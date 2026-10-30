@@ -170,16 +170,14 @@ test("a signed-out model says so with its hint and offers no Try again", () => {
   draw(
     failed({
       code: "model_signed_out",
-      message: "The assistant's model is signed out, so it cannot answer.",
-      hint: "Ask an administrator to sign the assistant's model in again.",
+      message: "Ask Crewlet's model is signed out, so it cannot answer.",
+      hint: "Ask an administrator to sign Ask Crewlet's model in again.",
       retryable: false,
     }),
   );
-  expect(
-    screen.getByText("The assistant's model is signed out, so it cannot answer."),
-  ).toBeTruthy();
+  expect(screen.getByText("Ask Crewlet's model is signed out, so it cannot answer.")).toBeTruthy();
   expect(document.body.textContent).toContain(
-    "Ask an administrator to sign the assistant's model in again.",
+    "Ask an administrator to sign Ask Crewlet's model in again.",
   );
   expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
 });
@@ -187,7 +185,7 @@ test("a signed-out model says so with its hint and offers no Try again", () => {
 test("a model that took too long offers Try again, held off while Send is", () => {
   const timeout = failed({
     code: "model_timeout",
-    message: "The assistant's model took too long to answer.",
+    message: "Ask Crewlet's model took too long to answer.",
     hint: "Ask again, or ask a narrower question.",
     retryable: true,
   });
@@ -219,11 +217,11 @@ test("a turn that failed before it wrote a word shows its sentence", () => {
     phase: "failed",
     error: {
       code: "model_timeout",
-      message: "The assistant's model took too long to answer.",
+      message: "Ask Crewlet's model took too long to answer.",
       retryable: true,
     },
   });
-  expect(screen.getByText("The assistant's model took too long to answer.")).toBeTruthy();
+  expect(screen.getByText("Ask Crewlet's model took too long to answer.")).toBeTruthy();
 });
 
 test("a sent question shows the images it carried as chips under its bubble", async () => {

@@ -718,7 +718,7 @@ describe("a reloaded transcript's ended turns", () => {
             state: "failed",
             error: {
               code: "model_timeout",
-              message: "The assistant's model took too long to answer.",
+              message: "Ask Crewlet's model took too long to answer.",
               retryable: false,
             },
           },

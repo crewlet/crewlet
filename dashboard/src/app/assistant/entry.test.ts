@@ -120,8 +120,8 @@ describe("the assistant's model", () => {
     reason: "model_not_ready",
     model: {
       code: "model_signed_out",
-      message: "The assistant's model is signed out, so it cannot answer.",
-      hint: "Ask an administrator to sign the assistant's model in again.",
+      message: "Ask Crewlet's model is signed out, so it cannot answer.",
+      hint: "Ask an administrator to sign Ask Crewlet's model in again.",
     },
   } as const;
 
@@ -152,7 +152,7 @@ describe("the assistant's model", () => {
     const busy = assistantModelFor({
       assistantModel: {
         code: "model_busy",
-        message: "The assistant's model has reached its usage limit for now.",
+        message: "Ask Crewlet's model has reached its usage limit for now.",
         hint: "It is tried again once the limit resets.",
         retry_at: "2026-10-25T14:05:00Z",
       },

@@ -391,7 +391,7 @@ company's budget and, where `token_budget` is set, to that person's own, across
 every node of the fleet. A person whose own window is spent, or whose company's
 is, is refused before the next model round with `budget_exhausted` naming which
 (`person` or `org`), and starts again when the window turns over or the ceiling
-is raised (on Company › Budgets, under **Each person's assistant**). A per-person
+is raised (on Company › Budgets, under **Ask Crewlet, per person**). A per-person
 ceiling that can never refuse a question is a warning, as a seat's is: one at or
 above another of its own windows that holds it, or at or above the company's on
 a window that holds it, since a person's Ask Crewlet spend is the company's too

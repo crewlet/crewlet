@@ -320,8 +320,8 @@ test("the panel's body is flush for the thread and scrolls for the offline notic
 const SIGNED_OUT: AssistantModelProblem = {
   code: "model_signed_out",
   short: "Ask Crewlet's model is signed out",
-  title: "The assistant's model is signed out, so it cannot answer.",
-  body: "Ask an administrator to sign the assistant's model in again.",
+  title: "Ask Crewlet's model is signed out, so it cannot answer.",
+  body: "Ask an administrator to sign Ask Crewlet's model in again.",
 };
 
 // A MODEL THE ENGINE KNOWS CANNOT ANSWER is said before the reader asks: the
