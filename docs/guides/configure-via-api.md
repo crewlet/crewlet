@@ -291,7 +291,7 @@ consequences worth knowing before you script against it:
   document you looked at, and land as one reviewable revision: export, edit,
   `PUT /config`. A model is the one exception, because what names it has a
   shape the route can ask for: `DELETE /config/llm-providers/{key}` takes the
-  repoint of every seat job and assistant target that names the entry, by seat
+  repoint of every seat job and Ask Crewlet target that names the entry, by seat
   and job, and refuses with the list of them while one is unanswered, so the
   removal and every repoint land as one revision
   ([the route](../reference/api-endpoints.md#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it)).

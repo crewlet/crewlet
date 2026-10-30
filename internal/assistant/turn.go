@@ -550,7 +550,7 @@ func (t *turn) run(r loopRun) {
 	progress := &toolloop.Progress{}
 	res, err := toolloop.Run(ctx, toolloop.Config{
 		Provider: r.provider, ProviderKey: r.key, Surface: surface, Messages: r.messages,
-		Host: t.svc.sessions, ServerTitle: "Dashboard Assistant",
+		Host: t.svc.sessions, ServerTitle: "Ask Crewlet",
 		MaxRounds: r.maxRounds(), AllowSuspend: true, Budget: r.meter,
 		TerminateAfter: r.terminate,
 		Fence:          t.fence, OnProgress: t.onProgress, Progress: progress,
@@ -688,7 +688,7 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 		}
 		if errors.As(err, &budget) {
 			if budget.Scope == PersonBudgetScope {
-				failure.Message = "Your own assistant token budget for this window is spent."
+				failure.Message = "Your own Ask Crewlet token budget for this window is spent."
 			}
 			// BOTH WAYS BACK, in a person's words: the window turning over,
 			// and the ceiling raised, which the remedy beside it opens

@@ -14,7 +14,7 @@ import (
 // BriefPromptVersion names a brief turn's system prompt ([briefRules]),
 // stamped on its turn row and audit record in place of [PromptVersion]. A
 // reworded sentence is a new version.
-const BriefPromptVersion = "assistant.brief.v4"
+const BriefPromptVersion = "assistant.brief.v5"
 
 // promptVersion is the prompt this turn runs on.
 func (t *turn) promptVersion() string {
@@ -34,7 +34,7 @@ func (t *turn) promptVersion() string {
 // anything. The second is never written: it is the number of needs, which the
 // engine counts and draws as the card's verdict, so the rules spend their
 // words on keeping needs to things to do.
-var briefRules = fmt.Sprintf("You are the Crewlet assistant inside the company's dashboard, writing a "+
+var briefRules = fmt.Sprintf("You are Ask Crewlet, the assistant inside the company's dashboard, writing a "+
 	"brief for the person you act as. Every tool you call is a request made as them, decided "+
 	"by their own access. You only read: you change nothing and propose nothing.\n\n"+
 	"A brief tells the person, in as few words as possible, what this is about and whether "+

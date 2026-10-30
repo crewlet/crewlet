@@ -164,7 +164,7 @@ flowchart TD
   running a turn taking a person's note, the node a `direct` or `container`
   box is on reading it back for a seat's holder elsewhere, the node holding a
   box's session running a tool call relayed to it, and the node running an
-  assistant turn replaying or stopping it. So is the live relay a data node whose own copy is
+  Ask Crewlet turn replaying or stopping it. So is the live relay a data node whose own copy is
   out of service hears a sound peer's appliers through, because what it
   relays reaches its dashboards as somebody's chat messages and datastore
   documents.

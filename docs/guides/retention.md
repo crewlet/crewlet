@@ -31,7 +31,7 @@ Five figures per domain, and no others:
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
-| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, the Dashboard Assistant's and chat's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
+| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, Ask Crewlet's and chat's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
 | `headroom_fraction` | how much of the ceiling **ordinary writes** are held to is unused: `max_bytes` less `reserve_bytes` |
 | `bytes_per_day` | what the log took in over the trailing day (`PER DAY` in the table) |
 
@@ -172,7 +172,7 @@ A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
 this domain does not **have** — the vector log, the identity estate's, the
-artifacts log's, the artifact datastore's, the Dashboard Assistant's and the
+artifacts log's, the artifact datastore's, Ask Crewlet's and the
 usage log's have no wake feed — is `n/a`
 rather than zero, which is a different thing again. And a term that was
 read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
@@ -264,7 +264,7 @@ Two policies decide which copies count:
   `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_ARTIFACTS_LOG`,
   `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG` and `CREWLET_CHAT_LOG`,
   each grow until their own ceiling refuses writes — a full identity log
-  refuses every sign-in, a full assistant log every question the assistant is
+  refuses every sign-in, a full Ask Crewlet log every question Ask Crewlet is
   asked, and a full chat log every message — while the two compacted logs,
   `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their
   records out on the broker whatever the trim decides; their trim and its
@@ -648,8 +648,8 @@ See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-opera
 
 When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) a log
 that claims identity — the tracker's, the knowledge base's, the identity
-estate's, the artifacts log's, the artifact datastore's, the Dashboard
-Assistant's or chat's — it opens the next generation from its own rows, and
+estate's, the artifacts log's, the artifact datastore's,
+Ask Crewlet's or chat's — it opens the next generation from its own rows, and
 every other node's rows are then a history the log no longer continues from. Nothing on the log can bring them
 level, so each of those nodes adopts a snapshot from a node in the new
 generation, **on its own**:
@@ -777,7 +777,7 @@ next backup afresh.
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on — every log that claims identity: the tracker's, the knowledge
 base's, the identity estate's, the artifacts log's, the artifact datastore's,
-the Dashboard Assistant's and chat's. (The vector log and the
+Ask Crewlet's and chat's. (The vector log and the
 usage log count nothing and get none: a node behind on the vectors is a
 coverage figure, and an evicted node's usage is still what its seats did.) Every
 node running the state log can make the gesture, whichever backends the
@@ -810,7 +810,7 @@ characters) is refused before anything is judged.
 
 Past the judgement the record goes to every log at once, and each answers on
 its own line — the tracker's log, the pages log, the identity estate's, the
-artifacts log, the artifact datastore's, the Dashboard Assistant's and chat's —
+artifacts log, the artifact datastore's, Ask Crewlet's and chat's —
 with the
 [three-valued outcome](replication.md#a-write-has-three-outcomes) every write
 has — `applied`, `pending` or `unknown` — or `not written` with the
@@ -1034,8 +1034,8 @@ changes it. Every log declares the largest record it publishes — 8 MiB less
 4 KiB on the tracker's, the knowledge base's, the vector changelog's and the
 usage log's, which is the largest the embedded broker's 8 MiB messages carry
 once a record is signed, 128 KiB on the identity estate's, 2 MiB on the
-artifacts log's, 1 MiB plus 64 KiB on the artifact datastore's, 2 MiB on the
-Dashboard Assistant's and 512 KiB on chat's — and a record past it is refused
+artifacts log's, 1 MiB plus 64 KiB on the artifact datastore's, 2 MiB on
+Ask Crewlet's and 512 KiB on chat's — and a record past it is refused
 before it is sent; the stream's
 own `max_msg_size` is that declaration plus 4 KiB for what a stored record
 carries beside it, so the broker holds a peer on another build to it too. Two
@@ -1097,7 +1097,7 @@ eviction was refused, run again, and refused again.
 
 So on the logs that carry gate records — every log that claims identity:
 the tracker's, the knowledge base's, the identity estate's, the artifacts log's,
-the artifact datastore's, the Dashboard Assistant's and chat's — **ordinary
+the artifact datastore's, Ask Crewlet's and chat's — **ordinary
 writes are refused at a soft ceiling** below the
 broker's, and the top of the ceiling — the **gate reserve**, `reserve_bytes`
 in `crewlet retention status` — takes only the records that install or lift a
@@ -1138,7 +1138,7 @@ So the reserve is the larger of two terms:
 | identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 | artifacts | 2 MiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | artifact datastore | 1 MiB plus 64 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
-| Dashboard Assistant | 2 MiB | 64 MiB | about 15 MiB (the fleet term) | about 49 MiB |
+| Ask Crewlet | 2 MiB | 64 MiB | about 15 MiB (the fleet term) | about 49 MiB |
 | chat | 512 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
@@ -1172,7 +1172,7 @@ maintenance window**, and the reason is not caution:
   applied. So is a target under the floor Tier A holds that log's field to — a
   gibibyte on the tracker's, the knowledge base's, the vector changelog's, the
   artifacts log's, the artifact datastore's and chat's, 64 MiB on the identity
-  estate's, the usage log's and the Dashboard Assistant's —
+  estate's, the usage log's and Ask Crewlet's —
   naming the field. Anything else is fair, including a target under the
   current ceiling, which is how a log created larger than its budget gives
   the reservation back.
@@ -1706,7 +1706,7 @@ having nothing to re-anchor.
 
 **It moves one log.** Each domain — the tracker, the knowledge base, the
 identity estate, the vectors, the usage days, the artifacts, their datastore,
-the Dashboard Assistant's conversations and chat — has its own stream and its
+Ask Crewlet's conversations and chat — has its own stream and its
 own generation, and a reanchor moves only the one you named: that domain's
 checkpoint goes to the next generation, where its case puts it, keyed to the
 live instant. Every other domain keeps its checkpoint, its generation and its
@@ -1746,7 +1746,7 @@ own ([a node a peer re-anchored past](#a-node-a-peer-re-anchored-past)).
 
 For every log that keeps a generation record — the tracker's, the knowledge
 base's, the identity estate's, the artifacts log's, the artifact datastore's,
-the Dashboard Assistant's and chat's — it refuses while any peer
+Ask Crewlet's and chat's — it refuses while any peer
 has already re-anchored the stream — a peer at a later generation of it — naming the peer:
 that peer's rows are the fleet's history in the new generation, and a second
 reanchor from another node's rows would open the same generation over a
@@ -1818,7 +1818,7 @@ them.
 **Every log can be re-anchored, by its own domain.** What a reanchor writes
 beside the checkpoint is the domain's to say: a log that claims identity
 (Worklet's, Doclet's, the identity estate's, the artifacts log's, the artifact
-datastore's, the Dashboard Assistant's and Chatlet's) appends its own generation
+datastore's, Ask Crewlet's and Chatlet's) appends its own generation
 record, which is the audit row above and the first-writer-wins between two
 operators, while the vectors and the usage days declare that they keep none. A
 domain that cannot say is refused when the node boots, never when an operator
@@ -1968,7 +1968,7 @@ omission.
 Every data node holds the whole corpus in one SQL database. A task filed three
 years ago is read at the same cost as one filed this morning, is searched by the
 same index, and is replicated exactly as many times. The log in front of it is
-trimmed; the tables are not — bar the usage history, the Dashboard Assistant's
+trimmed; the tables are not — bar the usage history, Ask Crewlet's
 conversations and the chat transcript, which keep a horizon of their own, and
 the bookkeeping tables each node sweeps, all below.
 
@@ -1983,10 +1983,10 @@ is compared with, and the day a moved clock can touch. Nothing sweeps them:
 every record for a day deletes the rows older than that day minus 181 in the
 same transaction that writes it, on every data node, and the stream's own age
 bound forgets the same days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
-The Dashboard Assistant's conversations are another: a conversation nobody has
+Ask Crewlet's conversations are another: a conversation nobody has
 touched for the company's `assistant.retention_days`, 30 days by default, is
 purged by the trash reaper through a record every data node applies (see
-[Running the Dashboard Assistant](assistant.md#retention-and-erasure)).
+[Running Ask Crewlet](assistant.md#retention-and-erasure)).
 The chat transcript is the third, and its horizon is the company's to set: see
 [the chat transcript's horizon](#the-chat-transcripts-horizon) below.
 
@@ -2226,8 +2226,8 @@ at its definition is 0 × 100 × 365 × 140 B. It was held to the tracker's and
 the knowledge base's 125 a day per seat before the rate was declared per domain: a census its ceiling
 was never sized for, which at the reference company is about 639 MB a year of
 barriers it would have had to hold against a 512 MiB ceiling, and which
-`census_drift` would have measured it against while it took none. The
-Dashboard Assistant's log declares **none** as well: no seat reads it, and a
+`census_drift` would have measured it against while it took none.
+Ask Crewlet's log declares **none** as well: no seat reads it, and a
 person reads their own conversation through the node their own writes waited
 on, so its one barrier is the collector's pin below, counted as the engine's
 own.

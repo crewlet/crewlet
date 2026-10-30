@@ -185,7 +185,7 @@ func TestAWriteThatKeepsAHistoryCarriesTheLineThePersonApproved(t *testing.T) {
 			return b
 		}()}, "Stated in the body"},
 		"the route's": {map[string]any{"body": seatBody(nil)},
-			"Change unit · core through the Dashboard Assistant"},
+			"Change unit · core through Ask Crewlet"},
 	} {
 		args := c.args
 		args["route"] = "PUT /config/units/{id}"

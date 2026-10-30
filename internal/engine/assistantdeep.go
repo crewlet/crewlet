@@ -380,7 +380,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	// token the earlier box's no longer reaches.
 	endpoint := d.e.bridge.Open(ctx, &mcpbridge.Session{
 		RunID: r.ID, Launch: uuid.NewString(), Handle: "assistant",
-		Role: "Dashboard Assistant deep work", Surface: r.Surface, Caller: assistantRunAs{},
+		Role: "Ask Crewlet deep work", Surface: r.Surface, Caller: assistantRunAs{},
 		TTL: r.Timeout + deepGrace, Loopback: deepHeldToLoopback(placement, d.e.bridge),
 	})
 	if endpoint == "" {

@@ -75,8 +75,8 @@ workers: {...}                          # optional — reusable delegate templat
 roles: [...]                            # optional — root-level org-wide agents (see below)
 units: [...]                            # optional — org structure tree (see below)
 
-assistant: {...}                        # optional, the Dashboard Assistant; off unless enabled
-                                        #   (see "The Dashboard Assistant" below)
+assistant: {...}                        # optional, Ask Crewlet; off unless enabled
+                                        #   (see "Ask Crewlet" below)
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
@@ -336,9 +336,9 @@ See the [Scheduling](../concepts/scheduling.md) concept doc for delivery
 modes (`each` / `lead`), at-most-once semantics, catchup, and the
 per-task wall-clock timeout.
 
-### The Dashboard Assistant
+### Ask Crewlet
 
-The assistant is a drawer in the dashboard that answers a person's questions
+Ask Crewlet is a drawer in the dashboard that answers a person's questions
 about the company and prepares changes for them to approve. It has no
 identity of its own: every read is a request made as the signed-in person,
 and nothing is written until that person approves the change it previews. It
@@ -352,7 +352,7 @@ providers:
       model: sonnet
       timeout_seconds: 90               # one interactive round
       max_concurrent: 4                 # its own slots, apart from the seats'
-      overrides: { web_tools: denied }  # required for every assistant entry
+      overrides: { web_tools: denied }  # required for every Ask Crewlet entry
 
 assistant:
   enabled: true                         # absent or false: off
@@ -371,14 +371,14 @@ assistant:
 
 | Field | Default | Meaning |
 |---|---|---|
-| `enabled` | off | Runs the assistant. A pointer, so an absent key and `false` both mean off. |
+| `enabled` | off | Runs Ask Crewlet. A pointer, so an absent key and `false` both mean off. |
 | `llm` | none | The model chain, first key first, in the shape a seat's `llm_auxiliary` takes. Required when `enabled` is true. |
 | `max_steps` | 30 | The most tool steps one turn may take: enough to look a route up, read what it touches and propose the change. |
 | `turn_timeout_seconds` | 900 | The longest one turn may run. Every round is a CLI launch of fifteen to twenty-five seconds. |
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
-| `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`agent: claude-code`), run as its CLI's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running the Dashboard Assistant](../guides/assistant.md#deep-work)). |
+| `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`agent: claude-code`), run as its CLI's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
 | `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
 | `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
 | `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
@@ -394,7 +394,7 @@ is, is refused before the next model round with `budget_exhausted` naming which
 is raised (on Company › Budgets, under **Each person's assistant**). A per-person
 ceiling that can never refuse a question is a warning, as a seat's is: one at or
 above another of its own windows that holds it, or at or above the company's on
-a window that holds it, since a person's assistant spend is the company's too
+a window that holds it, since a person's Ask Crewlet spend is the company's too
 and the company's ceiling is reached first. Beside the
 tokens, a person may have two turns running on a node and start twenty a minute
 across the whole fleet.
@@ -405,7 +405,7 @@ return.** Each `llm` key must name a `providers.llm` entry that is:
 - on a profile whose run has **no tool of its own, by construction**, so the
   CLI's one tool source is the engine's `crewlet` server serving the person's
   own requests: its profile declares `local_tools: denied` and a measured
-  `tools_off`, and the argv every assistant call runs carries it, with an `mcp`
+  `tools_off`, and the argv every Ask Crewlet call runs carries it, with an `mcp`
   allow list naming the engine's tools alone. A CLI with its own shell or file
   reader on the engine host could read whatever the engine user can, the
   engine's own data and keys included. Today that is `claude-code` and `pi`;
@@ -422,9 +422,9 @@ return.** Each `llm` key must name a `providers.llm` entry that is:
 A document that breaks one of these is refused by `crewlet validate` and by
 every `/config` write, each naming the chain member and the entry field to
 change. A stored revision that somehow carries one still applies, so every
-seat keeps running, and the assistant stays unavailable with that reason
+seat keeps running, and Ask Crewlet stays unavailable with that reason
 until the chain is fixed. Run `crewlet llm doctor assistant` before turning
-it on: on the exact argv the assistant runs it asks the CLI to run a shell
+it on: on the exact argv Ask Crewlet runs it asks the CLI to run a shell
 command, to read a file the doctor just wrote and to fetch a page, and reports
 any of the three that succeeded as a problem. Nothing records that run, so the
 chain cannot require it: it is the operator's check to make.
@@ -1030,7 +1030,7 @@ stream:
                                     #   the ceiling any of them that already
                                     #   exists holds. The unset ones are scaled
                                     #   down together to fit, never below 1 GiB
-                                    #   each but the Dashboard Assistant's,
+                                    #   each but Ask Crewlet's,
                                     #   which gives way down to its own 64 MiB
                                     #   floor; any other unset ask already below
                                     #   1 GiB (the identity log's) is kept as
@@ -1150,12 +1150,12 @@ stream:
                                     #   is kept for gate records as on the
                                     #   tracker's log
   # assistant_log_max_bytes: 536870912
-                                    #   the Dashboard Assistant's log, where
+                                    #   Ask Crewlet's log, where
                                     #   every person's conversations, turns
                                     #   and proposals are recorded (64 MiB..
                                     #   64 GiB). UNSET TAKES 512 MiB, sized
-                                    #   by how many people ask the
-                                    #   assistant rather than by the disk,
+                                    #   by how many people use
+                                    #   Ask Crewlet rather than by the disk,
                                     #   and scaled down as far as 64 MiB
                                     #   where the broker is short:
                                     #   about two weeks of a completely
@@ -1722,7 +1722,7 @@ where it is pinned, naming only `admin`, `worklet`, `doclet`, `artifacts`
 and `chatlet` (an unknown name is refused naming the set, and `admin` on a
 `refuse` node is refused too) — and its value must be at least 26 characters,
 checked on what the `${VAR}` resolves to. A value may not start with `cwl_ast_`, the prefix the
-engine reserves for the Dashboard Assistant's in-process grants: the request
+engine reserves for Ask Crewlet's in-process grants: the request
 guard reads that shape as a grant, so such a token could never authenticate.
 
 **`secrets.keys` is required on every node**, whether or not a port is set.

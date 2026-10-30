@@ -79,8 +79,8 @@ has to finish it to see what it did.
 
 The engine keeps nine ordered logs on the stream: the tracker's mutation
 log, the vector changelog, the knowledge base's log, the identity estate's
-log, the usage log, the artifacts log, the artifact datastore's log, the
-Dashboard Assistant's log and the chat log. Each log's byte ceiling is
+log, the usage log, the artifacts log, the artifact datastore's log,
+Ask Crewlet's log and the chat log. Each log's byte ceiling is
 **reserved** on the volume holding `stream.store_dir` when its stream is
 created: the embedded broker grants a ceiling in full, up front, or refuses
 to create the stream at all. Its limit is `stream.store_max_bytes` where you
@@ -89,7 +89,7 @@ that volume's free space.
 
 The node sizes the ceilings together to fit half of that limit. A log derived
 from the disk that would be scaled below 1 GiB is **held at 1 GiB** instead,
-the Dashboard Assistant's log gives way down to its own 64 MiB floor, and any
+Ask Crewlet's log gives way down to its own 64 MiB floor, and any
 other log whose own default is smaller than a gibibyte is held at what it asked
 for, so a fresh node has a floor it cannot go below.
 
@@ -107,7 +107,7 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The chat log | 1 GiB | `stream.chat_log_max_bytes` |
 | The usage log (a fixed default) | 1 GiB | `stream.usage_log_max_bytes` |
 | The identity estate's log (a fixed default) | 512 MiB | `stream.iam_log_max_bytes` |
-| The Dashboard Assistant's log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.assistant_log_max_bytes` |
+| Ask Crewlet's log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.assistant_log_max_bytes` |
 | **The nine logs together** | **7.56 GiB** | |
 | The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.52 GiB at the minimum | `store.objects.nats_max_bytes` |
 
@@ -142,9 +142,9 @@ The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes`,
 64 MiB. The other six fields accept no less than 1 GiB, so setting them only
 moves the figure up.
 - **A floor is per log, not universal.** The identity estate's, the usage
-  log's and the Dashboard Assistant's fields go down to 64 MiB, far below the
-  others, because the identity log grows with headcount and sign-ins, the
-  assistant's with how many people ask it (a month of a ten-person company's
+  log's and Ask Crewlet's fields go down to 64 MiB, far below the
+  others, because the identity log grows with headcount and sign-ins,
+  Ask Crewlet's with how many people ask it (a month of a ten-person company's
   questions fits in 64 MiB), and the usage log is a census of
   node-days — about 12 MB for a ten-seat node's 181 days — and a ceiling is
   granted in full at create time, so a log at a disk-sized floor costs free
@@ -154,9 +154,9 @@ moves the figure up.
   the knowledge base's log, the artifacts log and the artifact datastore's
   log each for a quarter of the mutation log's, the chat log for 8 GiB,
   capped at a sixteenth of the free space (so the whole of it is asked from
-  128 GiB free), the identity estate's log and the Dashboard Assistant's for
+  128 GiB free), the identity estate's log and Ask Crewlet's for
   a flat 512 MiB each and the usage log for a flat 1 GiB — none of the last
-  three is derived from the disk at all, because the identity and assistant
+  three is derived from the disk at all, because the identity and Ask Crewlet
   logs grow with headcount and the usage log's size is a count of node-days
   rather than a rate, so more disk buys them nothing. The chat log's ask does
   not follow the mutation log's as the knowledge base's does, so if you set
@@ -1203,8 +1203,8 @@ A `direct` or `container` box is a directory on the engine host, made under
 one **box root**: `providers.sandbox.local.state_dir`, else
 `$CREWLET_SANDBOX_LOCAL_HOME`, else `~/.crewlet/sandboxes` under the engine
 user's home. A relative `state_dir` is read against the directory the engine
-was started in. A seat's box is `<box root>/boxes/<id>`, and a
-[Dashboard Assistant deep-work run](assistant.md#where-a-run-happens) placed on
+was started in. A seat's box is `<box root>/boxes/<id>`, and an
+[Ask Crewlet deep-work run](assistant.md#where-a-run-happens) placed on
 the engine host keeps its confined box at `<box root>/assistant/boxes/<id>`.
 A box holds its run's checkout, its coding CLI's home with a copy of the
 entry's login, its temporary files (`TMPDIR` and the CLI's own temporary root

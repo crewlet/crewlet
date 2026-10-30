@@ -86,7 +86,7 @@ func TestUnauthorizedSaysTheRuleThatRefused(t *testing.T) {
 		// do: a verb it never takes stays theirs, and a change nobody
 		// approved is one it proposes.
 		{authz.ReasonAssistRefused, []iam.Grant{iam.GrantAdmin},
-			[]string{"The assistant never does this", "stays with you"}, false},
+			[]string{"Ask Crewlet never does this", "stays with you"}, false},
 		{authz.ReasonAssistScope, []iam.Grant{iam.GrantAdmin},
 			[]string{"only as a change you approve"}, false},
 	} {

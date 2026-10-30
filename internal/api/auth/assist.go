@@ -621,7 +621,7 @@ func (g *Guard) assistEdge(w http.ResponseWriter, r *http.Request) bool {
 	}
 	if AssistRefusedPath(r.URL.Path) {
 		log.InfoContext(r.Context(), "api_assist_path_refused", "route", r.URL.Path)
-		assistRefusal(authz.ReasonAssistRefused, "The assistant can't reach "+
+		assistRefusal(authz.ReasonAssistRefused, "Ask Crewlet can't reach "+
 			r.URL.Path+".").write(w)
 		return true
 	}
@@ -676,7 +676,7 @@ func (g *Guard) assist(r *http.Request, candidate string) (*http.Request, *Refus
 		// anything.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead && !authz.AsksCheck(r) {
 			return assisted(r, p, claims), assistRefusal(authz.ReasonAssistScope,
-				"The assistant's read access can't send a "+r.Method+" request.")
+				"Ask Crewlet's read access can't send a "+r.Method+" request.")
 		}
 	case iam.AssistScopeExec:
 		body, err := io.ReadAll(io.LimitReader(r.Body, AssistMaxBody+1))

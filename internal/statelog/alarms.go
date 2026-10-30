@@ -1392,7 +1392,7 @@ var table = []rule{
 					m.ExpiresAt.UTC().Format("2 Jan 2006")), m.ExpiresAt, true
 			case m.NoSignIn:
 				return fmt.Sprintf("nothing signs %s in on this node, and a seat or "+
-					"the assistant runs on it", m.Key), time.Time{}, true
+					"Ask Crewlet runs on it", m.Key), time.Time{}, true
 			}
 			return "", time.Time{}, false
 		},

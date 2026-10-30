@@ -313,19 +313,19 @@ A few things worth knowing when deploying Crewlet:
   to read it back (that host reads the box and pauses it, as the collection it
   is part of does), a box's tool call relayed to the node holding its session
   (that node runs it as whoever the call's token names, and its answer goes
-  back to the box as that node's), and a request about a person's Dashboard
-  Assistant turn running on another node (the running node hands the turn
+  back to the box as that node's), and a request about a person's
+  Ask Crewlet turn running on another node (the running node hands the turn
   over, or stops it, for the person the request names). Unsigned, each would
   let anybody who reaches either port write as anybody, change the broker's
   quorum past every check the operator's route makes, put words in front of a
   running agent under anybody's name, have a run's box read back and paused,
-  call a running seat's tools as that seat, or stop anybody's assistant turn. So is the live relay, which only reads but whose
+  call a running seat's tools as that seat, or stop anybody's Ask Crewlet turn. So is the live relay, which only reads but whose
   answers a data node whose own copy is out of service pushes to its
   dashboards as a sound peer's committed chat messages and datastore
   documents: unsigned, anybody on either port could show words in a room, or
   values in a shared table, under anybody's name. So are the frames a node
-  broadcasts for its peers to show: who is in a room, and a Dashboard
-  Assistant turn as it streams, which is also encrypted under the keyring
+  broadcasts for its peers to show: who is in a room, and an
+  Ask Crewlet turn as it streams, which is also encrypted under the keyring
   because it carries the person's conversation. Each request is bound to an id
   and a deadline inside its signature, so one
   captured off the wire is not carried out twice. A frame under a key the

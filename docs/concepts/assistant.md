@@ -1,6 +1,6 @@
-# The Dashboard Assistant
+# Ask Crewlet
 
-The Dashboard Assistant is a panel in the dashboard where you ask questions
+Ask Crewlet is a panel in the dashboard where you ask questions
 about your company in plain language and have changes prepared for you to
 approve. It answers from the same screens and records you can already open,
 and it prepares the same changes you could already make yourself.
@@ -11,9 +11,9 @@ changes nothing until you approve the change it shows you.
 
 This page is for the people who use it. Administrators turning it on, choosing
 its model and answering compliance requests read
-[Running the Dashboard Assistant](../guides/assistant.md); the configuration
+[Running Ask Crewlet](../guides/assistant.md); the configuration
 fields are in the
-[Configuration Reference](../getting-started/configuration.md#the-dashboard-assistant).
+[Configuration Reference](../getting-started/configuration.md#ask-crewlet).
 
 ---
 
@@ -45,7 +45,7 @@ this decision", and the brief covers that record and its immediate context
 only: the question asked, its task, the agent on it and its recent thread. Ask
 a follow-up in the same conversation as you would any question.
 
-A brief only reads, as you. Every row names a record the assistant read for
+A brief only reads, as you. Every row names a record Ask Crewlet read for
 this brief and that you may open (a task, a project, an agent, a page, an
 artifact, or a chat room, where a question asked of you there waits), checked
 again by the engine before the row is drawn; a row it cannot check is left out
@@ -58,44 +58,44 @@ written by an earlier version, or by a newer node during an upgrade) shows as
 a short note in its place: ask again to see it now.
 
 **The screen you are on travels with your question.** The chip above the
-message box (for example "Worklet › Tasks") tells the assistant which screen you
+message box (for example "Worklet › Tasks") tells Ask Crewlet which screen you
 are looking at: its filters, its selection and the records it shows, by id and
 never by content. Select the `×` on the chip to ask without it, and **Add this
 page** to put it back. Each message you send shows the page it carried.
 
-If **Ask** is dimmed, the assistant is not available to you, and the button
+If **Ask** is dimmed, Ask Crewlet is not available to you, and the button
 says why:
 
 | Reason | What it means |
 |---|---|
-| Turned off | Your company has not enabled the assistant. |
-| No model | The assistant is enabled, but no model it may run on is configured or working. An administrator fixes the model chain. |
-| Not a person | You are signed in with a machine token, a service account, or a session exchanged from an operator's bootstrap token. Only a person signed in through their own browser may use the assistant. |
-| No permission | Your company's access rules do not let your account use the assistant. |
+| Turned off | Your company has not enabled Ask Crewlet. |
+| No model | Ask Crewlet is enabled, but no model it may run on is configured or working. An administrator fixes the model chain. |
+| Not a person | You are signed in with a machine token, a service account, or a session exchanged from an operator's bootstrap token. Only a person signed in through their own browser may use Ask Crewlet. |
+| No permission | Your company's access rules do not let your account use Ask Crewlet. |
 
 ## It acts as you
 
 Every answer comes from requests made **as you**, through the engine's normal
 API, the same way the dashboard's own screens load. So:
 
-- **You see what you could already see.** A list the assistant reads is the
+- **You see what you could already see.** A list Ask Crewlet reads is the
   list you would see on the screen, filtered by your access. A record you cannot
-  open is one the assistant cannot read either; it tells you so rather than
+  open is one Ask Crewlet cannot read either; it tells you so rather than
   guessing.
 - **A refusal stays a refusal.** When something needs a permission you do not
-  hold, the assistant shows a card saying which one, with a ready-made request
+  hold, Ask Crewlet shows a card saying which one, with a ready-made request
   you can copy to an administrator. It cannot obtain the access for you. When
   no permission would help, for example with something only you can do
-  yourself or a change the assistant can only propose, the card says why in
+  yourself or a change Ask Crewlet can only propose, the card says why in
   the engine's own words and offers no request.
 - **It never acts as anyone else.** It cannot impersonate a colleague, an
   agent or an administrator, and nothing you type can make it.
 
 Behind each answer the panel lists the steps it took, each one a single
-request the assistant made as you, in plain words (for example "Read token
+request Ask Crewlet made as you, in plain words (for example "Read token
 spend by agent"). A step never names the engine's tools; an administrator also
 sees each step's request (its method and path) beside it. A refusal is said in
-plain words too: the assistant is handed the engine's exact reason and says
+plain words too: Ask Crewlet is handed the engine's exact reason and says
 what to change.
 What a step read is not drawn as a card beside the answer. The first time
 the answer names a record it read (a task by its key, such as GOP-11, a chat
@@ -109,7 +109,7 @@ snapshot you were shown. A list is one chip, named by what it read and how
 much ("Matching tasks (first 50 of 210)"), and its peek says which screen
 shows the rest. A read whose answer was too large for one step is listed too
 ("... (too large to show here)"): its peek links the screen that shows all of
-it and says what to narrow, and the assistant is told it saw none of it, so it
+it and says what to narrow, and Ask Crewlet is told it saw none of it, so it
 never answers as though it had.
 
 A read of a part of the engine that has no record of its own is drawn from the
@@ -137,18 +137,18 @@ title says what its read was narrowed to ("Spend by agent, last 14 days",
 answer is one chip.
 
 **Use the names you use.** Ask about "the QA Engineer", "the Company space" or
-"the Marketing project": the assistant resolves a seat, unit, project or space
+"the Marketing project": Ask Crewlet resolves a seat, unit, project or space
 by its name or its key, through your own reads of the chart, the projects and
 the spaces, and cards name seats by their names. A change that names something
 that is not there, or a name two records share, is refused before any card,
 listing the choices, rather than after you approve it; every name the call got
-wrong is named at once, beside anything else wrong with it, so the assistant
+wrong is named at once, beside anything else wrong with it, so Ask Crewlet
 fixes them all in one go. It never says something does not exist without
 having looked.
 
 **Ask or plan when the request is open.** A clear request is acted on at once.
 When what to change, or for whom, is genuinely open, or the request is a matter
-of taste ("make it friendlier"), the assistant reads what is there, then asks
+of taste ("make it friendlier"), Ask Crewlet reads what is there, then asks
 one short question with the options it found, or sets out an ordered plan and
 proposes its first step. It says what each proposal does before its card.
 
@@ -166,17 +166,17 @@ offers the changes your permissions allow.
 **Change what is on your screen**, on screens that accept it: apply a filter,
 fill in a draft in an editor, or select records. These are proposals too, and
 nothing is saved until you save it on that screen as usual. The screen you are
-on never limits what you may ask: from any screen the assistant gathers what it
+on never limits what you may ask: from any screen Ask Crewlet gathers what it
 needs and prepares each change where it lives, and for a change that can only
 be made in another screen's editor it offers that screen to open.
 
 **Work on what you have open.** Every screen with a draft or a form (the brand
 setup, the Brand page's cards, the principles, a page or a doc being written,
-the org builder, a new artifact) tells the assistant what is open: which draft,
+the org builder, a new artifact) tells Ask Crewlet what is open: which draft,
 the step you are on, and its current values, so "check my draft" is answered
 from the draft in front of you rather than a search. Values are sent as you
 typed them, with any password, token or key left out, and only while the page
-chip is attached. A change the assistant proposes to that draft shows each
+chip is attached. A change Ask Crewlet proposes to that draft shows each
 field's value now beside the proposed one, applies to the draft once you
 approve it, and is saved when you save. On the brand screens it proposes
 colours, typefaces and the voice; a logo can be proposed only from a file in
@@ -185,13 +185,13 @@ your own conversation, shown on the card as a thumbnail before you approve.
 **Do deep work** on a task that needs research, scripts, generated files, the
 images you attached, or many steps, where your company turns it on: for
 example "look through last month's work and propose how to redefine our teams
-and roles", or "redesign our brand assets". The assistant decides on its own
+and roles", or "redesign our brand assets". Ask Crewlet decides on its own
 when a task needs it, says so, and hands it to a deep-work run: a coding agent
 with its own shell, files, web search and image reading, working in a sandbox.
 The panel shows the run as one step marked **Deep work**, with its goal, its
 time and step limits, how much of its budget it has used, the latest of what it
 is doing, and the Crewlet records it reads nested under it. The run reaches
-Crewlet only through your assistant's own tools, as you, so it reads only what
+Crewlet only through Ask Crewlet's own tools, as you, so it reads only what
 you could read and every change it prepares is a proposal you approve. When it
 proposes a change it stops and waits for you; approving it continues the same
 run. Files it makes (a logo, a CSV, a report) appear on a card to download, and
@@ -209,7 +209,7 @@ text the model wrote.
 
 ## Approving a change
 
-The assistant never writes anything by itself. When you ask for a change, it
+Ask Crewlet never writes anything by itself. When you ask for a change, it
 prepares a **proposal card** that shows exactly what would change, as a before
 and after: an old value struck through with the new one beside it, added and
 removed items, and long text as a word by word difference (select **Show the
@@ -219,11 +219,11 @@ model's description of it.
 
 - **Approve** sends that one request, as you, from your own browser session.
   The receipt appears on the card and the screen behind it refreshes.
-- **Decline** discards it, and the assistant continues knowing you declined.
+- **Decline** discards it, and Ask Crewlet continues knowing you declined.
 - A proposal **expires** if it waits too long (15 minutes unless your company
   sets otherwise). Ask again to get a fresh one.
 - If the record **changed since the preview** (someone else edited it), the
-  approval is refused as stale and nothing is sent. The assistant can prepare
+  approval is refused as stale and nothing is sent. Ask Crewlet can prepare
   a new proposal against the current version. A change that creates something
   is held to the same rule: if something by that name appears before the
   change lands, the change is refused rather than replacing it, and nothing
@@ -232,7 +232,7 @@ model's description of it.
   does not exist, you may not read it, or it would add something at an
   address that cannot add one, such as a role, which is added to its unit
   instead) is never shown as a card. The step
-  says why, and the assistant is told the same reason, so it can prepare a
+  says why, and Ask Crewlet is told the same reason, so it can prepare a
   change that can apply.
 - A task card handed to someone says what happens next, and only what the
   engine can stand behind: a person is notified; an agent that is taking work
@@ -246,7 +246,7 @@ model's description of it.
   connection dropped), the card says so and offers **Retry**, which sends the
   same request under the same operation, so it can never apply twice.
 
-Only you can approve your own proposals, signed in as yourself. The assistant
+Only you can approve your own proposals, signed in as yourself. Ask Crewlet
 cannot approve them, and an administrator cannot approve them for you.
 
 ## Stopping and starting over
@@ -312,11 +312,11 @@ These limits are structural: they hold whatever the model is asked or reads.
 **What is proved, and what is not.** The engine's own tests prove the limits
 above by structure: with a scripted model that obeys an injected instruction
 completely, nothing is written without your approval, the injected text
-reaches the model only marked as data, and the assistant's answers equal your
+reaches the model only marked as data, and Ask Crewlet's answers equal your
 own requests, refusals included. They do not prove that any real model resists
 a prompt injection; that depends on the model your company chooses, which an
 administrator measures with `crewlet assistant eval`
-([Running the Dashboard Assistant](../guides/assistant.md#evaluating-a-model)).
+([Running Ask Crewlet](../guides/assistant.md#evaluating-a-model)).
 The structural limits are why a model that is misled still cannot act on it.
 
 ## Your conversations and privacy
@@ -334,25 +334,25 @@ credential is ever stored.
 
 **An administrator may read a conversation for a compliance reason.** This is
 a separate, audited action: the administrator must confirm their identity,
-must give a reason, and cannot do it through the assistant. Every such read is
+must give a reason, and cannot do it through Ask Crewlet. Every such read is
 recorded with who read it, when and why, and **is listed in the conversation
 for you to see**.
 
 The changes you approve are recorded in the company's audit log like any other
-change you make, marked as made through the assistant and naming the
+change you make, marked as made through Ask Crewlet and naming the
 conversation they came from.
 
 ## Limits
 
-The assistant uses tokens from your company's model budget, and your company
-may also set a budget per person, per day, week or month. When a budget is spent, the assistant
+Ask Crewlet uses tokens from your company's model budget, and your company
+may also set a budget per person, per day, week or month. When a budget is spent, Ask Crewlet
 says so and when it resets, and stops before using more. A turn takes at most
 a few tool steps and a couple of minutes; a question that needs more is best
 split in two.
 
-## When the assistant cannot answer
+## When Ask Crewlet cannot answer
 
-The assistant runs on a model your company set up, and it tells you when that
+Ask Crewlet runs on a model your company set up, and it tells you when that
 model cannot answer rather than leaving you waiting:
 
 - **Before you ask.** When the model is known to be unavailable, the panel says
@@ -373,15 +373,15 @@ model cannot answer rather than leaving you waiting:
 | The model is signed out | Ask an administrator to sign it in again. Asking again does not help until they do |
 | The model reached its usage limit | Wait until the time shown, or ask an administrator to add another model |
 | The model took too long | Try again, or ask a narrower question |
-| The model cannot be started | Ask an administrator to check the assistant's model |
+| The model cannot be started | Ask an administrator to check Ask Crewlet's model |
 | The brief could not be written | Try again. A brief that read more than a brief may says so: ask about one thing on the page instead |
 
 An administrator sees the command that fixes it instead.
 
 ## Related
 
-- [Running the Dashboard Assistant](../guides/assistant.md): turning it on,
+- [Running Ask Crewlet](../guides/assistant.md): turning it on,
   choosing its model, compliance reads, audit and evaluation
 - [Identity and Access](identity-and-access.md): the permissions that decide
-  what the assistant can read and propose
+  what Ask Crewlet can read and propose
 - [LLM backends](llm-backends.md): how models are reached through coding CLIs

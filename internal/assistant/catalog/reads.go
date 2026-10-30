@@ -583,7 +583,7 @@ func readTools() []Tool {
 			Name: "get_spend", Phrase: "read token spend",
 			Narrow: []string{"handle", "days"},
 			Description: "Token spend over a window of company days, by agent, by model or by " +
-				"phase. By agent also lists each person's own assistant use, marked as a " +
+				"phase. By agent also lists each person's own Ask Crewlet use, marked as a " +
 				"person's: say so, and leave it out when ranking the agents.",
 			schema: object(nil, map[string]*schema{
 				"days":   positive("The window in company days. Default 7.", 90),

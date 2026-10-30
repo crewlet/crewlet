@@ -47,8 +47,8 @@ func (e AssistantConversationRead) Actor() string { return e.ActorName }
 // SummaryFor names the read and its reason.
 func (e AssistantConversationRead) SummaryFor(actor string) string {
 	if e.FileID != "" {
-		return lead(actor, "downloaded a file of an assistant conversation for compliance: "+
+		return lead(actor, "downloaded a file of an Ask Crewlet conversation for compliance: "+
 			e.Reason)
 	}
-	return lead(actor, "read an assistant conversation for compliance: "+e.Reason)
+	return lead(actor, "read an Ask Crewlet conversation for compliance: "+e.Reason)
 }

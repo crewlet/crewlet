@@ -578,7 +578,7 @@ var ErrTokenRefused = errors.New("access tokens can't change people or access")
 // permission, for [ErrTokenRefused]'s reason, and a surface that tells them
 // apart answers that the person takes the gesture themselves rather than that
 // a permission is missing.
-var ErrAssistRefused = errors.New("the assistant can't issue sign-in links, invitations or tokens, or end sessions")
+var ErrAssistRefused = errors.New("only the person can issue sign-in links, invitations or tokens, or end sessions, never Ask Crewlet")
 
 // publish runs one decide through the framework's own write authority.
 //

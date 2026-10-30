@@ -368,10 +368,10 @@ Full reference: [CLI](docs/reference/cli.md) ·
 - [Agent runtime](docs/concepts/agent-runtime.md) · [Turn engine](docs/concepts/turn-engine.md) · [LLM backends](docs/concepts/llm-backends.md) · [Code sandbox](docs/concepts/code-sandbox.md)
 - [Knowledge system](docs/concepts/knowledge-system.md) · [Chatlet](docs/concepts/chatlet.md) · [Agent learning](docs/concepts/agent-learning.md) · [Tool skills](docs/concepts/tool-skills.md)
 - [Event system](docs/concepts/event-system.md) · [Scheduling](docs/concepts/scheduling.md) · [Configuration](docs/concepts/configuration.md)
-- [Dashboard Assistant](docs/concepts/assistant.md): ask questions and approve changes, acting as you
+- [Ask Crewlet](docs/concepts/assistant.md): ask questions and approve changes, acting as you
 
 **Guides**
-- [Tools & MCP](docs/guides/tools-and-mcp.md) · [Deployment](docs/guides/deployment.md) · [Running a Fleet](docs/guides/fleet.md) · [Running the Dashboard Assistant](docs/guides/assistant.md)
+- [Tools & MCP](docs/guides/tools-and-mcp.md) · [Deployment](docs/guides/deployment.md) · [Running a Fleet](docs/guides/fleet.md) · [Running Ask Crewlet](docs/guides/assistant.md)
 
 </td>
 <td valign="top" align="center" width="38%">

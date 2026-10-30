@@ -1762,7 +1762,7 @@ type Stream struct {
 	// (the assistant cannot record the turn) rather than shedding history. A
 	// conversation's own retention is set in the company document and does
 	// not depend on this.
-	AssistantLogMaxBytes int64 `yaml:"assistant_log_max_bytes,omitempty" json:"assistant_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the Dashboard Assistant's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
+	AssistantLogMaxBytes int64 `yaml:"assistant_log_max_bytes,omitempty" json:"assistant_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on Ask Crewlet's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
 	// ChatLogMaxBytes is the byte ceiling on the chat log, the ordered
 	// stream every Chatlet message, reaction and membership change goes

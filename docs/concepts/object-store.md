@@ -33,8 +33,8 @@ flowchart LR
 ```
 
 Today the store holds [a project's files](../guides/worklet.md#a-projects-files),
-every file of every [artifact](artifacts.md) version and asset, and the files a
-[Dashboard Assistant](../guides/assistant.md#retention-and-erasure) conversation
+every file of every [artifact](artifacts.md) version and asset, and the files an
+[Ask Crewlet](../guides/assistant.md#retention-and-erasure) conversation
 keeps (the images a person attaches and the files a deep-work run delivers,
 each sealed under the fleet keyring before it is stored, so the bucket holds
 none of them in the clear). Every consumer follows the same rule: the estate
@@ -166,9 +166,9 @@ are told not to try again. An upload the store simply did not take (a request
 that ran out of time, a broker or a provider that didn't answer) is a `503`
 under an election's wait instead, and the tools are told to try again
 shortly: the object store classes every put it could not finish once, so a
-project file's upload, an artifact's, an image attached to a question for the
-[Dashboard Assistant](../guides/assistant.md) and both kinds of tool answer each
-the same way, and the assistant is told what kept out a file a deep-work run
+project file's upload, an artifact's, an image attached to a question for
+[Ask Crewlet](../guides/assistant.md) and both kinds of tool answer each
+the same way, and Ask Crewlet is told what kept out a file a deep-work run
 delivered. The collector does not bound the bucket: it deletes what no row
 names, never the files a company keeps.
 
@@ -492,7 +492,7 @@ object is garbage from then on. Instead one data node at a time — the
 judged against the replicated estate the data node holds:
 
 - **Collection, hourly.** It pins the estate (a barrier on each log whose rows
-  name objects, the tracker's, the artifacts' and the assistant's, so it reads
+  name objects, the tracker's, the artifacts' and Ask Crewlet's, so it reads
   every row committed when it began), lists the store, and deletes
   every object **stored more than a day ago, whose key was minted more than a
   day ago, that no row names**. The day is the grace an upload in flight is

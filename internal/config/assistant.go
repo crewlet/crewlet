@@ -57,25 +57,25 @@ import (
 // refuses a chain that breaks this, so a stored revision carrying one leaves
 // the assistant unavailable rather than unsafe.
 type Assistant struct {
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Run the Dashboard Assistant for this company. Absent or false: off."`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Run Ask Crewlet for this company. Absent or false: off."`
 
 	// LLM is the assistant's provider chain, the first key tried first, in
 	// the shape a seat's llm_auxiliary takes.
-	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys the assistant runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."`
+	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."`
 
-	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most tool steps one assistant turn may take, 1..40. Absent: 30."`
-	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty" json:"turn_timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one assistant turn may run, 30..1200 seconds. Absent: 900."`
+	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30."`
+	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty" json:"turn_timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900."`
 	ProposalTTLSeconds int `yaml:"proposal_ttl_seconds,omitempty" json:"proposal_ttl_seconds,omitempty" js:"min=0;max=3600" desc:"How long a proposed change waits for approval, 60..3600 seconds. Absent: 900."`
-	RetentionDays      int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0;max=365" desc:"How long a person's assistant conversations are kept, 1..365 days. Absent: 30."`
+	RetentionDays      int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0;max=365" desc:"How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30."`
 
 	// TokenBudget is each PERSON's ceiling per calendar window, in the shape
 	// a seat's budget takes, charged on top of the company's own.
-	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Each person's assistant token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."`
+	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."`
 
 	// DeepWork is the assistant's escalation into a coding CLI's own
 	// harness for a task that needs research, scripts, files or many steps
 	// (ADR-0054). Absent: the assistant answers in quick mode only.
-	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: the assistant hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own assistant tools. Absent: quick mode only."`
+	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: Ask Crewlet hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."`
 }
 
 // AssistantDeepWork is the `assistant.deep_work` block.
@@ -228,7 +228,7 @@ func (d AssistantDeepWork) Tokens() int { return deepTokens.value(d.MaxTokens) }
 
 // ErrDeepWorkOff is what [Company.AssistantDeepWork] answers for a company
 // whose assistant has no deep work.
-var ErrDeepWorkOff = errors.New("the assistant has no deep work: set assistant.deep_work.llm " +
+var ErrDeepWorkOff = errors.New("deep work is off for Ask Crewlet: set assistant.deep_work.llm " +
 	"to a Claude Code providers.llm entry")
 
 // AssistantDeepWork is the providers.llm entry deep work runs on and its key,
@@ -328,7 +328,7 @@ func (c *Company) deepWorkProblems(path Path) error {
 
 // ErrAssistantOff is what [Company.AssistantChain] answers for a company that
 // has not turned the assistant on.
-var ErrAssistantOff = errors.New("the assistant is not enabled: set assistant.enabled to true")
+var ErrAssistantOff = errors.New("this company has not enabled Ask Crewlet: set assistant.enabled to true")
 
 // AssistantChain is the provider chain the assistant runs on, or why there is
 // none: [ErrAssistantOff] for a company that has not turned it on, and
@@ -389,7 +389,7 @@ func (c *Company) assistantChainProblems(path Path) error {
 	llmPath := at(path, "llm")
 	if len(c.Assistant.LLM) == 0 {
 		p.add(llmPath, ErrMissing,
-			"the assistant is enabled but names no model: list a providers.llm "+
+			"Ask Crewlet is enabled but names no model: list a providers.llm "+
 				"key, e.g. llm: [assistant], whose CLI's local tools are denied and "+
 				"whose entry has overrides: {web_tools: denied}")
 		return p.err()
@@ -439,7 +439,7 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 		// load; an assistant member nobody can judge is refused here too,
 		// so AssistantChain never hands one out.
 		p.add(member, ErrConflict,
-			"providers.llm.%s cannot be judged for the assistant because its profile "+
+			"providers.llm.%s cannot be judged for Ask Crewlet because its profile "+
 				"does not load (see %s)", key, entryField("overrides"))
 		return p.err()
 	}
@@ -455,7 +455,7 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 		p.add(member, ErrConflict,
 			"providers.llm.%s runs the %s CLI with its own local tools %s (%s), so a shell "+
 				"or a file reader on the engine host could read what no request of the "+
-				"person's returned: the assistant needs a CLI whose profile has local_tools: "+
+				"person's returned: Ask Crewlet needs a CLI whose profile has local_tools: "+
 				"denied and whose run has no tool of its own, which of the built-in profiles "+
 				"is %s", key, entry.AgentName(), localToolsWord(profile.LocalTools),
 			strings.TrimSpace(profile.LocalToolsNote), eligible)
@@ -465,7 +465,7 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 				"providers.llm.%s says the %s CLI's local tools are denied, but %s, so its "+
 					"run is not shown to leave the model without a tool of its own: a shell or "+
 					"a file reader on the engine host could read what no request of the "+
-					"person's returned. The assistant runs only on a CLI whose argv removes "+
+					"person's returned. Ask Crewlet runs only on a CLI whose argv removes "+
 					"every tool (tools_off), which of the built-in profiles is %s; check %s",
 				key, entry.AgentName(), problem, eligible, entryField("overrides"))
 		}

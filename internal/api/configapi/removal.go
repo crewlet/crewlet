@@ -111,8 +111,8 @@ var jobWords = map[config.ProviderJob]string{
 	config.JobSubagent:  "delegated tasks",
 	config.JobAuxiliary: "memory and summaries",
 	config.JobJudge:     "onboarding checks",
-	config.JobAssistant: "the assistant's chat",
-	config.JobDeepWork:  "the assistant's deep work",
+	config.JobAssistant: "Ask Crewlet's chat",
+	config.JobDeepWork:  "Ask Crewlet's deep work",
 }
 
 // phaseJobs is the job each phase's chain is resolved for, the phases a
@@ -176,8 +176,8 @@ func readRemoval(text []byte) (RemovalRequest, string, error) {
 		seat := r.At.Seat != "" || r.At.Job != ""
 		switch {
 		case seat && r.At.Assistant != "":
-			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names a seat and the "+
-				"assistant: address one", i)
+			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names a seat and "+
+				"Ask Crewlet: address one", i)
 		case seat && (r.At.Seat == "" || !config.ProviderJob(r.At.Job).Valid() ||
 			config.ProviderJob(r.At.Job) == config.JobAssistant ||
 			config.ProviderJob(r.At.Job) == config.JobDeepWork):
@@ -280,8 +280,8 @@ func repoint(c *config.Company, id string, req RemovalRequest) error {
 			path := config.Path{"assistant", "llm"}
 			problems = append(problems, config.Problem{Path: path.String(), Segments: path,
 				Kind: "missing",
-				Message: "the assistant is on and this write leaves its chat with no model: " +
-					"repoint it to another model, or send assistant_off to turn the assistant off"})
+				Message: "Ask Crewlet is on and this write leaves its chat with no model: " +
+					"repoint it to another model, or send assistant_off to turn Ask Crewlet off"})
 		}
 	}
 	if len(problems) > 0 {
@@ -304,7 +304,7 @@ func whose(ref config.ProviderReference) string {
 // describeAt is an address in a person's words.
 func describeAt(at RemovalAt) string {
 	if at.Assistant != "" {
-		return "the assistant's " + strings.ReplaceAll(at.Assistant, "_", " ")
+		return "Ask Crewlet's " + strings.ReplaceAll(at.Assistant, "_", " ")
 	}
 	return at.Seat + "'s " + jobWords[config.ProviderJob(at.Job)]
 }
@@ -456,7 +456,7 @@ func (s *Service) deleteEntity(kind string) http.HandlerFunc {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
 				"detail": err.Error(),
 				"hint": "name every field that runs on the model by its seat and job, or " +
-					"the assistant's chat or deep work, with the model it moves to " +
+					"Ask Crewlet's chat or deep work, with the model it moves to " +
 					"(null to leave it unset)",
 			})
 			return
@@ -600,8 +600,8 @@ func refuseRemoval(w http.ResponseWriter, e *RemovalError) {
 			"detail":     e.Error(),
 			"problems":   e.Problems,
 			"references": e.References,
-			"hint": "answer every reference in repoint, by its seat and job or the " +
-				"assistant's chat or deep work, with the model it moves to or null",
+			"hint": "answer every reference in repoint, by its seat and job or " +
+				"Ask Crewlet's chat or deep work, with the model it moves to or null",
 		})
 }
 

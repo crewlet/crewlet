@@ -100,7 +100,7 @@ func (e AssistantTurnCompleted) Actor() string { return e.ActorName }
 
 // SummaryFor says how the segment ended and how many steps it took.
 func (e AssistantTurnCompleted) SummaryFor(actor string) string {
-	summary := "asked the assistant: " + e.State + ", " + strconv.Itoa(len(e.Steps)) + " steps"
+	summary := "used Ask Crewlet: " + e.State + ", " + strconv.Itoa(len(e.Steps)) + " steps"
 	if e.ErrorCode != "" {
 		summary += " (" + e.ErrorCode + ")"
 	}

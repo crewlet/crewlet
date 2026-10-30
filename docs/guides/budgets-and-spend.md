@@ -103,12 +103,12 @@ the company's before the seat's — so a window that a coding run, a background
 pass or a person's answers filled says when it last turned work away rather
 than reading as one that has refused nothing.
 
-A third ceiling holds each **person's** Dashboard Assistant questions:
+A third ceiling holds each **person's** Ask Crewlet questions:
 `assistant.token_budget`, the same three windows, charged per person on top of
-the company's (see [the assistant's budgets](assistant.md#budgets-and-limits)).
+the company's (see [Ask Crewlet's budgets](assistant.md#budgets-and-limits)).
 
 Every ceiling is part of the company document. The **company's**
-`token_budget`, a **seat's** and **each person's assistant's** are written through
+`token_budget`, a **seat's** and **each person's Ask Crewlet ceiling** are written through
 [`/config`](configure-via-api.md) (`admin`) — a seat's on its own with
 `PUT /config/roles/{handle}` — and every node enforces them once it has applied
 that epoch. The write is a revision recorded with a summary such as "Raise the

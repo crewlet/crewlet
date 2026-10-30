@@ -1363,9 +1363,9 @@ acts on (`Access-Control-Expose-Headers`): `X-Crewlet-Engine`, `ETag`,
 `X-Request-Id`; an origin the list does not name is answered with none of
 these. Leaving one out does not strip it; the browser refuses the whole
 request, or hides the header from the page, so a route reading a header a
-permitted origin cannot send is a route that origin can never use. The
-Dashboard Assistant's `Last-Event-ID` is not offered, since the one route that
-reads it, the assistant's stream, answers nothing but a person's own browser
+permitted origin cannot send is a route that origin can never use.
+Ask Crewlet's `Last-Event-ID` is not offered, since the one route that
+reads it, Ask Crewlet's stream, answers nothing but a person's own browser
 session, and no answer here allows another origin credentials. The dashboard's
 `X-Crewlet-Reader` is not offered, since only the dashboard sends it and it is
 same-origin. The methods are likewise exactly the ones the routes serve,

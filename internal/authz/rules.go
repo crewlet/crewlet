@@ -1568,16 +1568,16 @@ const (
 	tellProof = "Changing how somebody proves who they are stays with them: they do it from " +
 		"their Account page."
 	tellSessions = "Signing people out stays with you: use People in Settings."
-	tellSecret   = "A secret's value never passes through the assistant, so this stays with " +
+	tellSecret   = "A secret's value never passes through Ask Crewlet, so this stays with " +
 		"you: use Secrets in Settings."
 	tellSetup = "Connecting an integration means entering its credentials, so it stays with " +
 		"you: use Integrations."
 	tellFrame = "An artifact's page opens from the artifact itself: open it from Artifacts."
-	tellOwn   = "The assistant never approves, declines or reads its own conversations: that " +
+	tellOwn   = "Ask Crewlet never approves, declines or reads its own conversations: that " +
 		"stays with you."
 	tellSeat      = "Only an agent does this, as part of its own work."
 	tellKnowledge = "Asking the knowledge base's own model would spend outside this " +
-		"conversation's budget, so the assistant searches the pages itself instead."
+		"conversation's budget, so Ask Crewlet searches the pages itself instead."
 	tellReady = "Only an open artifact reports that it has finished drawing."
 )
 

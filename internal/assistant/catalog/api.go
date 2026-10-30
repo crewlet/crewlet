@@ -610,7 +610,7 @@ func summarised(body []byte, args Args) ([]byte, error) {
 	}
 	summary := strings.Join(strings.Fields(args.String("summary")), " ")
 	if summary == "" {
-		summary = "Change " + lowerFirst(callTitle(args)) + " through the Dashboard Assistant"
+		summary = "Change " + lowerFirst(callTitle(args)) + " through Ask Crewlet"
 	}
 	doc[SummaryKey] = summary
 	encoded, err := json.Marshal(doc)
