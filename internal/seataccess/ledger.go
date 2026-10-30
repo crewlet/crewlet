@@ -51,6 +51,12 @@ type Account struct {
 
 	// State is where it stands.
 	State AccountState `json:"state"`
+
+	// Adopted marks an account this engine found under its own naming with
+	// no ledger row (one made before the ledger existed) and recorded rather
+	// than creating a second; CreatedByPass is then the sync that adopted
+	// it, and CreatedAt the vendor's own date where it gave one.
+	Adopted bool `json:"adopted,omitempty"`
 }
 
 // LaneRecord is what the ledger keeps for one seat's lane between passes.
