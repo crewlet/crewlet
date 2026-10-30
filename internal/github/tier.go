@@ -150,10 +150,6 @@ func (t Tier) Permissions() map[string]string {
 	}
 }
 
-// PermissionWorkflows is GitHub's key for the permission a push needs to
-// change a workflow file.
-const PermissionWorkflows = "workflows"
-
 // Access is what one seat's tokens may do: its tier, and the one grant no
 // tier carries by itself.
 //
