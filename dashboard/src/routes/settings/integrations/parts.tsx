@@ -21,6 +21,9 @@ import { ProductMark } from "@crewlethq/icons/product-mark";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { relTime } from "~/lib/format.ts";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
+// THE SCREEN'S OWN SHEET, with every module of the integrations screen (its
+// directory, panes, setup form and disconnect dialog), which all reach it here.
+import "~/styles/integrations.css";
 import { FindingSubjects, docHref } from "./catalogue.tsx";
 import {
   BUCKET_WORDS,
