@@ -300,9 +300,9 @@ func (s *syncer) seat(
 		if !d.Enabled || s.in.Sink == nil {
 			continue
 		}
-		f, err := s.offered(ctx, lane, d)
-		if err != nil {
-			return err
+		f, offerErr := s.offered(ctx, lane, d)
+		if offerErr != nil {
+			return offerErr
 		}
 		if f != nil {
 			blocked[lane] = f
