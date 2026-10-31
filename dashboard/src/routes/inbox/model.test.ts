@@ -604,11 +604,16 @@ describe("what was answered", () => {
       answered: answeredRow,
     });
     // ANSWERED HERE AND SETTLED: the row moves to the head of Answered as the
-    // row that was answered, and the engine's row for it is not listed too.
+    // row that was answered, until the engine lists the question as answered;
+    // then the engine's row stands in its place, the one row for it.
     const moved = new Map([["run:turn-7", { row: parked("q1"), moved: true as const, order: 1 }]]);
-    expect(pairAnswered([parked("q1")], answeredRow, moved)).toEqual({
+    expect(pairAnswered([parked("q1")], [], moved)).toEqual({
       needs: [],
       answered: [parked("q1")],
+    });
+    expect(pairAnswered([parked("q1")], answeredRow, moved)).toEqual({
+      needs: [],
+      answered: answeredRow,
     });
     // HELD HERE (accepted, not settled): it stays in Needs you, and Answered
     // does not list it.

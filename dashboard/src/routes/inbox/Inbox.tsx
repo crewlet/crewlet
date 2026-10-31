@@ -114,6 +114,7 @@ import {
   nextAfter,
   noticeRows,
   pairAnswered,
+  questionOf,
   readThrough,
   rowItem,
   rowKey,
@@ -307,11 +308,18 @@ export function Inbox() {
   // pane, where the pane replaces it), the first one not yet dealt with, so the pane
   // is never an empty box beside a list with something in it. A row the URL
   // names that has just LEFT the list (an update read a moment ago) stays open
-  // until the next one opens: what happened to it is what the pane shows.
+  // until the next one opens: what happened to it is what the pane shows. A
+  // row ANSWERED HERE that the engine has since listed as answered is its
+  // row, found by the question the two share ([pairAnswered]): a run's
+  // answered row is keyed by the launch that asked as well as its turn.
   const held = useRef<InboxRow | null>(null);
+  const movedHere = settled.get(open);
   const named =
     order.find((r) => r.key === open) ??
     answered.find((r) => r.key === open) ??
+    (movedHere?.moved
+      ? answered.find((r) => questionOf(r) === questionOf(movedHere.row))
+      : undefined) ??
     (open && held.current?.key === open ? held.current : null);
   const selected =
     named ??
@@ -478,6 +486,12 @@ export function Inbox() {
   });
   const showList = !single || !named;
   const showPane = !single || named !== null;
+  // THE ANSWER GIVEN TO THE OPEN ROW, where it moved to Answered and the
+  // engine has not listed it yet: the pane draws it in place of the controls
+  // that gave it, which would answer the question again.
+  const selectedHere = selected ? settled.get(selected.key) : undefined;
+  const answeredHere =
+    selected?.kind === "decision" && selectedHere?.moved ? selectedHere.answer : undefined;
   const given = useMemo(
     () =>
       new Map(
@@ -617,6 +631,7 @@ export function Inbox() {
               selected ? (titleOf(titles, rowItem(selected)) ?? taskTitleOf(selected)) : undefined
             }
             onBack={single ? () => nav.filter({ row: null }) : undefined}
+            answered={answeredHere}
             onSettled={(label, answer, hold) => selected && settle(selected, label, answer, hold)}
           />
         )}

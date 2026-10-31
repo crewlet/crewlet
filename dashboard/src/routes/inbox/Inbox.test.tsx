@@ -2194,6 +2194,77 @@ describe("what was answered", () => {
     expect(screen.queryByRole("region", { name: /^Needs you, [1-9]/ })).toBeNull();
   });
 
+  // A ROW ANSWERED HERE OPENS AS ANSWERED, never as the open question it was,
+  // whose controls would answer it a second time. Until the engine lists it
+  // as answered, the pane draws the answer given, read-only, where its
+  // controls were. Mutation: open the moved row as it stood in Needs you, and
+  // its options are back.
+  test("a row answered here reopens read-only, with the answer given", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem(), second) } });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    expect(location.hash).toContain("row=ask%3Ac-13");
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+        name: /Answered$/,
+      }),
+    );
+    await settle();
+    expect(location.hash).toContain("row=ask%3Ac-12");
+    const pane = within(document.querySelector<HTMLElement>(".inbox-pane")!);
+    expect(pane.queryByRole("button", { name: /Hold release/ })).toBeNull();
+    expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toContain(
+      "Hold release",
+    );
+  });
+
+  // ONCE THE ENGINE LISTS IT AS ANSWERED, its row stands in for the one
+  // answered here, and opens as an answered ask: what was asked, who
+  // answered and what became of it. Mutation: keep the row answered here in
+  // its place, and the pane is the open question's.
+  test("a row answered here opens as the engine's answered row once it is listed", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    const mine = answeredItem({
+      ask: { ...askItem().ask, open: false },
+      answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
+    });
+    let answeredYet = false;
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem(), second),
+        answered_decisions: () =>
+          Promise.resolve({ handle: "jane", items: answeredYet ? [mine] : [] }),
+      },
+    });
+    await settle();
+    answeredYet = true;
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+        name: /Answered$/,
+      }),
+    );
+    await settle();
+    expect(byline()).toContain("asked for your approval");
+    expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
+  });
+
   // A CODING RUN'S QUESTION, ONCE ANSWERED, IS READ BACK AS AN ASK IS. The
   // engine lists it in `answered_decisions` beside the work items' asks, and
   // the Inbox drew none of it: the row read the item's `ask`, which a run's
@@ -2408,7 +2479,15 @@ describe("what was answered", () => {
       ).toHaveLength(1);
     });
 
-    test("answered here moves under Answered with its option marked, never in Needs you as well", async () => {
+    /**
+     * The run parked on its question, opened and answered with "Target main",
+     * which its run takes and the engine then lists as answered (unless
+     * `listed` is false), with what else waits on the reader beside it.
+     */
+    async function answerParkedRun({
+      also = [],
+      listed = true,
+    }: { also?: unknown[]; listed?: boolean } = {}) {
       const parked = {
         kind: "run",
         at: new Date(Date.now() - 5 * 60_000).toISOString(),
@@ -2427,9 +2506,10 @@ describe("what was answered", () => {
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
         answers: {
-          decisions: () => Promise.resolve(sent() ? decisionsOf() : decisionsOf(parked)),
+          decisions: () =>
+            Promise.resolve(sent() ? decisionsOf(...also) : decisionsOf(parked, ...also)),
           answered_decisions: () =>
-            Promise.resolve({ handle: "jane", items: sent() ? [answeredRun()] : [] }),
+            Promise.resolve({ handle: "jane", items: sent() && listed ? [answeredRun()] : [] }),
           sandbox_runs: () =>
             Promise.resolve({
               runs: [
@@ -2442,12 +2522,60 @@ describe("what was answered", () => {
       fireEvent.click(screen.getByRole("button", { name: /Target main/ }));
       await settle();
       await settle();
+    }
+
+    test("answered here moves under Answered with its option marked, never in Needs you as well", async () => {
+      await answerParkedRun();
       // THE OPTION PRESSED IS MARKED, as the answered pane marks it.
       const answers = within(screen.getByRole("group", { name: "Answers" }));
       expect(answers.getByRole("button", { pressed: true }).textContent).toContain("Target main");
       expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
       expect(screen.getByRole("button", { name: /^Answered, 1/ })).toBeTruthy();
       expect(screen.queryByRole("region", { name: /^Needs you, [1-9]/ })).toBeNull();
+    });
+
+    // THE OPEN ROW FOLLOWS ITS QUESTION to the engine's answered row, which
+    // a run keys by the launch that asked as well as its turn: the address
+    // still names the turn, and the pane reads the run's answer as the
+    // engine recorded it. An answer to a run is no tracker write, so the
+    // engine's row arrives with the next read of what was answered, a poll
+    // the case runs on by hand. Mutation: find the open row by its key alone,
+    // and the pane is the open question's.
+    test("answered here opens as the engine's answered row, found by its question", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(new Date(PINNED_NOW));
+      await answerParkedRun();
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      await settle();
+      expect(location.hash).toBe("#/inbox?row=run%3Aturn-7");
+      expect(byline()).toBe("CTO’s coding run asked for your approval on LEAD-12");
+      const answered = screen.getByRole("region", { name: "Answered, 1" });
+      expect(answered.querySelector(".crewlet-inbox-row--selected")?.textContent).toContain(
+        "You chose Target main",
+      );
+    });
+
+    // REOPENED BEFORE THE ENGINE LISTS IT, the run's question reads as the
+    // run took it: its options as offered, the chosen one marked, and
+    // nothing to press. Mutation: open it with the controls it had, and
+    // "Something else" is back.
+    test("answered here and reopened before it is listed reads as taken, with nothing to press", async () => {
+      await answerParkedRun({ also: [askItem()], listed: false });
+      expect(location.hash).toContain("row=ask%3Ac-12");
+      fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+      fireEvent.click(
+        within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+          name: /Answered$/,
+        }),
+      );
+      await settle();
+      expect(location.hash).toBe("#/inbox?row=run%3Aturn-7");
+      const answers = within(screen.getByRole("group", { name: "Answers" }));
+      expect(answers.getByRole("button", { pressed: true }).textContent).toContain("Target main");
+      expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
+      expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toContain(
+        "Target main",
+      );
     });
 
     // ASKED ON EVERY COMPANY: a coding run's question is answered here
