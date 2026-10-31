@@ -103,7 +103,7 @@ room by its name with its #, such as #launch, or an agent, a team, a project
 or a page by its name), that mention is a chip: press
 it for a peek with the record's facts, its body and the list under it, and
 **Open** to go to its page. A record it read and never named is on one
-**Also read** line under the answer, with a chip of its own. A table's peek
+**Also looked up** line under the answer, with a chip of its own. A table's peek
 holds its rows, and it can be downloaded as CSV or XLSX from there, from the
 snapshot you were shown. A list is one chip, named by what it read and how
 much ("Matching tasks (first 50 of 210)"), and its peek says which screen

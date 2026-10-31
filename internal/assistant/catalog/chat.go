@@ -357,7 +357,7 @@ const (
 	// a read too large to show, which names what narrows it.
 	chatRoomsLimit = 50
 	// threadHeadingBytes is how much of its first message heads a thread's
-	// card: about a dozen words, which a chip on the Also read line holds on
+	// card: about a dozen words, which a chip on the Also looked up line holds on
 	// one line, and enough to tell two threads of one room apart.
 	threadHeadingBytes = 80
 )
