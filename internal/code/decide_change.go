@@ -575,8 +575,8 @@ func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRep
 	if d.payload == nil || d.refusal != "" {
 		return d, nil
 	}
-	actor, _ := p.Asker.party()
-	c := concerning{repoName: repo.name, change: row, actor: actor, roster: seats.Roster}
+	actor, actorKind := p.Asker.party()
+	c := concerning{repoName: repo.name, change: row, actor: actor, actorKind: actorKind, roster: seats.Roster}
 	switch {
 	case p.Open != nil:
 		c.mentions = p.Open.Mentions

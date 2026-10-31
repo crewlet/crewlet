@@ -50,9 +50,10 @@ func TestTheCodeDomainsDeclaration(t *testing.T) {
 	case d.GatesSeatAdmission():
 		t.Error("the code log gates seat admission, so a stalled code copy would shed " +
 			"seats that read nothing of it")
-	case d.FeedGroup() != "":
-		t.Errorf("the code log declares the feed group %q, which no consumer reads in "+
-			"this build — the trim would wait on it for ever", d.FeedGroup())
+	case d.FeedGroup() != code.FeedGroup || code.FeedGroup != "crewlet-code-feed":
+		t.Errorf("the code log declares the feed group %q and its feed runs as %q, want both "+
+			"crewlet-code-feed — the trim waits on the declared one, and a renamed group replays "+
+			"the whole retained log as wakes", d.FeedGroup(), code.FeedGroup)
 	}
 	// EIGHT MAXIMAL RECORDS ARE OUT AT ONCE ON ONE NODE: the log's reserve
 	// admits one append of its declared largest record in flight

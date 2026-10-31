@@ -240,18 +240,34 @@ func TestAFeedThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 	}
 }
 
-// THE CODE LOG RUNS NO WAKE FEED, AND DECLARES NONE: a push wakes nobody in
-// this build, so no consumer of its log waits on a group, and the trim waits
-// for none. Pinned rather than left to the register's sweep above, so the
-// build that makes a push wake a seat changes this test as well as a default.
-func TestTheCodeLogRunsNoFeedAndDeclaresNone(t *testing.T) {
+// THE CODE FEED IS DECLARED WITH ITS TRANSLATOR: the code log declares
+// `crewlet-code-feed`, its trim waits on that consumer, and the register's
+// entry runs the code translator over the log under exactly that group, on the
+// code host's own source — the name every code write delivers to, so a wake
+// about a change is answered by a write to one. Pinned rather than left to the
+// register's sweep above, which would pass a log that declared no feed and ran
+// none just as well.
+//
+// Mutation: drop the entry's Feed → feedFor refuses the declaration nobody
+// runs; declare no group → it refuses the feed nobody declared.
+func TestTheCodeFeedIsDeclaredWithItsTranslator(t *testing.T) {
 	t.Parallel()
-	if group := (code.Domain{}).FeedGroup(); group != "" {
-		t.Fatalf("the code log declares the wake feed %q", group)
+	if group := (code.Domain{}).FeedGroup(); group != code.FeedGroup {
+		t.Fatalf("the code log declares the wake feed %q, want %q", group, code.FeedGroup)
 	}
 	translator, opener, err := (&Engine{}).feedFor(&runningLog{domain: code.Domain{}})
-	if err != nil || translator != nil || opener != nil {
-		t.Fatalf("feedFor(code) = (%v, %v, %v), want no feed and no error",
-			translator, opener, err)
+	if err != nil || translator == nil || opener == nil {
+		t.Fatalf("feedFor(code) = (%v, %v, %v), want the code feed", translator, opener, err)
+	}
+	if _, ok := translator.(*code.Translator); !ok {
+		t.Errorf("the code log's feed translates with %T, want the code translator", translator)
+	}
+	if src := translator.Source(); src.Name != code.Source || src.Group != code.FeedGroup {
+		t.Errorf("the code feed runs as %+v, want source %q under %q", src, code.Source, code.FeedGroup)
+	}
+	group, ok := fleetGroupNamed(code.FeedGroup)
+	if !ok || !group.Data {
+		t.Errorf("the code feed's group is declared %+v (%v), want a group only a data node joins — "+
+			"the feed reads the log a data node applies", group, ok)
 	}
 }

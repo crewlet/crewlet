@@ -118,15 +118,11 @@ func pastHorizon(at applyContext, horizon time.Duration) bool {
 	return horizon > 0 && !at.now.IsZero() && at.brokerAt.Before(at.now.Add(-horizon))
 }
 
-// noticeRecordID is the notice's record: the record's own operation id, else
-// its position — never an id minted here, which would differ between two nodes
-// applying one record and write two notices for one change.
-func noticeRecordID(at applyContext) string {
-	if at.record.OpID != "" {
-		return at.record.OpID
-	}
-	return at.position.String()
-}
+// noticeRecordID is the notice's record ([RecordID]): the record's own
+// operation id, else its position — never an id minted here, which would
+// differ between two nodes applying one record and write two notices for one
+// change, and the one the feed derives the record's wakes from.
+func noticeRecordID(at applyContext) string { return RecordID(at.record.OpID, at.position) }
 
 // excerptOf is what a notice keeps of what its record says, at most
 // [MaxNoticeExcerpt] bytes cut at a character: an open's description, an

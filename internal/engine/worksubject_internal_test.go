@@ -12,6 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/code"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -97,6 +99,74 @@ func TestATrackerWakeNamesItsItem(t *testing.T) {
 	t.Parallel()
 	start, summary, done := turnRecords(t, trackerWake())
 	charged(t, nativeTask, types.BasisTrigger, start, summary, done)
+}
+
+// codeWake is the wake swe is given of a comment that mentions it on a change
+// that implements item — nil for a change that names none — as the code log's
+// feed relays the record and the code parser routes it.
+func codeWake(t *testing.T, item *types.WorkItem) *events.Event {
+	t.Helper()
+	const repo, change = "repo-1", "change-1"
+	mutation, err := json.Marshal(code.Comment{RepoID: repo, ChangeID: change, CommentID: "comment-1",
+		ThreadID: "comment-1", Body: "@swe is the retry bounded?", Mentions: []string{"swe"},
+		Routing: &code.ChangeRouting{ChangeID: change, ChangeRef: "web!42", RepoName: "web",
+			Title: "Retry the upload", Actor: "cto", Owner: "dev", OwnerKind: code.PartyAgent,
+			WorkItem: item, Mentions: []string{"swe"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := code.Encode(code.MutationRecord{
+		RecordEnvelope: code.RecordEnvelope{OpID: "op-comment", Subject: code.ChangeSubject(change),
+			Op: code.OpComment, CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Writer: "node-a",
+			Scope: code.Scope{code.RepoPath(repo), code.ChangePath(change)}},
+		Mutation: mutation, Actor: "node-a", ActorKind: code.ActorSystem,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, relayed, err := code.NewTranslator().Translate(t.Context(), changefeed.Record{
+		Key: "crewlet.code.log.change." + change, Payload: payload, Position: 7,
+		Stream: code.Domain{}.Stream().Name})
+	if err != nil || !relayed {
+		t.Fatalf("the code feed relays the comment: %v, %v", relayed, err)
+	}
+	routed, err := code.NewParser(code.ParserOptions{}).Parse(t.Context(), types.RawWebhook{Body: d.Body}, nil)
+	if err != nil || len(routed) != 1 || routed[0].To.Handle != "swe" {
+		t.Fatalf("the comment wakes %+v (%v), want swe", routed, err)
+	}
+	return events.New(types.ExternalNotification{
+		NotificationSource: routed[0].Source, SourceEventType: routed[0].EventType,
+		Subject: routed[0].Subject, Metadata: routed[0].Metadata,
+	}, events.TraceContext{})
+}
+
+// A CODE WAKE NAMES ITS WORK ITEM (ADR-0067): a change implements the item its
+// owner named, its routing carries it, and every wake about the change names
+// it — so the turn a review request, a mention or a finding's answer starts is
+// charged to the item the change implements, at dispatch, under the trigger
+// rule, whatever backend the item is on. A change that names no item names
+// none, and its wake's turn is on nothing until a sole write says otherwise.
+//
+// Mutation: leave code.Prompt out of workItemNamers, or the work item out of
+// the wake's metadata, and the turn is on nothing.
+func TestACodeWakeNamesItsWorkItem(t *testing.T) {
+	t.Parallel()
+	for name, item := range map[string]types.WorkItem{
+		"a native task": nativeTask,
+		"a jira issue":  {Backend: types.WorkJira, ID: "10042", Key: "ENG-12", Project: "ENG"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			start, summary, done := turnRecords(t, codeWake(t, &item))
+			charged(t, item, types.BasisTrigger, start, summary, done)
+		})
+	}
+	t.Run("a change that names none", func(t *testing.T) {
+		t.Parallel()
+		if item, basis := workItemOfEvent(codeWake(t, nil)); item != nil || basis != "" {
+			t.Errorf("a wake about a change that names no item is on %+v (%q)", item, basis)
+		}
+	})
 }
 
 // A WAKE ABOUT A PERSON'S OWN LIST NAMES NO ITEM.

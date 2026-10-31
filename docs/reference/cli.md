@@ -1984,7 +1984,7 @@ ceiling ordinary writes are refused at — so a log at `0%` still takes an
 eviction.
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
-vector, usage and code logs and the identity estate's have no wake feed, and an
+vector and usage logs and the identity estate's have no wake feed, and an
 absent term is a different fact from one that permits nothing. Where a log does
 have one, its `feed_ack_floor` is that log's own feed — never another domain's.
 `PER DAY` prints `-` for the same reason where nothing was measured — a

@@ -171,10 +171,12 @@ func (Domain) GatesSeatAdmission() bool { return false }
 // record, and every instant it stores is the broker's.
 func (Domain) ClaimsIdentity() bool { return true }
 
-// FeedGroup is empty: no wake is derived from a code record. A declared group
-// with no consumer would hold the trim's feed term at nothing for ever, so the
-// term is ABSENT rather than zero until a feed exists.
-func (Domain) FeedGroup() string { return "" }
+// FeedGroup is the code log's wake feed ([FeedGroup]): a record about a change
+// wakes the seats its routing tells (feed.go), so the log's trim waits on the
+// feed's acknowledgement — a record that feed has not acknowledged is one no
+// seat has been woken for yet — and a stopped feed holds back this log and no
+// other.
+func (Domain) FeedGroup() string { return FeedGroup }
 
 // Evictions is every eviction this log's applied rows hold — what the trim
 // reads to stop counting an evicted node on THIS log once its fence window has

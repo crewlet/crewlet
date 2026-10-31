@@ -146,13 +146,12 @@ Every node still evaluates its own alarms on every tick, whatever duty it holds.
 
 `feed_ack_floor` is the acknowledgement floor of the durable consumer that each
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
-`CREWLET_TRACKER_LOG`, and its group `crewlet-pages-feed` on
-`CREWLET_PAGES_LOG` — because a record that feed has not acknowledged is one
-nobody has been woken for yet. The code log is trimmed by the same six terms
-and declares no wake feed, so its feed term is absent rather than zero: no
-wake is derived from a code record in this release. So a feed that has stopped holds back its own
-log and no other, and `blocked_by: feed_ack_floor` on a domain names that
-domain's feed.
+`CREWLET_TRACKER_LOG`, its group `crewlet-pages-feed` on `CREWLET_PAGES_LOG`,
+and its group `crewlet-code-feed` on `CREWLET_CODE_LOG`, which wakes the seats
+a change's records tell ([How a seat is woken](../concepts/code-host.md#how-a-seat-is-woken))
+— because a record that feed has not acknowledged is one nobody has been woken
+for yet. So a feed that has stopped holds back its own log and no other, and
+`blocked_by: feed_ack_floor` on a domain names that domain's feed.
 
 A group name is not the broker's consumer name. The durable consumer is named
 from the group **and** the stream, as `<group>__<stream>__<digest>` — for
@@ -165,8 +164,8 @@ the group name alone finds nothing.
 A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
-this domain does not **have** — the vector log, the code log, the identity
-estate's and the usage log's have no wake feed — is `n/a`
+this domain does not **have** — the vector log, the identity estate's and the
+usage log's have no wake feed — is `n/a`
 rather than zero, which is a different thing again. And a term that was
 read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
 no snapshots — reads `unbounded` rather than carrying a sequence. Inside the

@@ -294,6 +294,18 @@
 // person's own push under direct_push persons, which is that person's recorded
 // override; never by a seat's push, which every protection refuses.
 //
+// # A change wakes the seats its records concern
+//
+// Every record about a change carries whom it concerns, stamped by its writer
+// (concerns.go); the applier writes a notice row for each (apply_notices.go),
+// which a person's code inbox reads, and the code log's own fleet-wide
+// consumer, [FeedGroup], derives a WAKE for each seat among them (feed.go,
+// wake.go) — never the writer's goroutine (ADR-0012). The log's trim waits on
+// that consumer. A person is never queue-woken. A CHANGE IMPLEMENTS ONE WORK
+// ITEM AND CARRIES NO SPEND (ADR-0067): every wake about it names the item
+// ([Prompt.WorkItem]), so the turn it starts is charged to that item, and no
+// table of this domain has a column for what a turn spent.
+//
 // # A repository's checks are rows on their own subject
 //
 // What a repository's `.crewlet/checks.yaml` defines (checksfile.go:

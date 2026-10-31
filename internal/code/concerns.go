@@ -237,9 +237,10 @@ type ChangeRouting struct {
 	// LeadFallback is the lead a change nobody who may review it is asked
 	// reaches, "" for none.
 	LeadFallback string `json:"lead_fallback,omitempty"`
-	// Persons is which of the handles named above are persons, sorted: what
-	// a notice row's recipient kind and its horizon are read from, and what
-	// keeps a person from ever being queue-woken.
+	// Persons is which of the handles named above are persons — the actor
+	// among them — sorted: what a notice row's recipient kind and its horizon
+	// are read from, what keeps a person from ever being queue-woken, and
+	// what tells a wake whether a person or a seat wrote what it announces.
 	Persons []string `json:"persons,omitempty"`
 }
 
@@ -485,8 +486,11 @@ type concerning struct {
 	// change is the change's row as the record leaves it: its id, number,
 	// title, owner and work item.
 	change changeRow
-	// actor is who made the change, "" for the home's own records.
-	actor string
+	// actor is who made the change, "" for the home's own records, and
+	// actorKind what it is: a person's actor is named among the routing's
+	// persons, so a wake says a person wrote what it announces.
+	actor     string
+	actorKind PartyKind
 	// roster is the deciding chart: what a mention is held to and what says
 	// whether a handle is a person's. Nil only for a record that names no
 	// mention.
@@ -538,6 +542,9 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 	}
 	if row.owner != "" {
 		note(row.owner, row.ownerKind)
+	}
+	if c.actor != "" {
+		note(c.actor, c.actorKind)
 	}
 	mentions := c.mentions
 	for _, text := range c.mentionText {

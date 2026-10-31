@@ -3922,7 +3922,8 @@ current node or by nobody. A person's push it decides as before.
 ### Reads made for somebody else
 
 A turn somebody woke — a person's message, a colleague seat's message or ask,
-or a change either of them made on a work item or a page that wakes the seat —
+or a change either of them made on a work item, a page or a repository's
+[change](#who-a-change-wakes) that wakes the seat —
 is that somebody's errand, and a seat that read out for them whatever it may
 read itself would hand a `visibility: unit` repository to anybody who can
 message one of the unit's seats. So inside such a turn every code read the
@@ -3931,7 +3932,7 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 
 | The turn was woken by | What the seat reads |
 |---|---|
-| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
+| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge, a revision's facts — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
 | a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
 | a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
@@ -3940,6 +3941,9 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 A change on a work item or a page names who made it by the kind its record
 holds, never by how the name is spelled: a seat's change, or a person's made
 as the seat they hold, is that seat's, and the engine's own is nobody's. A
+record about a repository's change names who made it in the routing its
+writer stamped, a person by the human seat they hold, and its home's own
+records name nobody. A
 credential acting as no seat holds no seat a ceiling could be decided for, so
 the turn its change wakes reads nothing, as a stranger's does. The seat's own
 voice is never its requester: when the outcome of its own act opens a thread,
@@ -5206,6 +5210,59 @@ chart, as a seat's write is. Whoever a comment or a review mentions joins the
 change's participants, and hears what its watchers hear from then on; an
 open's or an edit's mentions are told and join nothing, since those records
 are the repository's and the participants are the change's own.
+
+### How a seat is woken
+
+A seat hears about a change by a **wake derived from the code log**, the way
+it hears about a work item or a page
+([Who a change concerns, and who it wakes](event-system.md#who-a-change-concerns-and-who-it-wakes)):
+the log's own consumer, the group `crewlet-code-feed`, reads every committed
+record on whichever data node takes it, and the notification service routes
+each wake from the record's own routing, on any node — never from a row, and
+never from the goroutine of the node that decided the record, so a node that
+stops after its record committed loses no wake.
+
+- **Only seats are woken.** A person reads their code notices in their inbox,
+  from the rows above, and is never woken as a seat is; a record that tells
+  only persons, or only whoever made it, is no wake at all.
+- **A seat the company no longer employs is not woken**, and keeps its row:
+  the chart is asked at the wake, so a reviewer who left after being asked
+  hears nothing. The lead's copy (`lead_fallback`) wakes only where nobody
+  else the record tells is still employed — a person among them, whose
+  notice counts as somebody hearing.
+- **One wake per seat per record**, its id derived from the record and the
+  seat, so a record the feed handles twice — its claim fails open when the
+  coordination store cannot be reached — wakes nobody twice. Every wake
+  about one change is one conversation, keyed by the change's id: a rename of
+  its repository splits nothing.
+- **The wake names the change's work item**, and the turn it starts is
+  charged to that item from its first record
+  ([ADR-0067](../../adr/0067-a-change-implements-one-work-item-and-carries-no-spend.md)):
+  the review a change was asked for, the fix its findings asked for and the
+  answer to its conflict are all work on the item the change implements. A
+  change carries no spend of its own — what a turn spent is on the turn and
+  its item, never summed on the change.
+- **Who wrote it bounds what the seat reads**: a review a colleague seat
+  asked for is that colleague's errand, and a code read in the turn is
+  decided for both grants ([Reads made for somebody else](#reads-made-for-somebody-else));
+  the home's own records — a conflict, a change ready to merge — are nobody's.
+- **What the seat is told** is the change by name, why it hears, whatever
+  the record says in full — a comment, a review's summary, an ask's note, a
+  description — and the tool that answers it: `code_review_change` for a
+  review asked, `code_resolve_finding` and `code_comment_on_change` for
+  findings and requests for changes, `code_comment_on_change` for a mention or
+  a thread. It always reads the change itself first, with `code_get_change`:
+  the wake says what happened, not what the change is. `mention`,
+  `review_requested`, `changes_requested`, `conflicted`, `finding_replied`,
+  `ready_to_merge` and `re_review` ask for an answer, which the seat delivers
+  through a code write; the rest are news it may absorb in silence.
+
+The feed holds the code log's trim: a record it has not acknowledged is one
+no seat has been woken for, so the log keeps it
+([The six terms](../guides/retention.md#the-six-terms)). Turned on over a
+log that already holds records, the consumer starts from the first record the
+log still has, and none from before a change existed carries a routing, so
+that replay wakes nobody.
 
 ---
 

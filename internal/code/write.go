@@ -37,9 +37,10 @@ import (
 // Source is the code host as a delivery's SURFACE: the name a seat's code
 // write delivers to (internal/agent/builtin registers every code write tool
 // with tools.DeliversTo(Source)), and the notification source the code feed
-// publishes a repository's wakes under once it exists — reserved here, by the
-// writes that are its first reader, so the delivery gate compares a write's
-// surface and a wake's source in one spelling, as tracker.Source and
+// publishes a change's wakes under ([Translator], [Parser]) — one name for
+// both, so the delivery gate compares a write's surface and a wake's source in
+// one spelling, and an addressed code wake is answered by a code write, as
+// tracker.Source and
 // pages.Source are each one. FIXED: a wake published under another spelling
 // would find no delivery to it, and the gate would read every obligation
 // about code as reaching nobody.

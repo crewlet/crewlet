@@ -578,7 +578,7 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 	}
 	c := d.concern
 	c.repoName, c.change, c.roster = repoName, row, roster
-	c.actor, _ = w.Asker.party()
+	c.actor, c.actorKind = w.Asker.party()
 	r, err := routingFor(ctx, tx, c)
 	if err != nil {
 		return conversationDecision{}, err

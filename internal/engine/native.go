@@ -1151,6 +1151,15 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 		}))
 		prompts = append(prompts, pages.Prompt{})
 	}
+	if run.code {
+		// NO LEAD MAP AND NO BASE URL, as the tracker's: a code record
+		// carries the routing its writer decided from its own snapshot and
+		// chart — the repository owner's lead for a change nobody may
+		// review among them — and the woken seat reads the change with its
+		// code tools rather than a link.
+		parsers = append(parsers, code.NewParser(code.ParserOptions{}))
+		prompts = append(prompts, code.Prompt{})
+	}
 	return parsers, prompts
 }
 

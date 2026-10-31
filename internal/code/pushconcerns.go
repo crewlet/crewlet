@@ -76,7 +76,7 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 	if len(merged) == 0 && opened == "" {
 		return nil, nil
 	}
-	actor, _ := e.Principal.party()
+	actor, actorKind := e.Principal.party()
 	var out []ChangeRouting
 	for _, id := range merged {
 		row := *b.rows[id]
@@ -94,7 +94,7 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 			}
 		}
 		routed, err := routingFor(ctx, tx, concerning{repoName: r.repo.name, change: row, actor: actor,
-			authors: true, addedAuthors: added, merged: true})
+			actorKind: actorKind, authors: true, addedAuthors: added, merged: true})
 		if err != nil {
 			return nil, err
 		}
@@ -111,7 +111,7 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 		row := *b.rows[opened]
 		row.number = r.pendingNumber
 		routed, err := routingFor(ctx, tx, concerning{repoName: r.repo.name, change: row, actor: actor,
-			roster: r.roster, mentionText: []string{e.Change.Title, e.Change.Body}})
+			actorKind: actorKind, roster: r.roster, mentionText: []string{e.Change.Title, e.Change.Body}})
 		if err != nil {
 			return nil, err
 		}

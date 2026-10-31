@@ -641,9 +641,15 @@ func register() []registration {
 					return host.EvictNode(ctx, actor, opID, node)
 				}, nil
 			},
-			// NO WAKE FEED: the domain declares no feed group
-			// ([code.Domain.FeedGroup]), since nothing a repository's rows
-			// say wakes a seat yet.
+			// THE WAKE A CHANGE SENDS A SEAT — asked to review, its change
+			// reviewed, a finding answered — derived from the committed
+			// record and the routing its writer stamped on it, never
+			// published by the committer's or the change writer's goroutine
+			// (ADR-0012). A person hears from the notice rows its applier
+			// writes, never from here.
+			Feed: func(_ *Engine, records domainFeed) (changefeed.Translator, changefeed.Opener) {
+				return code.NewTranslator(), code.FeedSource{Log: records}
+			},
 			OpsRetention: statelog.OpsRetention,
 			Ceiling: func(stream config.Stream, free int64) domainCeiling {
 				bytes, derived := stream.CodeMaxBytes(free)

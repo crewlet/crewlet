@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -35,6 +36,7 @@ func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 	}{
 		"the tracker": {tracker.NewTranslator().Source(), "work", "crewlet-tracker-feed"},
 		"the wiki":    {pages.NewTranslator(nil).Source(), "page", "crewlet-pages-feed"},
+		"the code":    {code.NewTranslator().Source(), "code", "crewlet-code-feed"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if tc.got.Group != tc.wantGroupExact {
@@ -49,8 +51,13 @@ func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 			}
 		})
 	}
-	if tracker.NewTranslator().Source().Group == pages.NewTranslator(nil).Source().Group {
-		t.Error("two estates share a durable consumer, so each would handle " +
-			"records it cannot decode")
+	groups := map[string]bool{}
+	for _, src := range []changefeed.Source{tracker.NewTranslator().Source(),
+		pages.NewTranslator(nil).Source(), code.NewTranslator().Source()} {
+		if groups[src.Group] {
+			t.Errorf("two estates share the durable consumer %q, so each would handle "+
+				"records it cannot decode", src.Group)
+		}
+		groups[src.Group] = true
 	}
 }

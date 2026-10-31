@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/alarmwake"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -42,10 +43,18 @@ func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 		native        *native
 		remote        *remoteNative
 		tracker, wiki bool
+		// code is the company hosting its repositories in the engine, whose
+		// changes the code parser routes.
+		code bool
 		// walk is the skill walk the node takes, by the method's name, or
 		// "" where it reads no native skills at all.
 		walk string
 	}{
+		{name: "a data node hosting code beside both halves", native: codeRuntime(own(true, true)),
+			tracker: true, wiki: true, code: true, walk: "walkNativeSkills"},
+		{name: "a data node hosting code alone", native: codeRuntime(own(false, false)), code: true},
+		{name: "a node without data hosting code alone",
+			remote: &remoteNative{built: builtWith{code: true}}, code: true},
 		{name: "a node running no native runtime"},
 		{name: "a data node running both halves", native: own(true, true),
 			tracker: true, wiki: true, walk: "walkNativeSkills"},
@@ -97,6 +106,9 @@ func TestEveryReaderOfTheNativeHalvesAgrees(t *testing.T) {
 			}
 			if tc.wiki {
 				want = append(want, pages.Source)
+			}
+			if tc.code {
+				want = append(want, code.Source)
 			}
 			if !slices.Equal(routed, want) || len(prompts) != len(want) {
 				t.Errorf("the inbound edge routes %v with %d prompts, want %v",
@@ -158,6 +170,13 @@ func ownRuntime(runTracker, wiki bool) *native {
 	if wiki {
 		n.pageReader, n.pages, n.searcher = &pages.Reader{}, &pages.Store{}, &pages.Searcher{}
 	}
+	return n
+}
+
+// codeRuntime is n built for a company that hosts its repositories in the
+// engine (`code.native`).
+func codeRuntime(n *native) *native {
+	n.built.code = true
 	return n
 }
 
