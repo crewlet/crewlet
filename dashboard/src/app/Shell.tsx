@@ -94,6 +94,7 @@ import {
   PHONE_BREAKPOINT,
   assistantColumnMin,
   assistantCounted,
+  assistantCoverEnd,
   assistantMaxWidth,
   assistantOccupied,
   assistantTrack,
@@ -396,17 +397,47 @@ function onVisibilityChange(notify: () => void): () => void {
 }
 
 /**
+ * How far in from the window's END edge the assistant stands over the page
+ * while it is an overlay ([assistantCoverEnd]); zero while it is a column, a
+ * sheet or shut.
+ */
+const PageCoverEnd = createContext(0);
+
+/**
+ * How far in from the window's end edge the assistant stands over the page,
+ * for a screen that draws something at its end and keeps it in view beside
+ * the panel rather than under it (Chatlet's pane, `routes/chatlet/Chat.tsx`).
+ * The screen subtracts its own measured distance to the window's edge.
+ */
+export function usePageCoverEnd(): number {
+  return useContext(PageCoverEnd);
+}
+
+/**
  * The page's [PageCovered], published around the screen: the assistant over
  * the page (`over`, the frame's own state) or any modal surface on the kit's
- * layer stack ([useModalLayerOpen]).
+ * layer stack ([useModalLayerOpen]), and how much of its end the assistant
+ * stands over ([PageCoverEnd]).
  *
  * ITS OWN COMPONENT, because the stack's feed re-renders whatever reads it on
  * every change, a menu opening included: here that is one small render, and
  * the screen under it re-renders only when the answer moves.
  */
-function PageCover({ over, children }: { over: boolean; children: ReactNode }) {
+function PageCover({
+  over,
+  coverEnd,
+  children,
+}: {
+  over: boolean;
+  coverEnd: number;
+  children: ReactNode;
+}) {
   const modal = useModalLayerOpen();
-  return <PageCovered.Provider value={over || modal}>{children}</PageCovered.Provider>;
+  return (
+    <PageCovered.Provider value={over || modal}>
+      <PageCoverEnd.Provider value={coverEnd}>{children}</PageCoverEnd.Provider>
+    </PageCovered.Provider>
+  );
 }
 
 /**
@@ -794,7 +825,16 @@ function Frame({ children }: { children: ReactNode }) {
         <OwnHeaderRequest.Provider value={setOwnHeader}>
           <OwnHeaderSlot.Provider value={ownHeader ? headerSlot : null}>
             <PageContextValue.Provider value={page}>
-              <PageCover over={assistantOver}>{children}</PageCover>
+              <PageCover
+                over={assistantOver}
+                coverEnd={
+                  assistantOpen
+                    ? assistantCoverEnd(assistantShape, assistantDrawn, viewport, scale)
+                    : 0
+                }
+              >
+                {children}
+              </PageCover>
             </PageContextValue.Provider>
           </OwnHeaderSlot.Provider>
         </OwnHeaderRequest.Provider>

@@ -59,6 +59,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -68,7 +69,7 @@ import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { samePath, useNavigator, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import type { ChatView } from "~/app/routes.ts";
-import { usePageLabels } from "~/app/Shell.tsx";
+import { usePageCoverEnd, usePageLabels } from "~/app/Shell.tsx";
 import { CHAT_NARROW } from "~/app/layout.ts";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
@@ -192,6 +193,9 @@ function ChatAs({ id, view, seat }: ChatAddress & { seat: RefObject<string> }) {
 /** Where the frame's measured chat area is handed its element. */
 const ChatAreaContext = createContext<(el: HTMLDivElement | null) => void>(() => {});
 
+/** How much of the measured chat area's end the assistant stands over, in px. */
+const ChatCoverContext = createContext(0);
+
 /**
  * Everything the screen holds above every place, provided to what is under
  * it: the navigation (`nav.tsx`), the frame's own state (the reader's rooms,
@@ -222,9 +226,16 @@ export function ChatFrameRoot({
   // THE CHAT AREA'S OWN WIDTH, not the window's: the app sidebar, a peek and
   // the assistant's column each take a share of the window that no media
   // query can see (`app/layout.ts`). The layout hands its element up.
+  //
+  // LESS WHAT THE ASSISTANT STANDS OVER: as an overlay it covers the area's
+  // end, which is where a pane is drawn, so the area a reader can see is what
+  // decides whether a pane covers the conversation, and the pane stands
+  // beside the panel (`--chat-cover-end`, [ChatLayout]) rather than wholly
+  // under it.
   const [area, setArea] = useState<HTMLDivElement | null>(null);
-  const width = useWidth(area);
-  const nav = useChatNavigation(place, pane, width > 0 && width < CHAT_NARROW);
+  const { width, endGap } = useWidth(area);
+  const covered = Math.max(0, usePageCoverEnd() - endGap);
+  const nav = useChatNavigation(place, pane, width > 0 && width - covered < CHAT_NARROW);
 
   // ONE CURSOR WRITER FOR THE SEAT, above the room, so switching rooms is a
   // flush rather than a new writer that has forgotten what the last one had
@@ -374,7 +385,9 @@ export function ChatFrameRoot({
       <ChatFrameProvider value={frame}>
         <DraftsContext.Provider value={drafts}>
           <OpenRoomProvider room={open}>
-            <ChatAreaContext.Provider value={setArea}>{children}</ChatAreaContext.Provider>
+            <ChatAreaContext.Provider value={setArea}>
+              <ChatCoverContext.Provider value={covered}>{children}</ChatCoverContext.Provider>
+            </ChatAreaContext.Provider>
           </OpenRoomProvider>
         </DraftsContext.Provider>
       </ChatFrameProvider>
@@ -396,6 +409,10 @@ function DialogHost() {
 function ChatLayout({ children }: { children: ReactNode }) {
   const nav = useChatNav();
   const area = useContext(ChatAreaContext);
+  // WHAT THE ASSISTANT STANDS OVER at the area's end, which a pane keeps
+  // clear of (`styles/chatlet-frame.css`).
+  const covered = useContext(ChatCoverContext);
+  const cover = covered > 0 ? ({ "--chat-cover-end": `${covered}px` } as CSSProperties) : undefined;
   // MENU BRINGS THE PANEL BACK, so it is where focus goes when the panel is
   // unpinned from inside the dock.
   const menu = useRef<HTMLButtonElement>(null);
@@ -416,7 +433,7 @@ function ChatLayout({ children }: { children: ReactNode }) {
   return (
     <LayerHost className="chat-layer">
       <RoomScopeProvider channelID={room}>
-        <div ref={area} className={className}>
+        <div ref={area} className={className} style={cover}>
           {!nav.narrow && <RoomsDock docked={nav.rooms.docked} back={() => menu.current} />}
           <section className="chat-main" aria-label="Conversation">
             <ChatTopBar menu={menu} />
@@ -459,19 +476,26 @@ function PlaceView() {
 }
 
 /**
- * An element's own width, measured again as it changes; zero until measured,
- * which reads as wide: the wide layout is the one that works before anything
- * has been measured.
+ * An element's own width, measured again as it changes, and how far its end
+ * stands from the window's end edge; zero until measured, which reads as
+ * wide: the wide layout is the one that works before anything has been
+ * measured.
  */
-function useWidth(el: HTMLElement | null): number {
-  const [width, setWidth] = useState(0);
+function useWidth(el: HTMLElement | null): { width: number; endGap: number } {
+  const [box, setBox] = useState({ width: 0, endGap: 0 });
   useLayoutEffect(() => {
     if (!el || typeof ResizeObserver === "undefined") return;
-    const measure = () => setWidth(el.getBoundingClientRect().width);
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      const endGap = Math.max(0, window.innerWidth - rect.right);
+      setBox((was) =>
+        was.width === rect.width && was.endGap === endGap ? was : { width: rect.width, endGap },
+      );
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
   }, [el]);
-  return width;
+  return box;
 }

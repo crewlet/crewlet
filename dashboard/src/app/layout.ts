@@ -371,6 +371,27 @@ export function assistantOccupied(
 }
 
 /**
+ * How far in from the WINDOW's end edge the assistant stands OVER the page:
+ * what it occupies ([assistantOccupied]) while it is an overlay. Nothing as a
+ * column, which pushes the page narrower instead, or as a sheet, which is the
+ * whole window and modal.
+ *
+ * FOR A SCREEN THAT DRAWS SOMETHING AT ITS OWN END EDGE, which is exactly
+ * where the overlay stands: Chatlet's pane lay wholly under it. Measured from
+ * the window rather than the page because the page's own end inset is the
+ * kit's to draw (none under the shell's step): the screen subtracts its own
+ * distance to the window's edge, which it can measure.
+ */
+export function assistantCoverEnd(
+  shape: AssistantShape,
+  width: number,
+  viewport: number,
+  scale: number,
+): number {
+  return shape === "overlay" ? assistantOccupied(shape, width, viewport, scale) : 0;
+}
+
+/**
  * The narrowest window Settings' column stands beside its section at, with
  * the assistant's track (if any) taken first: [SECTION_COLUMN_MIN] plus it.
  */
