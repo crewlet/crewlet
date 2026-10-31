@@ -19,11 +19,16 @@ import (
 // it carries), so a read naming more would be a need no read holds anybody to.
 // A WRITE's row is the access the deciding node holds the colleague its turn
 // works for to (code.ChangeProposal.CeilingNeeds,
-// code.ConversationWrite.CeilingNeeds), the two one rule.
+// code.ConversationWrite.CeilingNeeds), the two one rule — but for a write
+// that is a branch move alone, a rebase, which the git node holds the
+// colleague to as every branch write (code.EngineWrite.Ceiling, Grant.Under on
+// the one ref it moves, the seat's own work spared): a rule of the push and
+// no access its decide reads, so its row is read, the least that admits it.
 //
 // Mutations: a change tool's row dropped — a read's or a write's; a row naming
 // a tool that is not one; a read's row raised to review; the review's row, or
-// the decide's need for a review, lowered to read → red.
+// the decide's need for a review, lowered to read; the rebase's row raised to
+// review → red.
 func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 	t.Parallel()
 	every := slices.Concat(ChangeToolNames(), ChangeWrites())
@@ -67,9 +72,16 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		CodeResolveFindingTool:   code.ConversationWrite{FindingResolve: &code.FindingResolve{}},
 		CodeApplySuggestionsTool: code.ConversationWrite{FindingResolve: &code.FindingResolve{}},
 	}
+	// The change writes a git node decides as a branch move, and nothing else.
+	pushes := []string{CodeRebaseChangeTool}
 	for _, name := range ChangeWrites() {
 		write, ok := sends[name]
 		switch {
+		case slices.Contains(pushes, name):
+			if ok || changeToolNeeds[name] != code.AccessRead {
+				t.Errorf("%s is a branch move the git node holds a colleague to by the push's rule, so its row is "+
+					"read and no decide's access names it: row %s", name, changeToolNeeds[name])
+			}
 		case !ok:
 			t.Errorf("%s names no write its decide holds a colleague by", name)
 		case write.CeilingNeeds() != changeToolNeeds[name]:

@@ -4111,7 +4111,10 @@ review the change, which its author may never review itself. For a stranger,
 or a person who may not act in the company now, a seat writes nothing of a
 change except its own work: a change it owns, an open of a branch under its own
 namespace, and any change of a repository it owns. Every read a change tool
-makes is held to a colleague as every code read is.
+makes is held to a colleague as every code read is. **A change's
+[rebase](#a-change-rebased) is a branch write**, so the git node that builds it
+holds it as it holds every one: for a colleague seat, a source branch the
+colleague could push, or the seat's own work.
 
 ---
 

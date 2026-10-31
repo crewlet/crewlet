@@ -436,8 +436,8 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 
 // A CODE WRITE IS DECIDED AGAIN FOR WHOEVER WOKE THE TURN (M3-decisions U40
 // (a)): the engine writes, the lifecycle request and a change's writes — an
-// open, its ask for review, an edit, a comment, and a suggestions apply and
-// its findings' answer — a seat's call sends carry
+// open, its ask for review, an edit, a comment, a suggestions apply and its
+// findings' answer, and a rebase — a seat's call sends carry
 // whom its turn works for, for the git node and the data node that decide them
 // to judge beside the seat's own grant — none for a turn nobody woke, the
 // outcome of its own act or a person (who maintains every repository); the
@@ -453,8 +453,8 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 // stranger's writes carry none, red; the ceiling's refusal answered as a
 // refusal rather than nobody's ceiling → the stranger's write is refused
 // before it is sent, red; the colleague left off the call's reads → red; the
-// lifecycle request, a change proposal or a conversation write left
-// unstamped → red.
+// lifecycle request, a change proposal, a conversation write or a rebase's
+// engine write left unstamped → red.
 func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	t.Parallel()
 	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
@@ -494,15 +494,16 @@ func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 					"title": "Retry twice"}},
 				{builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Hm."}},
 				{builtin.CodeApplySuggestionsTool, applyArgs(suggestedA)},
+				{builtin.CodeRebaseChangeTool, map[string]any{"change": "site!7", "expected_head": revHead(3)}},
 			} {
 				if got := callWrite(t, everyGrant(), reg, turn, call.tool, call.args); got.Failed {
 					t.Fatalf("%s answered %q", call.tool, got.Output)
 				}
 			}
 			writes, requests := writer.asked()
-			if len(writes) != 2 || len(requests) != 1 {
-				t.Fatalf("%d engine writes and %d lifecycle requests were sent, want a commit and an apply, and "+
-					"one request", len(writes), len(requests))
+			if len(writes) != 3 || len(requests) != 1 {
+				t.Fatalf("%d engine writes and %d lifecycle requests were sent, want a commit, an apply and a "+
+					"rebase, and one request", len(writes), len(requests))
 			}
 			for _, w := range writes {
 				if !reflect.DeepEqual(w.Ceiling, c.ceiling) {

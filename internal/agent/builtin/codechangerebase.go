@@ -20,7 +20,10 @@ import (
 // author and its author date (U43 a), the first that conflicts stopping it
 // with nothing stored. The push is the caller's, held to the grant's ref rule
 // and the protections of the source branch as a force-push of it is, and its
-// apply records the change's new revision.
+// apply records the change's new revision. In a turn somebody woke, the write
+// carries whom it is made for (code.EngineWrite.Ceiling, [CodeDeps.writeCaller])
+// and the git node holds the push to that requester's grant too, the seat's own
+// work spared — as every branch write is, since a rebase is one.
 
 // CodeRebaseChangeTool is the tool's name: its authority row's action.
 const CodeRebaseChangeTool = string(authz.ActionCodeRebaseChange)
@@ -86,7 +89,7 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	op := opIDFor(cv.g.c.actor, tool, rebaseVerb, repo.ID, args)
 	w := code.EngineWrite{Kind: code.WriteRebaseChange, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
 		OpID: op, Fresh: t.deps.writeFresh(turn, cv.g.c, repo), Ref: cv.change.SourceRef, ExpectedHead: head,
-		Change: cv.change.Number}
+		Change: cv.change.Number, Ceiling: cv.g.c.write}
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}

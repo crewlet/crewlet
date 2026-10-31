@@ -124,7 +124,11 @@ func ChangeToolNames() []string { return []string{CodeListChangesTool, CodeGetCh
 // it is the seat's own to meet, so an author may ask a seat to review the
 // change it could never review itself. The committer reads that access from
 // the write's kind — review for a review, read for every other — which
-// TestEveryChangeToolNamesTheAccessItNeeds holds to these rows.
+// TestEveryChangeToolNamesTheAccessItNeeds holds to these rows. A REBASE is a
+// branch move and nothing else, so the git node that builds it holds the
+// colleague as it holds every branch write (code.EngineWrite.Ceiling,
+// code.Grant.Under on the source it moves, the seat's own work spared), and no
+// decide reads an access for it.
 var changeToolNeeds = map[string]code.Access{
 	CodeListChangesTool:     code.AccessRead,
 	CodeGetChangeTool:       code.AccessRead,
@@ -140,7 +144,8 @@ var changeToolNeeds = map[string]code.Access{
 	// rule the git node's and the committer's.
 	CodeApplySuggestionsTool: code.AccessRead,
 	// A rebase force-pushes the change's source branch, its rule likewise the
-	// git node's and the committer's.
+	// git node's and the committer's — and, in a turn a colleague woke, the
+	// colleague's too, on that git node (code.EngineWrite.Ceiling).
 	CodeRebaseChangeTool: code.AccessRead,
 }
 
