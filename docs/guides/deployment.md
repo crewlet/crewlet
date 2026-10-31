@@ -662,8 +662,10 @@ be secured, operated, or shared on a schedule of its own:
 stream:
   type: nats
   url: "nats://nats-1.internal:4222,nats://nats-2.internal:4222,nats://nats-3.internal:4222"
-  credentials: "/etc/crewlet/engine.creds"   # an NKey/JWT creds file
-  # token: "${CREWLET_NATS_TOKEN}"           # or a bearer token
+  credentials: "/etc/crewlet/engine.creds"   # an NKey/JWT creds file — one of
+  # token: "${CREWLET_NATS_TOKEN}"           #   credentials, token or tls.cert
+                                             #   (or a credential in url) is
+                                             #   required
   tls:
     ca: /etc/crewlet/ca.pem                  # the private CA to trust
     cert: /etc/crewlet/client.pem            # this engine's own certificate
@@ -689,26 +691,43 @@ engine writes repeats it: a failed dial, a refusal at boot and a log line each
 name a server by its scheme, host and port alone, and an address that does
 not parse is named as one rather than quoted.
 
-**Authentication is `credentials` or `token`.** `credentials` is a path to a
-NATS credentials file, the NKey/JWT pair a NATS account setup issues per
-user; `token` is a bearer token, and takes a `${VAR}` reference so the
-secret stays out of the file and out of the config revision history. Set
-whichever the broker asks for; both are dial options, and the engine stores
-neither.
+**Authentication is required, on both sides.** This node must present a
+credential: `credentials`, a path to a NATS credentials file (the NKey/JWT
+pair a NATS account setup issues per user); `token`, a bearer token, which
+takes a `${VAR}` reference so the secret stays out of the file and out of the
+config revision history; `tls.cert`, a client certificate; or a credential in
+any `url` entry's userinfo, which the client sends. Set whichever the broker
+asks for; each is a dial option, and the engine stores none of them. A Tier A
+that presents none of the four is refused at `stream.credentials`, because a
+node presenting nothing reaches only a server that authenticates nobody.
 
-**A `container` coding box beside an external cluster reaches it unless its
-network forbids it.** Whether that cluster authenticates its clients is its own
-operator's configuration, which the engine does not read — unlike the embedded
-broker, which admits only its own nodes
-([above](#the-fleets-broker-admits-only-its-own-nodes)). A
-[container box](../concepts/code-sandbox.md#local-sandboxes) joins the Docker
-network `providers.sandbox.local.network` names and reaches whatever its host
-reaches, and against a cluster that admits anybody it could publish as any
-principal the estate trusts. Require authorization on every server of the
-cluster, give coding boxes a network that cannot reach it, or run them in
-`e2b`. `crewlet validate` and every node warn, at `stream`, wherever a company
-that hosts code runs a `container` box on a node that dials an external
-cluster.
+And the server must authenticate its clients. Anything a NATS server admits
+reads every event this company publishes and writes on every subject it rides
+— a seat's mail, a lease, a state-log record (whose signature keeps a forged
+one from being applied, and nothing else) — so a server that admits anybody
+makes everything that can reach its port, a [container coding
+box](../concepts/code-sandbox.md#local-sandboxes) on a node's host among them,
+a reader and a writer of this company. The dial reads what the server says in
+the `INFO` line it sends first, and admits it only where that says
+`auth_required` — the server holds any authorization: a token, users, nkeys,
+an operator — or `tls_required` with `tls_verify`, where every client must
+present a certificate the server verifies before it says anything. Anything
+else refuses the boot, naming the server by host and port:
+
+```text
+engine: stream: connect nats: jetstream: an external NATS server must authenticate its clients: the NATS server at nats://nats-1.internal:4222 requires no authentication (it admits anonymous clients, or binds them to a no_auth_user), so anything that reaches it reads and writes this company: configure authorization, or tls { verify: true } without allow_non_tls, on every server of that cluster
+```
+
+A certificate this node presents does not count on its own: a server holding
+`tls { }` without `verify` never asks for one, and admits a client that
+presents nothing beside it. Neither does `verify` with `allow_non_tls`, which
+admits a plaintext client that presents no certificate at all. And a token the
+server does not require is no authentication either — the server admits
+everybody else as well — which is why the server's own word is read rather
+than this node's. The check judges the server each connection the node opens
+first reaches — the coordination store's and every second connection
+included — and not one a connection reconnects to later, so configure every
+server of the cluster alike: a client fails over to whichever answers.
 
 **`stream.tls` is the transport underneath that authentication**, and it is a
 separate question from who you are: a broker configured `tls { verify: true }`

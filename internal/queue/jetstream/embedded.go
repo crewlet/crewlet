@@ -1640,7 +1640,7 @@ func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 // otherwise reimplement the option list, and none ever existed — it was code
 // with no caller, indistinguishable from code whose caller nobody had found.
 func dial(cfg Config, at watched) (*nats.Conn, error) {
-	opts, err := dialOptions(cfg)
+	opts, recorded, err := dialOptions(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -1655,6 +1655,15 @@ func dial(cfg Config, at watched) (*nats.Conn, error) {
 	// The other place a connection is opened, and held to the same
 	// contract — see [embeddedServer.connect].
 	if nc, err = heldToTheContract(nc, false); err != nil {
+		return nil, err
+	}
+	// And to a server that authenticates somebody, read from the INFO the
+	// connection's own handshake carried. After the contract, so a server
+	// short of both is refused for its max_payload, as it was before this
+	// check existed and as the suites staging that refusal expect. Every
+	// connection on an external broker comes through here, the
+	// coordination store's and every [Queue.DialOwned] one's included.
+	if nc, err = heldToAuthentication(nc, recorded.info()); err != nil {
 		return nil, err
 	}
 	at.track(nc)
@@ -1683,14 +1692,21 @@ func dial(cfg Config, at watched) (*nats.Conn, error) {
 const externalHandshake = 2 * time.Second
 
 // dialOptions is the option list, separated from the dial so a test can
-// assert what a config produces without a broker to connect to.
+// assert what a config produces without a broker to connect to — and the
+// [infoDialer] the list dials through, which keeps the INFO line
+// [requiresAuthentication] reads.
 //
 // The alternative was asserting on the connection, which needs a real TLS
 // server with `verify: true` and a generated certificate chain — and would
 // then be testing that NATS honours its own documented option rather than
 // that this package passes it.
-func dialOptions(cfg Config) ([]nats.Option, error) {
+func dialOptions(cfg Config) ([]nats.Option, *infoDialer, error) {
+	// THE CLIENT'S OWN DIALER, kept: a custom one replaces it, and the
+	// client applies its Timeout only to the dialer it builds. So the TCP
+	// dial is bounded by the same [externalHandshake] here.
+	recorded := &infoDialer{dialer: net.Dialer{Timeout: externalHandshake}}
 	opts := []nats.Option{
+		nats.SetCustomDialer(recorded),
 		nats.Name("crewlet"),
 		// Reconnect forever. A broker blip must not become a node
 		// restart: the coordination layer already distinguishes
@@ -1723,7 +1739,7 @@ func dialOptions(cfg Config) ([]nats.Option, error) {
 	// coordination), so this only has to name the file and the field.
 	if cfg.TLS.CA != "" {
 		if _, err := os.Stat(cfg.TLS.CA); err != nil {
-			return nil, fmt.Errorf("tls.ca %s: %w", cfg.TLS.CA, err)
+			return nil, nil, fmt.Errorf("tls.ca %s: %w", cfg.TLS.CA, err)
 		}
 		opts = append(opts, nats.RootCAs(cfg.TLS.CA))
 	}
@@ -1732,12 +1748,12 @@ func dialOptions(cfg Config) ([]nats.Option, error) {
 			"tls.cert": cfg.TLS.Cert, "tls.key": cfg.TLS.Key,
 		} {
 			if _, err := os.Stat(path); err != nil {
-				return nil, fmt.Errorf("%s %s: %w", field, path, err)
+				return nil, nil, fmt.Errorf("%s %s: %w", field, path, err)
 			}
 		}
 		opts = append(opts, nats.ClientCert(cfg.TLS.Cert, cfg.TLS.Key))
 	}
-	return opts, nil
+	return opts, recorded, nil
 }
 
 // ephemeralInactive is how long the broker keeps an ephemeral consumer whose

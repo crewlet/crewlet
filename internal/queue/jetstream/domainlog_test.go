@@ -402,7 +402,7 @@ func awaitReplaced(t *testing.T, w *DomainWatch, lost string) string {
 func externalLog(t *testing.T) (*externaltest.Server, *Queue, *DomainLog) {
 	t.Helper()
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
-	q := newQueueWith(t, Config{URL: srv.URL()})
+	q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
 	if err := q.EnsureDomainStream(t.Context(), probeDomain()); err != nil {
 		t.Fatalf("EnsureDomainStream: %v", err)
 	}

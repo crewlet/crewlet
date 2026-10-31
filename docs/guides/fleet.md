@@ -61,7 +61,10 @@ all at an external cluster with `stream.type: nats` and `stream.url` — one
 whose servers all set `max_payload: 8MB`, since an event or a node's answer to
 another may be that large (a company's files cross in messages of 128 KiB,
 which any server carries); a
-server at nats-server's 1 MiB default is refused at connect, by name. It is
+server at nats-server's 1 MiB default is refused at connect, by name, and so
+is one that authenticates nobody, since every node must present a credential
+it checks ([An external NATS
+server](deployment.md#an-external-nats-server)). It is
 the same client code either way; embedded versus external is a connection
 choice, not a second backend — and it really is either/or: `stream.cluster`
 configures the embedded server's own membership, so writing one against

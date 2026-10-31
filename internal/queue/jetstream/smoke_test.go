@@ -438,7 +438,7 @@ func TestTheConfiguredTLSMaterialReachesTheDialOptions(t *testing.T) {
 	cert := write("c.pem", certPEM)
 	key := write("k.pem", keyPEM)
 
-	opts, err := dialOptions(Config{TLS: TLS{CA: ca, Cert: cert, Key: key}})
+	opts, _, err := dialOptions(Config{TLS: TLS{CA: ca, Cert: cert, Key: key}})
 	if err != nil {
 		t.Fatalf("dialOptions: %v", err)
 	}

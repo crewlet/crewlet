@@ -781,6 +781,7 @@ func TestAnExternalStreamURLIsActuallyDialled(t *testing.T) {
 		b.Stream.Type = config.StreamNATS
 		// Port 1 on loopback: reserved, and nothing binds it.
 		b.Stream.URL = "nats://127.0.0.1:1"
+		b.Stream.Token = externaltest.Token
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 	})
 	back, err := openBackends(t, b)
@@ -806,6 +807,7 @@ func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.Type = config.StreamNATS
 		b.Stream.URL = "nats://127.0.0.1:1"
+		b.Stream.Token = externaltest.Token
 		b.Stream.TLS = config.NATSTLS{CA: "/nope/ca.pem"}
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 	})
@@ -854,6 +856,7 @@ func TestABootAgainstAServerBelowTheContractIsRefusedByName(t *testing.T) {
 			b := bootstrap(t, func(b *config.Bootstrap) {
 				b.Stream.Type = config.StreamNATS
 				b.Stream.URL = url
+				b.Stream.Token = externaltest.Token
 				b.Coordination.Type = config.CoordinationEmbeddedKV
 			})
 			back, err := openBackends(t, b)

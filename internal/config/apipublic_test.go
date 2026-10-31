@@ -143,7 +143,7 @@ func TestTheAPIPortCannotBeTheBrokersPort(t *testing.T) {
 func TestAnExternalBrokersPortsAreNotThisHosts(t *testing.T) {
 	t.Parallel()
 	doc := "node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
-		"stream:\n  type: nats\n  url: nats://nats.example.com:8443\n" +
+		"stream:\n  type: nats\n  url: nats://nats.example.com:8443\n  credentials: /etc/crewlet/engine.creds\n" +
 		"coordination:\n  type: embedded-kv\napi:\n  port: 8080\n  public:\n    port: 8443\n"
 	if _, err := ParseRunnableBootstrap([]byte(doc), EnvOnly()); err != nil {
 		t.Fatalf("refused: %v", err)

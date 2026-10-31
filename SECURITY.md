@@ -307,7 +307,8 @@ A few things worth knowing when deploying Crewlet:
   That admission is per connection, and a route's credential crosses the
   fleet network in clear once per connection, so it is only as private as that
   network; an external cluster (`stream.type: nats`) admits whom its own
-  operator chooses. So every state-log record is still signed under the
+  operator chooses, and a node dials one only where its servers authenticate
+  their clients. So every state-log record is still signed under the
   keyring and verified before any node applies it, and so is every request one
   node asks another to CARRY OUT, and every reply, on each of the three
   channels that carry one: a node without `data` asking a data node's estate

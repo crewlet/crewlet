@@ -59,7 +59,7 @@ func TestAServerBelowTheContractIsRefusedWhenTheQueueOpens(t *testing.T) {
 			if announced == 0 {
 				announced = server.MAX_PAYLOAD_SIZE
 			}
-			q, err := Open(t.Context(), Config{URL: srv.URL()})
+			q, err := Open(t.Context(), Config{URL: srv.URL(), Token: externaltest.Token})
 			if !tc.refused {
 				if err != nil {
 					t.Fatalf("a server announcing a max_payload of %d was refused: %v",
@@ -304,7 +304,7 @@ func TestASecondConnectionToAnOperatorsServerIsHeldToTheContract(t *testing.T) {
 	t.Parallel()
 	const limit = queue.MaxPayloadBytes / 4
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
-	q := newQueueWith(t, Config{URL: srv.URL()})
+	q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
 	srv.Restart(limit, q.Conn())
 
 	nc, err := q.DialOwned()
@@ -352,7 +352,7 @@ func TestAReconnectToAServerBelowTheContractIsNamed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			srv := externaltest.Start(t, tc.maxPayload)
-			nc, err := nats.Connect(srv.URL())
+			nc, err := nats.Connect(srv.URL(), nats.Token(externaltest.Token))
 			if err != nil {
 				t.Fatalf("connect: %v", err)
 			}
@@ -393,7 +393,7 @@ func TestAReconnectToAServerBelowTheContractIsNamed(t *testing.T) {
 			t.Fatalf("DialOwned: %v", err)
 		}
 		t.Cleanup(owned.Close)
-		dialled, err := dialOptions(Config{})
+		dialled, _, err := dialOptions(Config{})
 		if err != nil {
 			t.Fatalf("dialOptions: %v", err)
 		}
@@ -447,7 +447,7 @@ func TestAMessageTooLargeNamesTheServersOwnLimit(t *testing.T) {
 	t.Parallel()
 	const limit = queue.MaxPayloadBytes / 4
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
-	q := newQueueWith(t, Config{URL: srv.URL()})
+	q := newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
 	// Provisioned against the server the queue opened on, as a node's log
 	// is at boot; the restarted server recovers it from its store.
 	if err := q.EnsureDomainStream(t.Context(), probeDomain()); err != nil {

@@ -1258,7 +1258,7 @@
           "description": "Byte ceiling on the code log, the ordered stream a repository's refs, packs and settings move on; unset derives two thirds of the mutation log's ceiling, set or derived, 1 GiB..1 TiB. Reserved whether or not the company hosts code: one that hosts none and is short of broker room sets 1073741824 before the first boot."
         },
         "credentials": {
-          "description": "Path to a NATS credentials file for an external server.",
+          "description": "Path to a NATS credentials file for an external server. type: nats needs one of credentials, token, tls.cert or a credential in url.",
           "type": [
             "string",
             "number",
@@ -1391,7 +1391,7 @@
           "$ref": "#/$defs/NATSTLS"
         },
         "token": {
-          "description": "Bearer token for an external server; ${VAR} supported.",
+          "description": "Bearer token for an external server; ${VAR} supported. type: nats needs one of credentials, token, tls.cert or a credential in url.",
           "type": [
             "string",
             "number",

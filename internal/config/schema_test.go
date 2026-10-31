@@ -745,7 +745,7 @@ units:
 		{
 			name: "an external stream named by the environment", tier: TierBootstrap,
 			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: \"${STREAM_TYPE}\"\n  url: \"${NATS_URL}\"\n",
-			env:  map[string]string{"STREAM_TYPE": "nats", "NATS_URL": "nats://nats.example.com:4222"},
+			env:  map[string]string{"STREAM_TYPE": "nats", "NATS_URL": "nats://fixture-token@nats.example.com:4222"},
 		},
 		// A NUMBER OR A SWITCH TAKES A WHOLE REFERENCE, whose value is read
 		// as the same characters written there would be: `8080` is a port,
@@ -783,7 +783,7 @@ units:
 		{
 			name: "an external fleet keeping three copies", tier: TierBootstrap,
 			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n" +
-				"  url: nats://nats.example.com:4222\n  replicas: 3\n",
+				"  url: nats://nats.example.com:4222\n  replicas: 3\n  credentials: /etc/crewlet/engine.creds\n",
 		},
 		{
 			name: "a leaf keeping the fleet's three copies", tier: TierBootstrap,
@@ -1145,7 +1145,7 @@ units:
 		},
 		{
 			name: "an external stream with no url", tier: TierBootstrap, editorCatches: true,
-			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n",
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n  credentials: /etc/crewlet/engine.creds\n",
 		},
 
 		// Rules the schema cannot express. They belong here to prove the
@@ -1166,6 +1166,15 @@ units:
 			// is what an operator reaches for first. The schema sees a
 			// string and has nothing to say.
 			yaml: "name: Acme\nintegrations:\n  gitlab: {enabled: true, url: https://gitlab.example.com, signing_secret: plain-shared-secret}\n",
+		},
+		// AN EXTERNAL STREAM PRESENTING NO CREDENTIAL. A credential in the
+		// url's userinfo counts, and a url may be a ${VAR} whose value
+		// carries one, so the schema cannot tell a url that presents
+		// nothing from one that does; the validator judges the resolved
+		// value.
+		{
+			name: "an external stream presenting no credential", tier: TierBootstrap, validatorOnly: true,
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  type: nats\n  url: nats://nats.example.com:4222\n",
 		},
 		// WHAT A REFERENCE RESOLVES TO is the node's business, so the schema
 		// admits one wherever some value would do and the validator judges

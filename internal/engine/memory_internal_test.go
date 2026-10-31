@@ -9,6 +9,7 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
 // A SEAT'S MEMORY TRAVELS ON AN EXTERNAL BROKER TOO.
@@ -25,6 +26,8 @@ func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 		ServerName: "external", JetStream: true, Port: -1, Host: "127.0.0.1",
 		StoreDir: filepath.Join(t.TempDir(), "external"), NoSigs: true,
 		MaxPayload: 8 << 20,
+		// An external server authenticates somebody, or the dial refuses it.
+		Authorization: externaltest.Token,
 	})
 	if err != nil {
 		t.Fatalf("start an external broker: %v", err)
@@ -39,6 +42,7 @@ func TestSeatMemoryTravelsOnAnExternalBroker(t *testing.T) {
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.Type = config.StreamNATS
 	b.Stream.URL = broker.ClientURL()
+	b.Stream.Token = externaltest.Token
 	b.Coordination.Type = config.CoordinationEmbeddedKV
 	SeedStore(t, &b)
 	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))

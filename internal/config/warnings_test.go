@@ -506,7 +506,7 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 		"an unset type is embedded":         {config.Stream{Replicas: 1}, false},
 		"a blank store directory is none":   {config.Stream{Type: config.StreamEmbedded, Replicas: 1, StoreDir: "  "}, false},
 		"an embedded stream that persists":  {config.Stream{Type: config.StreamEmbedded, Replicas: 1, StoreDir: "/var/lib/crewlet/stream"}, true},
-		"an external cluster keeps its own": {config.Stream{Type: config.StreamNATS, URL: "nats://broker.example.com:4222", Replicas: 1}, true},
+		"an external cluster keeps its own": {config.Stream{Type: config.StreamNATS, URL: "nats://broker.example.com:4222", Credentials: "/etc/crewlet/engine.creds", Replicas: 1}, true},
 		// A LEAF KEEPS NO STREAM: it runs no JetStream, every log it
 		// reaches is a member's, and the member holds the store directory
 		// — so it passes with none, and is refused one by its own rule.
@@ -673,6 +673,7 @@ func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
 		"a client of an external cluster hosting code on it": {func(b *config.Bootstrap) {
 			b.Stream.Type = config.StreamNATS
 			b.Stream.URL = "nats://broker.example.com:4222"
+			b.Stream.Credentials = "/etc/crewlet/engine.creds"
 		}, true, "store.objects.backend"},
 		"a fleet hosting code on s3": {func(b *config.Bootstrap) {
 			fleet(b)

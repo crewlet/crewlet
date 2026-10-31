@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsapi/jsapitest"
@@ -14,6 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue"
 )
+
+// leaderReadsToken is what accountQueue's broker requires: the dial refuses an
+// external server that authenticates nobody, and jsapitest's interception
+// signs in with it too.
+const leaderReadsToken = "leader-reads"
 
 // accountQueue is a queue dialled to a broker of its own with JetStream and no
 // domain — an external cluster's shape, read through the account's API — with
@@ -25,6 +31,8 @@ func accountQueue(t *testing.T, spec DomainStream) (*server.Server, *Queue) {
 		Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,
 		JetStream: true, StoreDir: t.TempDir(),
 		MaxPayload: int32(queue.MaxPayloadBytes),
+		// An external server authenticates somebody, or the dial refuses it.
+		Authorization: leaderReadsToken,
 	})
 	if err != nil {
 		t.Fatalf("configure the broker: %v", err)
@@ -37,7 +45,7 @@ func accountQueue(t *testing.T, spec DomainStream) (*server.Server, *Queue) {
 	if !ns.ReadyForConnections(30 * time.Second) {
 		t.Fatal("the broker never became ready")
 	}
-	q, err := Open(t.Context(), Config{URL: ns.ClientURL()})
+	q, err := Open(t.Context(), Config{URL: ns.ClientURL(), Token: leaderReadsToken})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -76,7 +84,7 @@ func TestTheApplierPendingCountAsksTheBrokerNothing(t *testing.T) {
 		t.Fatalf("open the consumer: %v", err)
 	}
 	t.Cleanup(cons.Close)
-	held := jsapitest.Hold(t, ns, jsapitest.ConsumerInfo(probeDomain().Name, cons.Name()))
+	held := jsapitest.Hold(t, ns, jsapitest.ConsumerInfo(probeDomain().Name, cons.Name()), nats.Token(leaderReadsToken))
 	const subject = "crewlet.probe.log.task.a"
 	appendN(t, log, subject, 5)
 
@@ -154,7 +162,7 @@ func TestAPendingCountBeforeAnyDeliveryIsUnknown(t *testing.T) {
 		t.Fatalf("open the consumer: %v", err)
 	}
 	t.Cleanup(cons.Close)
-	held := jsapitest.Hold(t, ns, jsapitest.ConsumerInfo(probeDomain().Name, cons.Name()))
+	held := jsapitest.Hold(t, ns, jsapitest.ConsumerInfo(probeDomain().Name, cons.Name()), nats.Token(leaderReadsToken))
 	if got, err := cons.Pending(context.Background()); err == nil {
 		t.Errorf("Pending before any fetch = (%d, nil), want an error: nothing "+
 			"has counted what follows", got)
@@ -195,7 +203,8 @@ func TestAGroupAckFloorAMemberDropsIsAskedAgain(t *testing.T) {
 		t.Fatalf("stop the group: %v", err)
 	}
 	held := jsapitest.DropFirst(t, ns,
-		jsapitest.ConsumerInfo(probeDomain().Name, domainGroupName(probeDomain().Name, "feed")), 1)
+		jsapitest.ConsumerInfo(probeDomain().Name, domainGroupName(probeDomain().Name, "feed")), 1,
+		nats.Token(leaderReadsToken))
 
 	timing := q.provisioning()
 	ctx, cancel := context.WithTimeout(t.Context(), 3*(timing.ReadTerm+timing.ReAsk))
@@ -253,8 +262,8 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Run("a caller with a deadline past a consumers page and a re-ask", func(t *testing.T) {
 		t.Parallel()
 		ns, q, stream := listing(t)
-		names := jsapitest.DropFirst(t, ns, jsapitest.StreamNames(), 1)
-		consumers := jsapitest.DropFirst(t, ns, jsapitest.ConsumerList(stream), 1)
+		names := jsapitest.DropFirst(t, ns, jsapitest.StreamNames(), 1, nats.Token(leaderReadsToken))
+		consumers := jsapitest.DropFirst(t, ns, jsapitest.ConsumerList(stream), 1, nats.Token(leaderReadsToken))
 
 		// A dropped names page costs a term and a re-ask; a dropped
 		// consumers page the four seconds the metadata leader waits for a
@@ -279,7 +288,7 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Run("no deadline: a names page dropped is asked again", func(t *testing.T) {
 		t.Parallel()
 		ns, q, _ := listing(t)
-		names := jsapitest.DropFirst(t, ns, jsapitest.StreamNames(), 1)
+		names := jsapitest.DropFirst(t, ns, jsapitest.StreamNames(), 1, nats.Token(leaderReadsToken))
 		got, err := q.ListSubscriptions(context.Background(), "dropped.>")
 		if err != nil {
 			t.Fatalf("a deadline-less listing whose names page the broker dropped once "+
@@ -296,7 +305,7 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Run("no deadline: a consumers page is asked once, inside the client's default", func(t *testing.T) {
 		t.Parallel()
 		ns, q, stream := listing(t)
-		consumers := jsapitest.Hold(t, ns, jsapitest.ConsumerList(stream))
+		consumers := jsapitest.Hold(t, ns, jsapitest.ConsumerList(stream), nats.Token(leaderReadsToken))
 		bound := q.js.Options().DefaultTimeout
 		start := time.Now()
 		got, err := q.ListSubscriptions(context.Background(), "dropped.>")
@@ -325,7 +334,7 @@ func TestASubscriptionListingAMemberDropsIsAskedAgain(t *testing.T) {
 func TestAnAccountLimitAMemberDropsIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	ns, q := accountQueue(t, probeDomain())
-	held := jsapitest.DropFirst(t, ns, jsapitest.AccountInfo(), 1)
+	held := jsapitest.DropFirst(t, ns, jsapitest.AccountInfo(), 1, nats.Token(leaderReadsToken))
 
 	timing := q.provisioning()
 	ctx, cancel := context.WithTimeout(t.Context(), 3*(timing.ReadTerm+timing.ReAsk))
@@ -376,7 +385,7 @@ func TestADeadlineLessReadNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 			t.Parallel()
 			ns, q := accountQueue(t, probeDomain())
 			bound := q.js.Options().DefaultTimeout
-			held := jsapitest.Hold(t, ns, c.subject)
+			held := jsapitest.Hold(t, ns, c.subject, nats.Token(leaderReadsToken))
 			done := make(chan error, 1)
 			start := time.Now()
 			go func() { done <- c.read(context.Background(), q) }()
@@ -452,7 +461,7 @@ func TestARecordReadAcrossALinkIsGivenItsRecordsCrossing(t *testing.T) {
 			return err
 		}, 2, 3},
 	} {
-		held := jsapitest.Hold(t, ns, jsapitest.MsgGet(spec.Name))
+		held := jsapitest.Hold(t, ns, jsapitest.MsgGet(spec.Name), nats.Token(leaderReadsToken))
 		ctx, cancel := context.WithTimeout(t.Context(), wait)
 		err := c.read(ctx)
 		cancel()

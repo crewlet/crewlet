@@ -19,7 +19,7 @@ func TestBothSidesOfTheLeafLinkLoad(t *testing.T) {
 	for name, doc := range map[string]string{
 		"stateless on the embedded stream": statelessDoc,
 		"stateless on an external cluster": "node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
-			"stream:\n  type: nats\n  url: nats://nats.example.com:4222\n" +
+			"stream:\n  type: nats\n  url: nats://nats.example.com:4222\n  credentials: /etc/crewlet/engine.creds\n" +
 			"coordination:\n  type: embedded-kv\n",
 		"a member with a leaf listener": "stream:\n  store_dir: /var/lib/crewlet/stream\n" +
 			"  leaf:\n    port: 7422\ncoordination:\n  type: embedded-kv\n",
@@ -93,7 +93,7 @@ func TestRolesThatContradictTheNodeAreRefused(t *testing.T) {
 			"stream.leaf.urls[0]", ErrUnknownValue},
 		{"a leaf block on an external cluster",
 			"node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
-				"stream:\n  type: nats\n  url: nats://x:4222\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n" +
+				"stream:\n  type: nats\n  url: nats://x:4222\n  credentials: /etc/crewlet/engine.creds\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n" +
 				"coordination:\n  type: embedded-kv\n",
 			"stream.leaf", ErrConflict},
 		{"a leaf listener's host with no port",

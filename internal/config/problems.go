@@ -1066,36 +1066,6 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 				"takes store.objects.backend: s3"))
 	}
 
-	// A CONTAINER BOX BESIDE AN EXTERNAL BROKER: a `container` coding box
-	// joins the network `providers.sandbox.local.network` names, or the
-	// runtime's default bridge, and either reaches whatever the host it runs
-	// on reaches — the external NATS cluster this node dials among it. Whether
-	// that cluster authenticates its clients is its operator's configuration,
-	// which nothing here reads; one that admits anybody admits a box that
-	// could then publish as any principal the estate trusts.
-	//
-	// THE EMBEDDED BROKER IS NOT WARNED ABOUT, on a member, a member serving
-	// leaves or a leaf: it admits only a route, a leaf link or an operator
-	// presenting a key derived from secrets.keys, and this process's own
-	// clients (ADR-0064), so a box that reaches its ports is refused there. So
-	// this reads the broker's KIND, never [Bootstrap.clustered] — which
-	// [Bootstrap.validateTopology] still needs whole, a leaf and a member
-	// serving leaves included, to refuse local coordination on a fleet. What a
-	// box on a member's host network can still do — read the fleet's plaintext
-	// links — is the deployment guide's to say, not a warning's.
-	// Never for `e2b`, whose box is on the vendor's network, nor `direct`,
-	// which [Company.directBoxWarnings] already says reads the keyring itself;
-	// never for the double, which runs nothing.
-	if company.Code.Native && boot.BrokerKind() == placement.BrokerClient &&
-		company.runsContainerBoxes() {
-		out = append(out, advisory(field("stream"),
-			"this node dials an external NATS cluster, and whether that cluster authenticates its "+
-				"clients is its operator's configuration: a `container` coding box on this node's "+
-				"host reaches it unless its network forbids it — require authorization on every "+
-				"server of that cluster (docs/guides/deployment.md), give coding boxes a network that "+
-				"cannot reach it (providers.sandbox.local.network), or run them in `e2b`"))
-	}
-
 	// A REPOSITORY LARGER THAN THE CACHE. A git node caches a repository
 	// whole, and one past its budget is served and evicted as soon as its
 	// last reader lets go — so every fetch of it is a cold sync, one GET a
@@ -1117,21 +1087,6 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 	}
 
 	return out
-}
-
-// runsContainerBoxes reports whether any seat's box runs in the `container`
-// cell, as [Company.SeatBoxes] places it — never under the double, which
-// answers every cell and runs nothing.
-func (c *Company) runsContainerBoxes() bool {
-	if c.Providers.Sandbox == nil || c.Providers.Sandbox.Fake {
-		return false
-	}
-	for box := range c.SeatBoxes() {
-		if box.Cell == PlacementContainer {
-			return true
-		}
-	}
-	return false
 }
 
 // writerWarnings are the company_writers settings that are valid and almost

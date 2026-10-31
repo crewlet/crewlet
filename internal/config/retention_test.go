@@ -630,11 +630,13 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		// of the two fires, which would leave this rule uncovered.
 		"on an external cluster": {func(b *config.Bootstrap) {
 			b.Stream.Type, b.Stream.URL, b.Stream.StoreDir = config.StreamNATS, "nats://broker:4222", ""
+			b.Stream.Credentials = "/etc/crewlet/engine.creds"
 			b.Coordination.Type = config.CoordinationEmbeddedKV
 			b.Stream.StoreMaxBytes = 16 * gib
 		}, false, "store_max_bytes"},
 		"an external cluster with none of its own": {func(b *config.Bootstrap) {
 			b.Stream.Type, b.Stream.URL, b.Stream.StoreDir = config.StreamNATS, "nats://broker:4222", ""
+			b.Stream.Credentials = "/etc/crewlet/engine.creds"
 			b.Coordination.Type = config.CoordinationEmbeddedKV
 		}, true, ""},
 		"holding ceilings that fit": {func(b *config.Bootstrap) {

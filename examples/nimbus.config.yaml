@@ -81,9 +81,11 @@ logging:
 # refused a store_dir (docs/guides/satellite-nodes.md).
 #
 # `type: nats` dials an external NATS server or cluster instead, and takes
-# `url` (plus `credentials` / `token` / `tls` where the estate demands
-# them).  It is the same client code either way: embedded versus external
-# is a connection choice, not a second backend.
+# `url` and a credential: `credentials`, `token` or `tls.cert` — one is
+# required, and the node refuses a server that authenticates nobody
+# (`tls.ca` where the estate demands it).  It is the same client code
+# either way: embedded versus external is a connection choice, not a
+# second backend.
 stream:
   type: embedded
   store_dir: "./nimbus-data/stream"

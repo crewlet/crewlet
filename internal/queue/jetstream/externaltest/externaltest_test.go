@@ -30,7 +30,7 @@ func TestARestartChangesTheLimitAndKeepsTheStreams(t *testing.T) {
 	t.Parallel()
 	const before, after = 8 << 20, 2 << 20
 	srv := externaltest.Start(t, before)
-	nc, err := nats.Connect(srv.URL())
+	nc, err := nats.Connect(srv.URL(), nats.Token(externaltest.Token))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestAReloadChangesTheServerAndNotItsClients(t *testing.T) {
 	t.Parallel()
 	const before, after = 8 << 20, 2 << 20
 	srv := externaltest.Start(t, before)
-	nc, err := nats.Connect(srv.URL())
+	nc, err := nats.Connect(srv.URL(), nats.Token(externaltest.Token))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestAReloadChangesTheServerAndNotItsClients(t *testing.T) {
 		t.Errorf("the connected client reads %d after a reload to %d, want the "+
 			"%d it was told when it connected", got, after, before)
 	}
-	fresh, err := nats.Connect(srv.URL())
+	fresh, err := nats.Connect(srv.URL(), nats.Token(externaltest.Token))
 	if err != nil {
 		t.Fatalf("connect after the reload: %v", err)
 	}
@@ -143,6 +143,43 @@ func TestARestartAsAnotherConfigurationIsThatConfiguration(t *testing.T) {
 	nc, err := nats.Connect(url, nats.Token("after"))
 	if err != nil {
 		t.Fatalf("the restarted server refuses the credential it was configured with: %v", err)
+	}
+	nc.Close()
+}
+
+// A SERVER AUTHENTICATES UNLESS A CASE SAYS IT DOES NOT.
+//
+// The engine refuses an external server that authenticates nobody, so a
+// fixture that started one by default would hand every suite a broker its dial
+// refuses: the default is [externaltest.Token], and an anonymous server is
+// what a case asks for by name, with [externaltest.Anonymous].
+//
+// Mutation: drop the default Authorization and the default server admits a
+// client presenting nothing; apply the default after the configures and the
+// Anonymous server still requires the token.
+func TestAServerRequiresTheFixtureTokenUnlessStartedAnonymous(t *testing.T) {
+	t.Parallel()
+	byDefault := externaltest.Start(t, 0)
+	if nc, err := nats.Connect(byDefault.URL()); err == nil {
+		nc.Close()
+		t.Error("a server started with no configure admits a client presenting nothing")
+	}
+	nc, err := nats.Connect(byDefault.URL(), nats.Token(externaltest.Token))
+	if err != nil {
+		t.Fatalf("a server started with no configure refuses externaltest.Token: %v", err)
+	}
+	if !nc.AuthRequired() {
+		t.Error("a server started with no configure announces auth_required false")
+	}
+	nc.Close()
+
+	anonymous := externaltest.Start(t, 0, externaltest.Anonymous)
+	nc, err = nats.Connect(anonymous.URL())
+	if err != nil {
+		t.Fatalf("a server started Anonymous refuses a client presenting nothing: %v", err)
+	}
+	if nc.AuthRequired() {
+		t.Error("a server started Anonymous announces auth_required")
 	}
 	nc.Close()
 }

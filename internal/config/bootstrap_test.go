@@ -65,7 +65,7 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 			"stream:\n  cluster:\n    advertise: nat.example.com:6222\n",
 			"stream.cluster.name", ErrMissing,
 		},
-		{"external stream with no url", "stream:\n  type: nats\ncoordination:\n  type: embedded-kv\n", "stream.url", ErrMissing},
+		{"external stream with no url", "stream:\n  type: nats\n  credentials: /etc/crewlet/engine.creds\ncoordination:\n  type: embedded-kv\n", "stream.url", ErrMissing},
 		{"embedded stream with a url", "stream:\n  url: nats://localhost:4222\n", "stream.url", ErrConflict},
 		// `debug` starts the EMBEDDED server verbose. Against an external
 		// cluster it reaches nothing, so it is refused for the reason
@@ -74,7 +74,7 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		// happened".
 		{
 			"external stream with the embedded broker's debug flag",
-			"stream:\n  type: nats\n  url: nats://x:4222\n  debug: true\n" +
+			"stream:\n  type: nats\n  url: nats://x:4222\n  credentials: /etc/crewlet/engine.creds\n  debug: true\n" +
 				"coordination:\n  type: embedded-kv\n",
 			"stream.debug", ErrConflict,
 		},
@@ -92,7 +92,7 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		},
 		{
 			"stream client key with no cert",
-			"stream:\n  type: nats\n  url: nats://x:4222\n  tls:\n    key: /etc/k.pem\n" +
+			"stream:\n  type: nats\n  url: nats://x:4222\n  credentials: /etc/crewlet/engine.creds\n  tls:\n    key: /etc/k.pem\n" +
 				"coordination:\n  type: embedded-kv\n",
 			"stream.tls.cert", ErrMissing,
 		},
@@ -416,7 +416,7 @@ func TestSupportedTopologiesLoad(t *testing.T) {
 		// stream carrying its own coordination, and an external one.
 		"coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  store_dir: /var/lib/crewlet/stream\n" +
 			"  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
-		"stream:\n  type: nats\n  url: nats://localhost:4222\ncoordination:\n  type: embedded-kv\n",
+		"stream:\n  type: nats\n  url: nats://localhost:4222\n  credentials: /etc/crewlet/engine.creds\ncoordination:\n  type: embedded-kv\n",
 		// An external cluster asking for replicas. Its membership is not
 		// in this file and cannot be — the url names an address, not a
 		// member list — so the peers rule must not reach it. It did, and
@@ -424,7 +424,7 @@ func TestSupportedTopologiesLoad(t *testing.T) {
 		// one copy of its streams AND of its lease and fleet KV buckets,
 		// so the seat mailboxes and every lease lived on whichever single
 		// server held them and died with it.
-		"stream:\n  type: nats\n  url: nats://localhost:4222\n  replicas: 3\ncoordination:\n  type: embedded-kv\n",
+		"stream:\n  type: nats\n  url: nats://localhost:4222\n  credentials: /etc/crewlet/engine.creds\n  replicas: 3\ncoordination:\n  type: embedded-kv\n",
 	} {
 		if _, err := ParseRunnableBootstrap([]byte(doc), EnvOnly()); err != nil {
 			t.Fatalf("%q should load:\n%v", doc, err)

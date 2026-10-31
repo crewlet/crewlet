@@ -985,6 +985,48 @@ func carriesCredential(raw string) bool {
 	return err == nil && u.User != nil
 }
 
+// presentsCredential answers whether an external stream's dial presents
+// anything a server could authenticate: a credentials file, a token, a client
+// certificate, or a userinfo in any entry of url.
+//
+// EVERY ENTRY, split and trimmed as the NATS client splits stream.url (the
+// rule internal/queue/jetstream's serverAddresses follows), because the client
+// fails over between them and sends whichever entry's userinfo it dials.
+func (s *Stream) presentsCredential() bool {
+	if s.Credentials != "" || s.Token != "" || s.TLS.Cert != "" {
+		return true
+	}
+	for _, entry := range strings.Split(s.URL, ",") {
+		if entryCarriesUserinfo(strings.TrimSpace(entry)) {
+			return true
+		}
+	}
+	return false
+}
+
+// entryCarriesUserinfo answers whether one stream.url entry carries a
+// non-empty userinfo — `user:password@`, or a bare `token@`, which the client
+// sends as a bearer token.
+//
+// A BARE host:port IS THE CLIENT'S nats:// ONE, and is given that scheme
+// before it is parsed: without one, `token@host:4222` parses as a path whose
+// first segment holds a colon and is refused, and the token the client sends
+// would not be counted. An empty userinfo (`nats://@host`) sends nothing.
+func entryCarriesUserinfo(entry string) bool {
+	if entry == "" {
+		return false
+	}
+	if !strings.Contains(entry, "://") {
+		entry = "nats://" + entry
+	}
+	u, err := url.Parse(entry)
+	if err != nil || u.User == nil {
+		return false
+	}
+	password, _ := u.User.Password()
+	return u.User.Username() != "" || password != ""
+}
+
 // joinRoute is the one normal form both sides of the comparison are put in.
 func joinRoute(host string, port int) string {
 	host = strings.ToLower(strings.Trim(host, "[]"))
@@ -1555,11 +1597,15 @@ type Stream struct {
 	Debug bool `yaml:"debug,omitempty" json:"debug,omitempty" desc:"Turn on the EMBEDDED broker's own debug logging. Separate from logging.level, which is the engine's; refused for type: nats. Its warnings and errors are never gated by this."`
 
 	// Credentials is a path to a NATS credentials file.
-	Credentials string `yaml:"credentials,omitempty" json:"credentials,omitempty" desc:"Path to a NATS credentials file for an external server."`
+	//
+	// type: nats needs one of Credentials, Token, TLS.Cert or a userinfo in
+	// URL: a node presenting nothing reaches only a server that
+	// authenticates nobody ([Stream.presentsCredential]).
+	Credentials string `yaml:"credentials,omitempty" json:"credentials,omitempty" desc:"Path to a NATS credentials file for an external server. type: nats needs one of credentials, token, tls.cert or a credential in url."`
 
 	// Token is a bearer token presented to an external server. Use ${VAR}
 	// to read it from the environment.
-	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported."`
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Bearer token for an external server; ${VAR} supported. type: nats needs one of credentials, token, tls.cert or a credential in url."`
 
 	// TLS is the transport for an external NATS server: a private CA to
 	// trust, and a client certificate to present. Without it a broker
@@ -2149,6 +2195,27 @@ func (s *Stream) validate(path Path) error {
 		p.add(at(path, "store_dir"), ErrConflict,
 			"store_dir is where an EMBEDDED server persists; an external "+
 				"cluster keeps its own storage")
+	}
+	// AN EXTERNAL CLUSTER IS DIALLED WITH SOMETHING TO PRESENT, or not at
+	// all. A node that presents nothing can only be admitted by a server
+	// that authenticates nobody, and anything that reaches such a server
+	// reads every event this company publishes and writes as any person on
+	// its estate. The dial refuses that server by what it announces
+	// (internal/queue/jetstream's requiresAuthentication); this is the half
+	// a file can be held to before any dial, and it names the fields.
+	//
+	// A URL's USERINFO COUNTS: the client sends `user:password@` and a bare
+	// `token@` as credentials (address.go in internal/queue/jetstream), so
+	// refusing a file that carries its token there would refuse a node that
+	// authenticates.
+	if external && !s.presentsCredential() {
+		p.add(at(path, "credentials"), ErrMissing,
+			"this node dials an external NATS cluster and presents no "+
+				"credential, so it can only reach one that authenticates nobody — "+
+				"and anything that reaches such a broker reads every event of this "+
+				"company and writes as any person on its estate. Set "+
+				"stream.credentials (a .creds file), stream.token, or "+
+				"stream.tls.cert, as the cluster's operator issues them")
 	}
 	p.wrap(s.durable(path))
 	// THE SAME RULE, and the same reason: this is the limit handed to the

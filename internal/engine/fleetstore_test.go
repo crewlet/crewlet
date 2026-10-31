@@ -207,6 +207,7 @@ func TestAnExternalBrokersFleetStoreIsDialled(t *testing.T) {
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.Type = config.StreamNATS
 		b.Stream.URL = url
+		b.Stream.Token = externaltest.Token
 	})
 	fs, err := engine.OpenFleetStore(t.Context(), b)
 	if err != nil {

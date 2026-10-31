@@ -18,6 +18,17 @@
 // to wait until the CLIENT reads the new limit rather than until the server is
 // up, since the client refuses against what it last read.
 //
+// # Why every server authenticates
+//
+// The engine refuses an external server that authenticates nobody: Tier A
+// requires `stream.type: nats` to present a credential, and the dial refuses a
+// server whose INFO admits anonymous clients. So a server this package starts
+// requires [Token] unless a configure states authentication of its own, and a
+// fixture that dials it through the engine presents Token (`stream.token`, or
+// the queue's Config.Token). [Anonymous] is the configure of the cases whose
+// subject is that refusal. [Server.URL] still carries no credential: a case
+// that signs in through the URL puts its own there.
+//
 // # Why not jetstreamtest
 //
 // Importing jetstreamtest IS forming a quorum: its exported surface is
@@ -43,6 +54,14 @@ import (
 // measures, so the bound only has to separate "slow" from "never".
 const readyWithin = 30 * time.Second
 
+// Token is the bearer token every server [Start] starts requires, unless a
+// configure states authentication of its own.
+const Token = "externaltest-fixture-token"
+
+// Anonymous is a configure that leaves the server authenticating nobody — the
+// shape the engine's dial refuses, for the cases whose subject is that.
+func Anonymous(o *server.Options) { o.Authorization = "" }
+
 // Server is one external NATS server with JetStream, listening on loopback.
 type Server struct {
 	t         testing.TB
@@ -58,8 +77,9 @@ type Server struct {
 }
 
 // Start starts one announcing maxPayload — nats-server's own default, 1 MiB,
-// where it is zero — with each of configure applied to its options (its
-// authentication, say), and stops it when the test ends.
+// where it is zero — requiring [Token], with each of configure applied to its
+// options after that (authentication of its own, say, or [Anonymous]), and
+// stops it when the test ends.
 func Start(t testing.TB, maxPayload int32, configure ...func(*server.Options)) *Server {
 	t.Helper()
 	s := &Server{t: t, store: t.TempDir(), configure: configure}
@@ -73,6 +93,9 @@ func (s *Server) start(port int, maxPayload int32) {
 	opts := &server.Options{
 		Host: "127.0.0.1", Port: port, NoLog: true, NoSigs: true,
 		JetStream: true, StoreDir: s.store, MaxPayload: maxPayload,
+		// BEFORE the configures, so one stating authentication of its own
+		// replaces this rather than sitting beside it.
+		Authorization: Token,
 	}
 	for _, c := range s.configure {
 		c(opts)
@@ -140,7 +163,8 @@ func (s *Server) Reload(maxPayload int32) {
 
 // RestartAs stops the server and starts it again on its own port and its own
 // store, at the max_payload it announces now, configured by configure in place
-// of what [Start] was given — and waits only for the server.
+// of what [Start] was given, over [Token] as Start's are — and waits only for
+// the server.
 //
 // For a case whose subject is a server that no longer admits a running client:
 // its credentials rotated, say. Such a client never reconnects, so nothing

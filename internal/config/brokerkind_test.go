@@ -19,7 +19,7 @@ var brokerStreams = map[placement.BrokerKind]string{
 		"coordination:\n  type: embedded-kv\n",
 	placement.BrokerLeaf: "stream:\n  leaf:\n    urls: [nats-leaf://data-a.example.com:7422]\n" +
 		"coordination:\n  type: embedded-kv\n",
-	placement.BrokerClient: "stream:\n  type: nats\n  url: nats://nats.example.com:4222\n" +
+	placement.BrokerClient: "stream:\n  type: nats\n  url: nats://nats.example.com:4222\n  credentials: /etc/crewlet/engine.creds\n" +
 		"coordination:\n  type: embedded-kv\n",
 }
 
@@ -50,6 +50,7 @@ func TestBrokerMembershipComesFromTheStreamBlock(t *testing.T) {
 		}, placement.BrokerLeaf},
 		{"an external cluster", func(s *Stream) {
 			s.Type, s.URL = StreamNATS, "nats://nats.example.com:4222"
+			s.Credentials = "/etc/crewlet/engine.creds"
 		}, placement.BrokerClient},
 	} {
 		// EVERY ROLE SET, the refused pairings included: the kind of a

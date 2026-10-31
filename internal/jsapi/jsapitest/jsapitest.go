@@ -121,14 +121,16 @@ type Held struct {
 // subjects — by a client of srv's global account to the case, until
 // [Held.Release] or the case ends.
 //
-// srv must have no JetStream domain — see the package doc.
-func Hold(t testing.TB, srv *server.Server, subject string) *Held {
+// srv must have no JetStream domain — see the package doc. signIn is how the
+// interception's own connection authenticates to srv, where srv requires it
+// (a token, say).
+func Hold(t testing.TB, srv *server.Server, subject string, signIn ...nats.Option) *Held {
 	t.Helper()
 	if cfg := srv.JetStreamConfig(); cfg != nil && cfg.Domain != "" {
 		t.Fatalf("jsapitest: the server serves the JetStream domain %q, whose own "+
 			"mappings the broker consults first — start it without one", cfg.Domain)
 	}
-	nc, err := nats.Connect("", nats.InProcessServer(srv))
+	nc, err := nats.Connect("", append([]nats.Option{nats.InProcessServer(srv)}, signIn...)...)
 	if err != nil {
 		t.Fatalf("jsapitest: connect the interception: %v", err)
 	}
@@ -207,10 +209,10 @@ func (h *Held) Count() int {
 // DropFirst makes the broker DROP the next n leader reads asked on subject —
 // each reaches a subscriber that never answers, as a member that still
 // believes in a leader its group just lost drops one — and lets every read
-// after them through to the stream's leader.
-func DropFirst(t testing.TB, srv *server.Server, subject string, n int) *Held {
+// after them through to the stream's leader. signIn is [Hold]'s.
+func DropFirst(t testing.TB, srv *server.Server, subject string, n int, signIn ...nats.Option) *Held {
 	t.Helper()
-	h := Hold(t, srv, subject)
+	h := Hold(t, srv, subject, signIn...)
 	go func() {
 		for range n {
 			if _, err := h.Next(h.done); err != nil {

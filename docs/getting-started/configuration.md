@@ -1098,7 +1098,10 @@ stream:
                                     #   Unbounded is deliberately not expressible:
                                     #   an event log nothing sweeps grows for the
                                     #   life of the deployment
-  # credentials: ""                 # path to a NATS credentials file
+  # credentials: ""                 # path to a NATS credentials file. type: nats
+                                    #   needs one of credentials, token, tls.cert
+                                    #   or a credential in url, and refuses a
+                                    #   server that authenticates nobody
   # token: "${CREWLET_NATS_TOKEN}"  # bearer token for an external server
   # tls:                            # the TCP layer under that auth: which CA to
   #   ca: /etc/crewlet/ca.pem       #   trust; empty = the host roots

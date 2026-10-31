@@ -39,6 +39,7 @@ func TestANodeCarriesSeatMemoryWhoeverRunsTheBroker(t *testing.T) {
 		{"an operator's NATS server", func(t *testing.T, b *config.Bootstrap) {
 			b.Stream.Type = config.StreamNATS
 			b.Stream.URL = externaltest.Start(t, queue.MaxPayloadBytes).URL()
+			b.Stream.Token = externaltest.Token
 		}, func(back *Backends) *nats.Conn {
 			return back.Queue.(interface{ Conn() *nats.Conn }).Conn()
 		}},

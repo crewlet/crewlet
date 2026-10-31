@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
@@ -35,7 +36,7 @@ func TestANodesUploadsShareTheWindowItsBrokerKindCallsFor(t *testing.T) {
 	// made explicitly, so the case names no figure of its own.
 	reference := func(t *testing.T, url string, cfg natsobj.Config) int {
 		t.Helper()
-		conn, err := nats.Connect(url)
+		conn, err := nats.Connect(url, nats.Token(externaltest.Token))
 		if err != nil {
 			t.Fatalf("dial the external broker: %v", err)
 		}
@@ -75,6 +76,7 @@ func TestANodesUploadsShareTheWindowItsBrokerKindCallsFor(t *testing.T) {
 		return func(b *config.Bootstrap) {
 			b.Stream.Type = config.StreamNATS
 			b.Stream.URL = url
+			b.Stream.Token = externaltest.Token
 			b.Coordination.Type = config.CoordinationEmbeddedKV
 			b.Coordination.LeaseTTLSeconds = ttl.Seconds()
 		}
@@ -145,6 +147,8 @@ func externalBroker(t *testing.T) string {
 		ServerName: "external", JetStream: true, Port: -1, Host: "127.0.0.1",
 		StoreDir: filepath.Join(t.TempDir(), "external"), NoSigs: true,
 		MaxPayload: 8 << 20,
+		// An external server authenticates somebody, or the dial refuses it.
+		Authorization: externaltest.Token,
 	})
 	if err != nil {
 		t.Fatalf("start an external broker: %v", err)
