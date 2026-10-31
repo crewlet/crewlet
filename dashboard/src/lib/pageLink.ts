@@ -14,9 +14,20 @@
  * nothing and said nothing.
  */
 export async function copyPageLink(): Promise<"Copied" | "Blocked"> {
+  return copyLink(location.href);
+}
+
+/**
+ * Copy the whole address of a page in this dashboard, given its href (a
+ * `#/…` hash, as `app/router.tsx`'s `href` builds one, or a whole URL): a
+ * room's own address from a menu, which is not the address the reader is on
+ * when a pane is open beside it. Resolved against this page's URL, so what
+ * is copied opens on somebody else's machine.
+ */
+export async function copyLink(address: string): Promise<"Copied" | "Blocked"> {
   if (!navigator.clipboard) return "Blocked";
   try {
-    await navigator.clipboard.writeText(location.href);
+    await navigator.clipboard.writeText(new URL(address, location.href).href);
     return "Copied";
   } catch {
     return "Blocked";
