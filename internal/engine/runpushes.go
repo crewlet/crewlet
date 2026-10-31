@@ -45,10 +45,15 @@ type runPushes struct {
 
 var _ sandbox.RunPushes = runPushes{}
 
-// pushReader is the code host's read the reader pages through — the estate's
-// [estate.CodeSeam.Read].
+// pushReader is the code host as a collection asks it — the estate's
+// [estate.CodeSeam]: its reads, which the reader pages through and names the
+// run's branches' changes by; a change's lifecycle write, which opens the
+// change a run asked for; and a read by object id, which titles one its ask
+// named no title for.
 type pushReader interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
+	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 }
 
 // codeRunPushes is the engine's reader of what its coding runs pushed: over the

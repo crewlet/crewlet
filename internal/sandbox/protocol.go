@@ -478,6 +478,15 @@ type RunRepo struct {
 	// alternates rather than fetching. Required for that purpose and empty
 	// for every other.
 	Objects string `json:"objects,omitempty"`
+	// Change is the change a coding run works on — the live change whose
+	// source is Branch, which it starts from the head of — and nil for a run
+	// on no change (runchange.go). A coding run's alone.
+	Change *RunChange `json:"change,omitempty"`
+	// Open is the change a coding run asked to open from Branch once it
+	// finishes — at its collection, once a launch ([OpenChange]) — and nil
+	// for none. A coding run's alone, and only one given the repository to
+	// write: a run that may push nothing delivers nothing to open one from.
+	Open *OpenChange `json:"open_change,omitempty"`
 }
 
 // ValidateFor holds a RunRepo to the grammar of the box it is given to for
@@ -488,7 +497,11 @@ type RunRepo struct {
 // holds a path to). Then by purpose:
 //
 //   - [CloneCoding]: a branch name git and the code host both take
-//     (gitref.ValidBranch), since the run works on one, and no objects;
+//     (gitref.ValidBranch), since the run works on one, and no objects; a
+//     change it works on named by its id and its number; and a change it
+//     asks to open given write, never beside a change it works on — whose
+//     branch heads that change already — and proposing its branch into
+//     another ([OpenChange.problem]);
 //   - [CloneSingleSHA] and [CloneBorrowed], a CHECK's: a base — the commit it
 //     measures — no branch, since a check is given one commit and works on
 //     none, read access, since its box's credential fetches and never pushes,
@@ -534,10 +547,23 @@ func (r RunRepo) ValidateFor(purpose ClonePurpose) error {
 		case r.Objects != "":
 			return fmt.Errorf("sandbox: repository %s: a coding run clones its repository and borrows no "+
 				"objects, and is given %q", r.Repo, r.Objects)
+		case r.Change != nil && r.Change.problem() != "":
+			return fmt.Errorf("sandbox: repository %s: the change it works on %s", r.Repo, r.Change.problem())
+		case r.Open != nil && r.Change != nil:
+			return fmt.Errorf("sandbox: repository %s: a run on change !%d asks to open another, and its branch "+
+				"%s heads that one already", r.Repo, r.Change.Number, r.Branch)
+		case r.Open != nil && r.Access != RepoWrite:
+			return fmt.Errorf("sandbox: repository %s: a run given it to %s asks to open a change, and delivers "+
+				"nothing to open one from", r.Repo, r.Access)
+		case r.Open != nil && r.Open.problem(r.Branch) != "":
+			return fmt.Errorf("sandbox: repository %s: the change it asks to open %s", r.Repo,
+				r.Open.problem(r.Branch))
 		}
 		return nil
 	}
 	switch {
+	case r.Change != nil || r.Open != nil:
+		return fmt.Errorf("sandbox: repository %s: a check is given one commit and works on no change", r.Repo)
 	case r.Base == "":
 		return fmt.Errorf("sandbox: repository %s: a check is given one commit, and names none", r.Repo)
 	case r.Branch != "":
@@ -688,6 +714,13 @@ type Result struct {
 	Pushed       []PushedRef
 	PushedElided int
 	PushedUnread string
+
+	// Opened is what became of each change the run asked to open
+	// ([RunRepo.Open]), in the order it was given its repositories: opened
+	// at this collection, one its branch already headed, or why none was
+	// ([OpenedChange]). Set by the coordinator from the engine's account
+	// ([RunPushes.Changes]), as Pushed is, and never by a runner.
+	Opened []OpenedChange
 
 	Error string
 

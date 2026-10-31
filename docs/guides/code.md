@@ -485,9 +485,13 @@ by default — and hands that run a credential of its own, which pushes only
 what the run was given and its seat may push, and ends with the run
 ([Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)).
 When the run ends, the seat is told what it pushed from the code host's own
-record of its pushes — each branch it moved, from where to where — not from
-what the run says of itself
+record of its pushes — each branch it moved, from where to where, and the
+change it heads — not from what the run says of itself
 ([What a run pushed is reported for it](../concepts/code-sandbox.md#what-a-run-pushed-is-reported-for-it)).
+A run can work on a change — `change: web!42` puts it on that change's branch,
+from its head — or ask for one: `open_change` opens a change from the run's
+branch once the run has succeeded, once, carrying the seat's work item
+([A run's changes](../concepts/code-sandbox.md#a-runs-changes)).
 Every node that runs seats needs `CREWLET_BOX_GIT_URL` for it, the address a
 box reaches the git nodes' `/box/git/` at
 ([Deployment](deployment.md#exposing-webhooks-without-the-admin-api)).

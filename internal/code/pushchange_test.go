@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -476,5 +477,47 @@ func TestAChangeIsOpenedFromThePushsOneBranch(t *testing.T) {
 					tc.refusal, tc.says)
 			}
 		})
+	}
+}
+
+// A BOX'S PUSH OPENS ITS CHANGE ON ITS RUN'S WORK ITEM (M4-decisions D34): a
+// coding box's `git push -o change` names the item its run was charged to by
+// its identity — stamped from the run's row by the box's admission
+// (RunProvenance.WorkID) — and the change it opens carries that item, its
+// tracker, id and key, as the turn's own code_open_change would; a push that
+// names its item by tracker and key alone, the history's label, opens one
+// carrying none.
+//
+// Mutation: leave the push's work item off the change its entry opens
+// (changeBook.open), and the box's change carries none — red.
+func TestABoxPushOpensItsChangeOnTheRunsWorkItem(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	c, _ := committerOn(t, n, n.pub)
+	boxed := func(workID string) code.Principal {
+		who := dev
+		who.Run = code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String(), RunID: uuid.NewString(),
+			CodingAgent: "claude-code", WorkBackend: string(types.WorkNative), WorkID: workID, WorkKey: "ENG-42"}
+		return who
+	}
+	for _, tc := range []struct {
+		name, repo, workID string
+		want               types.WorkItem
+	}{
+		{"by its identity", "web", "0190d8f0-3333-7000-8000-0123456789ab",
+			types.WorkItem{Backend: types.WorkNative, ID: "0190d8f0-3333-7000-8000-0123456789ab", Key: "ENG-42"}},
+		{"by its label alone", "api", "", types.WorkItem{}},
+	} {
+		repo := changeRepo(t, n, tc.repo)
+		p := proposal(repo, update(featureRef, oidOf("B"), oidOf("C")))
+		p.Principal, p.Change = boxed(tc.workID), &code.ChangeOption{Title: "Retry the upload"}
+		res, err := c.Propose(t.Context(), p)
+		requireOK(t, answer{res, err})
+		if res.Answer.Change == nil || !res.Answer.Change.Opened {
+			t.Fatalf("%s: the box's push opened no change: %+v", tc.name, res.Answer.Change)
+		}
+		if got := n.change(code.PushChangeID(p.PushID)).work; got != tc.want {
+			t.Errorf("%s: the change the box's push opened carries %+v, want %+v", tc.name, got, tc.want)
+		}
 	}
 }

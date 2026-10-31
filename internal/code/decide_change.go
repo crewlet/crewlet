@@ -390,7 +390,7 @@ func (p ChangeProposal) validOpen() error {
 			return badField(ref.field, "%s", why)
 		}
 	}
-	if why := titleProblem(o.Title); why != "" {
+	if why := TitleProblem(o.Title); why != "" {
 		return badField("open.title", "%s", why)
 	}
 	if why := textProblem(o.Body, MaxChangeBodyBytes, "change's body"); why != "" {
@@ -453,7 +453,7 @@ func (e *ChangeEdit) validFields() error {
 		return badField("edit.clear_work_item", "an edit sets a work item or clears it, never both")
 	}
 	if e.Title != nil {
-		if why := titleProblem(*e.Title); why != "" {
+		if why := TitleProblem(*e.Title); why != "" {
 			return badField("edit.title", "%s", why)
 		}
 	}

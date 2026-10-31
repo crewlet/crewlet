@@ -26,6 +26,11 @@ type PushedRef struct {
 	New string
 	// Pushes is how many of the run's pushes moved the ref.
 	Pushes int
+	// Change is the live change the ref heads once the run is collected —
+	// web!42, the change the run delivered its work to — and "" for a ref
+	// that heads none: a tag, a deleted branch, a branch no change proposes
+	// ([RunPushes.Changes]).
+	Change string
 }
 
 // RunPushes reads what a coding run pushed to the engine's own code host, from
@@ -41,6 +46,19 @@ type RunPushes interface {
 	// read had no room to hold. An error is the record UNREAD, and never
 	// stands for "nothing pushed".
 	Pushed(ctx context.Context, run PendingRun) (refs []PushedRef, more int, err error)
+	// Changes names each branch of pushed — run's refs as Pushed answered
+	// them — with the live change it heads ([PushedRef.Change]), and, where
+	// open is set, opens the change each repository run was given asks for
+	// ([RunRepo.Open]) from the branch the run delivered — ONCE A LAUNCH,
+	// so a collection retried, on this node or another, opens nothing
+	// twice — answering pushed named and what became of each ask, in the
+	// order run was given its repositories ([OpenedChange]); where open is
+	// not set it opens nothing and answers no ask. An ask the code host
+	// refused or could not be asked is an entry saying so, never an error:
+	// an error is the branches' changes UNREAD — pushed answered as given
+	// and nothing opened.
+	Changes(ctx context.Context, run PendingRun, pushed []PushedRef, open bool) (named []PushedRef,
+		opened []OpenedChange, err error)
 }
 
 // MaxPushedRefs is the most refs of a run's push record the engine holds while
@@ -111,8 +129,9 @@ func repoNames(repos []RunRepo) []string {
 
 // line is how the resumed executor's text names one pushed ref: its repository
 // and ref, then where it went — created, deleted, moved, or back where it
-// started — and how many of the run's pushes moved it where that is more than
-// one. What a result's refs are fitted by ([boundPushed]).
+// started — how many of the run's pushes moved it where that is more than
+// one, and the change it heads where it heads one. What a result's refs are
+// fitted by ([boundPushed]).
 func (p PushedRef) line() string {
 	var where string
 	switch {
@@ -130,6 +149,9 @@ func (p PushedRef) line() string {
 	line := "- " + p.Repo + " " + p.Ref + " " + where
 	if p.Pushes > 1 {
 		line += fmt.Sprintf(" (%d pushes)", p.Pushes)
+	}
+	if p.Change != "" {
+		line += ", change " + p.Change
 	}
 	return line
 }
@@ -231,15 +253,30 @@ func branchesOf(repos []RunRepo) string {
 // with its branch, as run_sandbox's `repos` takes them. JSON, the tool's own
 // argument, so nothing is left to the executor to transcribe.
 func recloneText(repos []RunRepo) string {
+	type openAgain struct {
+		Target string `json:"target"`
+		Title  string `json:"title,omitempty"`
+		Draft  bool   `json:"draft,omitempty"`
+	}
 	type again struct {
 		Repo   string     `json:"repo"`
 		Branch string     `json:"branch"`
 		Access RepoAccess `json:"access,omitempty"`
 		Paths  []string   `json:"paths,omitempty"`
+		// Open is the run's ask to open a change, AS IT WAS: a run that
+		// parked on a question opened none (unopenedAsked), so the run that
+		// finishes its work asks again — for the target its launch resolved,
+		// which a default branch changed since does not move. A run on a
+		// change is cloned on its branch, which still heads it.
+		Open *openAgain `json:"open_change,omitempty"`
 	}
 	value := make([]again, len(repos))
 	for i, r := range repos {
 		value[i] = again{Repo: r.Repo, Branch: r.Branch, Paths: r.Paths}
+		if o := r.Open; o != nil {
+			value[i].Open = &openAgain{Target: strings.TrimPrefix(o.Target, branchRoot), Title: o.Title,
+				Draft: o.Draft}
+		}
 		if r.Access != RepoWrite {
 			// AS IT WAS: a call that names no access is given write where
 			// the seat may push, and a repository this run was given to read
@@ -264,7 +301,8 @@ func PushedRecords(pushed []PushedRef) []types.PushedRefRecord {
 	}
 	out := make([]types.PushedRefRecord, len(pushed))
 	for i, p := range pushed {
-		out[i] = types.PushedRefRecord{Repo: p.Repo, Ref: p.Ref, Old: p.Old, New: p.New, Pushes: p.Pushes}
+		out[i] = types.PushedRefRecord{Repo: p.Repo, Ref: p.Ref, Old: p.Old, New: p.New, Pushes: p.Pushes,
+			Change: p.Change}
 	}
 	return out
 }

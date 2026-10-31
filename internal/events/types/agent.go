@@ -871,13 +871,17 @@ func (AgentPhaseCompleted) EventType() string { return "agent_phase_completed" }
 // as [AgentPhaseCompleted.PushedRefs] lists it: the repository by the name the
 // run was given it under, the ref, the old value of the run's first push of it
 // and the new value of its last — the zero object id where the run created it
-// or deleted it — and how many of the run's pushes moved it.
+// or deleted it — how many of the run's pushes moved it, and the live change
+// it heads once the run is collected (web!42), absent for none. The envelope
+// evolves additive-only: a reader that predates Change reads the ref without
+// it.
 type PushedRefRecord struct {
 	Repo   string `json:"repo"`
 	Ref    string `json:"ref"`
 	Old    string `json:"old"`
 	New    string `json:"new"`
 	Pushes int    `json:"pushes"`
+	Change string `json:"change,omitempty"`
 }
 
 // Role is the seat the phase ran for — including for a judge or auxiliary

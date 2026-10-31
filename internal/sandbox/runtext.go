@@ -369,6 +369,9 @@ func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Resu
 	// code host's answer said: redacted, and held to the one bound an
 	// error a record carries has.
 	result.PushedUnread = events.ClipDiagnostic(redact.Secrets(result.PushedUnread))
+	// AND WHAT BECAME OF THE CHANGES IT ASKED TO OPEN, each sentence as
+	// that one is ([fitOpened]).
+	result.Opened = fitOpened(result.Opened)
 	return result
 }
 

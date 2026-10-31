@@ -1164,8 +1164,18 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 // interrupted ([Coordinator.collectFailed]): a drain or a moving seat says
 // nothing about the record, and said it would leave the run's phase record —
 // published once — calling its pushes unknown for good.
+//
+// AND THE CHANGES ([RunPushes.Changes]): every ref read is named by the live
+// change its branch heads, and the changes the run asked to open are opened
+// from what it pushed — only for a run that FINISHED its work, succeeded and
+// asked nothing: a run that stopped on a question is resumed by its answer
+// and finished by another run, which asks again (recloneText), and one that
+// did not succeed would put half its work in front of reviewers, which its
+// executor decides whether to do with code_open_change. Opened is the
+// coordinator's too, cleared with the rest. Its read failing fails nothing,
+// for the push record's reason: each ask says it was not opened, and why.
 func (c *Coordinator) readPushes(ctx context.Context, run PendingRun, result Result) (Result, error) {
-	result.Pushed, result.PushedElided, result.PushedUnread = nil, 0, ""
+	result.Pushed, result.PushedElided, result.PushedUnread, result.Opened = nil, 0, "", nil
 	if len(Pushable(run.Repos)) == 0 {
 		return result, nil
 	}
@@ -1178,14 +1188,54 @@ func (c *Coordinator) readPushes(ctx context.Context, run PendingRun, result Res
 		// ([Coordinator.fitResult]): the reason rides the run's phase record
 		// and the resumed executor's text.
 		result.PushedUnread = err.Error()
+		result.Opened = asked(run, unopenedUnread(err.Error()))
 		log.WarnContext(ctx, "sandbox_pushes_unread", "turn_id", run.TurnID, "launch_id", run.LaunchID,
 			"error", err.Error(),
 			"detail", "what the run pushed to the code host could not be read; the run resumes "+
 				"saying its pushes are unknown, never that it pushed nothing")
-	default:
-		result.Pushed, result.PushedElided = pushed, more
+		return result, nil
 	}
-	return result, nil
+	result.Pushed, result.PushedElided = pushed, more
+	finished := result.Success && !result.NeedsInput
+	if len(pushed) == 0 && (!finished || len(asked(run, "")) == 0) {
+		// NOTHING TO NAME AND NOTHING TO OPEN: no read.
+		return withUnopened(run, result, finished), nil
+	}
+	named, opened, err := c.pushes.Changes(ctx, run, pushed, finished)
+	switch {
+	case err != nil && errors.Is(ctx.Err(), context.Canceled):
+		return Result{}, fmt.Errorf("sandbox: reading the changes run %s delivered to: %w", run.TurnID, err)
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_changes_unread", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"error", err.Error(),
+			"detail", "the changes the run's branches head could not be read; its pushed refs name none, "+
+				"and no change it asked to open was opened")
+		if finished {
+			result.Opened = asked(run, unopenedNoChanges(err.Error()))
+			return result, nil
+		}
+		return withUnopened(run, result, finished), nil
+	}
+	result.Pushed = named
+	if finished {
+		result.Opened = opened
+		return result, nil
+	}
+	return withUnopened(run, result, finished), nil
+}
+
+// withUnopened is result with every change run asked to open said unopened —
+// for a run that did not finish its work, why — or as it is, for one that
+// did and opened none.
+func withUnopened(run PendingRun, result Result, finished bool) Result {
+	switch {
+	case finished:
+	case result.NeedsInput:
+		result.Opened = asked(run, unopenedAsked)
+	default:
+		result.Opened = asked(run, unopenedFailed)
+	}
+	return result
 }
 
 // charge post-accounts a collected run's tokens, ONCE per launch, and reports
@@ -3810,6 +3860,9 @@ func resumeText(run PendingRun, result Result) string {
 	}
 	if pushed := pushedText(run, result); pushed != "" {
 		lines = append(lines, pushed)
+	}
+	if opened := openedText(result); opened != "" {
+		lines = append(lines, opened)
 	}
 	switch {
 	case result.Text != "":

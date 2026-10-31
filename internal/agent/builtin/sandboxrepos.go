@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -83,21 +84,29 @@ type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 //  1. the repository, by [CodeDeps.repo] — judged by the node that answers
 //     for the seat and for whoever its turn acts for, and held; a deleted or
 //     purging one is refused in the code host's words;
-//  2. the branch: the request's, or [code.SeatBranch] of the seat, the
-//     turn's work item's key and the turn — held to [gitref.ValidBranch];
-//  3. ONE ref query for the branch, a base named as a ref, and — where no
-//     base is named — the default branch, the turn's hold taken on every
-//     seat's branch among them ([HoldRef]) and on the run's own branch where
-//     it does not exist yet, before anything durable of the launch exists;
+//  2. the branch: the request's; a change's it names to work on — read
+//     LINEARIZABLE, as every seat's read is, and refused closed or merged
+//     ([CodeDeps.runChange]) — its source branch; or [code.SeatBranch] of the
+//     seat, the turn's work item's key and the turn — held to
+//     [gitref.ValidBranch]; and the branch a change it asks to open proposes
+//     into ([openTarget]): the one it names, or the default branch;
+//  3. ONE ref query for the branch, a base named as a ref, — where no base
+//     is named — the default branch, and that branch the change proposes
+//     into, which must exist; the turn's hold taken on every seat's branch
+//     among them ([HoldRef]) and on the run's own branch where it does not
+//     exist yet, before anything durable of the launch exists — and a
+//     change's branch, a live change's source, must;
 //  4. the access: `write` asked must pass, for the branch, the ref rule the
 //     box will be judged by — the seat's grant held to a run given write and,
 //     in a turn a colleague woke, to that colleague's grant outside the
 //     seat's own namespace — and the repository must not be archived; `read`
 //     is read, and none asked is write where `write` would pass, else read;
+//     a run that asks to open a change must come to write, or it could
+//     deliver nothing to open one from;
 //  5. the base: an id — whole or abbreviated — expanded and checked by a
 //     read by object id; a ref, as the query answered it; none, the branch's
-//     head where it exists, else the default branch's, and an EMPTY
-//     repository (no default branch) none;
+//     head where it exists — a change's head, for a run on one — else the
+//     default branch's, and an EMPTY repository (no default branch) none;
 //  6. the cone, each path cleaned and held to the box's grammar.
 func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs []RepoRequest,
 	grant GrantFunc) (RunRepos, error) {
@@ -154,6 +163,14 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	floor := statelog.Later(repo.Position, d.Code.FloorOf(repo.ID))
 
 	branch := req.Branch
+	change, at, refusal := d.runChange(ctx, turn, c, req, repo)
+	if refusal != nil {
+		return sandbox.RunRepo{}, statelog.Position{}, refusal
+	}
+	if change != nil {
+		branch = strings.TrimPrefix(change.SourceRef, branchRoot)
+		floor = statelog.Later(floor, at)
+	}
 	if branch == "" {
 		var err error
 		if branch, err = code.SeatBranch(c.asker.Seat, workItemKey(turn), turn.RunID); err != nil {
@@ -168,11 +185,17 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		return sandbox.RunRepo{}, statelog.Position{}, &r
 	}
 
+	target, refusal := openTarget(req, repo, branch)
+	if refusal != nil {
+		return sandbox.RunRepo{}, statelog.Position{}, refusal
+	}
+
 	// ONE READ for every ref the launch needs of the repository: the run's
-	// branch, a base named as a ref, and the default branch where no base is
-	// named — one barrier, all of them at one checkpoint.
+	// branch, a base named as a ref, the default branch where no base is
+	// named, and the branch a change it asks to open proposes into — one
+	// barrier, all of them at one checkpoint.
 	names := []string{"refs/heads/" + branch}
-	baseAt, defaultAt := -1, -1
+	baseAt, defaultAt, targetAt := -1, -1, -1
 	switch {
 	case req.Base == "" && repo.DefaultBranch != "":
 		defaultAt = slices.Index(names, "refs/heads/"+repo.DefaultBranch)
@@ -181,6 +204,11 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		}
 	case req.Base != "" && !code.ValidRev(req.Base):
 		baseAt, names = len(names), append(names, req.Base)
+	}
+	if target != "" {
+		if targetAt = slices.Index(names, target); targetAt < 0 {
+			targetAt, names = len(names), append(names, target)
+		}
 	}
 	answer, refusal := d.refsOf(ctx, turn, tool, c, repo, names...)
 	if refusal != nil {
@@ -199,6 +227,20 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		return sandbox.RunRepo{}, statelog.Position{}, &r
 	}
 	head := answer.Refs[0]
+	switch {
+	case change != nil && head.Missing != "":
+		// A LIVE CHANGE'S SOURCE IS LIVE — deleting it closes the change in
+		// the same record — so the branch was deleted between the two reads,
+		// and the change with it.
+		r := refusedBy(tools.RefusalNotFound, fmt.Errorf("%w: %s", code.ErrRefNotFound, head.Missing),
+			fmt.Sprintf("%s: %s's branch %s was deleted as the run was launched, which closes the change; "+
+				"nothing was launched — read it with %s.", tool, change.Ref, change.SourceRef, CodeGetChangeTool))
+		return sandbox.RunRepo{}, statelog.Position{}, &r
+	case targetAt >= 0 && answer.Refs[targetAt].Missing != "":
+		r := codeFailure(ctx, tool, repo.Name, fmt.Errorf("%w: %s — name an existing branch as "+
+			"open_change's `target`", code.ErrRefNotFound, answer.Refs[targetAt].Missing))
+		return sandbox.RunRepo{}, statelog.Position{}, &r
+	}
 	if head.Missing != "" {
 		// THE RUN'S OWN BRANCH, NOT THERE YET: held with no read, as a branch
 		// a write creates is — no deletion can have listed it, and the box's
@@ -224,6 +266,15 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	access, refusal := runAccess(req, branch, head, current, boxGrant)
 	if refusal != nil {
 		return sandbox.RunRepo{}, statelog.Position{}, refusal
+	}
+	if req.OpenChange != nil && access != sandbox.RepoWrite {
+		// AN ACCESS LEFT OUT came to read: the box could push nothing, so
+		// it could deliver nothing to open a change from.
+		r := refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, fmt.Sprintf("%s: repository %q's run "+
+			"asks for open_change on %s, which it may not push, so it could deliver nothing to open a change "+
+			"from: name a `branch` it may push — leave `branch` out for your own — or leave open_change out.",
+			tool, repo.Name, branch))
+		return sandbox.RunRepo{}, statelog.Position{}, &r
 	}
 
 	var base string
@@ -271,6 +322,12 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	}
 	out := sandbox.RunRepo{Repo: current.Name, RepoID: current.ID, Base: base, Branch: branch, Access: access,
 		Paths: paths}
+	if change != nil {
+		out.Change = &sandbox.RunChange{ID: change.ID, Number: change.Number}
+	}
+	if req.OpenChange != nil {
+		out.Open = &sandbox.OpenChange{Target: target, Title: req.OpenChange.Title, Draft: req.OpenChange.Draft}
+	}
 	if err := out.ValidateFor(sandbox.CloneCoding); err != nil {
 		r := failed(fmt.Sprintf("%s: repository %q cannot be given to a run as named: %v.", tool, repo.Name,
 			err))
@@ -325,6 +382,90 @@ func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.
 		"to write may not push %s: %s. Ask for `access: read`, or name a `branch` this run may push — "+
 		"leave `branch` out for your own.", tool, repo.Name, branch, why))
 	return "", &r
+}
+
+// runChange is the change a request names to work on, read once at the seat's
+// level — LINEARIZABLE ([CodeDeps.changeOf]), held to the caller's grant on
+// the repository — with the position it was read at; nil for a request that
+// names none. A change that is no longer live is refused naming what became
+// of it: a closed one's work is over unless it is reopened, and a merged
+// one's is in its target, which a run starts from by naming it as `base`.
+func (d CodeDeps) runChange(ctx context.Context, turn *turnctx.Turn, c codeCaller, req RepoRequest,
+	repo code.RepoRef) (*code.ChangeDetail, statelog.Position, *tools.Result) {
+
+	const tool = RunSandboxTool
+	if req.Change == "" {
+		return nil, statelog.Position{}, nil
+	}
+	s := req.Change
+	if name, n, ok := strings.Cut(s, "!"); ok {
+		if name != req.Repo {
+			r := failed(fmt.Sprintf("%s: repository %q's `change` %q names a change of repository %q — name "+
+				"the change by its number on %q.", tool, clip(req.Repo), clip(req.Change), clip(name),
+				clip(req.Repo)))
+			return nil, statelog.Position{}, &r
+		}
+		s = n
+	}
+	number, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || number < 1 {
+		r := failed(fmt.Sprintf("%s: repository %q's `change` %q is no change: name it by its number (42) or "+
+			"its reference (%s), as %s lists it.", tool, clip(req.Repo), clip(req.Change),
+			code.ChangeRef(repo.Name, 42), CodeListChangesTool))
+		return nil, statelog.Position{}, &r
+	}
+	written, refusal := d.changeOf(ctx, turn, tool, c, repo, number)
+	if refusal != nil {
+		return nil, statelog.Position{}, refusal
+	}
+	change := written.detail
+	switch change.State {
+	case code.ChangeStateClosed:
+		r := refused(tools.RefusalConflict, fmt.Sprintf("%s: %s is closed, so a run delivers "+
+			"to no change on its branch; reopen it with %s, or name its branch as `branch`.", tool, change.Ref,
+			CodeCloseChangeTool))
+		return nil, statelog.Position{}, &r
+	case code.ChangeStateMerged:
+		r := refused(tools.RefusalConflict, fmt.Sprintf("%s: %s is merged, its work in %s; "+
+			"name that branch as `base` to build on it.", tool, change.Ref, change.TargetRef))
+		return nil, statelog.Position{}, &r
+	}
+	return change, written.at, nil
+}
+
+// openTarget is the branch, whole, a request's ask to open a change proposes
+// the run's branch into — the one it names, else the repository's default
+// branch — held to the rules an open is, before anything is read; "" for a
+// request that asks for none. A title it names is held to a change's title's
+// rule here too ([code.TitleProblem]), so an ask the collection's open would
+// refuse costs no box.
+func openTarget(req RepoRequest, repo code.RepoRef, branch string) (string, *tools.Result) {
+	const tool = RunSandboxTool
+	ask := req.OpenChange
+	if ask == nil {
+		return "", nil
+	}
+	target := strings.TrimPrefix(ask.Target, branchRoot)
+	if target == "" {
+		target = repo.DefaultBranch
+	}
+	why := ""
+	switch {
+	case target == "":
+		why = "the repository has no default branch yet, so name the branch it proposes into as `target`"
+	case !gitref.ValidBranch(target):
+		why = fmt.Sprintf("`target` %q is not a branch name git accepts", clip(target))
+	case target == branch:
+		why = fmt.Sprintf("it would propose %s into itself: name another `target`", branch)
+	case ask.Title != "" && code.TitleProblem(ask.Title) != "":
+		why = "`title` is " + code.TitleProblem(ask.Title) + " — a title is one line of at most " +
+			strconv.Itoa(code.MaxChangeTitleBytes) + " bytes"
+	}
+	if why != "" {
+		r := failed(fmt.Sprintf("%s: repository %q's open_change: %s.", tool, repo.Name, why))
+		return "", &r
+	}
+	return branchRoot + target, nil
 }
 
 // workItemKey is the key of the work item turn is charged to, as its tracker

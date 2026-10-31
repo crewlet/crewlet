@@ -25,6 +25,30 @@ type pushSpy struct {
 	// held, when set, holds every read until the context it runs under ends,
 	// and is closed by the first read to arrive.
 	held chan struct{}
+	// changes, set, answers every Changes call; unset, Changes names nothing
+	// and opens nothing. changed records whether each call was asked to open.
+	changes func(run PendingRun, pushed []PushedRef, open bool) ([]PushedRef, []OpenedChange, error)
+	changed []bool
+}
+
+func (s *pushSpy) Changes(_ context.Context, run PendingRun, pushed []PushedRef,
+	open bool) ([]PushedRef, []OpenedChange, error) {
+
+	s.mu.Lock()
+	s.changed = append(s.changed, open)
+	changes := s.changes
+	s.mu.Unlock()
+	if changes == nil {
+		return pushed, nil, nil
+	}
+	return changes(run, pushed, open)
+}
+
+// opens is whether each Changes call was asked to open, in order.
+func (s *pushSpy) opens() []bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.changed)
 }
 
 func (s *pushSpy) Pushed(ctx context.Context, run PendingRun) ([]PushedRef, int, error) {
@@ -145,6 +169,110 @@ func TestACollectedRunIsToldWhatItPushed(t *testing.T) {
 	if !slices.Equal(recs[0].PushedRefs, wantRecs) || recs[0].PushedRefsElided != 0 ||
 		recs[0].PushedRefsUnread != "" {
 		t.Errorf("the run's record lists %+v, want the whole ids of %+v", recs[0].PushedRefs, wantRecs)
+	}
+}
+
+// A COLLECTED RUN IS TOLD THE CHANGES IT DELIVERED TO (M4-decisions D33): the
+// engine names each ref the run pushed by the live change its branch heads,
+// and opens the change the run asked to open — asked to open only for a run
+// that finished its work, succeeded and asked nothing — and the resumed
+// executor reads both: each ref beside its change, and what became of each
+// ask, opened or why not; the run's record carries each ref's change. A run
+// that stopped on a question is told the run that finishes its work opens
+// it, and one that did not succeed that it opens none; a run that pushed
+// nothing and asked nothing reads nothing more.
+//
+// Mutations: ask the engine to open for a run that did not succeed — the
+// open flag, red; leave the opened lines out of resumeText — red; leave the
+// change off the phase record — red.
+func TestACollectedRunIsToldTheChangesItDeliveredTo(t *testing.T) {
+	t.Parallel()
+	opening := func(r *PendingRun) {
+		withNative(r)
+		r.Repos[0].Open = &OpenChange{Target: "refs/heads/main"}
+	}
+	pushed := []PushedRef{{Repo: "web", Ref: "refs/heads/seats/swe/ENG-1", Old: gitref.ZeroOID, New: oidB,
+		Pushes: 2}}
+	opened := func(run PendingRun, refs []PushedRef, open bool) ([]PushedRef, []OpenedChange, error) {
+		named := slices.Clone(refs)
+		named[0].Change = "web!7"
+		if !open {
+			return named, nil, nil
+		}
+		return named, []OpenedChange{{Repo: "web", Branch: "seats/swe/ENG-1", Change: "web!7", Opened: true}}, nil
+	}
+
+	rig := newCoordRig(t)
+	rig.launchWith("t1", opening)
+	rig.pushes.answer(pushed, 0, nil)
+	rig.pushes.changes = opened
+	if err := completeRun(t, rig, Result{Success: true, Text: "fixed the flake"}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := rig.pushes.opens(); !slices.Equal(got, []bool{true}) {
+		t.Fatalf("the engine was asked to open %v, want once, for a run that finished", got)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("resumed %d times, want once", len(calls))
+	}
+	want := "- web refs/heads/seats/swe/ENG-1 created at bbbbbbbbbbbb (2 pushes), change web!7\n" +
+		"Changes on this company's code host (opened at the run's collection):\n" +
+		"- web!7 opened from seats/swe/ENG-1 for review\n"
+	if !strings.Contains(calls[0].Answer, want) {
+		t.Errorf("the resumed executor reads:\n%s\nwant it to carry:\n%s", calls[0].Answer, want)
+	}
+	if recs := rig.phases(); len(recs) != 1 || len(recs[0].PushedRefs) != 1 || recs[0].PushedRefs[0].Change != "web!7" {
+		t.Errorf("the run's record = %+v, want its ref naming web!7", recs)
+	}
+
+	// A RUN THAT DID NOT SUCCEED has its refs named and opens nothing, and
+	// is told why.
+	failed := newCoordRig(t)
+	failed.launchWith("t1", opening)
+	failed.pushes.answer(pushed, 0, nil)
+	failed.pushes.changes = opened
+	if err := completeRun(t, failed, Result{Success: false, Error: "the tests still fail"}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := failed.pushes.opens(); !slices.Equal(got, []bool{false}) {
+		t.Fatalf("the engine was asked to open %v for a run that failed, want named and never opened", got)
+	}
+	says := "- web: no change opened from seats/swe/ENG-1 — the run did not succeed"
+	if calls := failed.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, says) ||
+		!strings.Contains(calls[0].Answer, ", change web!7") {
+		t.Errorf("a run that failed resumed with %+v, want it to say %q and name web!7", calls, says)
+	}
+
+	// A RUN THAT STOPPED ON A QUESTION opens nothing either: the run that
+	// finishes its work asks again.
+	parked := newCoordRig(t)
+	parked.launchWith("t1", opening)
+	parked.pushes.answer(pushed, 0, nil)
+	parked.pushes.changes = opened
+	if err := completeRun(t, parked, Result{Success: true, NeedsInput: true, Question: "which flag?",
+		AskTo: "requester"}); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := parked.pushes.opens(); !slices.Equal(got, []bool{false}) {
+		t.Fatalf("the engine was asked to open %v for a run that asked a question, want never", got)
+	}
+}
+
+// A RUN RECLONED AFTER ITS ANSWER ASKS TO OPEN ITS CHANGE AGAIN: the call the
+// executor is told to make for a reclaimed box names each repository's ask
+// as the run had it, its target as a branch, so the run that finishes the
+// work opens the change the parked one could not.
+//
+// Mutation: leave open_change out of recloneText — red.
+func TestARecloneAsksToOpenItsChangeAgain(t *testing.T) {
+	t.Parallel()
+	repos := []RunRepo{{Repo: "web", RepoID: webRepoID, Branch: "seats/swe/ENG-1", Access: RepoWrite,
+		Open: &OpenChange{Target: "refs/heads/main", Title: "Retry the upload", Draft: true}}}
+	want := `[{"repo":"web","branch":"seats/swe/ENG-1","open_change":{"target":"main","title":"Retry the upload",` +
+		`"draft":true}}]`
+	if got := recloneText(repos); got != want {
+		t.Errorf("recloneText = %s, want %s", got, want)
 	}
 }
 

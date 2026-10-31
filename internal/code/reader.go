@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1558,6 +1559,14 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// refuses, and the maintainer asks another node.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.ExpungeTips.RepoID)}}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.expungeTips(ctx, tx, q, &out) }
+	case ReadBranchChanges:
+		// A POINT READ OF THE REPOSITORY, as a `run_pushes` read is: a
+		// record this node deferred on it may open or close a change on one
+		// of the branches, and an answer past it would name a delivered ref
+		// by a change it no longer heads — or by none — so such a read
+		// refuses, and the engine asks another node.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.BranchChanges.RepoID)}}, false)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.branchChanges(ctx, tx, q, &out) }
 	}
 	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		out = ReadAnswer{}
@@ -1605,6 +1614,8 @@ func (q ReadQuery) validate() error {
 		return q.validateChecksDue()
 	case ReadExpungeTips:
 		return q.validateExpungeTips()
+	case ReadBranchChanges:
+		return q.validateBranchChanges()
 	case ReadCheckBox:
 		return q.validateCheckBox()
 	case ReadChecksQueued:
@@ -1652,6 +1663,9 @@ func (q ReadQuery) validate() error {
 			ErrInvalid)
 	case q.ExpungeTips != nil:
 		return fmt.Errorf("%w: expunge_tips: only an expunge_tips read names a repository's ref drops", ErrInvalid)
+	case q.BranchChanges != nil:
+		return fmt.Errorf("%w: branch_changes: only a branch_changes read names the branches whose live "+
+			"changes it answers", ErrInvalid)
 	case q.MinPacks != 0:
 		return fmt.Errorf("%w: min_packs: only a compaction_due read names a floor of live packs", ErrInvalid)
 	case q.Prefix != "" && q.Kind != ReadRefs:
@@ -1893,6 +1907,7 @@ func (q ReadQuery) validateRunPushes() error {
 	}{
 		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
 		{"introduced", q.Introduced != nil}, {"expunge_tips", q.ExpungeTips != nil},
+		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
@@ -1941,6 +1956,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"branch_changes", q.BranchChanges != nil},
 		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
@@ -1980,6 +1996,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
@@ -2015,6 +2032,7 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"expunge_tips", q.ExpungeTips != nil},
+		{"branch_changes", q.BranchChanges != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
@@ -2078,16 +2096,112 @@ func (q ReadQuery) validateExpungeTips() error {
 	return nil
 }
 
+// validateBranchChanges is [ReadQuery.validate] for a `branch_changes` read:
+// the engine's own — what it names a collected coding run's delivered refs by
+// — so it names NO asker, for a `run_pushes` read's reason; it names its
+// repository by id and one to [MaxRefsPerQuery] branches, each a whole ref
+// under refs/heads/ and each once, and nothing else: no filter, no cursor and
+// no limit, since one page answers every branch it names, each one change at
+// most.
+func (q ReadQuery) validateBranchChanges() error {
+	in := q.BranchChanges
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	switch {
+	case q.Asker != (Principal{}):
+		return refused("asker", "a branch_changes read is the engine's own, which no principal makes")
+	case in == nil:
+		return refused("branch_changes", "a branch_changes read names its repository and its branches")
+	case !canonicalUUID(in.RepoID):
+		return refused("branch_changes.repo_id", fmt.Sprintf("%q is not a repository's id in its canonical "+
+			"lowercase spelling", in.RepoID))
+	case len(in.Refs) == 0 || len(in.Refs) > MaxRefsPerQuery:
+		return refused("branch_changes.refs", fmt.Sprintf("%d branches; a branch_changes read names one to %d "+
+			"(MaxRefsPerQuery)", len(in.Refs), MaxRefsPerQuery))
+	}
+	named := make(map[string]bool, len(in.Refs))
+	for i, ref := range in.Refs {
+		if why := branchProblem(ref); why != "" {
+			return refused(fmt.Sprintf("branch_changes.refs[%d]", i), why)
+		}
+		if named[ref] {
+			return refused(fmt.Sprintf("branch_changes.refs[%d]", i), fmt.Sprintf("%s is named twice", ref))
+		}
+		named[ref] = true
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
+		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
+		{"expunge_tips", q.ExpungeTips != nil}, {"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0},
+		{"cursor", q.Cursor != ""}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
+		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
+		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
+	} {
+		if f.set {
+			return refused(f.field, "a branch_changes read answers one repository's branches' live changes in "+
+				"one page, and names nothing else")
+		}
+	}
+	return nil
+}
+
+// branchChanges serves a `branch_changes` read ([ReadBranchChanges]): the live
+// change each branch the query names heads, in the query's order — one seek
+// of code_changes_open_idx a branch, through the statement a push's decide
+// and apply read the changes its branches head by (liveBySourceSQL), driven
+// from the list of the branches a chunk at a time. NOT HELD TO A GRANT, for a
+// `run_pushes` read's reason: the engine names its own run's refs, of a
+// repository the run was given.
+func (r *Reader) branchChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	in := q.BranchChanges
+	order := make(map[string]int, len(in.Refs))
+	for i, ref := range in.Refs {
+		order[ref] = i
+	}
+	if err := inChunks(in.Refs, func(part []string) error {
+		encoded, err := json.Marshal(part)
+		if err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, liveBySourceSQL, in.RepoID, string(encoded))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			row, err := scanChange(rows.Scan)
+			if err != nil {
+				return err
+			}
+			out.BranchChanges = append(out.BranchChanges, BranchChange{Ref: row.source, ChangeID: row.id,
+				Number: row.number})
+		}
+		return rows.Err()
+	}); err != nil {
+		return fmt.Errorf("code: read the live changes of repository %s's branches: %w", in.RepoID, err)
+	}
+	slices.SortFunc(out.BranchChanges, func(a, b BranchChange) int { return order[a.Ref] - order[b.Ref] })
+	return nil
+}
+
 // freshness is the level a read is served at: EVERY LEVEL, by every code
 // read's one rule ([checkFreshness]) — `session` only beside a position on the
 // code log, which is the position it waits for, and a floor on any other log
 // refused as the request's mistake. Where none is named, a principal's read and
 // a duty listing are read stale — the REST read path's level, and what a poll
-// of the duty listings needs — and the engine's own `introduced` and
-// `run_pushes` are refused, since whoever builds an index names the level its
-// pages must be read at, and whoever reads what a run delivered the level its
-// "nothing" may be said at: a run's pushes read stale would answer none for a
-// push another node has already applied.
+// of the duty listings needs — and the engine's own `introduced`,
+// `run_pushes`, `expunge_tips` and `branch_changes` are refused, since whoever
+// builds an index names the level its pages must be read at, and whoever
+// reads what a run delivered the level its "nothing" may be said at: a run's
+// pushes read stale would answer none for a push another node has already
+// applied, and its branches' changes none for a change another node opened.
 //
 // # Why a principal's read serves `session`
 //
@@ -2103,7 +2217,8 @@ func (q ReadQuery) validateExpungeTips() error {
 // `session`, the wrong label the level exists to make impossible.
 func (q ReadQuery) freshness() (statelog.Freshness, error) {
 	fresh := q.Fresh
-	if fresh.Level == "" && q.Kind != ReadIntroduced && q.Kind != ReadRunPushes && q.Kind != ReadExpungeTips {
+	if fresh.Level == "" && q.Kind != ReadIntroduced && q.Kind != ReadRunPushes && q.Kind != ReadExpungeTips &&
+		q.Kind != ReadBranchChanges {
 		fresh.Level = statelog.ReadStale
 	}
 	return fresh, checkFreshness(fresh)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // A CHANGE'S CLOSED SETS — the values code_changes holds (replicated migration
@@ -378,10 +379,34 @@ func OpenChangeID(opID string) string {
 // bang and its number — web!42.
 func ChangeRef(repo string, number int64) string { return fmt.Sprintf("%s!%d", repo, number) }
 
-// titleProblem is why s is no change's title, or "": a title is one line of
+// AsTitle is s made a change's title, or "" where it cannot be one: valid
+// UTF-8 — a subject in another encoding is no title — on one line, every run
+// of spaces and control characters one space, and past [MaxChangeTitleBytes]
+// cut on a rune boundary with a marker: a title nobody wrote is a preview of
+// the subject, which its commit keeps whole. What an open that names no title
+// of its own is titled from — the subject of the commit its branch was
+// delivered at — for a push's options (internal/code/host) and for a coding
+// run's ask at its collection (internal/engine): ONE RULE for both, so a
+// change opened either way from one commit takes one title.
+func AsTitle(s string) string {
+	if !utf8.ValidString(s) {
+		return ""
+	}
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	return textcut.Within(strings.Join(strings.Fields(s), " "), MaxChangeTitleBytes)
+}
+
+// TitleProblem is why s is no change's title, or "": a title is one line of
 // text — not empty, at most [MaxChangeTitleBytes] of valid UTF-8 holding no
-// control character, so no line break.
-func titleProblem(s string) string {
+// control character, so no line break. Exported for the launch that holds a
+// coding run's ask to open a change to it before a box costs anything
+// (internal/agent/builtin).
+func TitleProblem(s string) string {
 	switch {
 	case strings.TrimSpace(s) == "":
 		return "a change is named by a title"

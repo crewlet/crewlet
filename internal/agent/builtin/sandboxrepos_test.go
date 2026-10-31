@@ -2,6 +2,8 @@ package builtin_test
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -195,5 +198,153 @@ func TestALaunchReadsARepositorysRefsInOneQuery(t *testing.T) {
 		gits[0].Tree.Rev != mainOID[:9] {
 		t.Errorf("a launch naming an abbreviated id made %d ref queries and reads by object id %+v, want one "+
 			"of each, the read asking the id", len(resolves), gits)
+	}
+}
+
+// changeAt is site's change number 3, from feature into main, in state, as a
+// read of it answers.
+func changeAt(state code.ChangeState) *code.ChangeDetail {
+	return &code.ChangeDetail{ChangeSummary: code.ChangeSummary{
+		ChangeRow: code.ChangeRow{ID: "0190d8f0-4444-7000-8000-0123456789ab", RepoID: siteID, Number: 3,
+			Title: "Retry the upload", State: state, SourceRef: "refs/heads/feature", TargetRef: "refs/heads/main",
+			Head: featureOID, Revision: 2, Owner: "agent-cto", OwnerKind: code.PartyAgent, Version: 4},
+		Repo: "site", Ref: "site!3"}}
+}
+
+// hostWithChange is the code host holding site and its change number 3 in
+// state, answering a read of any other number not found.
+func hostWithChange(state code.ChangeState) *codeHost {
+	host := newCodeHost()
+	host.changes = func(q code.ReadQuery) (code.ReadAnswer, error) {
+		if q.Kind != code.ReadChange || q.Change != 3 {
+			return code.ReadAnswer{}, fmt.Errorf("%w: site!%d", code.ErrChangeNotFound, q.Change)
+		}
+		return code.ReadAnswer{Position: codeAt(12), Level: q.Fresh.Level, Change: changeAt(state)}, nil
+	}
+	return host
+}
+
+// A RUN ON A CHANGE STARTS FROM ITS HEAD (M4-decisions D33): a repository named
+// with a `change` — by its number, or its reference — is given the run on the
+// change's own source branch, from the head that branch holds, and names the
+// change on the run's grant, so its pushes revise it and its collection names
+// it; the change is read once, LINEARIZABLE — a run must not start from a
+// change a node behind still shows open — and a closed or a merged one is
+// refused before a box costs anything, as is a change of another repository
+// and one the repository does not hold.
+//
+// Mutations: start from the default branch rather than the change's — the
+// base is main's, red; read the change stale — red; let a merged change
+// through — red.
+func TestARunOnAChangeStartsFromItsHead(t *testing.T) {
+	t.Parallel()
+	for _, named := range []string{"3", "site!3"} {
+		host := hostWithChange(code.ChangeStateOpen)
+		got, err := codeDeps(host).ResolveRunRepos(t.Context(), launchTurn(t),
+			[]builtin.RepoRequest{{Repo: "site", Change: named}}, maintains)
+		if err != nil {
+			t.Fatalf("change %q: ResolveRunRepos: %v", named, err)
+		}
+		want := sandbox.RunRepo{Repo: "site", RepoID: siteID, Base: featureOID, Branch: "feature",
+			Access: sandbox.RepoWrite, Paths: []string{},
+			Change: &sandbox.RunChange{ID: changeAt(code.ChangeStateOpen).ID, Number: 3}}
+		if len(got.Repos) != 1 || !reflect.DeepEqual(got.Repos[0], want) {
+			t.Fatalf("change %q: the run is given %+v, want %+v", named, got.Repos, want)
+		}
+		reads, resolves, _ := host.asked()
+		if n := readsOf(reads, code.ReadChange); n != 1 {
+			t.Fatalf("change %q: the launch read the change %d times, want once", named, n)
+		}
+		for _, q := range reads {
+			if q.Kind == code.ReadChange && q.Fresh.Level != statelog.ReadLinearizable {
+				t.Errorf("change %q: the change was read %s, want linearizable", named, q.Fresh.Level)
+			}
+		}
+		if len(resolves) != 1 || resolves[0].Refs[0] != "refs/heads/feature" {
+			t.Errorf("change %q: the launch resolved %+v, want the change's branch first", named, resolves)
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		host    *codeHost
+		req     builtin.RepoRequest
+		refusal tools.Refusal
+		says    string
+	}{
+		"a closed change": {hostWithChange(code.ChangeStateClosed),
+			builtin.RepoRequest{Repo: "site", Change: "3"}, tools.RefusalConflict, "site!3 is closed"},
+		"a merged change": {hostWithChange(code.ChangeStateMerged),
+			builtin.RepoRequest{Repo: "site", Change: "3"}, tools.RefusalConflict, "site!3 is merged"},
+		"a change it does not hold": {hostWithChange(code.ChangeStateOpen),
+			builtin.RepoRequest{Repo: "site", Change: "4"}, tools.RefusalNotFound, ""},
+		"another repository's change": {hostWithChange(code.ChangeStateOpen),
+			builtin.RepoRequest{Repo: "site", Change: "web!3"}, "", "names a change of repository"},
+		"no change": {hostWithChange(code.ChangeStateOpen),
+			builtin.RepoRequest{Repo: "site", Change: "three"}, "", "is no change"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := codeDeps(tc.host).ResolveRunRepos(t.Context(), launchTurn(t), []builtin.RepoRequest{tc.req},
+				maintains)
+			var refused *builtin.RefusedLaunch
+			if !errors.As(err, &refused) || !strings.Contains(refused.Result.Output, tc.says) ||
+				(tc.refusal != "" && tools.RefusalOf(refused.Result) != tc.refusal) {
+				t.Fatalf("ResolveRunRepos = %v, want a %s refusal saying %q", err, tc.refusal, tc.says)
+			}
+		})
+	}
+}
+
+// A LAUNCH RESOLVES A RUN'S ASK TO OPEN A CHANGE (M4-decisions D33): the
+// branch it proposes into is the one it names, else the repository's default
+// branch, whole on the run's grant beside its title and whether it is a
+// draft — resolved in the launch's one ref query, so a target that does not
+// exist is refused before a box costs anything — and an ask that proposes the
+// run's branch into itself, names a title no change may carry, or comes to a
+// run that may not push its branch is refused.
+//
+// Mutation: leave the target unresolved when none is named — the grant's
+// target is empty, red.
+func TestALaunchResolvesARunsAskToOpenAChange(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	got, err := codeDeps(host).ResolveRunRepos(t.Context(), launchTurn(t), []builtin.RepoRequest{
+		{Repo: "site", Branch: "feature", OpenChange: &builtin.OpenChangeRequest{Title: "Retry the upload",
+			Draft: true}}}, maintains)
+	if err != nil {
+		t.Fatalf("ResolveRunRepos: %v", err)
+	}
+	want := &sandbox.OpenChange{Target: "refs/heads/main", Title: "Retry the upload", Draft: true}
+	if len(got.Repos) != 1 || !reflect.DeepEqual(got.Repos[0].Open, want) || got.Repos[0].Access != sandbox.RepoWrite {
+		t.Fatalf("the run is given %+v, want write and an ask to open %+v", got.Repos, want)
+	}
+	if _, resolves, _ := host.asked(); len(resolves) != 1 || !slices.Contains(resolves[0].Refs, "refs/heads/main") {
+		t.Errorf("the launch resolved %+v, want the target in its one query", resolves)
+	}
+
+	for name, tc := range map[string]struct {
+		req   builtin.RepoRequest
+		grant builtin.GrantFunc
+		says  string
+	}{
+		"a target that does not exist": {builtin.RepoRequest{Repo: "site",
+			OpenChange: &builtin.OpenChangeRequest{Target: "release"}}, maintains, "release"},
+		"the run's own branch": {builtin.RepoRequest{Repo: "site", Branch: "feature",
+			OpenChange: &builtin.OpenChangeRequest{Target: "refs/heads/feature"}}, maintains, "into itself"},
+		"a title on two lines": {builtin.RepoRequest{Repo: "site",
+			OpenChange: &builtin.OpenChangeRequest{Title: "Retry\nthe upload"}}, maintains, "`title`"},
+		"a branch it may not push": {builtin.RepoRequest{Repo: "site", Branch: "main",
+			OpenChange: &builtin.OpenChangeRequest{Target: "feature"}},
+			func(code.Principal, code.RepoRef) code.Grant { return code.Grant{} }, "may not push"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := codeDeps(newCodeHost()).ResolveRunRepos(t.Context(), launchTurn(t),
+				[]builtin.RepoRequest{tc.req}, tc.grant)
+			var refused *builtin.RefusedLaunch
+			if !errors.As(err, &refused) || !strings.Contains(refused.Result.Output, tc.says) {
+				t.Fatalf("ResolveRunRepos = %v, want a refusal saying %q", err, tc.says)
+			}
+		})
 	}
 }

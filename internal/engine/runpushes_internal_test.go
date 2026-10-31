@@ -23,6 +23,11 @@ func (noPushes) Pushed(context.Context, sandbox.PendingRun) ([]sandbox.PushedRef
 	return nil, 0, nil
 }
 
+func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, pushed []sandbox.PushedRef,
+	_ bool) ([]sandbox.PushedRef, []sandbox.OpenedChange, error) {
+	return pushed, nil, nil
+}
+
 // pagedReader is the code host's read answering a scripted page per call, and
 // recording every query it was asked.
 type pagedReader struct {
@@ -40,6 +45,15 @@ func (r *pagedReader) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer
 		return code.ReadAnswer{}, fmt.Errorf("asked for page %d of %d", len(r.asked), len(r.pages))
 	}
 	return r.pages[len(r.asked)-1], nil
+}
+
+// Change and GitRead are no question the push record's reader asks.
+func (r *pagedReader) Change(context.Context, code.ChangeProposal) (code.ChangeResult, error) {
+	return code.ChangeResult{}, errors.New("the push record's reader asked for a change write")
+}
+
+func (r *pagedReader) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
+	return code.GitAnswer{}, errors.New("the push record's reader asked for a read by object id")
 }
 
 // readerOf is a runPushes over r.

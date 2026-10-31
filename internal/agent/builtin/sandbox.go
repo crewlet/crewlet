@@ -43,6 +43,24 @@ type RepoRequest struct {
 	// Paths are the directories checked out (a sparse cone); empty is the
 	// whole tree.
 	Paths []string
+	// Change is a change of the repository the run works on — its number
+	// (42) or its reference (web!42) — resolved to its source branch, from
+	// its head; "" for none. Never beside Branch or Base, which it decides.
+	Change string
+	// OpenChange asks the engine to open a change from the run's branch once
+	// the run finishes ([OpenChangeRequest]); nil for none. Never beside
+	// Change, whose branch heads one already.
+	OpenChange *OpenChangeRequest
+}
+
+// OpenChangeRequest is a run_sandbox call's ask to open a change from the
+// branch the run works on, at its collection: the branch it proposes into —
+// "" for the repository's default branch — its title — "" for the subject of
+// the commit the run delivers — and whether it opens as a draft.
+type OpenChangeRequest struct {
+	Target string
+	Title  string
+	Draft  bool
 }
 
 // SandboxLauncher is what this tool needs to start a detached coding run.
@@ -162,6 +180,19 @@ func reposParameter() map[string]any {
 					"items": map[string]any{"type": "string"},
 					"description": "Directories to check out (a sparse cone), for a large repository. " +
 						"Default: the whole tree."},
+				"change": map[string]any{"type": "string",
+					"description": "A change to work on, by its number or reference (web!42): its branch, " +
+						"from its head. Instead of `branch` and `base`."},
+				"open_change": map[string]any{"type": "object", "additionalProperties": false,
+					"description": "Open a change from the branch once the run succeeds — once, from what it " +
+						"pushed, carrying your work item. Needs write.",
+					"properties": map[string]any{
+						"target": map[string]any{"type": "string",
+							"description": "The branch it proposes into. Default: the default branch."},
+						"title": map[string]any{"type": "string",
+							"description": "Default: the subject of the commit the run delivers."},
+						"draft": map[string]any{"type": "boolean"},
+					}},
 			},
 		},
 	}
@@ -225,13 +256,19 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 	}, nil
 }
 
-// repoKeys are the keys a `repos` item may hold.
-var repoKeys = []string{"repo", "base", "branch", "access", "paths"}
+// repoKeys are the keys a `repos` item may hold, and openChangeKeys those its
+// `open_change` may.
+var (
+	repoKeys       = []string{"repo", "base", "branch", "access", "paths", "change", "open_change"}
+	openChangeKeys = []string{"target", "title", "draft"}
+)
 
 // reposArg is the call's `repos`, read STRICTLY — an item that is not an
 // object, a key the schema does not name, a field that is not the type the
 // schema gives it, an empty `repo`, an `access` outside its two values, a
-// list past its bound, or one repository named twice is refused naming the
+// `change` beside the `branch` or `base` it decides, an `open_change` beside
+// a `change` or asked of a run given `read`, a list past its bound, or one
+// repository named twice is refused naming the
 // item and the field, before the launcher is asked — or nil where the call
 // names none. A tool that offers no `repos` (a company whose code host this
 // node does not serve) never reads one: the argument is not in its schema, so
@@ -276,19 +313,36 @@ func (t *runSandbox) reposArg(args map[string]any) ([]RepoRequest, *tools.Result
 		for _, f := range []struct {
 			key  string
 			into *string
-		}{{"repo", &req.Repo}, {"base", &req.Base}, {"branch", &req.Branch}, {"access", &req.Access}} {
+		}{{"repo", &req.Repo}, {"base", &req.Base}, {"branch", &req.Branch}, {"access", &req.Access},
+			{"change", &req.Change}} {
 			value, ok := repoField(fields, f.key)
 			if !ok {
 				return refuse("repos[%d].%s is not a string: write it as one, or leave it out.", i, f.key)
 			}
 			*f.into = value
 		}
+		open, refusal := openChangeField(i, fields)
+		if refusal != nil {
+			return nil, refusal
+		}
+		req.OpenChange = open
 		switch {
 		case req.Repo == "":
 			return refuse("repos[%d] needs `repo`: a repository's name, as %s lists it.", i, CodeListReposTool)
 		case req.Access != "" && req.Access != string(sandbox.RepoRead) && req.Access != string(sandbox.RepoWrite):
 			return refuse("repos[%d].access is %q: it is %q, %q, or left out for the most your grant allows.",
 				i, clip(req.Access), sandbox.RepoRead, sandbox.RepoWrite)
+		case req.Change != "" && (req.Branch != "" || req.Base != ""):
+			// THE CHANGE DECIDES BOTH: its source branch, from its head. A
+			// branch or a base beside it is a run told two places to start.
+			return refuse("repos[%d] names `change` beside `branch` or `base`: a change is worked on from its "+
+				"own branch's head — name one or the other.", i)
+		case req.Change != "" && req.OpenChange != nil:
+			return refuse("repos[%d] names `change` and `open_change`: the change's branch heads it already, "+
+				"so the run delivers to it — leave `open_change` out.", i)
+		case req.OpenChange != nil && req.Access == string(sandbox.RepoRead):
+			return refuse("repos[%d] asks for `open_change` with `access: read`: a run that pushes nothing "+
+				"delivers nothing to open a change from.", i)
 		}
 		if paths, ok := fields["paths"]; ok && paths != nil {
 			list, ok := paths.([]any)
@@ -331,4 +385,51 @@ func repoField(fields map[string]any, key string) (string, bool) {
 		return strings.TrimSpace(v), true
 	}
 	return "", false
+}
+
+// openChangeField is the i-th `repos` item's `open_change`, read as strictly
+// as the item — nil where it leaves the field out or sets it null; an object
+// of only `target` and `title`, each a string, and `draft`, a bool; anything
+// else refused naming it — for the item's reason: an ask the engine acts on
+// as the seat once the run is done, which a misspelt key would have made
+// another one.
+func openChangeField(i int, fields map[string]any) (*OpenChangeRequest, *tools.Result) {
+	refuse := func(format string, a ...any) (*OpenChangeRequest, *tools.Result) {
+		r := failed("run_sandbox: " + fmt.Sprintf(format, a...))
+		return nil, &r
+	}
+	raw, named := fields["open_change"]
+	if !named || raw == nil {
+		return nil, nil
+	}
+	ask, ok := raw.(map[string]any)
+	if !ok {
+		return refuse("repos[%d].open_change is not an object: write {} for a change into the default branch, "+
+			"or name its `target`, `title` and `draft`.", i)
+	}
+	for key := range ask {
+		if !slices.Contains(openChangeKeys, key) {
+			return refuse("repos[%d].open_change holds %q, which is not one of %s.", i, clip(key),
+				strings.Join(openChangeKeys, ", "))
+		}
+	}
+	var out OpenChangeRequest
+	for _, f := range []struct {
+		key  string
+		into *string
+	}{{"target", &out.Target}, {"title", &out.Title}} {
+		value, ok := repoField(ask, f.key)
+		if !ok {
+			return refuse("repos[%d].open_change.%s is not a string: write it as one, or leave it out.", i, f.key)
+		}
+		*f.into = value
+	}
+	switch v := ask["draft"].(type) {
+	case nil:
+	case bool:
+		out.Draft = v
+	default:
+		return refuse("repos[%d].open_change.draft is not true or false.", i)
+	}
+	return &out, nil
 }

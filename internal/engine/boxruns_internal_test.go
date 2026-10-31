@@ -59,9 +59,12 @@ func codeAt(seq uint64) statelog.Position {
 // parked on a question, answered, reseeded or resumed, whose box holds no job
 // that may push. Its grants map to the code host's, an access this build does
 // not know read as read and never more, and its pushes are stamped with the
-// row's turn, launch, work item, model and coding agent.
+// row's turn, launch, work item — its id beside its tracker and key, what a
+// change its push opens carries it by (M4-decisions D34) — model and coding
+// agent.
 //
-// Mutation: count awaiting_clarification live — its row admits a box — red.
+// Mutations: count awaiting_clarification live — its row admits a box — red;
+// leave the item's id off the stamp — red.
 func TestBoxRunsJudgesLiveness(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -80,7 +83,7 @@ func TestBoxRunsJudgesLiveness(t *testing.T) {
 		turn, launch := uuid.Must(uuid.NewV7()).String(), uuid.NewString()
 		row := sandbox.PendingRun{TurnID: turn, LaunchID: launch, Status: tc.status, AgentHandle: "alice",
 			CodingAgent: "claude-code", Launch: sandbox.LaunchRecord{Model: "m"},
-			WorkItem: &types.WorkItem{Backend: "native", Key: "ENG-1"},
+			WorkItem: &types.WorkItem{Backend: "native", ID: "0190d8f0-9999-7000-8000-0123456789ab", Key: "ENG-1"},
 			Repos: []sandbox.RunRepo{{Repo: "web", RepoID: uuid.NewString(), Branch: "seats/alice/x",
 				Access: sandbox.RepoWrite}, {Repo: "api", RepoID: uuid.NewString(), Access: "admin"}}}
 		if tc.ended {
@@ -96,7 +99,8 @@ func TestBoxRunsJudgesLiveness(t *testing.T) {
 		}
 		want := host.BoxRun{Ref: host.BoxRunRef{TurnID: turn, LaunchID: launch}, Live: tc.live, Status: tc.status,
 			Seat: "alice", Provenance: code.RunProvenance{TurnID: turn, RunID: launch, WorkBackend: "native",
-				WorkKey: "ENG-1", Model: "m", CodingAgent: "claude-code"},
+				WorkID: "0190d8f0-9999-7000-8000-0123456789ab", WorkKey: "ENG-1", Model: "m",
+				CodingAgent: "claude-code"},
 			Repos: []host.BoxGrant{
 				{RepoID: row.Repos[0].RepoID, Name: "web", Access: code.AccessWrite, Branch: "refs/heads/seats/alice/x"},
 				{RepoID: row.Repos[1].RepoID, Name: "api", Access: code.AccessRead, Branch: "refs/heads/"},

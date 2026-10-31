@@ -236,7 +236,7 @@ func admitted(name string, p iam.Principal) admission {
 // fetch's record can never name two different principals.
 //
 // A BOX'S RUN IS FITTED where it is stamped (code.FitProvenance): its work
-// key, model and coding agent are other systems' labels copied onto the row
+// item, model and coding agent are other systems' labels copied onto the row
 // as they arrived — a GitLab key may nest a project path past the bound — and
 // one copied raw would have every push the box makes refused as an invalid
 // proposal, the run stopped by a label it never chose. Its two ids are the
@@ -255,6 +255,7 @@ func (a admission) principal() code.Principal {
 	if a.box != nil {
 		run := a.box.Provenance
 		run.WorkBackend, run.WorkKey = code.FitProvenance(run.WorkBackend), code.FitProvenance(run.WorkKey)
+		run.WorkID = code.FitProvenance(run.WorkID)
 		run.Model, run.CodingAgent = code.FitProvenance(run.Model), code.FitProvenance(run.CodingAgent)
 		return code.Principal{Kind: code.PrincipalAgent, Seat: a.box.Seat, Run: run}
 	}

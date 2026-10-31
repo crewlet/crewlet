@@ -1077,6 +1077,28 @@ type RunProvenance struct {
 	// turn charged to none.
 	WorkBackend string `json:"work_backend,omitempty"`
 	WorkKey     string `json:"work_key,omitempty"`
+	// WorkID is that work item's IDENTITY in its tracker
+	// (types.WorkItem.ID) — a key is a label the tracker may give another
+	// item — stamped on a coding box's push from its run's row by the box's
+	// admission, and empty on every other write: what a change the push
+	// opens from its options carries its item by ([PushEntry.Change]), so a
+	// box's `git push -o change` names the work its run was launched for, as
+	// a code_open_change of the same turn does. Set, it names a WorkBackend
+	// ([RunProvenance.Validate]). A RECORD'S FIELD AND NO ROW'S: code_pushes
+	// keeps the item as the history shows it, its tracker and its key, so a
+	// push read back from its row ([PushRow.Run]) carries none — the change
+	// the push opened keeps the identity on its own row.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as RunID's below: no build that
+	// carries the code domain has run without it — none of the domain is on
+	// main — and while that is so, every build that meets a push record reads
+	// it. Once a build without it has run, it takes {Name:
+	// "RunProvenance.WorkID", Since: <the next version>, Op: "push", Path:
+	// []string{"mutation", "pushes", "principal", "run", "work_id"}} in
+	// versionedFields: a reader without it would open the push's change
+	// carrying no item on its node alone, and two data nodes' change rows
+	// would disagree.
+	WorkID string `json:"work_id,omitempty"`
 	// Model is the executor model of the round that called the tool, empty
 	// where the call named none.
 	Model string `json:"model,omitempty"`
@@ -1115,16 +1137,19 @@ func (r RunProvenance) IsZero() bool { return r == RunProvenance{} }
 // MaxProvenanceBytes bounds each [RunProvenance] field: a turn id and a run id
 // are UUIDs (36 bytes), a work key a tracker's or a vendor's (Jira's are under
 // 32), a model id a provider's (the longest Bedrock ARN form is about 120), a
-// coding agent a name the sandbox configuration chose ("claude-code"). 256 is
-// past every one of them, and what the bound buys is a push entry whose size is
-// known before it is measured: six fields at it are about nine kibibytes of a
-// record's mebibyte even where JSON spells every byte in six.
+// coding agent a name the sandbox configuration chose ("claude-code"), a work
+// item's id its tracker's (a native task's UUID, `<repository id>#<number>` on
+// GitHub). 256 is past every one of them, and what the bound buys is a push
+// entry whose size is known before it is measured: seven fields at it are
+// about ten kibibytes of a record's mebibyte even where JSON spells every byte
+// in six.
 const MaxProvenanceBytes = 256
 
 // Validate refuses a run no push may carry ([ErrInvalid], naming the field):
 // one that names no turn, a run id that is not a UUID in its canonical
 // spelling, a coding run without its coding agent or an agent without its run,
-// or a field past [MaxProvenanceBytes], not valid UTF-8, or holding a control
+// a work item's id naming no tracker, or a field past [MaxProvenanceBytes],
+// not valid UTF-8, or holding a control
 // character. A stamping site passes every field it copies from outside the
 // code domain through [FitProvenance] first, so a field this refuses is the
 // engine's own bug, never a seat's.
@@ -1152,10 +1177,12 @@ func (r RunProvenance) invalid() string {
 		return "coding_agent: a coding run's push names the coding agent its box ran"
 	case r.RunID == "" && r.CodingAgent != "":
 		return "run_id: a coding agent's push names the coding run it pushed for"
+	case r.WorkID != "" && r.WorkBackend == "":
+		return "work_backend: a work item's id is its identity in one tracker, and names that tracker"
 	}
 	for _, f := range []struct{ name, value string }{
-		{"turn_id", r.TurnID}, {"work_backend", r.WorkBackend}, {"work_key", r.WorkKey}, {"model", r.Model},
-		{"coding_agent", r.CodingAgent},
+		{"turn_id", r.TurnID}, {"work_backend", r.WorkBackend}, {"work_id", r.WorkID}, {"work_key", r.WorkKey},
+		{"model", r.Model}, {"coding_agent", r.CodingAgent},
 	} {
 		switch {
 		case len(f.value) > MaxProvenanceBytes:

@@ -617,6 +617,27 @@ type RunPushesQuery struct {
 	After statelog.Position `json:"after"`
 }
 
+// BranchChangesQuery is a `branch_changes` read: one repository by its id and
+// the branches whose live changes the read answers, each a whole ref under
+// refs/heads/, one to [MaxRefsPerQuery] of them, each once — a collected
+// coding run's branches, which the engine names each delivered ref's change
+// by. One seek of code_changes_open_idx a branch, the index partial on the
+// live states that holds at most one change a branch, so the read costs its
+// branches and never the repository's changes.
+type BranchChangesQuery struct {
+	RepoID string   `json:"repo_id"`
+	Refs   []string `json:"refs"`
+}
+
+// BranchChange is the live change one branch of a `branch_changes` read heads:
+// the branch as the query named it, the change's id and its number on its
+// repository.
+type BranchChange struct {
+	Ref      string `json:"ref"`
+	ChangeID string `json:"change_id"`
+	Number   int64  `json:"number"`
+}
+
 // ChangesDueQuery is a `changes_due` read: the repositories a home owes
 // change work in, or ONE repository's due change work — the repository by its
 // id, which its home was nudged about or found listed — each judged against
@@ -869,6 +890,14 @@ const (
 	// engine's own read, which no principal makes: a repository's maintainer
 	// reads it at its scan and at its rescue (internal/code/compact).
 	ReadExpungeTips ReadKind = "expunge_tips"
+	// ReadBranchChanges is the LIVE CHANGE each of one repository's branches
+	// heads ([BranchChangesQuery]), in the order the query names the
+	// branches, a branch heading none left out. The engine's own read, as
+	// `run_pushes` is, which no principal makes and no grant holds: what it
+	// names each ref a collected coding run moved by — the change the run
+	// delivered to — and what tells it whether the change a run asked to
+	// open at its collection is open already.
+	ReadBranchChanges ReadKind = "branch_changes"
 	// ReadChangesDue is the change work a repository's HOME git node owes
 	// ([ChangesDueQuery]): with no repository, the active repositories
 	// holding a LIVE change whose head revision has no facts or no
@@ -965,7 +994,8 @@ const (
 // read [ReadQuery.Change], `changes` and `reviews` the only ones that read
 // [ReadQuery.Reviewer], `run_pushes` the only one
 // that reads [ReadQuery.RunPushes], `expunge_tips` the only one that reads
-// [ReadQuery.ExpungeTips], `check_box` the only one that reads
+// [ReadQuery.ExpungeTips], `branch_changes` the only one that reads
+// [ReadQuery.BranchChanges], `check_box` the only one that reads
 // [ReadQuery.CheckBox], `checks_running` the only one that reads
 // [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
 // that read [ReadQuery.Target], `queue_due` the only one that reads
@@ -975,7 +1005,8 @@ const (
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
-		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadChangesDue,
+		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadBranchChanges,
+		ReadChangesDue,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
 		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox}
 }
@@ -1212,6 +1243,13 @@ type ReadQuery struct {
 	// build that predates the kind refuses the read as a kind it does not
 	// know (ErrInvalid) — the scan unread, never answered as no tips.
 	ExpungeTips *ExpungeTipsQuery `json:"expunge_tips,omitempty"`
+	// BranchChanges is a `branch_changes` read's repository and branches:
+	// REQUIRED for that kind, refused on every other. An estate request's
+	// field and no record's, so it takes no versionedFields row: a node of a
+	// build that predates the kind refuses the read as a kind it does not
+	// know (ErrInvalid) — the run's delivered refs named by no change, never
+	// answered as heading none.
+	BranchChanges *BranchChangesQuery `json:"branch_changes,omitempty"`
 	// Target narrows a `queue` read of a repository to one of its branches'
 	// queues, and names the protected branch a `landings` read lists and a
 	// `green` read answers — REQUIRED for landings — a branch a change may
@@ -1308,6 +1346,9 @@ type ReadAnswer struct {
 	// page, in the order of the drops that name them — an object a later
 	// page names again is one more drop left, which its reader keeps once.
 	Tips []string `json:"tips,omitempty"`
+	// BranchChanges is a `branch_changes` read's answer: each branch's live
+	// change, in the query's order, a branch heading none left out.
+	BranchChanges []BranchChange `json:"branch_changes,omitempty"`
 	// Queue is a page of a `queue` or a `queue_due` read's live entries, in
 	// queue order; Trains a `queue` read's candidates of the trains testing
 	// the targets its page reaches; Landings a page of a `landings` read; and

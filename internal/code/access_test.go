@@ -926,6 +926,16 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
 			r.WorkBackend = "nat\xffive"
 		})}, false},
+		// A WORK ITEM'S IDENTITY names its tracker, and is a label's length.
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.WorkID = "0190d8f0-2222-7000-8000-0123456789ab"
+		})}, true},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.WorkBackend, r.WorkID = "", "0190d8f0-2222-7000-8000-0123456789ab"
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
+			r.WorkID = long
+		})}, false},
 		// A CODING BOX'S RUN: its launch's id and its coding agent, together.
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(*code.RunProvenance) {})}, true},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {

@@ -1171,8 +1171,12 @@ one](../guides/code.md#open-a-change-from-a-push)).
   first author, and the push its first revision. A seat's push names the turn
   that made it, and a push the seat's coding box made the coding run that
   pushed it too, and the change keeps both as the turn and the run that
-  opened it. Whoever may push the branch may open a change from it, so the
-  push's own update is the check.
+  opened it. A coding box's push also names the work item its run was charged
+  to, by its identity in its tracker, and the change carries that item, as
+  the seat's own `code_open_change` would ([A run's
+  changes](code-sandbox.md#a-runs-changes)); a person's push names none.
+  Whoever may push the branch may open a change from it, so the push's own
+  update is the check.
 - **Numbered like any other.** The record takes the repository's next number
   when it applies, in the order of the pushes it carries, and a later push in
   the same record revises or merges the change as it would any live one.

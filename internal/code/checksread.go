@@ -267,6 +267,7 @@ func (q ReadQuery) validateChecksDue() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
+		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil},
 	} {
@@ -309,6 +310,7 @@ func (q ReadQuery) validateCheckBox() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
+		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 		{"checks_running", q.ChecksRunning != nil},
 	} {
@@ -349,7 +351,8 @@ func (q ReadQuery) validateChecksQueued() error {
 		{"needs", q.Needs != ""}, {"part", q.Part != ""}, {"changes_due", q.ChangesDue != nil},
 		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"checks_running", q.ChecksRunning != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
-		{"expunge_tips", q.ExpungeTips != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"expunge_tips", q.ExpungeTips != nil},
+		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_queued read lists every repository's queued attempts, a page at "+
@@ -394,7 +397,8 @@ func (q ReadQuery) validateChecksRunning() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
-		{"expunge_tips", q.ExpungeTips != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"expunge_tips", q.ExpungeTips != nil},
+		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_running read lists the repositories holding a running attempt, or "+

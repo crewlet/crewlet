@@ -6,13 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // A PUSH'S CHANGE, AS ITS RECEIVER HANDLES IT: the options git handed the hook
@@ -119,7 +116,7 @@ const commitHeadBytes = 64 << 10
 // one: the subject of the commit the push sets its source to — what that
 // commit says it does, which is what a change is first read by — read in the
 // push's own scratch, whose pack or alternate holds every commit a push sets
-// a ref to. Where it cannot be read, or is no title once made one (asTitle),
+// a ref to. Where it cannot be read, or is no title once made one (code.AsTitle),
 // the branch's name, which the push's checks have held to a ref's rules: a
 // title always, since a push's change is never refused for its title.
 func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Command) string {
@@ -133,7 +130,7 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Comma
 			"commit", source.New, "error", err)
 		return branch
 	}
-	if title := asTitle(logSubject(head.buf)); title != "" {
+	if title := code.AsTitle(logSubject(head.buf)); title != "" {
 		return title
 	}
 	return branch
@@ -147,7 +144,7 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Comma
 // joined by a space (pretty.c's format_subject), or "" where raw holds no
 // message. Its headers end at the first blank line: a header's continuation
 // lines (a signature's) each start with a space. Its bytes are the commit's,
-// never re-encoded: a subject in another encoding is no title (asTitle).
+// never re-encoded: a subject in another encoding is no title (code.AsTitle).
 //
 // NOT commitSubject's subject (message.go), which is a message's first LINE —
 // the subject a revert quotes, as the sequencer finds it — since a change is
@@ -175,24 +172,6 @@ func logSubject(raw []byte) string {
 		b.WriteString(line)
 	}
 	return b.String()
-}
-
-// asTitle is s made a change's title, or "" where it cannot be one: valid
-// UTF-8 — a subject in another encoding is no title — on one line, every run
-// of spaces and control characters one space, and past
-// code.MaxChangeTitleBytes cut on a rune boundary with a marker: a title
-// nobody wrote is a preview of the subject, which its commit keeps whole.
-func asTitle(s string) string {
-	if !utf8.ValidString(s) {
-		return ""
-	}
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return ' '
-		}
-		return r
-	}, s)
-	return textcut.Within(strings.Join(strings.Fields(s), " "), code.MaxChangeTitleBytes)
 }
 
 // headBytes keeps the first max bytes written to it and drops the rest,

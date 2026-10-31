@@ -163,7 +163,7 @@ func ParseChangeOptions(options []string) (*ChangeOption, error) {
 			if !o.valued {
 				return nil, fmt.Errorf("%s names the change in one line, as -o %s=<title>", key, key)
 			}
-			if why := titleProblem(o.value); why != "" {
+			if why := TitleProblem(o.value); why != "" {
 				return nil, fmt.Errorf("%s: %s", key, why)
 			}
 			opt.Title = o.value
@@ -207,7 +207,7 @@ func (o *ChangeOption) validFields() error {
 			return badField("change.target", "%s", why)
 		}
 	}
-	if why := titleProblem(o.Title); why != "" {
+	if why := TitleProblem(o.Title); why != "" {
 		return badField("change.title", "%s — the receiver fills in the source's subject where the options "+
 			"name none", why)
 	}

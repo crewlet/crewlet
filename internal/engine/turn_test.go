@@ -2807,6 +2807,11 @@ func (noPushes) Pushed(context.Context, sandbox.PendingRun) ([]sandbox.PushedRef
 	return nil, 0, nil
 }
 
+func (noPushes) Changes(_ context.Context, _ sandbox.PendingRun, pushed []sandbox.PushedRef,
+	_ bool) ([]sandbox.PushedRef, []sandbox.OpenedChange, error) {
+	return pushed, nil, nil
+}
+
 // answerGiven is an operator's answer by turn, as it arrives on a seat's inbox.
 func answerGiven(turnID string) *events.Event {
 	return events.New(types.SandboxAnswerGiven{
