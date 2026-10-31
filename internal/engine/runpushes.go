@@ -20,9 +20,11 @@ import (
 // Every later page at session at the first page's position, so no node
 // behind the snapshot the first page read answers a later one — leaving out
 // pushes the run made before that snapshot — and no later page pays a barrier
-// of its own. The barrier is the seats' to pay for (code.GitReadsPerDay counts
-// it with their other reads of the code log), and the read is only asked for a
-// run given a repository to push to.
+// of its own. The barrier is the seats' to pay for — the code log census's
+// seats' term counts it beside their other reads of the log, while
+// code.GitReadsPerDay, the term for persons and their CI, does not (its doc
+// says so) — and the read is only asked for a run given a repository to push
+// to.
 //
 // THE REPOSITORIES ARE THE RUN'S OWN, from its row: those it was given to push
 // to, by id in the order it was given them, and named as it was given them —
