@@ -148,17 +148,11 @@ func (s Sources) unfurl(ctx context.Context, r *Registry, base, raw string) (
 	if !ok {
 		return chatUnfurl{}, false, nil
 	}
-	question, kind := "", chatUnfurlKind("")
-	switch screen {
-	case "item":
-		question, kind = "work_item", unfurlTask
-	case "page":
-		question, kind = "page", unfurlPage
-	case "artifact":
-		question, kind = "artifact", unfurlArtifact
-	default:
+	record, previewed := unfurlRecords[screen]
+	if !previewed {
 		return chatUnfurl{}, false, nil
 	}
+	question, kind := record.question, record.kind
 	answer, err := r.Answer(ctx, question, map[string]any{"id": params["id"]})
 	switch {
 	case err == nil:
@@ -176,12 +170,28 @@ func (s Sources) unfurl(ctx context.Context, r *Registry, base, raw string) (
 	if !ok {
 		return chatUnfurl{}, false, nil
 	}
+	// THE LINK TABLE BUILDS WHAT IT PARSED: ownAddress read this screen and
+	// these parameters off the same table, each by the grammar Link builds
+	// from, so a refusal here is the table disagreeing with itself. That is
+	// the node's own fault, said as one, never a link quietly left plain.
 	link, err := cards.Link(screen, params, "")
 	if err != nil {
-		return chatUnfurl{}, false, nil
+		return chatUnfurl{}, false, fmt.Errorf("queries: build the %s address a "+
+			"preview parsed: %w", screen, err)
 	}
 	unfurl.URL, unfurl.Kind, unfurl.Href = raw, kind, link.Href
 	return unfurl, true, nil
+}
+
+// unfurlRecords is each record screen a link previews, by the question its
+// own screen asks and the kind of preview it draws.
+var unfurlRecords = map[string]struct {
+	question string
+	kind     chatUnfurlKind
+}{
+	"item":     {"work_item", unfurlTask},
+	"page":     {"page", unfurlPage},
+	"artifact": {"artifact", unfurlArtifact},
 }
 
 // ownAddress is the record screen a link names when it is one of this

@@ -475,6 +475,35 @@ func TestAKeyedKindNeedsItsKeyAndNoOtherHasOne(t *testing.T) {
 	}
 }
 
+// AN ADDRESS THE TABLE READS IS ONE IT BUILDS: a record address ScreenOf
+// accepts, built again from what it read, is the same address. A chat link's
+// preview reads an address with ScreenOf and builds its href with Link, and
+// treats a refusal there as the node's own fault, which holds only while the
+// two directions agree.
+//
+// Mutation: give Link a grammar ScreenOf does not share, and an address it
+// read is refused.
+func TestAnAddressTheTableReadsIsOneItBuilds(t *testing.T) {
+	t.Parallel()
+	for _, address := range []string{"#/worklet/ENG-12",
+		"#/doclet/pages/0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31",
+		"#/artifacts/0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e32"} {
+		screen, params, ok := cards.ScreenOf(address)
+		if !ok {
+			t.Fatalf("%s reads as no record", address)
+		}
+		link, err := cards.Link(screen, params, "")
+		if err != nil {
+			t.Errorf("%s read as %s %v, which the table refuses to build: %v",
+				address, screen, params, err)
+			continue
+		}
+		if link.Href != address {
+			t.Errorf("%s read and built again is %s", address, link.Href)
+		}
+	}
+}
+
 // AN ADDRESS READ BACK IS THE RECORD THE TABLE BUILT IT FOR: every record
 // screen's link, read back, names that screen and those parameters, and an
 // address naming no record, or a value outside its grammar, names none.
