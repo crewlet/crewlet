@@ -5,7 +5,7 @@
 
 import { href } from "~/app/router.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
-import { changeRef, commitPath, repoPath } from "~/lib/code.ts";
+import { changePath, changeRef, commitPath, repoPath } from "~/lib/code.ts";
 
 /** A repository page's tabs, the overview first: what a reader opens a repository for. */
 export const REPO_TABS = [
@@ -58,6 +58,14 @@ export function compareHref(repo: string, at: { base?: string; head?: string } =
   if (at.base) query.base = at.base;
   if (at.head) query.head = at.head;
   return href([...repoPath(repo), "compare"], query);
+}
+
+/**
+ * A change's own page opened on its diff: the Files tab, every file its head
+ * revision changes with each one's patch (`ChangePage`'s `tab=files`).
+ */
+export function changeDiffHref(repo: string, number: number): string {
+  return href(changePath(repo, number), { tab: "files" });
 }
 
 /**

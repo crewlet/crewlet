@@ -64,7 +64,7 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { Attention } from "~/lib/attention.ts";
 import { detailItem, itemAddress } from "~/lib/work.ts";
-import { reasonPhrase } from "~/lib/reasons.ts";
+import { ChangeStateTag } from "../code/Changes.tsx";
 import type {
   CodeInboxNotice,
   SandboxRun,
@@ -76,7 +76,9 @@ import {
   askContext,
   askQuestion,
   budgetLine,
+  changeCard,
   changeWords,
+  findingsLine,
   firstSentence,
   moment,
   noticeNote,
@@ -263,10 +265,17 @@ function OpenPane({
 }
 
 /**
- * A notice the code host routed: the change it is about, why it reached this
- * reader, what the record said and what the change says, and the reader's own
- * marks over it (`code_mark_inbox`). Reviewing the change is the change's own
- * page's.
+ * A notice the code host routed, drawn as an INTENT-FIRST card ([changeCard]):
+ * the change it is about and why it reached this reader, then what the change
+ * is FOR — the work item it implements and the description its author wrote —
+ * before what happened to it, and then where it stands: its open agent
+ * findings by weight and the engine's one sentence of where its merge stands.
+ * The diff is one press away, on the change's own page, and the reader's own
+ * marks close the card (`code_mark_inbox`).
+ *
+ * ASKS NOTHING: every word is the notice's, read with the inbox page, so the
+ * card opens with the row and a list of them costs no read per card.
+ * Reviewing the change is the change's own page's.
  */
 function ChangeNoticePane({
   notice,
@@ -284,25 +293,55 @@ function ChangeNoticePane({
   onSettled: (label: string | null) => void;
 }) {
   const words = changeWords(notice);
-  const body = notice.change?.body ?? "";
+  const card = changeCard(notice);
+  const state = notice.change?.state;
+  const findings = findingsLine(card.findings);
   return (
     <ReadingPane>
       {frame.byline(
         <>
           <strong>{notice.change_ref}</strong> in {notice.repo}
         </>,
-        reasonPhrase(notice.reason),
+        card.why,
       )}
       <ReadingPaneTitle>{words.text}</ReadingPaneTitle>
+      {frame.task && (
+        <Text as="p" variant="caption">
+          For {frame.task}
+        </Text>
+      )}
+      {card.intent && (
+        <ReadingPaneLead>
+          <p>{card.intent}</p>
+        </ReadingPaneLead>
+      )}
       {words.excerpt && (
         <ReadingPaneQuote>
           <p>{words.excerpt}</p>
         </ReadingPaneQuote>
       )}
-      {body && (
-        <ReadingPaneLead>
-          <p>{notice.change?.body_cut ? `${body}…` : body}</p>
-        </ReadingPaneLead>
+      {state && (
+        <ReadingPaneSection label="Where it stands">
+          <Stack gap={2}>
+            {card.readiness ? (
+              <Text>{card.readiness}</Text>
+            ) : (
+              <span>
+                <ChangeStateTag state={state} />
+              </span>
+            )}
+            <Text variant="caption">
+              {findings ? `Open agent findings: ${findings}` : "No agent finding stands open"}
+            </Text>
+          </Stack>
+        </ReadingPaneSection>
+      )}
+      {card.diff && (
+        <span>
+          <ButtonLink variant="secondary" size="small" href={card.diff}>
+            Open the diff
+          </ButtonLink>
+        </span>
       )}
       <NoticeActions
         notice={notice}

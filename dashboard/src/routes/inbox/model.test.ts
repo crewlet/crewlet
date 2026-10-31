@@ -9,7 +9,9 @@ import { describe, expect, test } from "vitest";
 import {
   askContext,
   askQuestion,
+  changeCard,
   earlierOf,
+  findingsLine,
   firstSentence,
   inboxQuiet,
   inboxRows,
@@ -19,6 +21,7 @@ import {
   noticeTitle,
   readThrough,
   rowItem,
+  rowKey,
   rowName,
   rowWho,
   snoozePresets,
@@ -160,6 +163,81 @@ describe("the rows", () => {
       ["change", "change:r-1"],
     ]);
     expect(rowName(rows[1]!, null)).toBe("web!42");
+  });
+});
+
+/** A code notice whole, as its card reads it from the composed notice's `extra`. */
+function codeExtra(extra: Partial<CodeInboxNotice> = {}): CodeInboxNotice {
+  const n = codeNotice("r-1", extra);
+  if (n.source !== "code") throw new Error("codeNotice composes a code notice");
+  return n.extra;
+}
+
+// THE INTENT-FIRST CARD: what the change is for — the work item it
+// implements, its description — then what stands in its way, the diff one
+// press away, every word of it the notice's own, with no question per card.
+describe("a code notice's card", () => {
+  const change = {
+    title: "Retry the upload once",
+    state: "open",
+    work_item: { backend: "native", id: "item-7", key: "LEAD-7", project: "LEAD" },
+    body: "Uploads retried twice doubled the bill",
+    body_cut: true,
+    agent_findings: { nit: 3, brand_new: 1, blocker: 1, major: 0 },
+    readiness: { met: 3, total: 5, first: "web!42 waits on an approval from a reviewer" },
+  };
+
+  test("leads with the work item it implements, as the row's task", () => {
+    const n = codeExtra({ change });
+    const card = changeCard(n);
+    expect(card.item).toEqual({ id: "item-7" });
+    expect(card.itemKey).toBe("LEAD-7");
+    const row: InboxRow = { kind: "change", key: "change:r-1", at: n.at, notice: n };
+    expect(rowItem(row)).toEqual({ id: "item-7" });
+    expect(rowKey(row)).toBe("LEAD-7");
+    // A VENDOR'S ITEM is addressed by its key too, as a turn's is.
+    const jira = { ...change, work_item: { backend: "jira", id: "10042", key: "ENG-4" } };
+    expect(changeCard(codeExtra({ change: jira })).item).toEqual({ id: "10042", key: "ENG-4" });
+    expect(changeCard(codeExtra()).item).toBeNull();
+  });
+
+  test("carries the description, marked where the engine cut it", () => {
+    expect(changeCard(codeExtra({ change })).intent).toBe(
+      "Uploads retried twice doubled the bill…",
+    );
+    expect(changeCard(codeExtra({ change: { ...change, body_cut: false } })).intent).toBe(
+      "Uploads retried twice doubled the bill",
+    );
+    expect(changeCard(codeExtra()).intent).toBe("");
+  });
+
+  test("counts the open agent findings heaviest first, a weight it does not know last", () => {
+    const card = changeCard(codeExtra({ change }));
+    expect(card.findings).toEqual([
+      { severity: "blocker", count: 1 },
+      { severity: "nit", count: 3 },
+      { severity: "brand_new", count: 1 },
+    ]);
+    expect(findingsLine(card.findings)).toBe("Blocker 1 · Nit 3 · brand_new 1");
+    expect(findingsLine(changeCard(codeExtra()).findings)).toBe("");
+  });
+
+  test("says where a live change's merge stands, and nothing for one that merges nothing", () => {
+    expect(changeCard(codeExtra({ change })).readiness).toBe(
+      "web!42 waits on an approval from a reviewer",
+    );
+    const merged = { title: change.title, state: "merged", agent_findings: change.agent_findings };
+    expect(changeCard(codeExtra({ change: merged })).readiness).toBeNull();
+  });
+
+  test("opens the diff on the change's own page, in one press", () => {
+    expect(changeCard(codeExtra()).diff).toBe("#/code/repos/web/changes/42?tab=files");
+    expect(changeCard(codeExtra({ change_ref: "not a change" })).diff).toBeNull();
+  });
+
+  test("says why it reached the reader in the code host's own words", () => {
+    expect(changeCard(codeExtra({ reason: "review_requested" })).why).toBe("asked for your review");
+    expect(changeCard(codeExtra({ reason: "re_review" })).why).toBe("asked to look again");
   });
 });
 

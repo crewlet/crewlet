@@ -2966,7 +2966,8 @@ asks put to this person and the coding runs parked on a question to them
 (`decisions`, the read Home's figure counts), the seats the engine stopped on
 a spent token budget, and the conditions a person decides (`lib/attention.ts`,
 the subjects whose home is `seat`). **Updates** follows: what reached them and
-is not read yet (`work_inbox{unread, snoozed: exclude}`). Decisions are never
+is not read yet (`inbox{unread, snoozed: exclude}`, the tracker's notices and
+the code host's interleaved by when each happened). Decisions are never
 interleaved with updates by time, which would eventually rank "a task you
 watch moved" above the CEO asking whether to hold a release. An ask is ONE
 row: the notice that told the person they were asked rides on the decision it
@@ -3015,6 +3016,28 @@ run or a link. An update's pane names what it did as its heading, quotes a
 comment whole under it, and says why it reached the reader where the heading
 does not ("· you follow this task", from the reason of an update that only
 informs, or "· snoozed until …").
+
+**A code notice is an intent-first card.** A notice the code host routed is
+a row named by its change (`web!42`), with the code mark as its badge, the
+change's title as its line, what the record said after it, and — as every
+row's task — the work item the change implements. Opened, the card says what
+the change is FOR before what happened to it: its title, "For" the work item,
+the opening of the description its author wrote (marked "…" where the engine
+cut it at a kibibyte), and only then what the record said, quoted. **Where it
+stands** follows: the engine's one sentence of where a live change's merge
+stands ("no approval counts on revision 2: it waits on ada"), or, for a
+change that merges nothing, what became of it (Merged, Closed); and the
+findings seats raised that stand open, by weight with the heaviest first
+("Open agent findings: Blocker 1 · Nit 2"), in words and never in a hue.
+**Open the diff** is one press to the change's page on its Files tab. The
+byline's note says why it reached the reader in the code host's own words
+("asked for your review", "asked to look again"), never the tracker's. The
+card ASKS NOTHING: every word of it is the notice's own, read with the inbox
+page in one snapshot (`code.NoticeChange`), the readiness judged for the
+reader at that read, so a page of fifty cards is one read and no card
+contradicts the row beside it.
+Reviewing is the change's own page's; the card's controls are the reader's
+marks.
 
 **An ask is answered in one press, through the one write every surface uses.**
 The pane draws `AnswerAsk` in its `buttons` layout: each option is a button

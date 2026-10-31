@@ -215,6 +215,8 @@ const QUIET: Record<string, Answer> = {
 
 let asked: { kind: string; params: Record<string, unknown> }[];
 let posted: { tool: string; args: Record<string, unknown> }[];
+/** Every address the screen fetched, a REST read's as much as a write's. */
+let fetched: string[];
 
 /**
  * Midday on the company's clock (the fixture org keeps UTC).
@@ -233,9 +235,11 @@ beforeEach(() => {
   location.hash = "#/inbox";
   asked = [];
   posted = [];
+  fetched = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
+      fetched.push(String(url));
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
       const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
       posted.push({ tool, args: body.args });
@@ -745,6 +749,72 @@ describe("the pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mark as read" }));
     await settle();
     expect(posted).toEqual([{ tool: "code_mark_inbox", args: { read: ["c-5"] } }]);
+  });
+
+  // THE INTENT-FIRST CARD: the work item the change implements and its
+  // description lead, then its open agent findings by weight and the one
+  // sentence of where its merge stands, and the diff is one press away —
+  // every word the notice's own, so opening it asks the engine nothing more.
+  // A code question goes over REST (`useCodeQuery`), never the socket, so
+  // what the card must not ask is watched on both: the socket's reads and
+  // every address fetched. Mutations: draw the card without its findings,
+  // its readiness or its diff link — red; read the change to draw it
+  // (`useCodeQuery("code_change", …)`) — a /query/code_ fetch, red.
+  test("a code notice opens as an intent-first card that asks nothing more", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    mount({
+      services: { tracker: "native", knowledge: "native", code: "native" },
+      answers: {
+        inbox: inboxes({
+          unread: [
+            codeNotice("c-5", {
+              change: {
+                title: "Retry the upload once",
+                state: "open",
+                work_item: { backend: "native", id: "item-7", key: "LEAD-7", project: "LEAD" },
+                body: "Uploads retried twice doubled the storage bill",
+                agent_findings: { nit: 2, blocker: 1 },
+                readiness: { met: 3, total: 5, first: "web!42 waits on 1 standing blocker" },
+              },
+            }),
+          ],
+        }),
+      },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    expect(pane.getByText(/asked for your review/)).toBeTruthy();
+    expect(pane.getByRole("link", { name: /LEAD-7/ })).toBeTruthy();
+    expect(pane.getByText("Uploads retried twice doubled the storage bill")).toBeTruthy();
+    expect(pane.getByText("Open agent findings: Blocker 1 · Nit 2")).toBeTruthy();
+    expect(pane.getByText("web!42 waits on 1 standing blocker")).toBeTruthy();
+    expect(pane.getByRole("link", { name: "Open the diff" }).getAttribute("href")).toBe(
+      "#/code/repos/web/changes/42?tab=files",
+    );
+    expect(asked.filter((a) => a.kind.startsWith("code_"))).toEqual([]);
+    expect(fetched.filter((url) => url.includes("/query/code_"))).toEqual([]);
+    expect(posted).toEqual([]);
+  });
+
+  // A CHANGE THAT MERGES NOTHING has no readiness: its card says what became
+  // of it instead. Mutation: draw the state only while a readiness is absent
+  // AND the change is live — the merged change's card says nothing, red.
+  test("a merged change's card says it merged, in place of where its merge stands", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    mount({
+      services: { tracker: "native", knowledge: "native", code: "native" },
+      answers: {
+        inbox: inboxes({
+          unread: [
+            codeNotice("c-5", { change: { title: "Retry the upload once", state: "merged" } }),
+          ],
+        }),
+      },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    expect(pane.getByText("Merged")).toBeTruthy();
+    expect(pane.getByText("No agent finding stands open")).toBeTruthy();
   });
 
   // MARK ALL READ SENDS BOTH: one read-through a source, each at its own
