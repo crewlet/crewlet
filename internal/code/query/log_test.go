@@ -202,6 +202,59 @@ func TestALogGrepIsALiteralMatchedInGo(t *testing.T) {
 	}
 }
 
+// A GREP PAGE ENDS AT ITS LIMIT-TH MATCH, never walking on to find one more:
+// a history whose two newest commits match and whose six older ones do not,
+// read two a page through a pool that answers every walk git ran to its end
+// as one its budget cut (budgetEnds), is a page that ended its own walk at the
+// second match — those two commits, Scanned 2, Next s:2, not complete — and
+// no walk reached the history's end, so the page is the walk's own and the
+// memo keeps it. A look-ahead for a third match would walk every later
+// message to the root, or to the read's whole budget of git, for a page it
+// had already filled, and be cut there, with nothing memoized to spare the
+// next ask. The page after it, on the node's own pool, is the empty complete
+// one that covers the rest.
+//
+// Mutation: the look-ahead kept for a grep (the page ended only at a match
+// past its limit) → the walk runs to the root and the pool cuts it: Next s:8,
+// a walk counted, not memoized, red.
+func TestAGrepPageEndsAtItsLimitthMatch(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	for i := range 6 {
+		x.p.Commit(x.work, map[string]string{"f": strconv.Itoa(i)}, fmt.Sprintf("chore %d", i))
+	}
+	for i := range 2 {
+		x.p.Commit(x.work, map[string]string{"g": strconv.Itoa(i)}, fmt.Sprintf("fix %d", i))
+	}
+	x.push(codetest.RepoName, "main")
+	head := strings.TrimSpace(x.git("rev-parse", "HEAD"))
+	repo := x.repo(codetest.RepoName)
+	ended := &budgetEnds{Pool: x.f.Nodes()[0].Pool()}
+	s := x.server(0, query.Options{Git: ended})
+	q := logQ(repo, code.LogQuery{Rev: head, Grep: "fix", Limit: 2})
+	a := mustRead(t, s, q)
+	var got []string
+	for _, c := range a.Log.Commits {
+		got = append(got, c.Subject)
+	}
+	if !slices.Equal(got, []string{"fix 1", "fix 0"}) || a.Log.Scanned != 2 || a.Next != "s:2" || a.Log.Complete {
+		t.Fatalf("a grep page of two kept %q of %d scanned, next %q, complete %t; want both fixes, ended at the "+
+			"second: 2 scanned, next s:2", got, a.Log.Scanned, a.Next, a.Log.Complete)
+	}
+	if n := ended.walks.Load(); n != 0 {
+		t.Errorf("%d walk(s) ran past the page's last match to the history's end", n)
+	}
+	if again := mustRead(t, s, q); !again.Memo {
+		t.Error("a grep page that ended at its limit was not memoized")
+	}
+	q.Cursor = a.Next
+	rest := mustRead(t, x.server(0, query.Options{}), q)
+	if len(rest.Log.Commits) != 0 || rest.Log.Scanned != 6 || !rest.Log.Complete || rest.Next != "" {
+		t.Errorf("the page after it listed %d commits of %d scanned, complete %t, next %q; want none of the 6 "+
+			"left, complete", len(rest.Log.Commits), rest.Log.Scanned, rest.Log.Complete, rest.Next)
+	}
+}
+
 // A LOG CANNOT BE FORGED BY A MESSAGE: a pushed commit whose subject and body
 // hold \x01 and a whole record's worth of a commit git never made — the id,
 // the parents, an author, the dates, a subject, each between the separator a

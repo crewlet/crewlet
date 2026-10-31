@@ -3494,7 +3494,9 @@ type LogAnswer struct {
 	// Complete is set where the walk reached the history's end: there is no
 	// next page. A page the read's budget of git ended is never complete,
 	// and carries what it found and a Next: never a claim that nothing more
-	// matches.
+	// matches. Nor is a Grep's page that holds its limit, which ends at its
+	// last match rather than walking on to find one more, so the page after
+	// it may list nothing and be the complete one.
 	Complete bool `json:"complete,omitempty"`
 }
 

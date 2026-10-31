@@ -64,10 +64,19 @@ import (
 // read's Limit and as many as the answer's bytes hold: each commit costed as
 // a code tool sends it, its subject fenced and every string neutralised
 // (page.go), with the push that introduced it, so the page ends BEFORE the
-// commit that would take it past the bound. The walk says where a page ends:
-// the commit past its last — the Limit-th one Grep keeps, plus one — begins
-// the next page, and the run is ended there (errStop), so a page costs the
-// commits it covers. A field git leaves unbounded is described past its
+// commit that would take it past the bound. The walk says where a page ends,
+// and the run is ended there (errStop), so a page costs the commits it covers.
+// With no Grep that is the commit past its last, the Limit-and-first record —
+// one record of look-ahead, which costs one record and keeps Complete exact
+// (a page that holds the history's last commit says so itself). With a
+// Grep it is the Limit-th match itself, and never a look for one more: past
+// it every later message is streamed through the matcher only to learn
+// whether a next page holds anything, and where the literal is rare that is
+// the history's whole remainder or the read's whole budget of git — which
+// then cuts the page, so it is neither memoized nor spared to the next ask,
+// for the same commits the walk had in hand at once. Such a page is never
+// Complete; the page after it answers the rest, an empty complete one where
+// nothing more matches. A field git leaves unbounded is described past its
 // bound, never cut (code.MaxLogSubjectBytes and its kin), so the widest
 // commit is a few KiB and always fits a page.
 //
@@ -167,7 +176,8 @@ func (r *read) logRead(ctx context.Context, objs found, at cursor, m *memoRun) (
 	envelope := code.GitAnswer{Kind: code.GitLog, Rev: rev.peeled, Next: widestCursor('s', 1),
 		Log: &code.LogAnswer{Path: wire, PathB64: wireB64, Commits: []code.LogCommit{}, Scanned: widest,
 			Complete: true}}
-	p := &logPage{r: r, a: a.Log, limit: logLimitOf(q), left: r.room(envelope) - neutralGrowth(wire)}
+	p := &logPage{r: r, a: a.Log, limit: logLimitOf(q), left: r.room(envelope) - neutralGrowth(wire),
+		grep: q.Grep != ""}
 	format := logFormat
 	var grep *literal
 	if q.Grep != "" {
@@ -242,15 +252,20 @@ type logPage struct {
 	a     *code.LogAnswer
 	limit int
 	left  int
+	// grep is that a Grep keeps the page's records, so the page ends at its
+	// Limit-th match rather than at a record past it (the doc's "# The
+	// page").
+	grep bool
 	// scanned is how many records of the walk the page covers so far, and
-	// ended that the page found its own end — the record past its last —
-	// and ended the walk there.
+	// ended that the page found its own end — the record past its last, or a
+	// Grep's Limit-th match — and ended the walk there.
 	scanned int
 	ended   bool
 }
 
 // take places one record of the walk on the page — or passes it, unmatched
-// by the Grep — or ends the page before it: errStop, which ends the walk.
+// by the Grep — or ends the page before it: errStop, which ends the walk. A
+// Grep's page ends at its Limit-th match, the one it places.
 func (p *logPage) take(rec *logRecord) error {
 	if !rec.matched {
 		p.scanned++
@@ -280,6 +295,10 @@ func (p *logPage) take(rec *logRecord) error {
 	p.a.Commits = append(p.a.Commits, c)
 	p.left -= cost + pushed
 	p.scanned++
+	if p.grep && len(p.a.Commits) == p.limit {
+		p.ended = true
+		return errStop
+	}
 	return nil
 }
 

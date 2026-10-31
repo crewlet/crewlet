@@ -4209,9 +4209,14 @@ at a commit committed before it on each line of history it reaches.
 **A page ends where the history says.** A page holds as many commits as
 `limit` asks and its 56 KiB hold — every subject counted fenced, as the tools
 send it — and ends before the next; its cursor is how many commits of the walk
-the pages before it covered, so the next page's walk skips them. `scanned` is
-how many commits a page covered, the ones `grep` passed over included, and
-`complete` that the walk reached the history's end. A walk that runs the
+the pages before it covered, so the next page's walk skips them. A `grep` page
+ends at its `limit`-th match rather than walking on to find one more, since
+past it every later message is read only to learn whether another page
+exists, and where the words are rare that is the rest of the history. `scanned`
+is how many commits a page covered, the ones `grep` passed over included, and
+`complete` that the walk reached the history's end — which a `grep` page that
+filled its `limit` never says, so the page after it may list nothing and be the
+complete one. A walk that runs the
 read's ten seconds of git — a `grep` that matches little in a long history —
 answers what it found with its cursor past it, never an error and never a
 claim that nothing more matches; one that reached no commit at all in that
