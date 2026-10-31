@@ -870,6 +870,20 @@ export const ASSISTANT_WORDS: RenderOptions = {
  */
 export const CHECKED_WORDS: RenderOptions = { links: "checked" };
 
+/**
+ * How a chat message is read (`routes/chatlet/Body.tsx`): a model's words,
+ * since people and agents alike write a message a line at a time, whose
+ * links open where the dashboard built them and, beside those, on a page of
+ * the dashboard's own, rebuilt from its path alone (`links: "own"`): the
+ * task, page or room a message is about. A picture is its alt text, never
+ * fetched.
+ */
+export const CHAT_WORDS: RenderOptions = {
+  ...MODEL_WORDS,
+  links: "own",
+  image: () => null,
+};
+
 /** One heading of a document, as an "On this page" entry points at it. */
 export interface Heading {
   /** The markdown level, 1 for `#`. */

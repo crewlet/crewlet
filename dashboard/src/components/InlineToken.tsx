@@ -50,7 +50,9 @@ import {
   type GlyphSize,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
+import { appRoute } from "~/lib/appRoute.ts";
 import {
+  checksLinks,
   codeHostOwners,
   codeRoom,
   describeLink,
@@ -221,6 +223,17 @@ export function AddressLink({
   links: LinkMode;
 }) {
   const hosts = useLinkHosts();
+  // ONE OF THIS DASHBOARD'S OWN PAGES opens in place under `own`, rebuilt
+  // from its path alone (`lib/appRoute.ts`). Left to the host rules below, a
+  // Copy link pasted into a room was drawn inert.
+  const own = links === "own" ? appRoute(address) : null;
+  if (own !== null) {
+    return (
+      <InlineRef href={own.canonical} title={address}>
+        {text}
+      </InlineRef>
+    );
+  }
   const said = describeLink(address, hosts);
   // NO WEB ADDRESS (a `mailto:`): no app's and no host to show, so it is the
   // address as written, a link only where any link may be.
@@ -228,10 +241,10 @@ export function AddressLink({
     return <InlineRef href={links === "anchor" ? address : undefined}>{text}</InlineRef>;
   }
   // CHECKED AND NOT THE COMPANY'S: the address as written ([InertAddress]).
-  if (links === "checked" && said.canonical === null) {
+  if (checksLinks(links) && said.canonical === null) {
     return <InertAddress said={said} raw={address} written={text} />;
   }
-  const to = links === "text" ? undefined : links === "checked" ? said.canonical! : address;
+  const to = links === "text" ? undefined : checksLinks(links) ? said.canonical! : address;
   return (
     <InlineRef
       mark={addressMark(said)}
@@ -443,7 +456,12 @@ export function LabelledLink({
   const hosts = useLinkHosts();
   const said = describeLink(href, hosts);
   const vendor = said?.vendor ?? null;
-  const to = mode === "anchor" ? href : (said?.canonical ?? null);
+  // A LINK TO ONE OF THIS DASHBOARD'S OWN PAGES (a page link a writer
+  // inserted, `#/doclet/pages/…`) opens in place under `own`, rebuilt from its
+  // path alone (`lib/appRoute.ts`); it was drawn inert, because the host rules
+  // below know only other apps' hosts.
+  const own = mode === "own" ? appRoute(href) : null;
+  const to = mode === "anchor" ? href : (own?.canonical ?? said?.canonical ?? null);
   const shown = to === null ? linkTarget(href) : null;
   return (
     <>
