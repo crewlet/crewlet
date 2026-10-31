@@ -7587,11 +7587,11 @@ a link from any place (`routes/chatlet/nav.tsx`).
   [Home is the reader's board](#home-is-the-readers-board)), each asking what
   its page asks and re-reading on the frames its page re-reads on: **Unread
   rooms**, the rail's rooms with something unread and the engine's count on
-  each — a muted room left out and counted, a rail cut at the engine's bound
+  each (a muted room left out and counted, a rail cut at the engine's bound
   said to count only the reader's most recently active rooms, a room a newer
   engine made counted as left out, a rail that met a record this build cannot
   read said to be incomplete, and where the cursors could not be read a
-  sentence saying so, none of them ever drawn as "caught up" — and **Mentions**,
+  sentence saying so, none of them ever drawn as "caught up"), and **Mentions**,
   Activity's newest mentions, a mention in a thread opening the thread. The
   rooms are the frame's one reading of the reader's rooms, the one the
   sidebar's badge and the Rooms panel draw. Neither marks anything read. Like every chat page

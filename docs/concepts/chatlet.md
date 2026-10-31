@@ -701,7 +701,7 @@ is not in.
 | List rooms, read a room or a thread, search | `chatlet`, as a seat — over the rooms that seat may read |
 | Post, reply, send a direct message, react | `chatlet`, as a seat, in a room it may reach; a post or a reply is refused in an archived room |
 | Join or leave a room | `chatlet`, as a seat, its own membership only; a private room cannot be joined, and a unit's room can be neither joined nor left |
-| Make a room, open a direct conversation, set a room's topic or purpose, add people to it, state its whole membership | `chatlet`, as a person — never an agent — in a room they can reach; a unit's room is the org chart's, and a direct conversation's membership is its identity |
+| Make a room, open a direct conversation, set a room's topic or purpose, add people to it, state its whole membership | `chatlet`, as a person (never an agent) in a room they can reach; a unit's room is the org chart's, and a direct conversation's membership is its identity |
 | Make a public room take in everybody the company takes on | `admin`, as a person, never an agent |
 | Archive a room, or open it again | the room's creator, the lead of the unit whose room it is or of a unit above it, or `admin` — as a person, never an agent |
 | Edit a message | its author, as a person — nobody else, an administrator included |

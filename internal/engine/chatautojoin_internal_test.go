@@ -45,7 +45,7 @@ func TestEveryAutoJoinRoomIsHandedTheChartAsTheEngine(t *testing.T) {
 	seats := []string{"ceo", "jane", "qa"}
 	applyAutoJoin(t.Context(), desk, seats)
 	if !slices.Equal(desk.asked, desk.rooms) {
-		t.Fatalf("the pass asked about %v, want every auto-join room %v — a "+
+		t.Fatalf("the pass asked about %v, want every auto-join room %v: a "+
 			"room that failed must not stop the rooms after it", desk.asked, desk.rooms)
 	}
 	for i, got := range desk.seats {

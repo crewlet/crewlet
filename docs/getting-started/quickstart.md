@@ -695,8 +695,8 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the same tracker, knowledge-base and chat tools a seat holds — eighteen
-over the tracker, five over the pages and nine in the chat — and twenty-four
+It gets the same tracker, knowledge-base and chat tools a seat holds (eighteen
+over the tracker, five over the pages and nine in the chat) and twenty-four
 more that no seat is given: the saved views, the catalogue write, a person's own
 queue, inbox and pins, the trash, the board drag, the chat's furniture — making
 a room, opening a conversation, a room's settings and membership, editing and

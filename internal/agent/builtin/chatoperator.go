@@ -1112,7 +1112,7 @@ func argMembers(tool string, args map[string]any, key string) ([]chatlet.Member,
 				all, ok := argval.Bool(follow)
 				if !ok {
 					out := failed(fmt.Sprintf("%s's `%s` entry %d says follow_all "+
-						"is %v — it is true or false.", tool, key, i, follow))
+						"is %v: it is true or false.", tool, key, i, follow))
 					return nil, &out
 				}
 				member.FollowAll = all
@@ -1146,8 +1146,8 @@ func argMembers(tool string, args map[string]any, key string) ([]chatlet.Member,
 // as zero: a zero cursor is ignored by the merge, so a cursor that failed to
 // parse would answer `applied` and leave the badge where it was.
 //
-// ONE READER FOR THE THREE MAPS OF PLACES — `cursors` and `rewind` keyed by a
-// room, `thread_cursors` by a thread's root — named by key in a refusal, so a
+// ONE READER FOR THE THREE MAPS OF PLACES (`cursors` and `rewind` keyed by a
+// room, `thread_cursors` by a thread's root), named by key in a refusal, so a
 // call is told which of them it sent wrong.
 func argCursors(key string, raw any) (map[string]int64, *tools.Result) {
 	given, ok := argval.Object(raw)
@@ -1164,7 +1164,7 @@ func argCursors(key string, raw any) (map[string]int64, *tools.Result) {
 		id = strings.TrimSpace(id)
 		at, whole := argPositionValue(value)
 		if id == "" || !whole || at < 0 {
-			out := failed(fmt.Sprintf("%s's `%s` entry for %q is %v — an id and a "+
+			out := failed(fmt.Sprintf("%s's `%s` entry for %q is %v: an id and a "+
 				"whole, non-negative log position.", chatlet.MarkChatReadTool, key,
 				clip(id), value))
 			return nil, &out
@@ -1196,7 +1196,7 @@ func argNotifyLevels(raw any) (map[string]coord.NotifyLevel, *tools.Result) {
 		word, _ := argval.String(value)
 		level := coord.NotifyLevel(strings.TrimSpace(word))
 		if room == "" || !level.Valid() {
-			out := failed(fmt.Sprintf("%s's `notify` entry for %q is %v — a room id "+
+			out := failed(fmt.Sprintf("%s's `notify` entry for %q is %v: a room id "+
 				"and one of `all`, `mentions` or `muted`.", chatlet.MarkChatReadTool,
 				clip(room), value))
 			return nil, &out

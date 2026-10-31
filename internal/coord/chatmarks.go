@@ -141,7 +141,7 @@ var (
 // THE CAP IS CHECKED AGAINST THE SET THE FLUSH LEAVES, and only when the flush
 // grows it, at capAt. A flush that does not grow the set is never refused for
 // its size, so a removal, or a flush about something else entirely, always
-// lands on whatever the record holds — one kept from a build with a larger
+// lands on whatever the record holds, one kept from a build with a larger
 // cap included.
 func mergeRoomSet(stored, add, remove []string, capAt int, w setWords) ([]string, error) {
 	if len(add) == 0 && len(remove) == 0 {
@@ -382,7 +382,7 @@ func advanceCursors(stored, delta map[string]int64, what string) (map[string]int
 		}
 		// FORWARD ONLY. A cursor that could move backwards would make an
 		// unread badge flicker as two tabs disagree about which is
-		// further along — and the loser would be whichever flush the
+		// further along, and the loser would be whichever flush the
 		// network happened to deliver second.
 		if at > out[key] {
 			out[key] = at

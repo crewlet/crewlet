@@ -184,8 +184,8 @@ const (
 	// MaxEraseReason bounds the reason an erase records.
 	//
 	// 600 BYTES, the same figure as [MaxExcerpt]: why the company
-	// destroyed something is a sentence or two — "a credential
-	// was pasted here" — and an account longer than a paragraph belongs to
+	// destroyed something is a sentence or two ("a credential
+	// was pasted here"), and an account longer than a paragraph belongs to
 	// the incident it is part of. It is bounded at all because the reason
 	// rides a gate-installing record every node holds for the log's whole
 	// retention window, and an unbounded one is the one field that could
