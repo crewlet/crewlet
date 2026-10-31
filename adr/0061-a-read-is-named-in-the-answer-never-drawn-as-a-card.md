@@ -20,7 +20,7 @@ prose names it, and the first mention of each record the turn read is that
 record's chip, which opens a peek holding everything its card held: the
 facts, the body and the list under it, a table's rows, its downloads, and the
 way to its page. A record the turn read and the answer never named is listed
-on one "Also read" line under the answer. A proposal, a refusal, a notice, a
+on one "Also looked up" line under the answer. A proposal, a refusal, a notice, a
 file, a brief and an open in app are the point of their turn and stay cards.
 
 **The records are the turn's reads, never the model's words.** Only a record
@@ -135,7 +135,7 @@ shown, but it is an oversize card (`OversizeCard`): named for what it read
 (the table it would have been, or its step), with the screen that shows all
 of it, built from the read's own arguments through the same link table every
 card's Open uses, and what the tool takes that would narrow it. The drawer
-lists it on the Also read line as "Matching tasks, ... (too large to show
+lists it on the Also looked up line as "Matching tasks, ... (too large to show
 here)", whose peek says so, links that screen and names what to narrow. It
 replaced a notice that told a person inside the app to "open it in the app".
 

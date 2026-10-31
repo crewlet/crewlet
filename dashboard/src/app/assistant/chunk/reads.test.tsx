@@ -1,6 +1,6 @@
 /**
  * An answer and the records it read: no card per read, the first mention of
- * each a chip whose peek holds what the card held, the rest on one Also read
+ * each a chip whose peek holds what the card held, the rest on one Also looked up
  * line, and every other card drawn as it was.
  */
 
@@ -100,7 +100,7 @@ test("the first mention of a read record is its chip, and later ones stay words"
   expect(chips[0]!.getAttribute("aria-label")).toBe(
     "GOP-11, Android 12 crash when lesson audio starts",
   );
-  expect(screen.queryByRole("list", { name: "Also read" })).toBeNull();
+  expect(screen.queryByRole("list", { name: "Also looked up" })).toBeNull();
 });
 
 test("a record read twice is one chip, drawn from its fresher read", () => {
@@ -110,9 +110,9 @@ test("a record read twice is one chip, drawn from its fresher read", () => {
   expect(within(screen.getByRole("dialog")).getByText("In progress")).toBeTruthy();
 });
 
-test("what the answer read and never named is on the Also read line, and nothing is a card", () => {
+test("what the answer read and never named is on the Also looked up line, and nothing is a card", () => {
   draw("The beta waits on one decision.", [crash(), waiting, qa]);
-  const line = screen.getByRole("list", { name: "Also read" });
+  const line = screen.getByRole("list", { name: "Also looked up" });
   expect(
     within(line)
       .getAllByRole("button")
@@ -156,7 +156,7 @@ test("a chat room's chip is its name, and its peek says it is a room and opens i
     },
   });
   draw("#launch is waiting on the launch copy.", [launch]);
-  expect(screen.queryByRole("list", { name: "Also read" })).toBeNull();
+  expect(screen.queryByRole("list", { name: "Also looked up" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /#launch/ }));
   const dialog = screen.getByRole("dialog");
   expect(within(dialog).getByText("Room")).toBeTruthy();
@@ -208,7 +208,7 @@ test("a read too large to show is listed by what it read, and its peek opens its
     },
   });
   draw("Nothing in Crewlet holds a brand identity yet.", [cut]);
-  const line = screen.getByRole("list", { name: "Also read" });
+  const line = screen.getByRole("list", { name: "Also looked up" });
   const chip = within(line).getByRole("button");
   expect(chip.textContent).toBe('Matching tasks, "brand identity" (too large to show here)');
   expect(chip.getAttribute("title")).toBe(chip.textContent);
@@ -238,7 +238,7 @@ test("a list read is one chip, named by what it read and how many rows, however 
   });
   draw("Twenty tasks are open.", [twenty]);
   expect(
-    within(screen.getByRole("list", { name: "Also read" })).getAllByRole("button"),
+    within(screen.getByRole("list", { name: "Also looked up" })).getAllByRole("button"),
   ).toHaveLength(1);
   expect(screen.getByRole("button", { name: "Tasks, GP (20)" })).toBeTruthy();
 });
@@ -278,7 +278,7 @@ test("a page of a list says so on its chip and in its peek, never in a notice be
     },
   });
   draw("", [page, cut]);
-  const chips = within(screen.getByRole("list", { name: "Also read" })).getAllByRole("button");
+  const chips = within(screen.getByRole("list", { name: "Also looked up" })).getAllByRole("button");
   expect(chips.map((c) => c.textContent)).toEqual([
     "Turns (first 3)",
     "Matching tasks (first 2 of 210)",

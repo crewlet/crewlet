@@ -1,7 +1,7 @@
 /**
  * An answer and the records it read: the prose, with the first mention of
  * each record drawn as its chip; the records it read and never named on one
- * "Also read" line under it; and every other card (a proposal, a refusal, a
+ * "Also looked up" line under it; and every other card (a proposal, a refusal, a
  * notice, a file, a brief) as the shipped card it always was.
  *
  * WHAT A READ'S CARD DID, ITS PEEK DOES: a record's facts, its body and the
@@ -242,7 +242,7 @@ function EntityBody({ entity, on }: { entity: AssistantEntityCard; on: CardHandl
 
 /**
  * One read as its chip: what the answer named it with (or its key, else its
- * title, on the Also read line), opening its peek.
+ * title, on the Also looked up line), opening its peek.
  */
 export function ReadChip({
   read,
@@ -250,7 +250,7 @@ export function ReadChip({
   on,
 }: {
   read: Read;
-  /** The mention it stands in for, or none on the Also read line. */
+  /** The mention it stands in for, or none on the Also looked up line. */
   said?: Mention | undefined;
   on: CardHandlers;
 }) {
@@ -334,7 +334,7 @@ export function ReadChip({
 
 /**
  * One answer: its prose with each read record's first mention as its chip,
- * the reads it never named on the Also read line, then its other cards.
+ * the reads it never named on the Also looked up line, then its other cards.
  */
 export function Answer({
   text,
@@ -359,7 +359,7 @@ export function Answer({
     const mentions = mentionsOf(reads, (mention, key) => (
       <ReadChip key={key} read={mention.read} said={mention} on={handlers} />
     ));
-    // RENDERED FIRST, so `named` is whole before the Also read line reads it.
+    // RENDERED FIRST, so `named` is whole before the Also looked up line reads it.
     const rendered =
       text.trim() === "" ? [] : renderMarkdown(text, { ...ASSISTANT_WORDS, prose: mentions.prose });
     return { nodes: rendered, named: mentions.named };
@@ -369,7 +369,7 @@ export function Answer({
     <Stack gap={3}>
       {nodes.length > 0 ? <ProseBlock dimmed={dimmed}>{nodes}</ProseBlock> : null}
       {unnamed.length > 0 ? (
-        <RecordChipList label="Also read">
+        <RecordChipList label="Also looked up">
           {unnamed.map((read) => (
             <ReadChip key={read.id} read={read} on={handlers} />
           ))}

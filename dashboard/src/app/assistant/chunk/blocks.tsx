@@ -945,7 +945,7 @@ export function CardBlock({
     case "entity":
     case "oversize":
       // A READ IS NEVER A CARD: its answer draws it, as a chip where the
-      // answer names it and on the Also read line where it does not
+      // answer names it and on the Also looked up line where it does not
       // (`reads.tsx`). Reaching here is a caller drawing a read as a card.
       throw new Error(`a ${card.type} read is drawn by its answer, never as a card`);
     case "proposal":
