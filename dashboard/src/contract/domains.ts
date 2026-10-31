@@ -52,6 +52,7 @@ export const SESSION_QUERIES = {
     "chat_saved",
     "chat_sent",
     "chat_links",
+    "chat_message",
     "chat_search",
     "chat_room_names",
     "chat_rooms",

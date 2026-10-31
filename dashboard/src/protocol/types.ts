@@ -4551,7 +4551,10 @@ export interface ChatActivityItem {
   /** Who did it: the author of a mention or a reply, the reactor of a
    *  reaction. */
   actor: string;
-  actor_kind: ChatAuthorKind;
+  /** Absent on a reaction, which records only who reacted. */
+  actor_kind?: ChatAuthorKind;
+  /** A mention of the whole room (`@channel`) rather than of the reader. */
+  collective?: boolean;
   /** What the message says NOW, cut at `chatlet.MaxExcerpt` bytes as a
    *  mention's excerpt is: the message's own words, which a screen draws as
    *  plain text with the transcript's own helper. */
@@ -4682,6 +4685,55 @@ export interface ChatSharedLink {
   at: string;
   /** The message's own number in the room, which a jump opens it at. */
   channel_seq: number;
+}
+
+/**
+ * One message by its id, with what reading it in place needs: `chat_message`,
+ * asked with `{ channel_id, message_id }`. A room the reader may not read, or
+ * a message that is gone, is not found.
+ */
+export interface ChatMessageAnswer extends ChatServed {
+  channel_name?: string;
+  channel_kind: ChatKind;
+  view: ChatMessageView;
+  /** The thread's root, when the message is a reply. */
+  root?: ChatMessageView;
+  /** Up to two replies said just before it in its thread, oldest first. */
+  before?: ChatMessageView[];
+}
+
+/** What a link points at, as `chat_unfurls` resolved it. */
+export type ChatUnfurlKind = "task" | "page" | "artifact" | "pull_request";
+
+/**
+ * One link resolved for its preview. Only what the reader may read is
+ * resolved: a link to something they may not open, or that is not there, is
+ * absent from the answer and drawn by the link rules alone.
+ */
+export interface ChatUnfurl {
+  /** The address exactly as the message carries it. */
+  url: string;
+  kind: ChatUnfurlKind;
+  /** The object's own code: a task's key, a pull request's `owner/repo#14`. */
+  code?: string;
+  title: string;
+  /** The object's status in its own words ("In progress", "Merged"). */
+  status?: string;
+  /** The status's tone, for its dot. */
+  tone?: "neutral" | "info" | "success" | "warning" | "danger";
+  /** Who owns it: an assignee's, an author's or an owner's handle or login. */
+  owner?: string;
+  /** One quiet line of details ("+120 -14", "Updated 2 days ago"). */
+  meta?: string;
+}
+
+/**
+ * The previews for a message's links, in one read: `chat_unfurls`, asked with
+ * `{ urls: string[] }` (at most `chatlet.MaxLinks`, eight). Resolved as the
+ * reader, by the reads their own screens use.
+ */
+export interface ChatUnfurlsAnswer {
+  unfurls: ChatUnfurl[];
 }
 
 /**
@@ -7792,6 +7844,8 @@ export interface QueryMap {
   chat_saved: ChatSavedAnswer;
   chat_sent: ChatSentAnswer;
   chat_links: ChatLinksAnswer;
+  chat_message: ChatMessageAnswer;
+  chat_unfurls: ChatUnfurlsAnswer;
   /* EVERY ROOM THE CALLER MAY READ, BY NAME, joined or not: what a room
      written in prose is told from a colour or an issue's number by. */
   chat_room_names: ChatRoomNamesAnswer;
