@@ -1372,7 +1372,7 @@ type ReadAnswer struct {
 // maintainer finishes or serves first — when it was last expunged, its live
 // packs, bytes and objects — which a cycle's inputs are cut from, and the last
 // of which places the repository's maintenance on the node that compacts and
-// publishes it too, by the publication's charge (internal/code/compact) — and
+// publishes it too, by its maintenance's charge (internal/code/compact) — and
 // the version its row was read at.
 type ExpungeCandidate struct {
 	ID   string `json:"id"`

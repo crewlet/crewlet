@@ -997,13 +997,18 @@ A repository's background work — merging its packs and
 [publishing its layers](#when-a-repository-is-published) — runs on ONE git
 node, its **maintainer**: the first git node of the repository's rendezvous
 order (the order its reads walk, [The home git node](#the-home-git-node))
-whose **advertised background budget** holds the repository's publication — a
-bitmap over its whole history, 600 bytes an object of the repository with
-room beside it for a clone — and its home where no git node's does. Every git
+whose **advertised background budget** holds every step of its maintenance —
+the largest charge any of them is admitted at: its publication's bitmap over
+its whole history, 600 bytes an object of the repository with room beside it
+for a clone, or a merge of every object with its delta window, the larger
+under some six million objects — and its home where no git node's does. A node
+whose budget holds the publication but not a whole merge would refuse the
+merge for memory, and a merge refused costs the repository its pushes once its
+packs reach the bound, so the placement weighs the merge as well. Every git
 node advertises its budget on its presence heartbeat, so every node reads the
 placement from memory. On a fleet of alike git nodes every repository's
 maintainer is its home; on a fleet with one large git node, every repository
-only that node can publish is maintained there, and every other git node
+only that node can hold is maintained there, and every other git node
 installs what it publishes ([Sizing git
 nodes](../guides/deployment.md#sizing-git-nodes)).
 
@@ -1014,7 +1019,7 @@ after it starts, and its loops wait for that rather than run a pass before it;
 a node that is draining has left the listing, and every repository it
 maintained is placed among the rest.
 
-Both of a maintainer's loops ask by the publication's charge, so the two
+Both of a maintainer's loops ask by that one charge, so the two
 writers of a repository's packs run on one node, and there a merge never takes
 a pack a publication of the repository in flight has planned over. Once the
 publication has planned, it reserves every pack its layer will name, the packs

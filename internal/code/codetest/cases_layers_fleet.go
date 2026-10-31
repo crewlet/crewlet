@@ -39,7 +39,7 @@ func (rc *repoCase) publication(n Node) code.PublicationCandidate {
 }
 
 // maintainer is the running member whose compactor takes itself for the
-// repository's maintainer, asked by the publication's charge.
+// repository's maintainer, asked by its maintenance's charge.
 func (rc *repoCase) maintainer() Node {
 	rc.t.Helper()
 	var out []Node
@@ -85,10 +85,11 @@ func (rc *repoCase) chain(n Node) cache.Chain {
 }
 
 // LY8: a repository's publication is placed on the git node whose advertised
-// background budget holds it, whatever its home: with two members advertising
-// 64 KiB and one 64 GiB, every publication of a repository whose charge passes
-// 64 KiB is the large member's — which every other member installs — while a
-// repository whose charge every member holds stays with its home, the
+// background budget holds its maintenance, whatever its home: with two
+// members advertising exactly the small repository's charge and one 64 GiB,
+// every publication of the large repository, whose charge passes theirs, is
+// the large member's — which every other member installs — while the small
+// repository, whose charge every member holds, stays with its home, the
 // maintainer it had while every member advertised alike.
 func aLargeNodePublishesForEveryNode(t *testing.T, c Cluster) {
 	members := c.Members()
@@ -110,13 +111,10 @@ func aLargeNodePublishesForEveryNode(t *testing.T, c Cluster) {
 	p.Commit(other, map[string]string{"README.md": "one\n"}, "one")
 	small.mustPush(p, other, via, "main")
 	n := memberNode(t, c, via)
-	if charge := n.Cache().PublishCharge(large.publication(n).LiveObjects); charge <= 64<<10 {
-		t.Fatalf("the large repository's publication is charged %d, which the small members' 64 KiB would hold: "+
-			"the case needs it past them", charge)
-	}
-	if charge := n.Cache().PublishCharge(small.publication(n).LiveObjects); charge > 64<<10 {
-		t.Fatalf("the small repository's publication is charged %d, past the small members' 64 KiB: the case "+
-			"needs every member to hold it", charge)
+	smallCharge := n.Compactor().PlacedBy(small.publication(n).LiveObjects)
+	if charge := n.Compactor().PlacedBy(large.publication(n).LiveObjects); charge <= smallCharge {
+		t.Fatalf("the large repository's maintenance is charged %d, which the small members' %d would hold: "+
+			"the case needs it past them", charge, smallCharge)
 	}
 	homeSmall := small.maintainer().ID()
 	// THE LARGE MEMBER: one that is NOT the large repository's home, so
@@ -131,7 +129,7 @@ func aLargeNodePublishesForEveryNode(t *testing.T, c Cluster) {
 	}
 	for _, m := range members {
 		if m != big {
-			c.Advertise(t, m, 64<<10)
+			c.Advertise(t, m, smallCharge)
 		}
 	}
 	if got := large.maintainer().ID(); got != big {

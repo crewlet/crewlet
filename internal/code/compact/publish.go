@@ -193,8 +193,8 @@ type PublishReport struct {
 //     idle repository whose layer the store lost is in no due listing.
 //  2. MAINTAINERS, judged against ONE LISTING of who serves git and what each
 //     git node advertises ([Compactor.maintainedOfPublications]), for every
-//     repository the pass may publish, by the publication's charge
-//     (cache.Cache.PublishCharge), as the compaction loop judges its own: a
+//     repository the pass may publish, by its maintenance's charge
+//     ([Compactor.PlacedBy]), as the compaction loop judges its own: a
 //     placement this node cannot read publishes nothing that pass, logged
 //     once.
 //  3. THE STORE'S ROOM, read once a pass, and only while a repository is held
@@ -295,7 +295,7 @@ func (c *Compactor) PublishPass(ctx context.Context) (PublishReport, error) {
 // advertises, as the compaction loop judges its own ([Compactor.maintainedOf]):
 // asked of every repository the pass may publish — each but one a plan found
 // nothing to publish in at its version, which is no repair — each by the
-// charge it is placed by ([Compactor.placedBy]). An error is UNKNOWN for every
+// charge it is placed by ([Compactor.PlacedBy]). An error is UNKNOWN for every
 // one of them, never "maintains none". The rules that turn on the clock — a
 // repair's pace, [Due] — are left to the pass, which reads the clock at each
 // repository, so a repository due part way through it is one it judged.
@@ -305,7 +305,7 @@ func (c *Compactor) maintainedOfPublications(listed []code.PublicationCandidate,
 	ask := map[string]int64{}
 	for _, cand := range listed {
 		if damaged[cand.ID] || !c.nothingAt(cand) {
-			ask[cand.ID] = c.placedBy(cand.LiveObjects)
+			ask[cand.ID] = c.PlacedBy(cand.LiveObjects)
 		}
 	}
 	if len(ask) == 0 {

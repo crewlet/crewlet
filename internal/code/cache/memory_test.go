@@ -1183,12 +1183,21 @@ func TestTheScalingPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 			t.Errorf("%s does not say %q", path, want)
 		}
 	}
-	// THE PUBLICATION'S CHARGE, which places a repository's maintainer.
+	// THE CHARGE A REPOSITORY'S MAINTAINER IS PLACED BY: the larger of its
+	// publication's and a merge of every object's.
 	publish := fmt.Sprintf("its bitmap at %s bytes an object of the whole repository and a clone's %d beside it, "+
 		"%s bytes an object", spaced(cache.PublishBytesPerObject), gitproc.TransferBytesPerObject,
 		spaced(int64(cache.PublishBytesPerObject+gitproc.TransferBytesPerObject)))
-	if !strings.Contains(page, publish) {
-		t.Errorf("%s does not say %q", path, publish)
+	merge := fmt.Sprintf("for a merge of every object, %s bytes an object beside the build's delta window — %s of "+
+		"the largest blob `code.limits.max_blob_bytes` admits", spaced(int64(cache.CompactBytesPerObject+
+		gitproc.TransferBytesPerObject)), word(t, windowBlobs(t)))
+	placed := fmt.Sprintf("holds the larger of %s × N bytes and %s × N bytes plus that window",
+		spaced(int64(cache.PublishBytesPerObject+gitproc.TransferBytesPerObject)),
+		spaced(int64(cache.CompactBytesPerObject+gitproc.TransferBytesPerObject)))
+	for _, want := range []string{publish, merge, placed} {
+		if !strings.Contains(page, want) {
+			t.Errorf("%s does not say %q", path, want)
+		}
 	}
 }
 

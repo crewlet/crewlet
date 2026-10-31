@@ -44,11 +44,13 @@
 // # Who maintains, and why one node does all three
 //
 // The MAINTAINER is the first git node of the repository's rendezvous order
-// whose ADVERTISED background budget holds the publication's charge — the
-// bitmap over the whole history, cache.Cache.PublishCharge — and the home
-// where none can (internal/estate's Router.Maintainer): on a fleet of alike
-// nodes it is the home, and on a fleet with one large git node every
-// repository only that node can publish is maintained there. All three loops
+// whose ADVERTISED background budget holds its maintenance's charge — the
+// largest any of its steps may be admitted at, the publication's bitmap over
+// the whole history or a merge of every object with its delta window,
+// cache.Cache.MaintenanceCharge — and the home where none can
+// (internal/estate's Router.Maintainer): on a fleet of alike nodes it is the
+// home, and on a fleet with one large git node every repository only that
+// node can maintain is maintained there. All three loops
 // ask by the same charge, so the three writers of a repository's packs run on
 // ONE node, and on that node a compaction NEVER MERGES A PACK A PUBLICATION IN
 // FLIGHT PLANNED OVER ([Compactor.claimCompaction]): once a publication has

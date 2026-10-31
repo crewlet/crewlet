@@ -1066,10 +1066,10 @@ func TestAPublicationThatDidNotLandIsPacedByItsBuild(t *testing.T) {
 	}
 }
 
-// A PASS PUBLISHES ONLY WHAT ITS NODE MAINTAINS, asked by the publication's
-// own charge: a node that is not a repository's maintainer syncs nothing of
-// it, and the question is asked by cache.Cache.PublishCharge of the listing's
-// live objects — the figure the maintainer is placed by.
+// A PASS PUBLISHES ONLY WHAT ITS NODE MAINTAINS, asked by its maintenance's
+// charge: a node that is not a repository's maintainer syncs nothing of it,
+// and the question is asked by Compactor.PlacedBy of the listing's live
+// objects — the figure the maintainer is placed by.
 //
 // Mutation: publish what another node maintains, and the pass syncs it; ask by
 // the layer's own objects, and the charge differs.
@@ -1091,8 +1091,8 @@ func TestAPassPublishesOnlyWhatItsNodeMaintains(t *testing.T) {
 		t.Errorf("a pass over a repository another node maintains synced it %d times and reported %+v, want it "+
 			"listed and nothing more", syncs, report)
 	}
-	if want := x.node().Cache().PublishCharge(cand.LiveObjects); !slices.Equal(asked, []int64{want}) {
-		t.Errorf("the pass asked who maintains the repository by %v, want the publication's charge %d", asked, want)
+	if want := c.PlacedBy(cand.LiveObjects); !slices.Equal(asked, []int64{want}) {
+		t.Errorf("the pass asked who maintains the repository by %v, want its maintenance's charge %d", asked, want)
 	}
 }
 

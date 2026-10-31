@@ -40,8 +40,8 @@ import (
 //  5. Every listed repository in the listing's order, until the next tick
 //     would begin: skipped when a plan of it was found not due at its version
 //     and cap ([memo]), when it is held back for a full store, or when this
-//     node is not its MAINTAINER for the publication's charge — the charge
-//     every loop is placed by, so one node writes all of a repository's
+//     node is not its MAINTAINER for its maintenance's charge
+//     ([Compactor.PlacedBy]) — the charge every loop is placed by, so one node writes all of a repository's
 //     packs; and COMPACTED otherwise, one at a time. A placement this node
 //     cannot read compacts nothing that pass — a compactor that cannot tell
 //     does none of a maintainer's work rather than guess — logged once a pass.
@@ -108,13 +108,15 @@ func (c *Compactor) Poll(ctx context.Context) (PollReport, error) {
 	return report, nil
 }
 
-// placedBy is the charge a repository of liveObjects live objects is asked
-// who maintains it by: its publication's (cache.Cache.PublishCharge), the
-// charge of its dominant work — one question for every loop, so its
+// PlacedBy is the charge a repository of liveObjects live objects is asked
+// who maintains it by: the largest any of its maintainer's steps may be
+// admitted at under the current epoch's limits
+// (cache.Cache.MaintenanceCharge) — one question for every loop, so its
 // compactions, its publications and its expunges, the three writers of its
-// packs, are placed on one node.
-func (c *Compactor) placedBy(liveObjects int64) int64 {
-	return c.o.Cache.PublishCharge(liveObjects)
+// packs, are placed on one node, and on one whose own admissions hold every
+// one of them.
+func (c *Compactor) PlacedBy(liveObjects int64) int64 {
+	return c.o.Cache.MaintenanceCharge(liveObjects, c.o.Limits())
 }
 
 // listDue is every repository the `compaction_due` listing names, every page.
@@ -169,7 +171,7 @@ func (c *Compactor) forget(listed []code.CompactionCandidate) {
 // LISTING of who serves git and what each git node advertises: asked of every
 // repository the pass must judge — each at the pack bound, whose alarm it
 // raises whatever its plan, and each it may plan — each by the charge it is
-// placed by ([Compactor.placedBy]), and of no other, so a repository its
+// placed by ([Compactor.PlacedBy]), and of no other, so a repository its
 // maintainer remembers as not due costs the pass a lookup and nothing more. An
 // error is UNKNOWN for every one of them, never "maintains none".
 //
@@ -184,7 +186,7 @@ func (c *Compactor) maintainedOf(listed []code.CompactionCandidate) (map[string]
 	ask := map[string]int64{}
 	for _, cand := range listed {
 		if cand.LivePacks >= code.MaxPacksPerRepo || !c.notDueAt(cand) {
-			ask[cand.ID] = c.placedBy(cand.LiveObjects)
+			ask[cand.ID] = c.PlacedBy(cand.LiveObjects)
 		}
 	}
 	if len(ask) == 0 {

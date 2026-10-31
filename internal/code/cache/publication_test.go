@@ -35,8 +35,7 @@ func objectsOf(pushes []pushed) int64 {
 // objects the layer adds, since the bitmap walks every commit — the
 // commit-graph layer — GraphLayerBytesPerObject an object of the layer — and
 // its repack — CompactBytesPerObject an object of what it merges, and the
-// delta window; and the charge a repository's publication is PLACED by
-// (Cache.PublishCharge) is the first's, the one its admission holds it to.
+// delta window.
 //
 // Mutation: charge the bitmap by the layer's objects, and a layer of one
 // object over a repository of many fits a budget that holds no bitmap of it.
@@ -49,10 +48,6 @@ func TestAPublicationIsChargedByItsLargestStep(t *testing.T) {
 	s := w.sync(t, c, repo)
 	defer s.Release()
 	clone := objects * gitproc.TransferBytesPerObject
-	if got, want := c.PublishCharge(objects), objects*cache.PublishBytesPerObject+clone; got != want {
-		t.Errorf("PublishCharge(%d) = %d, want %d: the bitmap's figure an object of the repository and a clone's "+
-			"room beside it", objects, got, want)
-	}
 	limits := code.Limits{MaxBlobBytes: 1 << 20}
 	for _, c2 := range []struct {
 		name                  string
@@ -79,6 +74,67 @@ func TestAPublicationIsChargedByItsLargestStep(t *testing.T) {
 			continue
 		}
 		adm.Release()
+	}
+}
+
+// A MAINTAINER IS PLACED BY THE LARGEST CHARGE ITS STEPS ARE ADMITTED AT: a
+// repository's maintenance is placed on a git node by Cache.MaintenanceCharge
+// of its objects, so a node whose budget is exactly that charge admits every
+// step its maintainer runs over the whole repository — a compaction merging
+// every object with its delta window, an expunge sorting them, a publication
+// whose layer and repack cover them — and a budget a byte under it refuses
+// one of them. Placed by the publication's bitmap alone, a repository under
+// some six million objects went to a node that refused its whole merge.
+//
+// Mutation: place by the publication's bitmap charge alone, and the node the
+// charge places the repository on refuses its compaction for memory.
+func TestAMaintainerIsPlacedByTheLargestChargeItsStepsAreAdmittedAt(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	objects := objectsOf(w.pushN(t, repo, 3))
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	for _, limits := range []code.Limits{{MaxBlobBytes: 1}, {MaxBlobBytes: 50 << 20}} {
+		charge := c.MaintenanceCharge(objects, limits)
+		admit := map[string]func() (*cache.Admission, error){
+			"a compaction of every object": func() (*cache.Admission, error) {
+				return c.AdmitCompaction(s, objects, limits)
+			},
+			"an expunge sorting every object": func() (*cache.Admission, error) {
+				return c.AdmitExpunge(s, objects, limits)
+			},
+			"a publication whose layer and repack cover every object": func() (*cache.Admission, error) {
+				return c.AdmitPublication(s, objects, objects, limits)
+			},
+		}
+		cache.SetMaintenanceBudget(c, charge)
+		for what, step := range admit {
+			adm, err := step()
+			if err != nil {
+				t.Errorf("max_blob_bytes %d: %s on a budget of the placement's charge %d = %v, want it admitted",
+					limits.MaxBlobBytes, what, charge, err)
+				continue
+			}
+			adm.Release()
+		}
+		cache.SetMaintenanceBudget(c, charge-1)
+		refused := 0
+		for _, step := range admit {
+			adm, err := step()
+			if errors.Is(err, cache.ErrNoMemory) {
+				refused++
+				continue
+			}
+			if err == nil {
+				adm.Release()
+			}
+		}
+		if refused == 0 {
+			t.Errorf("max_blob_bytes %d: every step admitted on a budget a byte under the placement's charge %d, "+
+				"want it the largest of theirs", limits.MaxBlobBytes, charge)
+		}
 	}
 }
 
@@ -172,7 +228,7 @@ func TestAPublicationPastTheBudgetIsRefusedOnceAndRaisesTheAlarm(t *testing.T) {
 		t.Fatalf("the premise: the copy holds %d layers installed, want the chain", len(got))
 	}
 	limits := code.Limits{MaxBlobBytes: 1}
-	charge := c.PublishCharge(objects)
+	charge := objects*cache.PublishBytesPerObject + objects*gitproc.TransferBytesPerObject
 	refused := func(budget int64) {
 		t.Helper()
 		cache.SetMaintenanceBudget(c, budget)

@@ -115,8 +115,8 @@ func TestACompactorThatCannotReadThePlacementCompactsNothing(t *testing.T) {
 		t.Errorf("the pass logged code_compaction_maintainer_unknown %d times, want once:\n%s", n, l)
 	}
 	cand := x.candidate()
-	if want := x.node().Cache().PublishCharge(cand.LiveObjects); len(asked) == 0 || asked[0] != want {
-		t.Errorf("the pass asked who maintains the repository by the charges %v, want the publication's %d, "+
+	if want := c.PlacedBy(cand.LiveObjects); len(asked) == 0 || asked[0] != want {
+		t.Errorf("the pass asked who maintains the repository by the charges %v, want its maintenance's %d, "+
 			"which every loop is placed by", asked, want)
 	}
 }

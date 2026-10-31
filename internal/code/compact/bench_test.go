@@ -1356,9 +1356,9 @@ func (u *unreached) Chain(cache.Synced) cache.Chain {
 	return cache.Chain{}
 }
 
-// PublishCharge is arithmetic over the listing's own figure, which reaches no
-// copy of a repository, so it is never counted.
-func (u *unreached) PublishCharge(objects int64) int64 { return objects }
+// MaintenanceCharge is arithmetic over the listing's own figure, which
+// reaches no copy of a repository, so it is never counted.
+func (u *unreached) MaintenanceCharge(objects int64, _ code.Limits) int64 { return objects }
 
 func (u *unreached) Damaged() []code.RepoRef {
 	u.calls.Add(1)

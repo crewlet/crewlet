@@ -80,8 +80,8 @@ var errNothingKept = errors.New("compact: the expunge's inputs hold no object to
 //     listing's reason (the router carries this node's own writes as a floor
 //     on every code read it sends), each with its live objects;
 //  2. MAINTAINERS, judged against ONE LISTING of who serves git and what each
-//     git node advertises, by the PUBLICATION'S charge — the charge the other
-//     two loops are placed by, so every writer of a repository's packs runs
+//     git node advertises, by its MAINTENANCE'S charge ([Compactor.PlacedBy])
+//     — the charge the other two loops are placed by, so every writer of a repository's packs runs
 //     on one node — a placement this node cannot read expunging nothing that
 //     pass, logged once;
 //  3. THE STORE'S ROOM, read once a pass, and only while a repository is held
@@ -179,7 +179,7 @@ func (c *Compactor) forgetExpunges(listed []code.ExpungeCandidate) {
 
 // maintainedOfExpunges is which listed repositories this node maintains, off
 // ONE LISTING of who serves git, each by the charge it is placed by
-// ([Compactor.placedBy]) — an error is UNKNOWN for every one of them, never
+// ([Compactor.PlacedBy]) — an error is UNKNOWN for every one of them, never
 // "maintains none".
 func (c *Compactor) maintainedOfExpunges(listed []code.ExpungeCandidate) (map[string]bool, error) {
 	if len(listed) == 0 {
@@ -187,7 +187,7 @@ func (c *Compactor) maintainedOfExpunges(listed []code.ExpungeCandidate) (map[st
 	}
 	ask := make(map[string]int64, len(listed))
 	for _, cand := range listed {
-		ask[cand.ID] = c.placedBy(cand.LiveObjects)
+		ask[cand.ID] = c.PlacedBy(cand.LiveObjects)
 	}
 	return c.o.Maintainers.MaintainerOf(ask)
 }

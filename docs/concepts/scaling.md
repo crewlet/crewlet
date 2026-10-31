@@ -282,12 +282,16 @@ its order whose advertised background budget holds the work, its home on a
 fleet of alike nodes — MERGES its packs ([Compaction](code-host.md#compaction))
 and PUBLISHES its bitmapped index as layers every other git node installs
 ([When a repository is published](code-host.md#when-a-repository-is-published)).
-A publication is charged the largest of its steps: its bitmap at 600 bytes an
-object of the whole repository and a clone's 240 beside it, 840 bytes an
-object — so a repository of N objects needs ONE git node whose background
-budget holds 840 × N bytes for it to be served with a bitmap anywhere, for the
-whole fleet, and every other git node installs the layers in a few MiB of
-memory and serves through them
+A repository's maintenance is placed by the largest charge any of its steps
+is admitted at: for its publication, its bitmap at 600 bytes an object of the
+whole repository and a clone's 240 beside it, 840 bytes an object; for a merge
+of every object, 790 bytes an object beside the build's delta window — six of
+the largest blob `code.limits.max_blob_bytes` admits, 300 MiB by default —
+which is the larger under some six million objects. So a repository of N
+objects needs ONE git node whose background budget holds the larger of
+840 × N bytes and 790 × N bytes plus that window for it to be served with a
+bitmap anywhere, for the whole fleet, and every other git node installs the
+layers in a few MiB of memory and serves through them
 ([Sizing git nodes](../guides/deployment.md#sizing-git-nodes)).
 Measured on the node pin over a source repository's history of a gigabyte,
 three million objects, from the in-memory store (one run of each, on two

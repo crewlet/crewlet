@@ -364,9 +364,9 @@
 // work — for a caller that judges many at once: internal/code/compact's two
 // loops, the compaction of a repository's packs and the publication of its
 // layers, whose passes over their listings read the presence view again for
-// every repository they asked about one at a time. Both ask by the
-// publication's charge, so both writers of a repository's packs run on one
-// node (ADR-0061), and a maintainer two nodes both believe in is one the
+// every repository they asked about one at a time. Both ask by one charge,
+// the largest of their steps', so both writers of a repository's packs run
+// on one node (ADR-0061), and a maintainer two nodes both believe in is one the
 // committer takes once, as a home's work is.
 //
 // # Which data nodes to ask is answered from memory

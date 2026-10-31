@@ -243,7 +243,7 @@ func publicationOf(c *Case, n Node) code.PublicationCandidate {
 }
 
 // maintainerOf is the git node that maintains RepoName, as each node's
-// compactor asks: by the publication's charge.
+// compactor asks: by its maintenance's charge.
 func maintainerOf(c *Case) Node {
 	c.T.Helper()
 	for _, n := range c.Fleet.Nodes() {
@@ -260,10 +260,10 @@ func maintainerOf(c *Case) Node {
 }
 
 // maintains is whether n's compactor takes itself for cand's maintainer, asked
-// as each of its passes asks: by the publication's charge, off one listing of
+// as each of its passes asks: by its maintenance's charge, off one listing of
 // the git nodes for every repository it judges.
 func maintains(n Node, cand code.PublicationCandidate) (bool, error) {
-	yes, err := n.Maintainers().MaintainerOf(map[string]int64{cand.ID: n.Cache().PublishCharge(cand.LiveObjects)})
+	yes, err := n.Maintainers().MaintainerOf(map[string]int64{cand.ID: n.Compactor().PlacedBy(cand.LiveObjects)})
 	return yes[cand.ID], err
 }
 

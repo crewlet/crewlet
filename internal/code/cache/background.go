@@ -122,9 +122,13 @@ func (c *Cache) AdmitCompaction(s Synced, inputs int64, limits code.Limits) (*Ad
 	if inputs < 0 {
 		return nil, fmt.Errorf("%w: a compaction merges %d objects", ErrInvalid, inputs)
 	}
-	return c.admitBackground(s, stepCompactWork, func(int64) int64 {
-		return chargeOver(inputs, CompactBytesPerObject, inputs) + CompactWindowBytes(limits)
-	})
+	return c.admitBackground(s, stepCompactWork, func(int64) int64 { return compactionCharge(inputs, limits) })
+}
+
+// compactionCharge is what a compaction merging inputs objects is admitted at
+// ([Cache.AdmitCompaction]).
+func compactionCharge(inputs int64, limits code.Limits) int64 {
+	return chargeOver(inputs, CompactBytesPerObject, inputs) + CompactWindowBytes(limits)
 }
 
 // AdmitExpunge admits one build of an expunge of s's repository — its kept
@@ -153,20 +157,48 @@ func (c *Cache) AdmitExpunge(s Synced, inputs int64, limits code.Limits) (*Admis
 		return nil, fmt.Errorf("%w: an expunge sorts %d objects", ErrInvalid, inputs)
 	}
 	return c.admitBackground(s, stepExpungeWork, func(objects int64) int64 {
-		return chargeOver(inputs, CompactBytesPerObject, objects) + CompactWindowBytes(limits)
+		return expungeCharge(inputs, objects, limits)
 	})
 }
 
-// PublishCharge is the charge a repository of n live objects is placed by on
-// the git node that publishes it (internal/estate's Router.Maintainer): its
-// publication's DOMINANT step, the multi-pack-index layer and the bitmap over
-// the whole history, PublishBytesPerObject an object with room for a clone of
-// the repository beside it — the figure [Cache.AdmitPublication] charges that
-// step at, so the node a publication is placed on is one whose own admission
-// would hold it.
-func (c *Cache) PublishCharge(n int64) int64 { return publishCharge(n) }
+// expungeCharge is what one build of an expunge sorting inputs objects of a
+// repository of objects objects is admitted at ([Cache.AdmitExpunge]).
+func expungeCharge(inputs, objects int64, limits code.Limits) int64 {
+	return chargeOver(inputs, CompactBytesPerObject, objects) + CompactWindowBytes(limits)
+}
 
-// publishCharge is [Cache.PublishCharge]'s figure.
+// MaintenanceCharge is the charge a repository of n live objects is PLACED by
+// on the git node that maintains it (internal/estate's Router.Maintainer,
+// internal/code/compact's three loops): the LARGEST charge any step its
+// maintainer runs may be admitted at under limits — a publication's root,
+// its multi-pack-index layer and bitmap over the whole history; its commit-
+// graph layer and its repack over at most the whole repository; a compaction
+// merging every one of its objects; an expunge sorting them — so the node a
+// repository's maintenance is placed on is one whose own admissions would
+// hold all of it.
+//
+// THE LARGEST, NEVER THE PUBLICATION'S ALONE: a merge's charge carries its
+// delta window (CompactWindowBytes, 300 MiB at the default max_blob_bytes)
+// beside its objects, which no figure an object holds — so a repository
+// placed by its bitmap's 840 bytes an object alone, under some six million
+// objects, was kept on a git node that would refuse its whole-repository
+// compaction or expunge for memory while a larger node of the fleet could
+// have run it, and a compaction refused there costs the repository its
+// pushes once code.MaxPacksPerRepo gathers. The window follows the epoch's
+// limits, so the charge does too.
+func (c *Cache) MaintenanceCharge(n int64, limits code.Limits) int64 {
+	return maintenanceCharge(n, limits)
+}
+
+// maintenanceCharge is [Cache.MaintenanceCharge]'s figure: every admission's
+// charge at its worst for a repository of n objects — each step over all of
+// them.
+func maintenanceCharge(n int64, limits code.Limits) int64 {
+	return max(publicationCharge(n, n, n, limits), compactionCharge(n, limits), expungeCharge(n, n, limits))
+}
+
+// publishCharge is a publication's charge for its multi-pack-index layer and
+// bitmap over a repository of n objects ([Cache.AdmitPublication]).
 func publishCharge(n int64) int64 { return chargeOver(n, PublishBytesPerObject, n) }
 
 // AdmitPublication admits a publication of s's repository — a layer over

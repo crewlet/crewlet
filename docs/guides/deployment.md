@@ -2035,9 +2035,13 @@ bitmapped index is written once, by its
 installed by every other git node in a few MiB of memory: the maintainer is the
 first git node of the repository's order whose background budget — what the
 node can give its background work, which every git node advertises on its
-presence heartbeat — holds the repository's publication, about 840 bytes of
-memory an object of the repository (600 for the bitmap, 240 for a clone beside
-it; [Memory](../concepts/code-host.md#the-cache-on-a-git-node)). On a fleet of
+presence heartbeat — holds every step of the repository's maintenance: about
+840 bytes of memory an object of the repository for its publication (600 for
+the bitmap, 240 for a clone beside it;
+[Memory](../concepts/code-host.md#the-cache-on-a-git-node)), and under some six
+million objects more for a merge of every object — 790 bytes an object beside
+its delta window, six of the largest blob `max_blob_bytes` admits, 300 MiB by
+default. On a fleet of
 alike git nodes that is each repository's home, and a fleet whose repositories
 every node can publish needs nothing more. Where one repository's publication
 is past every node of ordinary size, give one git node the memory for it: every

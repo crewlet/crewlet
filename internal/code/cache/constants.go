@@ -507,8 +507,8 @@ const TipGraphBaseBytes = 2 << 20
 // and its bitmap hold for every object of the WHOLE repository
 // (Cache.AdmitPublication, internal/code/compact), beside the room for one
 // clone of the repository every whole-repository step is charged (memory.go's
-// chargeOver) — and the figure a repository's publication is PLACED by
-// (Cache.PublishCharge, the git node its maintenance falls to): a bitmap is
+// chargeOver) — and a figure a repository's maintenance is PLACED by
+// (Cache.MaintenanceCharge, the git node it falls to): a bitmap is
 // O(history), so the layer's own few objects say nothing of what it holds.
 //
 // 600 BYTES, MEASURED (BenchmarkMidx's step=publish and merge=root-write: git
@@ -522,7 +522,7 @@ const TipGraphBaseBytes = 2 << 20
 // 254 MiB (312 and 90); the node floor's own build, git 2.55.0, the same. The
 // largest, rounded up to the next 50 as BitmapBytesPerObject is: a
 // publication's charge follows its repository's history whatever its layer
-// adds, so a repository is placed by its root's. 900, the provisional figure
+// adds, so its placement charges its root's. 900, the provisional figure
 // this replaced, was a tip over a 219 679-object history (628 and 801 bytes an
 // object at that size) rounded up for git 2.43's growth with the history,
 // which the pin does not show (BitmapBytesPerObject). BenchmarkBigNode's

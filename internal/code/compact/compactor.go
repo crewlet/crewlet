@@ -54,7 +54,8 @@ type Estate interface {
 // ([Compactor.Poll], [Compactor.PublishPass], [Compactor.ExpungePass]). The
 // router satisfies it.
 //
-// EVERY LOOP ASKS BY THE PUBLICATION'S CHARGE (cache.Cache.PublishCharge), so
+// EVERY LOOP ASKS BY ONE CHARGE ([Compactor.PlacedBy]: the largest its
+// maintainer's steps may be admitted at, cache.Cache.MaintenanceCharge), so
 // a repository's compactions, its publications and its expunges — the three
 // writers of its packs — run on ONE node, where a compaction never merges a
 // pack a publication in flight planned over ([Compactor.claimCompaction]) and
@@ -96,7 +97,7 @@ type Uploader interface {
 // Cache is the node's git cache as the compactor reaches it — the
 // *cache.Cache satisfies it: the repository synced and pinned, its live packs
 // — and its dropping ones — and its published chain as the copy holds it for
-// the plans, the charge a publication is placed by, the repositories whose
+// the plans, the charge its maintenance is placed by, the repositories whose
 // copy holds a layer this node refused, each build's admission to the
 // maintenance lane, the scratch it writes into — a merge's, a compaction's or
 // a publication's repack, leaning on a store of exactly the packs it merges,
@@ -110,7 +111,7 @@ type Cache interface {
 	Packs(s cache.Synced) []code.PackRow
 	DroppingPacks(s cache.Synced) []code.PackRow
 	Chain(s cache.Synced) cache.Chain
-	PublishCharge(objects int64) int64
+	MaintenanceCharge(objects int64, limits code.Limits) int64
 	Damaged() []code.RepoRef
 	AdmitCompaction(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
 	AdmitPublication(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission,
