@@ -270,6 +270,9 @@ export function Inbox() {
   const needsNow = useStableList(rows.needs, rowKeyOf);
   const updates = useStableList(rows.updates, rowKeyOf);
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
+  // THE ROW THAT HAS JUST LANDED IN ANSWERED, which washes the group's
+  // heading: set by an answer, never on a first draw.
+  const [arrived, setArrived] = useState<string | undefined>(undefined);
   // ANSWERED BEFORE THIS VISIT: a question answered here is in Needs you,
   // and one answered before it is under Answered, never in both places.
   const { needs, answered } = useMemo(
@@ -364,6 +367,7 @@ export function Inbox() {
         const given: Settled = { label, row, at: Math.max(0, at), moved: true };
         if (answer) given.answer = answer;
         setSettled((was) => new Map(was).set(row.key, given));
+        setArrived(row.key);
         // THE NEXT THING TO DEAL WITH OPENS NOW, never one answered before
         // (the Answered group's rows), and the move is said once.
         const order = live.current.order;
@@ -529,7 +533,12 @@ export function Inbox() {
             }}
             onEarlierMore={earlier.next}
             settled={given}
-            answered={{ rows: answered, open: answeredOpen, onOpenChange: setAnsweredOpen }}
+            answered={{
+              rows: answered,
+              open: answeredOpen,
+              onOpenChange: setAnsweredOpen,
+              arrived,
+            }}
             reader={owner}
             selected={selected?.key ?? ""}
             onOpen={openRow}

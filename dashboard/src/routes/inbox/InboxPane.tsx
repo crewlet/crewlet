@@ -172,11 +172,16 @@ export function InboxPane(props: PaneProps) {
       </div>
     );
   }
-  // REMOUNTED PER ROW, so a draft, a pressed option or an outcome drawn for one
-  // row never shows under the next.
+  // ONE READING PANE FOR EVERY ROW, told which row it reads (`contentKey`):
+  // a new row plays in where the last one stood and takes focus to its title,
+  // so after an answer the reader's focus lands on the next item rather than
+  // on the page. What it holds is REMOUNTED PER ROW, so a draft, a pressed
+  // option or an outcome drawn for one row never shows under the next.
   return (
     <div className="inbox-pane">
-      <OpenPane key={props.row.key} {...props} row={props.row} />
+      <ReadingPane contentKey={props.row.key}>
+        <OpenPane key={props.row.key} {...props} row={props.row} />
+      </ReadingPane>
     </div>
   );
 }
@@ -345,7 +350,7 @@ function AskPane({
 
   return (
     <TokenScope texts={askTexts(ask)}>
-      <ReadingPane>
+      <>
         {frame.byline(
           <>
             <strong>{frame.name}</strong>
@@ -409,7 +414,7 @@ function AskPane({
           index={index}
           now={now}
         />
-      </ReadingPane>
+      </>
     </TokenScope>
   );
 }
@@ -462,7 +467,7 @@ function AnsweredPane({
   const context = run ? run.question_context.trim() : "";
   return (
     <TokenScope texts={answeredTexts(answered)}>
-      <ReadingPane>
+      <>
         {frame.byline(
           <>
             <strong>{frame.name}</strong>
@@ -514,7 +519,7 @@ function AnsweredPane({
         {ask && (
           <AskFollowThrough answered={ask} frame={frame} words={words} index={index} now={now} />
         )}
-      </ReadingPane>
+      </>
     </TokenScope>
   );
 }
@@ -982,7 +987,7 @@ function RunPane({
   const answererNamed = refusedAnswered?.worded === true && write.refusal !== null;
   return (
     <TokenScope texts={runAskTexts(run)}>
-      <ReadingPane>
+      <>
         {frame.byline(
           <>
             <strong>{frame.name}</strong>
@@ -1131,7 +1136,7 @@ function RunPane({
           </Stack>
         )}
         <RunLink turnId={run.turn_id} hold={hold} />
-      </ReadingPane>
+      </>
     </TokenScope>
   );
 }
@@ -1162,7 +1167,7 @@ function busyLine(busy: SandboxRun, name: string): string {
 function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {
   const w = seat.window;
   return (
-    <ReadingPane>
+    <>
       {frame.byline(
         <>
           <strong>{frame.name}</strong>
@@ -1187,13 +1192,13 @@ function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {
         />
         {frame.address && <ReassignItem item={frame.address} />}
       </Stack>
-    </ReadingPane>
+    </>
   );
 }
 
 function ConditionPane({ item, frame, now }: { item: Attention; frame: Frame; now: number }) {
   return (
-    <ReadingPane>
+    <>
       {frame.byline(
         <>
           <strong>{frame.name}</strong>
@@ -1221,7 +1226,7 @@ function ConditionPane({ item, frame, now }: { item: Attention; frame: Frame; no
       <Text as="p" variant="caption">
         Clears on its own when the condition ends.
       </Text>
-    </ReadingPane>
+    </>
   );
 }
 
@@ -1250,7 +1255,7 @@ function NoticePane({
   // so) stays in the conversation, where it is read in full.
   const whole = !said.endsWith("…");
   return (
-    <ReadingPane>
+    <>
       {frame.byline(
         <>
           <strong>{frame.name}</strong>
@@ -1294,6 +1299,6 @@ function NoticePane({
         index={index}
         now={now}
       />
-    </ReadingPane>
+    </>
   );
 }

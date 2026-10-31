@@ -21,6 +21,7 @@ import { currentReader, noteReader } from "~/lib/reader.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { QueryError, type QueryName } from "~/protocol/index.ts";
 import { ADA, ADA_SESSION, actEngine, applied, mountChat, unknown } from "~/test/chat.tsx";
+import { fakeTransition } from "~/test/motion.ts";
 
 import { READ_FLUSH_MS, useReadCursors, type ReadCursors } from "./cursor.ts";
 import { mountScreen } from "./frameKit.tsx";
@@ -393,30 +394,9 @@ describe("the Rooms panel", () => {
   // panel away on the press and the first expectation goes red; hand the dock
   // no way back and the focus one does; ignore the motion and the last does.
   test("unpinning keeps the panel, inert, until its column has eased shut", async () => {
-    // THE COLUMN'S OWN WIDTH TRANSITION, as a browser reports it (a
-    // `CSSTransition` on the column, running, with its end ahead): the kit
-    // waits on that motion and no other.
-    let close = () => {};
-    const finished = new Promise<void>((resolve) => (close = resolve));
-    const motion = { playState: "running" };
-    const had = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getAnimations");
-    Object.defineProperty(HTMLElement.prototype, "getAnimations", {
-      configurable: true,
-      value(this: HTMLElement) {
-        if (!this.classList.contains("chat-dock")) return [];
-        return [
-          {
-            get playState() {
-              return motion.playState;
-            },
-            transitionProperty: "width",
-            currentTime: 0,
-            effect: { target: this, getComputedTiming: () => ({ endTime: 300 }) },
-            finished,
-          } as unknown as Animation,
-        ];
-      },
-    });
+    // THE COLUMN'S OWN WIDTH TRANSITION: the kit waits on that motion and no
+    // other.
+    const motion = fakeTransition(".chat-dock", "width");
     try {
       localStorage.setItem(STORAGE_KEYS.chatletRoomsDocked, "1");
       mountScreen({ answer: chatAnswers([room(GENERAL, "general")]) });
@@ -430,10 +410,7 @@ describe("the Rooms panel", () => {
       expect(document.activeElement, "focus goes to Menu, which brings it back").toBe(
         screen.getByRole("button", { name: /^Menu/ }),
       );
-      await flush(async () => {
-        motion.playState = "finished";
-        close();
-      });
+      await flush(async () => motion.finish());
       await waitFor(() =>
         expect(
           document.querySelector(".chat-dock .crewlet-dock-column__panel"),
@@ -445,8 +422,7 @@ describe("the Rooms panel", () => {
         "the column stays, as wide as nothing",
       ).toBeTruthy();
     } finally {
-      if (had) Object.defineProperty(HTMLElement.prototype, "getAnimations", had);
-      else delete (HTMLElement.prototype as { getAnimations?: unknown }).getAnimations;
+      motion.restore();
     }
   });
 });

@@ -28,6 +28,7 @@ import { installScreen } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+import { fakeTransition } from "~/test/motion.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -903,6 +904,108 @@ describe("the pane", () => {
     // SAID ONCE, politely.
     const said = document.querySelector('[aria-live="polite"]')?.textContent ?? "";
     expect(said).toMatch(/^Answered\. Next: /);
+  });
+
+  // THE MOVE IS SEEN AND THE READER IS CARRIED ON: Answered's heading takes
+  // the kit's arrival wash only when an answer lands in it (never on a first
+  // draw, where nothing arrived), the row itself washes when the group is
+  // open, and the pane plays the next item in with focus on its title, since
+  // the pressed button left with the answered one. Mutation: pass the token
+  // on a first draw, or drop the pane's content key, and this goes red.
+  test("an answer lands in Answered with a wash, and focus moves to the next title", async () => {
+    const next = askItem({ ...DECISION, question: "Freeze the API for the release?" });
+    const second = {
+      ...next,
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...next.ask, comment: "c-13" },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem(), second) } });
+    await settle();
+    expect(document.querySelector(".crewlet-inbox-list__arrival")).toBeNull();
+    const press = screen.getByRole("button", { name: /Hold release/ });
+    press.focus();
+    fireEvent.click(press);
+    await settle();
+    const group = screen.getByRole("button", { name: "Answered, 1" });
+    expect(group.closest("h2, h3, h4")?.querySelector(".crewlet-inbox-list__arrival")).toBeTruthy();
+    expect(document.activeElement?.textContent).toContain("Freeze the API for the release?");
+    expect(document.activeElement?.classList.contains("crewlet-reading-pane__title")).toBe(true);
+    fireEvent.click(group);
+    expect(
+      within(screen.getByRole("region", { name: "Answered, 1" }))
+        .getByRole("button", { name: /Answered$/ })
+        .closest(".crewlet-inbox-row--arrived"),
+    ).toBeTruthy();
+  });
+
+  // A ROW CHOSEN IN THE LIST KEEPS THE READER IN THE LIST: the pane plays the
+  // row in but takes focus only when the reader's focus was in the pane, so
+  // arrowing or clicking down the list is never pulled away from it.
+  // Mutation: move focus on every new row and this goes red.
+  test("a row opened from the list keeps focus on that row", async () => {
+    const next = askItem({ ...DECISION, question: "Freeze the API for the release?" });
+    const second = {
+      ...next,
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...next.ask, comment: "c-13" },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem(), second) } });
+    await settle();
+    const row = within(screen.getByRole("region", { name: "Needs you, 2" })).getByRole("button", {
+      name: /Freeze the API for the release\?/,
+    });
+    row.focus();
+    fireEvent.click(row);
+    await settle();
+    expect(location.hash).toContain("row=ask%3Ac-13");
+    expect(document.querySelector(".crewlet-reading-pane__title")?.textContent).toBe(
+      "Freeze the API for the release?",
+    );
+    expect(document.activeElement).toBe(row);
+  });
+
+  // THE LAST ROW TAKES ITS GROUP WITH IT, once it has closed: Needs you stays
+  // while the answered row's height closes (the kit's group draws it, inert,
+  // on its way out), and then goes, so no "Needs you, 0" heading is left over
+  // nothing and the inbox's one empty state shows, never under the closing
+  // row. jsdom runs no transitions, so the row's own is faked and finished by
+  // hand. Mutation: draw the group only while it has rows and the first
+  // expectation goes red; show the empty state at once and the second does;
+  // never hear the row close and the last two do.
+  test("the last row leaving Needs you takes the group with it once it has closed", async () => {
+    const motion = fakeTransition(".crewlet-inbox-row", "grid-template-rows");
+    try {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ answers: { decisions: decisionsOf(askItem()) } });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+      await settle();
+      const group = screen.getByRole("region", { name: /^Needs you/ });
+      expect(group.querySelector(".crewlet-inbox-row--leaving")?.hasAttribute("inert")).toBe(true);
+      expect(document.querySelector(".crewlet-empty-state")).toBeNull();
+      await act(async () => motion.finish());
+      await settle();
+      expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
+      expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
+    } finally {
+      motion.restore();
+    }
+  });
+
+  // AT ONCE WHERE NOTHING MOVES: with no motion to run (reduced motion, or no
+  // Web Animations API, as in jsdom) the row closes in the commit that answers
+  // it, and the group and the empty state change with it. Mutation: never
+  // hear the row close and the group is left over nothing.
+  test("the last row leaving Needs you takes the group at once where nothing moves", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
+    expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
   });
 
   // ONE ANSWER PER ROW: a second word on a row already moved, a press

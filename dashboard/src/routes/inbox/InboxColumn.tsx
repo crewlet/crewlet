@@ -2,12 +2,16 @@
  * The Inbox's list: Needs you, then Updates, then the two quiet links to what
  * was snoozed and what was read already.
  *
- * AN ANSWER IS SAID, NEVER STRUCK. A row answered here stays where it stood in
- * Needs you until the reader leaves the screen, marked Answered in its head
- * with what was chosen or written under the question, every word legible; the
- * group's count is what is still open. Answers from before this visit (the
- * last week's, from `answered_decisions`) wait in a closed, counted Answered
- * group after Updates, each saying who answered and how.
+ * AN ANSWER IS SAID, NEVER STRUCK. A row answered here leaves Needs you, its
+ * height closing so the rows under it slide up (the kit's group draws it on
+ * its way out), and lands at the head of the closed, counted Answered group,
+ * whose heading takes a brief wash as it arrives. There it is marked Answered
+ * in its head, with what was chosen or written under the question, every word
+ * legible. Needs you's count is what is still open, and the group goes with
+ * its last row once that row has closed, so the empty state shows in its place
+ * rather than a heading over nothing. Answers from before this visit (the
+ * last week's, from `answered_decisions`) wait in the same Answered group,
+ * each saying who answered and how.
  *
  * EVERY ROW SAYS THE SAME THREE THINGS, whatever it is: WHO (whoever the
  * record names, `iam.ActorFor`: the seat a person or a bound credential writes
@@ -17,7 +21,7 @@
  * kind in a different shape would make a reader learn four lists to read one.
  */
 
-import { memo, type ReactNode } from "react";
+import { memo, useCallback, useState, type ReactNode } from "react";
 import {
   Button,
   EmptyState,
@@ -68,11 +72,16 @@ export interface Settled {
   answer?: AskAnswer;
 }
 
-/** The closed group of what was answered before this visit. */
+/** The closed group of what was answered, here and before this visit. */
 export interface AnsweredGroup {
   rows: readonly InboxRow[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * The key of the row that has just arrived here, which washes the group's
+   * heading (and the row, when the group is open). Absent on a first draw.
+   */
+  arrived?: string | undefined;
 }
 
 /** What the list holds beyond its two groups, read only when opened. */
@@ -115,7 +124,10 @@ export function InboxColumn({
   earlier: Later;
   /** Read the page of earlier updates after the ones shown. */
   onEarlierMore: () => void;
-  /** The rows answered or resolved here, kept in place as done until the list is left. */
+  /**
+   * The rows dealt with here: an answer held where it stands until the engine
+   * settles it, and a settled one, now under Answered.
+   */
   settled: ReadonlyMap<string, Settled>;
   /** What was answered before this visit, in its closed group. */
   answered: AnsweredGroup;
@@ -144,7 +156,11 @@ export function InboxColumn({
    */
   elsewhere?: string | null;
 }) {
-  const item = (row: InboxRow) => (
+  const [closing, closed] = useClosing(needs);
+  const item = (
+    row: InboxRow,
+    how: { arrived?: boolean; onClosed?: (key: string) => void } = {},
+  ) => (
     <InboxItem
       key={row.key}
       row={row}
@@ -155,6 +171,7 @@ export function InboxColumn({
       reader={reader}
       selected={row.key === selected}
       onOpen={onOpen}
+      {...how}
     />
   );
   const snoozedLabel = snoozedCount
@@ -163,11 +180,12 @@ export function InboxColumn({
   return (
     <InboxList label="Inbox" className="inbox-list">
       {refusal}
-      {needs.length > 0 && (
-        // THE COUNT IS WHAT IS STILL OPEN: a row answered here stays in the
-        // group until the reader leaves, and is not waiting on them.
+      {(needs.length > 0 || closing.size > 0) && (
+        // THE COUNT IS WHAT IS STILL OPEN: an answer held where it stands
+        // until the engine settles it is not waiting on the reader. THE GROUP
+        // OUTLIVES ITS LAST ROW only while that row closes, then goes.
         <InboxGroup label="Needs you" count={needs.filter((r) => !settled.has(r.key)).length}>
-          {needs.map(item)}
+          {needs.map((row) => item(row, { onClosed: closed }))}
         </InboxGroup>
       )}
       {elsewhere && (
@@ -175,7 +193,9 @@ export function InboxColumn({
           {elsewhere}
         </Text>
       )}
-      {updates.length > 0 && <InboxGroup label="Updates">{updates.map(item)}</InboxGroup>}
+      {updates.length > 0 && (
+        <InboxGroup label="Updates">{updates.map((row) => item(row))}</InboxGroup>
+      )}
       {answered.rows.length > 0 && (
         // CLOSED UNTIL OPENED, and counted: what a reader decided is there to
         // look back at, never in the way of what still waits on them.
@@ -185,12 +205,16 @@ export function InboxColumn({
           collapsible
           open={answered.open}
           onOpenChange={answered.onOpenChange}
+          arrived={answered.arrived}
         >
-          {answered.rows.map(item)}
+          {answered.rows.map((row) => item(row, { arrived: row.key === answered.arrived }))}
         </InboxGroup>
       )}
       {loading && <Skeleton variant="text" rows={5} label="Loading the inbox" />}
-      {quiet && <EmptyState size="compact" title={quiet.title} description={quiet.hint} />}
+      {quiet && closing.size === 0 && (
+        // AFTER THE LAST ROW HAS CLOSED, never under it as it closes.
+        <EmptyState size="compact" title={quiet.title} description={quiet.hint} />
+      )}
       {more && (
         <Text as="p" variant="caption" className="inbox-note">
           More unread below. Read these to see them.
@@ -229,6 +253,40 @@ export function InboxColumn({
   );
 }
 
+/**
+ * The keys of rows that have left a group and are still closing in it, and
+ * what to call as each one closes. The kit's group keeps drawing a row on its
+ * way out until its height has closed, then says so through the row's
+ * `onLeft`. Held beside the group rather than with the answer that moved the
+ * row, so a row taken away by any means is waited out the same way, and
+ * nothing outlives the list if it is put away mid close.
+ */
+function useClosing(rows: readonly InboxRow[]): [ReadonlySet<string>, (key: string) => void] {
+  const [held, setHeld] = useState<{ rows: readonly InboxRow[]; keys: ReadonlySet<string> }>(
+    () => ({ rows, keys: new Set() }),
+  );
+  let now = held;
+  if (held.rows !== rows) {
+    const present = new Set(rows.map((row) => row.key));
+    const keys = new Set(
+      [...held.keys, ...held.rows.map((row) => row.key)].filter((key) => !present.has(key)),
+    );
+    now = { rows, keys };
+    setHeld(now);
+  }
+  const closed = useCallback(
+    (key: string) =>
+      setHeld((was) => {
+        if (!was.keys.has(key)) return was;
+        const keys = new Set(was.keys);
+        keys.delete(key);
+        return { ...was, keys };
+      }),
+    [],
+  );
+  return [now.keys, closed];
+}
+
 /** The rows a quiet link opened, named for a screen reader by the link's own words. */
 function LaterRows({
   label,
@@ -248,7 +306,7 @@ function LaterRows({
     <>
       {later.rows.length > 0 ? (
         <InboxGroup label={label} hideLabel>
-          {later.rows.map(item)}
+          {later.rows.map((row) => item(row))}
         </InboxGroup>
       ) : (
         !later.more && (
@@ -344,6 +402,10 @@ const InboxItem = memo(function InboxItem({
   reader,
   selected,
   onOpen,
+  arrived = false,
+  leaving,
+  onLeft,
+  onClosed,
 }: {
   row: InboxRow;
   index: OrgIndex;
@@ -357,6 +419,20 @@ const InboxItem = memo(function InboxItem({
   /** Opens a row by its key: one function for every row, so a row's props
    *  are the same from one draw to the next. */
   onOpen: (key: string) => void;
+  /** Just arrived in its group: the kit's brief wash. */
+  arrived?: boolean;
+  /**
+   * On its way out of its group, and what to run once it has closed: the
+   * kit's group sets both on the row it keeps drawing, and they reach the
+   * row through this one.
+   */
+  leaving?: boolean | undefined;
+  onLeft?: (() => void) | undefined;
+  /**
+   * Told the row's key once it has closed on its way out: one function for
+   * every row, like `onOpen`, so a row's props hold from one draw to the next.
+   */
+  onClosed?: ((key: string) => void) | undefined;
 }) {
   const who = rowWho(row, index);
   const item = rowItem(row);
@@ -395,6 +471,12 @@ const InboxItem = memo(function InboxItem({
       done={done}
       doneLabel={settled?.label ?? (answered?.kind === "resolved" ? "Resolved" : "Answered")}
       selected={selected}
+      arrived={arrived}
+      leaving={leaving}
+      onLeft={() => {
+        onLeft?.();
+        onClosed?.(row.key);
+      }}
       onClick={() => onOpen(row.key)}
       aside={
         item ? (
