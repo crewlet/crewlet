@@ -19,14 +19,14 @@ import type { ChatReadState } from "~/protocol/index.ts";
  * How long live frames pile up before the screen re-reads the room.
  *
  * A THIRD OF A SECOND, and it is a rate limit rather than a delay budget: a
- * room in the middle of a conversation produces a burst of frames — a post, a
- * reaction, an edit, three more posts — and one read per frame would put a
+ * room in the middle of a conversation produces a burst of frames (a post, a
+ * reaction, an edit, three more posts), and one read per frame would put a
  * query per message on the socket, which is exactly the load the frames exist
  * to avoid. Under this window a burst is ONE read.
  *
  * The first frame is not delayed at all (see [useCoalesced]): a single message
  * in a quiet room appears as fast as the round trip allows, and only a second
- * one inside the window waits — for at most this long.
+ * one inside the window waits, for at most this long.
  */
 export const LIVE_REFETCH_MS = 350;
 
@@ -36,7 +36,7 @@ export const LIVE_REFETCH_MS = 350;
  *
  * FOR THE RAIL, which cares that SOMETHING landed and not what: a message in
  * any room changes the rail's order, its preview and its badge, and the rail
- * has no way to learn any of those from a frame — the counts are the
+ * has no way to learn any of those from a frame: the counts are the
  * engine's, counted against a cursor this tab does not hold. So it re-reads
  * its one question, and this is the signal it re-reads on.
  *
@@ -61,8 +61,8 @@ export function useChatRead(): ChatReadState | null {
  * LEADING EDGE, then a trailing one for whatever arrived inside the window.
  * The two halves are different failures: without the leading edge every single
  * message in a quiet room waits out the window for no reason, and without the
- * trailing one the last frame of a burst — which is the message somebody just
- * sent — is the one that never causes a read.
+ * trailing one the last frame of a burst (which is the message somebody just
+ * sent) is the one that never causes a read.
  *
  * ONLY THE SIGNAL IS A CHANGE. The window is read when the signal moves, so a
  * caller whose rate changes (the frame's reading of the rooms, at the room's
