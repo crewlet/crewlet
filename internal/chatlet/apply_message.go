@@ -788,9 +788,18 @@ const (
 	unfollowStatement = `DELETE FROM chat_follows
 		WHERE channel_id = ? AND thread_root = ? AND handle = ?`
 
+	// mentionsKey is the index chat_mentions' primary key (message_id,
+	// handle) builds, which every probe of one mention names: a person's
+	// feed index leads on the handle and carries the message id, so it covers
+	// the probe too, and unhinted the planner sought it on the handle alone
+	// and read every mention the person was ever named in. `INDEXED BY` is
+	// the statement saying which index it was written for, and a guard: a
+	// schema change that drops the key fails the probe loudly.
+	mentionsKey = "sqlite_autoindex_chat_mentions_1"
+
 	// rootNamesStatement asks whether a thread's root names a handle: one
 	// seek of the mention's own key.
-	rootNamesStatement = `SELECT 1 FROM chat_mentions
+	rootNamesStatement = `SELECT 1 FROM chat_mentions INDEXED BY ` + mentionsKey + `
 		WHERE message_id = ? AND handle = ?`
 
 	// repliesNameStatement asks whether any reply in a thread names a
@@ -799,7 +808,7 @@ const (
 	// drives on `chat_mentions_handle_idx` and reads every mention the handle
 	// has ever had in the company to answer a question about one thread.
 	repliesNameStatement = `SELECT 1
-		  FROM chat_messages AS m CROSS JOIN chat_mentions AS n
+		  FROM chat_messages AS m CROSS JOIN chat_mentions AS n INDEXED BY ` + mentionsKey + `
 		 WHERE m.channel_id = ? AND m.thread_root = ?
 		   AND n.message_id = m.id AND n.handle = ?
 		 LIMIT 1`
