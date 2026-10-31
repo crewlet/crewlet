@@ -169,7 +169,7 @@ test("the changes are the engine's listing over REST, open by default, each row 
   const links = within(grid)
     .getAllByRole("link")
     .map((a) => a.getAttribute("href"));
-  expect(links).toContain("#/code?peek=change%3Aweb%2142");
+  expect(links).toContain("#/code/repos/web/changes/42");
   const listing = listings(asked)[0]!;
   expect(listing.searchParams.get("state")).toBe("open");
   expect(onSocket).not.toContain("code_changes");

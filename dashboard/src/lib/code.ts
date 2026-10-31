@@ -10,7 +10,10 @@
 import {
   CHANGE_NEEDS,
   CHANGE_STATES,
+  CODE_PHRASES,
   COMMAND_OUTCOMES,
+  FINDING_CATEGORIES,
+  FINDING_SEVERITIES,
   PRECONDITION_KINDS,
   REPO_NAME,
   REPO_NAME_MAX_BYTES,
@@ -315,4 +318,111 @@ export function firstUnready(readiness: CodeReadiness): CodePrecondition | null 
     readiness.preconditions.find((p) => p.state === "computing") ??
     null
   );
+}
+
+/** A change's own page: `#/code/repos/{name}/changes/{n}`, which `web!42` is short for. */
+export function changePath(repo: string, number: number): string[] {
+  return ["code", "repos", repo, "changes", String(number)];
+}
+
+/** A weight a finding can carry, as the contract names them. */
+type KnownSeverity = (typeof FINDING_SEVERITIES)[number];
+
+/** Each weight in words, keyed on the contract's set. */
+const SEVERITY_WORDS: Readonly<Record<KnownSeverity, string>> = {
+  blocker: "Blocker",
+  major: "Major",
+  minor: "Minor",
+  nit: "Nit",
+};
+
+/** A finding's weight in a word — one a newer engine names, as it is. */
+export function severityWord(severity: string): string {
+  return (FINDING_SEVERITIES as readonly string[]).includes(severity)
+    ? SEVERITY_WORDS[severity as KnownSeverity]
+    : severity;
+}
+
+/** What a finding can be about, as the contract names them. */
+type KnownCategory = (typeof FINDING_CATEGORIES)[number];
+
+/** Each subject in words, keyed on the contract's set. */
+const CATEGORY_WORDS: Readonly<Record<KnownCategory, string>> = {
+  correctness: "Correctness",
+  security: "Security",
+  performance: "Performance",
+  tests: "Tests",
+  design: "Design",
+  style: "Style",
+  docs: "Docs",
+};
+
+/** A finding's subject in a word — one a newer engine names, as it is. */
+export function categoryWord(category: string): string {
+  return (FINDING_CATEGORIES as readonly string[]).includes(category)
+    ? CATEGORY_WORDS[category as KnownCategory]
+    : category;
+}
+
+/** The weights a finding composer offers, heaviest first, in the engine's order. */
+export const SEVERITY_CHOICES: readonly { value: string; label: string }[] = FINDING_SEVERITIES.map(
+  (s) => ({ value: s, label: SEVERITY_WORDS[s] }),
+);
+
+/** The subjects a finding composer offers, in the engine's order. */
+export const CATEGORY_CHOICES: readonly { value: string; label: string }[] = FINDING_CATEGORIES.map(
+  (c) => ({ value: c, label: CATEGORY_WORDS[c] }),
+);
+
+/**
+ * A finding's state in words: open, answered by an author (resolved, won't
+ * fix, disputed — each still standing where it is a blocker, S40), or cleared
+ * (dismissed, superseded by its raiser's later review).
+ */
+export function findingStateWord(state: string): string {
+  switch (state) {
+    case "open":
+      return "Open";
+    case "resolved":
+      return "Resolved";
+    case "wont_fix":
+      return "Won’t fix";
+    case "disputed":
+      return "Disputed";
+    case "dismissed":
+      return "Dismissed";
+    case "superseded":
+      return "Superseded";
+  }
+  return state;
+}
+
+/**
+ * Whether a finding STANDS: open, or answered by an author — what a raiser
+ * carries into a later review to keep it standing, and the only findings a
+ * review may carry (`code.Review.Carries`).
+ */
+export function findingStands(state: string): boolean {
+  return state === "open" || state === "resolved" || state === "wont_fix" || state === "disputed";
+}
+
+/** A review's verdict, said of a review as its timeline row says it. */
+export function verdictWord(verdict: string): string {
+  switch (verdict) {
+    case "approve":
+      return "approved";
+    case "request_changes":
+      return "asked for changes";
+    case "comment":
+      return "commented";
+  }
+  return verdict;
+}
+
+/**
+ * Why a recipient heard about a change, in one of `CODE_PHRASES`' voices — a
+ * reason a newer engine records, as its own words.
+ */
+export function codeReasonPhrase(reason: string, voice: "short" | "about" | "why"): string {
+  return CODE_PHRASES[reason]?.[voice] ?? reason.replace(/_/g, " ");
 }

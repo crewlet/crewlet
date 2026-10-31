@@ -266,6 +266,16 @@ Its rules are a sheet of its own, `diff.css`, which arrives with the first
 screen that draws a diff rather than in the first paint: every one of those
 screens is a lazy chunk.
 
+**A host can write on a diff.** A change's review is read in its diff, so the
+component takes what a host anchors to a line (`notes`, drawn under that
+line, and under its row across both sides of a split diff, once) and lets a
+host pick lines (`onPick`): each line's own number — its newer one, else its
+older, the number a finding names — becomes a button, Shift extending the
+host's pick from where it began, and a picked line is ruled at its edge
+(`picked`), never tinted, since a pick is the reader's place and not the
+line's. What is drawn under a line and what a pick does are the host's; a
+diff given neither draws exactly what it drew before.
+
 `styles/diffs.test.ts` holds the rule in the sheets (no rule naming a diff
 spends a state's, a chart series' or an identity's hue), in the palette (the
 two steps are the rungs either side of the ground, measured off it in every
@@ -1267,6 +1277,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/code` | **Code › Changes**, Code's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, standing blockers and when it was opened — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer or a need) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `peek=change:{repo}!{n}` |
 | `#/code/repos` | **Code › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its pushes | `status=active\|archived\|deleted\|purging` (none is active and archived) |
+| `#/code/repos/{name}/changes/{n}` | **A change**, `web!42` in full: its header (reference, title, state, repository, branches, owner, revisions, work item) and the page bar's **Approve**, **Request changes**, **Comment**, **Request review** and **Close**/**Reopen**; tabs **Conversation** (its readiness, description, and its reviews, threads and revisions in the order their records landed, with a comment of the reader's own), **Files** (the revision's files and one file's patch in the one `DiffView`, every finding and thread under the line it is on, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head), **Commits** (its revisions and their facts), **Provenance** (who opened it, from which turn and coding run, for which work item, and how it ended) and **Woke** (whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|files\|commits\|provenance\|woke` · on Files, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
 | `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
 | `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the adopted version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, adopting a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
@@ -6954,7 +6965,54 @@ section mounts.
   and `PRECONDITION_STATES`, held to `code.PreconditionKinds` and
   `code.PreconditionStates`) with where it stands and the engine's sentence —
   its conversation's counts and its authors. A change's reference typed in
-  ⌘K (`web!42`) opens it too, parsed by the engine's grammar.
+  ⌘K (`web!42`) opens its page, parsed by the engine's grammar, and the
+  peek's Open leads there too.
+- **A change's page**, `#/code/repos/{name}/changes/{n}` — the address its
+  reference is short for, and the engine's own REST path — reads the change a
+  part at a time (`code_change`): its detail rides the first page of its
+  revisions, and each tab asks the part it draws, every one a code question at
+  the tab's floor. **Conversation** is the readiness, the description, and the
+  timeline in the order the records landed on the code log — each review with
+  its verdict and summary, each thread by its first comment with its replies
+  under it, each revision pushed — never by a clock a node read, with the
+  reader's own comment below. **Files** is the revision's files (`rev=`, the
+  head by default; `since=` reads what changed since an earlier revision, the
+  engine's interdiff) and one file's patch (`file=`) as git wrote it, read
+  into the one `DiffView` and drawn `layout=unified` or `split`; every finding
+  the engine placed in that revision (`code.PlaceFindings`, the rule a seat's
+  `code_get_change` reads by) is drawn under its last line, every thread on a
+  line of it under its line, and what has no line here — a finding whose own
+  lines changed (outdated), one whose file is gone, a thread on another
+  revision — is drawn above the diff under a Disclosure that counts it, never
+  dropped. **On the head, a reviewer picks lines by their numbers** and drafts
+  a finding under them — its weight and subject in the engine's words
+  (`FINDING_SEVERITIES`, `FINDING_CATEGORIES`, held to `code.Severities` and
+  `code.Categories`), a title, a body and, on the newer side, the lines it
+  suggests in their place — and a draft is the TAB'S, kept in
+  `sessionStorage` per change and revision, until **Approve**, **Request
+  changes** or **Comment** sends every draft of the head in ONE
+  `code_review_change` with the verdict, a summary and the reviewer's own
+  standing findings it carries (each checked, since a review of a later
+  revision supersedes every standing finding of the reviewer's it leaves out);
+  the drafts are forgotten only once the engine has taken it. An open finding
+  with a suggestion offers **Apply suggestion** (`code_apply_suggestions`,
+  against the head on screen), and every finding and thread a reply; a thread
+  **Resolve**. **Request review** asks reviewers by handle with a note
+  (`code_request_review`); **Close** and **Reopen** move the change against
+  the version on screen (`code_close_change`). Every write is the act
+  transport's, through `useAct` and a `WriteButton` — drawn for every reader,
+  held with the reason where it cannot act (a change no longer live takes no
+  review; a merged one is neither closed nor reopened), and never optimistic:
+  nothing moves until the engine answers, and the answer's position is the
+  floor the page is read at next. **Commits** lists the revisions and the
+  facts their home recorded; **Provenance** who opened the change and with
+  which credential, the turn and the coding run behind it, its work item, its
+  authors and how it ended; **Woke** whom each record about it reached
+  (`code_change_routing`), newest first, each recipient with the one reason it
+  heard under in the voice of somebody else's notice (`CODE_PHRASES`' `about`,
+  held both ways to `code.Reasons`; `short` is the reader's own, for a notice
+  of theirs), and, where none is listed, whether nobody was told or the
+  notices were swept with the turn detail they named.
 - **Repositories** is the engine's listing, `code_repos`, by name and a page
   at a time. A page is what the engine SCANNED, not what it kept, so one can
   be short, or empty with a cursor, and the grid pages with Load more until no

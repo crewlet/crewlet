@@ -132,9 +132,9 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   // beside People, which is the only page a directory row has.
   person: { label: "Person", pathOf: () => ["settings", "people"], peekIsPage: true },
   // A CHANGE BY ITS REFERENCE, `web!42`: the name a person writes it by, and
-  // one the `!` keeps whole in a query value. Read beside Code › Changes,
-  // which is where it is opened from and what a copied link lands on.
-  change: { label: "Change", pathOf: () => ["code"], mono: true, peekIsPage: true },
+  // one the `!` keeps whole in a query value. Its page is the path the
+  // reference is short for, `#/code/repos/web/changes/42`.
+  change: { label: "Change", pathOf: changeRefPath, mono: true },
   // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER. It is a row in
   // somebody's inbox naming a change to something else, so its "page" is the
   // inbox that holds it — and that is where it is read in place and marked,
@@ -142,6 +142,17 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   // `peekable` answers false.
   notice: { label: "Notice", pathOf: () => ["inbox"] },
 };
+
+/**
+ * A change's page from its reference: `web!42` is `code/repos/web/changes/42`.
+ * Split at the LAST `!`, the one a repository's name cannot hold; a reference
+ * that is no change's is the Changes listing, where the peek says so.
+ */
+function changeRefPath(id: string): string[] {
+  const cut = id.lastIndexOf("!");
+  if (cut <= 0) return ["code"];
+  return ["code", "repos", id.slice(0, cut), "changes", id.slice(cut + 1)];
+}
 
 /** The route for an object. */
 export function pathOf(ref: ObjectRef): string[] {

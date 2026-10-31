@@ -257,6 +257,9 @@ var contract = []Entry{
 	{"CHANGE_NEEDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryNeedOfAListingOfChanges"},
 	{"PRECONDITION_KINDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 	{"PRECONDITION_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange"},
+	{"FINDING_SEVERITIES", ReadLiteral, "internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords"},
+	{"FINDING_CATEGORIES", ReadLiteral, "internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords"},
+	{"CODE_PHRASES", ReadLiteral, "internal/code.TestEveryCodeReasonReadsAsEnglishOnTheClient"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},

@@ -86,6 +86,35 @@
   font-variant-numeric: tabular-nums;
   user-select: none;
 }
+/* A NUMBER THAT PICKS ITS LINE is the number, pressable: no chrome of its
+   own beyond the pointer and the focus ring, so a diff a host writes on reads
+   as the diff it is. */
+.diff-view__pick {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.diff-view__pick:hover {
+  color: var(--color-text-primary);
+  text-decoration-line: underline;
+}
+/* A PICKED LINE IS RULED, not tinted: a hue here would be a state, and a pick
+   is the reader's place, not the line's. */
+.diff-view__line[data-picked] {
+  box-shadow: inset 2px 0 0 var(--color-border-strong);
+}
+/* WHAT A HOST DRAWS UNDER A LINE — a finding, a thread — on the diff's own
+   ground, ruled off the lines, in the body's face rather than the code's. */
+.diff-view__notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-block: 1px solid var(--color-border-default);
+  font-family: var(--font-family-sans);
+}
 .diff-view__mark {
   color: var(--color-text-secondary);
   text-align: center;

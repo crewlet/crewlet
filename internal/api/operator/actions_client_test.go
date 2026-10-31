@@ -238,6 +238,7 @@ var administrator = person("ada.admin", "jane-founder", iam.AllGrants...)
 // with no implementation behind it.
 func fullSurface(t *testing.T) *operator.Server {
 	t.Helper()
+	code := &writingHost{}
 	return newSurface(t, operator.Options{
 		Halves: fixed(operator.Halves{
 			Work: builtin.WorkDeps{
@@ -260,11 +261,13 @@ func fullSurface(t *testing.T) *operator.Server {
 				Writer: struct{ builtin.PageWriter }{},
 			},
 			Knowledge: struct{ builtin.KnowledgeSearcher }{},
-			// THE CODE HOST'S HALF, its writes wired: the dashboard marks a
-			// code notice through `code_mark_inbox`, which the catalogue
-			// serves only beside the code host's writes.
-			Code: builtin.CodeDeps{Code: &listingHost{}, Requesters: noRequesters{}, Chart: authz.NoChart{},
-				Writer: struct{ builtin.CodeWriter }{}},
+			// THE CODE HOST WITH ITS WRITES, so the change page's rows —
+			// reviews, comments, asks, closes, applied suggestions — and the
+			// Inbox's `code_mark_inbox`, which the catalogue serves only beside
+			// the code host's writes, are held to the catalogue a company
+			// hosting code serves.
+			Code: builtin.CodeDeps{Code: code, Requesters: noRequesters{}, Chart: authz.NoChart{},
+				Writer: code, Holder: code},
 		}),
 		Org:    func() *org.Organization { return nil },
 		Runs:   builtin.RunDeps{Desk: struct{ builtin.RunDesk }{}},

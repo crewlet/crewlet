@@ -653,6 +653,26 @@ describe("the resolver", () => {
     expect(ownedBy(workspaceRow("code")!)).toEqual(["code"]);
   });
 
+  // A CHANGE IS ITS REPOSITORY'S, at the path its reference is short for, and
+  // numbered from 1: a number with a leading zero, or none, is no change's.
+  // Mutation: read the number off any segment, and `042` is a change.
+  test("a change's page is its repository's, numbered from 1", () => {
+    expect(resolve(["code", "repos", "web", "changes", "42"])).toMatchObject({
+      screen: "code-change",
+      repo: "web",
+      number: 42,
+      workspace: "code",
+    });
+    for (const n of ["0", "042", "x", ""]) {
+      expect(resolve(["code", "repos", "web", "changes", n]).resolved, n).toBe(false);
+    }
+    expect(resolve(["code", "repos", "web", "changes"]).resolved).toBe(false);
+    expect(crumbsFor(["code", "repos", "web", "changes", "42"]).map((c) => c.label)).toEqual([
+      "Code",
+      "web!42",
+    ]);
+  });
+
   // A RESERVED WORD THAT IS NOT A WORK SECTION IS NOTHING HERE. Read as an item
   // id it would ask the tracker for an item called `turns`.
   test("a reserved word under a workspace that does not have it is Not Found", () => {

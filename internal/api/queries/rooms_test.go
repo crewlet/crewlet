@@ -391,13 +391,12 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // (builtin.ReadersOf). The decision [TestEveryQueryThisServerAnswersHasAReader]
 // asks to be taken in the open, and held both ways there: the first room that
 // reads one of these deletes its line, as the Code workspace's Repositories
-// and Pushes deleted the lines of `code_repos` and `code_pushes`, and Code ›
-// Changes and its peek those of `code_changes` and `code_change`. And a
-// change's routing and a seat's reviews, read by a script on the paths
-// api-endpoints.md prints for each (docs/reference/api-endpoints.md, "The
-// code reads") until the workspace draws a change's own page and a seat's
-// reviews: the questions land with the engine's change tools, which the
-// dashboard follows. And a
+// and Pushes deleted the lines of `code_repos` and `code_pushes`, Code ›
+// Changes and its peek those of `code_changes` and `code_change`, and a
+// change's page its routing's, `code_change_routing`. And a seat's reviews,
+// read by a script on the path api-endpoints.md prints
+// (docs/reference/api-endpoints.md, "The code reads") until a seat's page
+// draws the reviews it gave. And a
 // repository's content, its refs, files, history, blame, diffs, comparisons
 // and commits, read by a script on the paths api-endpoints.md prints
 // ("A repository's content") until the workspace draws a repository's own
@@ -406,18 +405,17 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // with the code host's through `inbox` and a script and a seat's tool read
 // alone.
 var readOutsideTheDashboard = map[string]string{
-	"code_repo":           "crewlet code status -repo",
-	"code_repo_readers":   "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
-	"code_change_routing": "a script: GET /code/repos/{name}/changes/{n}/routing, as docs/reference/api-endpoints.md prints it",
-	"code_reviews":        "a script: GET /code/reviews, as docs/reference/api-endpoints.md prints it",
-	"code_refs":           "a script: GET /code/repos/{name}/refs, as docs/reference/api-endpoints.md prints it",
-	"code_tree":           "a script: GET /code/repos/{name}/tree, as docs/reference/api-endpoints.md prints it",
-	"code_blob":           "a script: GET /code/repos/{name}/blob, as docs/reference/api-endpoints.md prints it",
-	"code_log":            "a script: GET /code/repos/{name}/log, as docs/reference/api-endpoints.md prints it",
-	"code_blame":          "a script: GET /code/repos/{name}/blame, as docs/reference/api-endpoints.md prints it",
-	"code_diff":           "a script: GET /code/repos/{name}/diff, as docs/reference/api-endpoints.md prints it",
-	"code_compare":        "a script: GET /code/repos/{name}/compare, as docs/reference/api-endpoints.md prints it",
-	"code_commit":         "a script: GET /code/repos/{name}/commits/{sha}, as docs/reference/api-endpoints.md prints it",
+	"code_repo":         "crewlet code status -repo",
+	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
+	"code_reviews":      "a script: GET /code/reviews, as docs/reference/api-endpoints.md prints it",
+	"code_refs":         "a script: GET /code/repos/{name}/refs, as docs/reference/api-endpoints.md prints it",
+	"code_tree":         "a script: GET /code/repos/{name}/tree, as docs/reference/api-endpoints.md prints it",
+	"code_blob":         "a script: GET /code/repos/{name}/blob, as docs/reference/api-endpoints.md prints it",
+	"code_log":          "a script: GET /code/repos/{name}/log, as docs/reference/api-endpoints.md prints it",
+	"code_blame":        "a script: GET /code/repos/{name}/blame, as docs/reference/api-endpoints.md prints it",
+	"code_diff":         "a script: GET /code/repos/{name}/diff, as docs/reference/api-endpoints.md prints it",
+	"code_compare":      "a script: GET /code/repos/{name}/compare, as docs/reference/api-endpoints.md prints it",
+	"code_commit":       "a script: GET /code/repos/{name}/commits/{sha}, as docs/reference/api-endpoints.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with the code host's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and

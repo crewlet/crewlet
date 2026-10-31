@@ -268,6 +268,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return [root(row, true), { ...projectCrumb(labels, where.key), switch: "project" }];
     case "code-changes":
       return sectionPage("changes");
+    case "code-change":
+      // A CHANGE IS ONE OF CODE'S CHANGES: the trail leads back to the
+      // listing, and names the change by its reference.
+      return [root(row, true), { label: `${where.repo}!${where.number}`, mono: true }];
     case "code-repos":
       return sectionPage("repos");
     case "code-pushes":

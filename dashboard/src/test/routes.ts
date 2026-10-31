@@ -45,6 +45,8 @@ export const FILL: Record<string, string> = {
   "{tool}": "search_work_items",
   "{node}": "node-1",
   "{domain}": "tracker",
+  // A CHANGE'S NUMBER on its repository, from 1 (`#/code/repos/{name}/changes/{n}`).
+  "{n}": "42",
 };
 
 /**

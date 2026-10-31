@@ -11601,3 +11601,130 @@ a.live-row:focus-visible {
   padding: 0;
   list-style: none;
 }
+
+/* A CHANGE'S PAGE (`routes/code/change/`). Its timeline is a plain list of
+   records in log order, each ruled off the next; nothing in it is a state, so
+   nothing in it takes a hue. */
+.code-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding-block-end: var(--spacing-3);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+.code-reply {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.code-carries {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+/* THE FILES TAB: the file list beside the diff, the list a column of its own
+   width on a wide page and above the diff on a narrow one. */
+.code-files {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+
+@container page (width < 720px) {
+  .code-files {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.code-files__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.code-files__file {
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.code-files__file:hover {
+  background: var(--color-surface-hover);
+}
+
+.code-files__file[aria-current="true"] {
+  background: var(--color-surface-pressed);
+}
+
+.code-file {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.code-finding {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.code-suggestion {
+  margin: 0;
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* PROVENANCE: a label and its value a row, the labels one column. */
+.code-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-2) var(--spacing-4);
+  margin: 0;
+}
+
+.code-facts > div {
+  display: contents;
+}
+
+.code-facts dt {
+  color: var(--color-text-secondary);
+}
+
+.code-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

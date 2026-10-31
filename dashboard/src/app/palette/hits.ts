@@ -33,8 +33,7 @@ import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
 import { sequenceWords } from "../keymap.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 import { KIND_WORDS } from "~/lib/artifacts/words.ts";
-import { changeRef, parseChangeRef } from "~/lib/code.ts";
-import { refToken } from "../frame/objects.ts";
+import { changePath, changeRef, parseChangeRef } from "~/lib/code.ts";
 import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
 
 /**
@@ -457,7 +456,7 @@ export function changeHits(term: string, nav: Navigator, runs: ServicesRun): Hit
       icon: "diff",
       label: reference,
       hint: "Open the change",
-      go: () => nav.to(["code"], { peek: refToken({ kind: "change", id: reference }) }),
+      go: () => nav.to(changePath(named.repo, named.number)),
     },
   ];
 }

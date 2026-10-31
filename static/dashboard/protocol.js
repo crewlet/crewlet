@@ -2814,6 +2814,70 @@ var ACTIONS = {
 		domain: "code",
 		refreshes: [],
 		scope: "person"
+	},
+	code_review_change: {
+		args: [
+			"repo",
+			"change",
+			"revision",
+			"verdict",
+			"summary",
+			"findings",
+			"carries"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
+	},
+	code_comment_on_change: {
+		args: [
+			"repo",
+			"change",
+			"body",
+			"thread",
+			"finding",
+			"anchor",
+			"resolve"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
+	},
+	code_request_review: {
+		args: [
+			"repo",
+			"change",
+			"reviewers",
+			"withdraw",
+			"note"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
+	},
+	code_close_change: {
+		args: [
+			"repo",
+			"change",
+			"expected_version",
+			"reason",
+			"reopen"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
+	},
+	code_apply_suggestions: {
+		args: [
+			"repo",
+			"change",
+			"findings",
+			"expected_head",
+			"message"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
 	}
 };
 //#endregion

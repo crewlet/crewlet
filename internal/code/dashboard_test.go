@@ -237,3 +237,78 @@ func TestTheDashboardKnowsEveryPreconditionOfAChange(t *testing.T) {
 		t.Errorf("the dashboard's PRECONDITION_STATES is %v, want the engine's, in order: %v", got, want)
 	}
 }
+
+// THE DASHBOARD RAISES FINDINGS IN THE ENGINE'S WORDS: the weights and the
+// subjects a change page's finding composer offers, which its review sends
+// back as code_review_change's `severity` and `category`, in the engine's
+// order.
+//
+// A weight or a subject the engine grew that `FINDING_SEVERITIES` or
+// `FINDING_CATEGORIES` (`contract/code.ts`) lacks is one no reviewer on the
+// dashboard can give; one they keep that the engine dropped is a review the
+// tool refuses on every press — every finding of it lost with the one word.
+//
+// Mutation: drop a value from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardRaisesFindingsInTheEnginesWords(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "FINDING_SEVERITIES"), spelledOut(code.Severities())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's FINDING_SEVERITIES is %v, want the engine's, in order: %v", got, want)
+	}
+	got, want = theDashboardsList(t, "FINDING_CATEGORIES"), spelledOut(code.Categories())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's FINDING_CATEGORIES is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
+// EVERY CODE REASON HAS ENGLISH ON THE OTHER SIDE, in both voices.
+//
+// The applier records, per record and per recipient, the ONE reason of
+// [code.Reasons] a handle heard about a change under (code_notifications), and
+// a change's Woke tab lists them; a reason the client has no phrase for
+// renders as its own snake_case value. `CODE_PHRASES` (`contract/code.ts`) is
+// read from its own source, as the tracker's `PHRASES` gate reads its table,
+// so the gate cannot drift towards claiming the pair agree — and a phrase for
+// a reason nothing records is checked too, which is how a rename leaves a dead
+// entry behind and a live one missing. Each phrase carries all three voices.
+//
+// Mutation: drop a reason's phrase, add one for a reason nothing records, or
+// leave a voice empty, and this fails.
+func TestEveryCodeReasonReadsAsEnglishOnTheClient(t *testing.T) {
+	t.Parallel()
+	table, err := clientsource.Literal(clientsource.Tree(t), "CODE_PHRASES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clientsource.Keys(table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) == 0 {
+		t.Fatal("CODE_PHRASES reads as empty, so this gate certifies nothing")
+	}
+	want := spelledOut(code.Reasons())
+	for _, reason := range want {
+		if !slices.Contains(keys, reason) {
+			t.Errorf("the engine records %q and CODE_PHRASES has no phrase for it", reason)
+			continue
+		}
+		row, err := clientsource.Property(table, reason)
+		if err != nil {
+			t.Errorf("%s: %v", reason, err)
+			continue
+		}
+		for _, voice := range []string{"short", "about", "why"} {
+			if said := clientsource.Field(row, voice); len(said) != 1 || strings.TrimSpace(said[0]) == "" {
+				t.Errorf("CODE_PHRASES.%s says nothing in its %q voice (%q)", reason, voice, said)
+			}
+		}
+	}
+	for _, key := range keys {
+		if !slices.Contains(want, key) {
+			t.Errorf("CODE_PHRASES phrases %q, which the engine never records — a renamed reason "+
+				"leaves exactly this behind", key)
+		}
+	}
+}

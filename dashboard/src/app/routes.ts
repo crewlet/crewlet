@@ -69,6 +69,12 @@ export const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
  * read as a container called `skills`.
  */
 export const CONTAINER_SHAPE = /^[^a-z]+$/;
+/**
+ * A change's number on its repository: a whole number from 1, as the engine
+ * numbers them (`code_repos.next_change`), with no leading zero — `web!042`
+ * is no change's reference, so `…/changes/042` is no change's page.
+ */
+export const CHANGE_NUMBER_SHAPE = /^[1-9][0-9]{0,15}$/;
 
 /** My work's sections below its queue. */
 export type MeSection =
@@ -198,6 +204,7 @@ export type FramedScreen =
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
   | { screen: "code-changes" }
+  | { screen: "code-change"; repo: string; number: number }
   | { screen: "code-repos" }
   | { screen: "code-pushes" }
   | { screen: "principles" }
@@ -410,6 +417,18 @@ function work(rest: string[], screen: Make, under: Under): Route {
 function code(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   if (first === undefined) return screen({ screen: "code-changes" });
+  // A CHANGE'S OWN PAGE, under its repository: `repos/{name}/changes/{n}`,
+  // the path its reference (web!42) is the short form of — and the engine's
+  // own REST path for it. The number is a whole number from 1, decided by its
+  // shape; the name is the page's to hold to the engine's grammar, which it
+  // says in place.
+  if (first === "repos" && tail.length === 3 && tail[1] === "changes") {
+    const [repo, , n] = tail;
+    if (repo && n && CHANGE_NUMBER_SHAPE.test(n)) {
+      return screen({ screen: "code-change", repo, number: Number(n) });
+    }
+    return missing("code", under("Code"), "A change is numbered from 1 on its repository");
+  }
   if (tail.length > 0) return missing("code", under("Code"));
   switch (first) {
     case "repos":

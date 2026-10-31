@@ -80,9 +80,22 @@
  * once one of its lines is drawn ([Pair]). Once its hunks exist, a diff of
  * any length costs, before its first paint, a walk over its lines and the
  * underlines of the rows it draws, never the tokens of every line it holds.
+ *
+ * # A host can write on it
+ *
+ * A change's review is read IN its diff: a finding or a thread is drawn under
+ * the line it is on ([DiffViewProps.notes]), and a reviewer picks the lines a
+ * new finding is about by pressing their numbers ([DiffViewProps.onPick]) —
+ * the line's own number, on the side it is on (its newer one, else its
+ * older), which is the number a finding names. What is drawn under a line and
+ * what a pick does are the host's: the diff draws neither a finding nor a
+ * composer of its own, and a diff given neither draws exactly what it drew
+ * before. Under a split diff a line's notes are drawn under its row, across
+ * both sides, since a note is about a line and not about a column.
  */
 
 import {
+  Fragment,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -173,6 +186,20 @@ export type DiffViewProps = DiffSource & {
   empty?: ReactNode;
   /** The diff's accessible name. */
   "aria-label"?: string | undefined;
+  /**
+   * What is drawn under a line, or nothing — the findings and threads a host
+   * anchors to it. Called as rows are drawn, so a windowed diff asks only for
+   * the lines it holds.
+   */
+  notes?: ((line: DiffLine) => ReactNode) | undefined;
+  /**
+   * Pick a line: with it, each line's own number is a button, and pressing it
+   * picks the line — with Shift held, `extend` is true, extending the host's
+   * pick from where it started.
+   */
+  onPick?: ((line: DiffLine, extend: boolean) => void) | undefined;
+  /** Whether the host has picked a line, which is drawn marked. */
+  picked?: ((line: DiffLine) => boolean) | undefined;
 };
 
 /**
@@ -610,6 +637,64 @@ function LineNumber({ n }: { n: number | null }) {
 interface Tracks {
   numbered: boolean;
   keyed: boolean;
+  notes?: ((line: DiffLine) => ReactNode) | undefined;
+  onPick?: ((line: DiffLine, extend: boolean) => void) | undefined;
+  picked?: ((line: DiffLine) => boolean) | undefined;
+}
+
+/**
+ * A line's number in one of its two slots — as a button that picks the line,
+ * where the host picks lines and this is the slot the line is picked by: its
+ * own number's (its newer one, else its older — the number a finding names),
+ * or, on the left of a split diff, the one number that side draws of an
+ * unchanged line, whose newer copy on the right is not read twice.
+ */
+function SlotNumber({
+  line,
+  slot,
+  side,
+  tracks,
+}: {
+  line: DiffLine;
+  slot: "before" | "after";
+  side: "left" | "right" | undefined;
+  tracks: Tracks;
+}) {
+  const n = slot === "after" ? line.after : line.before;
+  const own =
+    side === "left"
+      ? true
+      : side === "right"
+        ? line.kind !== "same"
+        : slot === (line.after !== null ? "after" : "before");
+  const pick = tracks.onPick;
+  if (!pick || n === null || !own) return <LineNumber n={n} />;
+  const named = line.after ?? line.before;
+  return (
+    <button
+      type="button"
+      className="diff-view__number diff-view__pick"
+      aria-label={`${line.after !== null ? "Line" : "Removed line"} ${named}: pick it`}
+      onClick={(event) => pick(line, event.shiftKey)}
+    >
+      {n}
+    </button>
+  );
+}
+
+/** What the host draws under a row's lines, or nothing. */
+function Notes({ lines, tracks }: { lines: readonly (DiffLine | null)[]; tracks: Tracks }) {
+  if (!tracks.notes) return null;
+  // AN UNCHANGED LINE IS BOTH SIDES OF ITS PAIR, and its notes are drawn once.
+  const drawn = lines.flatMap((line, i) => {
+    if (!line || (i > 0 && line === lines[0])) return [];
+    const note = tracks.notes!(line);
+    return note === null || note === undefined || note === false
+      ? []
+      : [<Fragment key={i}>{note}</Fragment>];
+  });
+  if (drawn.length === 0) return null;
+  return <div className="diff-view__notes">{drawn}</div>;
 }
 
 /**
@@ -630,9 +715,18 @@ function Line({
   hidden?: boolean | undefined;
 }) {
   return (
-    <div className="diff-view__line" data-kind={line.kind} aria-hidden={hidden || undefined}>
-      {tracks.numbered && side !== "right" && <LineNumber n={line.before} />}
-      {tracks.numbered && side !== "left" && <LineNumber n={line.after} />}
+    <div
+      className="diff-view__line"
+      data-kind={line.kind}
+      data-picked={tracks.picked?.(line) || undefined}
+      aria-hidden={hidden || undefined}
+    >
+      {tracks.numbered && side !== "right" && (
+        <SlotNumber line={line} slot="before" side={side} tracks={tracks} />
+      )}
+      {tracks.numbered && side !== "left" && (
+        <SlotNumber line={line} slot="after" side={side} tracks={tracks} />
+      )}
       <Mark kind={line.kind} />
       {tracks.keyed && <span className="diff-view__path">{line.path ?? ""}</span>}
       <Text text={line.text} run={run} />
@@ -645,38 +739,51 @@ function RowView({ row, tracks, pairs }: { row: Row; tracks: Tracks; pairs: Pair
     case "skip":
       return <div className="diff-view__skip">{plural(row.count, "unchanged line")}</div>;
     case "line":
-      return <Line line={row.line} run={underlineOf(pairs, row.line)} tracks={tracks} />;
+      return (
+        <>
+          <Line line={row.line} run={underlineOf(pairs, row.line)} tracks={tracks} />
+          <Notes lines={[row.line]} tracks={tracks} />
+        </>
+      );
     case "pair": {
       const same = row.left?.kind === "same";
       return (
-        <div className="diff-view__pair">
-          {/* A SIDE THE CHANGE DID NOT REACH is an empty cell on the diff's
+        <>
+          <div className="diff-view__pair">
+            {/* A SIDE THE CHANGE DID NOT REACH is an empty cell on the diff's
               own ground: a removal has no newer line beside it. */}
-          {row.left ? (
-            <Line line={row.left} run={underlineOf(pairs, row.left)} tracks={tracks} side="left" />
-          ) : (
-            <div aria-hidden="true" />
-          )}
-          {row.right ? (
-            // AN UNCHANGED LINE IS READ ONCE: its newer copy is the same words.
-            <Line
-              line={row.right}
-              run={underlineOf(pairs, row.right)}
-              tracks={tracks}
-              side="right"
-              hidden={same}
-            />
-          ) : (
-            <div aria-hidden="true" />
-          )}
-        </div>
+            {row.left ? (
+              <Line
+                line={row.left}
+                run={underlineOf(pairs, row.left)}
+                tracks={tracks}
+                side="left"
+              />
+            ) : (
+              <div aria-hidden="true" />
+            )}
+            {row.right ? (
+              // AN UNCHANGED LINE IS READ ONCE: its newer copy is the same words.
+              <Line
+                line={row.right}
+                run={underlineOf(pairs, row.right)}
+                tracks={tracks}
+                side="right"
+                hidden={same}
+              />
+            ) : (
+              <div aria-hidden="true" />
+            )}
+          </div>
+          <Notes lines={[row.left, row.right]} tracks={tracks} />
+        </>
       );
     }
   }
 }
 
 export function DiffView(props: DiffViewProps) {
-  const { layout = "unified", against, empty, "aria-label": label } = props;
+  const { layout = "unified", against, empty, "aria-label": label, notes, onPick, picked } = props;
   const { hunks: given, before, after, context } = props;
   // TWO TEXTS ARE COMPARED ONCE, for as long as they are the two texts.
   const compared = useMemo(
@@ -709,7 +816,7 @@ export function DiffView(props: DiffViewProps) {
   if (!changed) {
     return <>{empty ?? <p className="diff-view__empty">Nothing changed.</p>}</>;
   }
-  const tracks: Tracks = { numbered: shape.numbered, keyed: shape.keyed };
+  const tracks: Tracks = { numbered: shape.numbered, keyed: shape.keyed, notes, onPick, picked };
   return (
     <div
       ref={root}

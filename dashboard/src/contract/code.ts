@@ -124,3 +124,110 @@ export const PRECONDITION_KINDS = [
  * nobody. Held with [PRECONDITION_KINDS].
  */
 export const PRECONDITION_STATES = ["met", "unmet", "computing"] as const;
+
+/**
+ * How much a finding weighs, heaviest first (`code.Severities`): a blocker
+ * holds the change back until its raiser's later review or a dismissal clears
+ * it, and the rest are said. What a change page's finding composer offers and
+ * a finding is marked by. HELD BOTH WAYS, in order, by
+ * `internal/code.TestTheDashboardRaisesFindingsInTheEnginesWords`: a weight the
+ * engine grew that this lacks is one no reviewer here can give; one this keeps
+ * that the engine dropped is a review refused on every press.
+ */
+export const FINDING_SEVERITIES = ["blocker", "major", "minor", "nit"] as const;
+
+/**
+ * What a finding is about (`code.Categories`), in the engine's order. Held
+ * with [FINDING_SEVERITIES], for the same two reasons.
+ */
+export const FINDING_CATEGORIES = [
+  "correctness",
+  "security",
+  "performance",
+  "tests",
+  "design",
+  "style",
+  "docs",
+] as const;
+
+/**
+ * The twelve reasons a handle hears about a change (`code.Reasons`, in
+ * precedence order: the first that names a handle is the one it heard under),
+ * as the dashboard phrases them.
+ *
+ * TWO VOICES, as the tracker's `PHRASES` (`contract/reasons.ts`) has them,
+ * because there are two readers and the same reason is a different sentence
+ * to each: `short` is the reader's own ("asked for your review"), for a
+ * notice that reached them; `about` is somebody else's, for a change's Woke
+ * tab, which lists who its records reached — where the reader's own voice
+ * would read as a claim about the reader. `why` is the sentence either says
+ * when asked. One table with three columns, so a reason added in one voice
+ * cannot be missing in another.
+ *
+ * HELD BOTH WAYS by `internal/code.TestEveryCodeReasonReadsAsEnglishOnTheClient`:
+ * a reason the engine records with no phrase renders as its own snake_case
+ * value, and a phrase for a reason nothing records is what a rename leaves.
+ */
+export const CODE_PHRASES: Readonly<Record<string, { short: string; about: string; why: string }>> =
+  {
+    mention: {
+      short: "mentioned you",
+      about: "mentioned",
+      why: "somebody named you on the change",
+    },
+    review_requested: {
+      short: "asked for your review",
+      about: "asked to review",
+      why: "a review of the change is asked of you",
+    },
+    changes_requested: {
+      short: "changes asked of yours",
+      about: "an author, changes asked",
+      why: "a reviewer asked for changes to a change you wrote",
+    },
+    conflicted: {
+      short: "yours conflicts",
+      about: "an author, it conflicts",
+      why: "a change you wrote no longer merges cleanly into its target",
+    },
+    finding_replied: {
+      short: "your finding was answered",
+      about: "raised the finding",
+      why: "somebody answered a finding you raised",
+    },
+    ready_to_merge: {
+      short: "yours is ready",
+      about: "told it is ready",
+      why: "every precondition of a change you own is met",
+    },
+    merged: {
+      short: "yours merged",
+      about: "an author, merged",
+      why: "a change you wrote reached its target",
+    },
+    review_submitted: {
+      short: "yours was reviewed",
+      about: "an author, reviewed",
+      why: "a reviewer gave a verdict on a change you wrote",
+    },
+    re_review: {
+      short: "asked to look again",
+      about: "asked to look again",
+      why: "a new revision answers the changes you asked for",
+    },
+    thread: {
+      short: "in your thread",
+      about: "in the thread",
+      why: "you are in this conversation",
+    },
+    watcher: {
+      short: "you take part",
+      about: "takes part",
+      why: "you were asked, reviewed, commented or were mentioned on the change",
+    },
+    lead_fallback: {
+      short: "routed to you as the lead",
+      about: "the owning lead",
+      why: "nobody who may review was asked, and you lead the change's owner",
+    },
+  };

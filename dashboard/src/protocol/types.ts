@@ -38,6 +38,8 @@ import type { OrgServices } from "../contract/services.ts";
 import type {
   CHANGE_STATES,
   COMMAND_OUTCOMES,
+  FINDING_CATEGORIES,
+  FINDING_SEVERITIES,
   PRECONDITION_KINDS,
   PRECONDITION_STATES,
   REPO_STATUSES,
@@ -6928,13 +6930,215 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   mergeability?: CodeMergeabilityRow;
 }
 
+/** A revision's facts, as its home git node recorded them (`code.RevisionFactsRow`). */
+export interface CodeRevisionFacts {
+  target_ref: string;
+  target_oid: string;
+  base_oid?: string;
+  patch_id?: string;
+  patch_id_omitted?: boolean;
+  touched: string[];
+  touches_all?: boolean;
+  node: string;
+}
+
+/** One revision of a change (`code.RevisionRow`): a move of its source branch's head. */
+export interface CodeRevisionRow {
+  n: number;
+  head: string;
+  pusher: string;
+  pusher_kind: CodePartyKind;
+  push_id?: string;
+  position: LogPosition;
+  at: string;
+  /** Absent for a revision its home has recorded no facts of yet. */
+  facts?: CodeRevisionFacts;
+}
+
+/** One reviewer a change has asked (`code.ReviewerRow`). */
+export interface CodeReviewerRow {
+  reviewer: string;
+  kind: CodePartyKind;
+  /** `requested`, or `path_owner` for one a revision's path owners asked. */
+  reason: string;
+  /** `requested` while the ask stands, `withdrawn` once taken back. */
+  state: string;
+  requested_by: string;
+  requested_by_kind: CodePartyKind;
+  note?: string;
+  position: LogPosition;
+}
+
+/** A verdict a review gives (`code.Verdicts`). */
+export type CodeVerdict = "approve" | "request_changes" | "comment" | (string & {});
+
+/** One review of a change (`code.ReviewRow`). */
+export interface CodeReviewRow {
+  id: string;
+  revision: number;
+  reviewer: string;
+  reviewer_kind: CodePartyKind;
+  operator_id?: string;
+  verdict: CodeVerdict;
+  summary?: string;
+  findings: number;
+  turn_id?: string;
+  model?: string;
+  position: LogPosition;
+  at: string;
+}
+
+/** Where a comment on a line points (`code.CommentAnchor`). */
+export interface CodeCommentAnchor {
+  revision: number;
+  path: string;
+  side: "old" | "new" | (string & {});
+  line: number;
+  blob_oid: string;
+}
+
+/** One comment on a change (`code.CommentRow`), in thread order. */
+export interface CodeCommentRow {
+  id: string;
+  /** Its own id for a thread's first comment, the finding's for a reply to one. */
+  thread_id: string;
+  parent_id?: string;
+  finding_id?: string;
+  author: string;
+  author_kind: CodePartyKind;
+  author_operator_id?: string;
+  anchor?: CodeCommentAnchor;
+  resolved?: boolean;
+  resolved_by?: string;
+  resolved_by_kind?: CodePartyKind;
+  turn_id?: string;
+  body: string;
+  position: LogPosition;
+  at: string;
+}
+
+/** One finding on a change (`code.FindingRow`). */
+export interface CodeFindingRow {
+  id: string;
+  review_id: string;
+  raiser: string;
+  raiser_kind: CodePartyKind;
+  revision: number;
+  commit_oid: string;
+  path: string;
+  blob_oid: string;
+  side: "old" | "new" | (string & {});
+  line_start: number;
+  line_end: number;
+  severity: (typeof FINDING_SEVERITIES)[number] | (string & {});
+  category: (typeof FINDING_CATEGORIES)[number] | (string & {});
+  title: string;
+  body?: string;
+  /** The lines it would put in place of its own, where it suggests some. */
+  suggestion?: string;
+  /** open, resolved, wont_fix, disputed, dismissed or superseded. */
+  state: string;
+  resolution_note?: string;
+  resolved_by?: string;
+  resolved_by_kind?: CodePartyKind;
+  resolved_commit?: string;
+  position: LogPosition;
+}
+
+/**
+ * Where a finding's lines are in the revision a read asks about
+ * (`code.FindingPlace`): moved by the lines changed above them; OUTDATED where
+ * its own lines changed; GONE where the revision holds no file at its path.
+ */
+export interface CodeFindingPlace {
+  start?: number;
+  end?: number;
+  outdated?: boolean;
+  gone?: boolean;
+}
+
+/** One file a diff changed (`code.DiffFile`). */
+export interface CodeDiffFile {
+  path: string;
+  /** The path in base64 where it is no valid UTF-8 (`code.WirePath`). */
+  path_b64?: string;
+  old_path?: string;
+  /** Git's own letter: A added, D deleted, M modified, R renamed, T type changed. */
+  status: string;
+  similarity?: number;
+  old_mode?: string;
+  new_mode?: string;
+  added: number;
+  deleted: number;
+  binary?: boolean;
+  old_oid?: string;
+  new_oid?: string;
+}
+
+/** A page of a diff's files, or of one file's patch (`code.DiffAnswer`). */
+export interface CodeDiffAnswer {
+  base: string;
+  head: string;
+  files: CodeDiffFile[] | null;
+  total: number;
+  added: number;
+  deleted: number;
+  /** One file's patch, as git writes it. */
+  patch?: string;
+}
+
 /**
  * `code_change`, a part at a time: the change's detail rides the first page of
- * its revisions (no `part`, or `part=revisions`), and each other part answers
- * its own page beside the change.
+ * its revisions (no `part`, or `part=revisions`); each other part answers its
+ * own page beside the change — its reviewers, comments, reviews or findings;
+ * `files` and `diff` a revision's files or one file's patch (`diff`), read by
+ * object id on its home git node; and `findings` placed in the revision asked
+ * about (`placed`, by the finding's id).
  */
 export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
+  revisions?: CodeRevisionRow[];
+  reviewers?: CodeReviewerRow[];
+  comments?: CodeCommentRow[];
+  reviews?: CodeReviewRow[];
+  findings?: CodeFindingRow[];
+  /** The `files` and `diff` parts: the revision read at, and the one read since. */
+  revision?: number;
+  since_revision?: number;
+  diff?: CodeDiffAnswer;
+  /** The `findings` part's placing of each finding, by its id. */
+  placed?: Record<string, CodeFindingPlace>;
+}
+
+/** One handle a record about a change reached (`code.RoutedRecipient`). */
+export interface CodeRoutedRecipient {
+  handle: string;
+  kind: CodePartyKind;
+  reason: string;
+  addressed?: boolean;
+  fallback?: boolean;
+  fallback_rank?: number;
+}
+
+/** One record about a change, and whom it reached (`code.RoutedRecord`). */
+export interface CodeRoutedRecord {
+  record_id: string;
+  position: LogPosition;
+  at: string;
+  excerpt?: string;
+  recipients: CodeRoutedRecipient[];
+}
+
+/** `code_change_routing`: whom a change's records reached, newest first (`code.RoutedPage`). */
+export interface CodeChangeRoutingAnswer extends CodePage {
+  routed?: {
+    change: { repo: string; ref: string; title: string; state: CodeChangeState };
+    opened_at: string;
+    records: CodeRoutedRecord[] | null;
+    /** `reached`, `nobody` or `swept` (`routing.Delivery`). */
+    delivery: string;
+    retained_from: string;
+  };
 }
 
 /** The code questions the dashboard asks, and what each answers. */
@@ -6943,6 +7147,7 @@ export interface CodeQueryMap {
   code_pushes: CodePushesAnswer;
   code_changes: CodeChangesAnswer;
   code_change: CodeChangeAnswer;
+  code_change_routing: CodeChangeRoutingAnswer;
 }
 
 export type CodeQueryName = keyof CodeQueryMap;

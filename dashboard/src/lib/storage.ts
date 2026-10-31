@@ -74,6 +74,12 @@ export const STORAGE_KEYS = {
   peekWidth: "crewlet.peek.width",
   /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
   orgDraft: "crewlet_org_draft",
+  /**
+   * The PREFIX of a change's drafted findings, in `sessionStorage`: the
+   * change's id and the revision follow it (`lib/reviewDrafts.ts`). The tab's
+   * until a review sends them, and gone with it.
+   */
+  reviewDrafts: "crewlet.code.review_drafts/",
   /** How the Artifacts gallery is drawn, `grid` or `list` (`routes/artifacts/Gallery.tsx`). */
   artifactsShape: "crewlet.artifacts.shape",
 } as const;

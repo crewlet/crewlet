@@ -126,13 +126,16 @@ export function actionApp(tool: ActionTool): App | null {
 /**
  * The service built into Crewlet a change lands in, read off the same
  * `domain`: Crewlet Works for the tracker's log, Crewlet Knowledge for the
- * pages'. A company running another system in its place, or none, has nowhere
- * for the change to land.
+ * pages', the code host for the code log's. A company running another system
+ * in its place, or none, has nowhere for the change to land. The code log is
+ * no app's (ADR-0033 has no code app: every person reads every repository), so
+ * [actionApp] names none for it and only the service can hold a code change.
  */
 export function actionService(tool: ActionTool): Service | null {
   const domain: string | null = ACTIONS[tool].domain;
   if (domain === "tracker") return "tracker";
   if (domain === "pages") return "knowledge";
+  if (domain === "code") return "code";
   return null;
 }
 

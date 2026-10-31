@@ -1224,6 +1224,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "code",
   "repos",
   "pushes",
+  "changes",
 ];
 
 /**

@@ -436,6 +436,56 @@ function paintOf(selector: string): string | undefined {
   return /background(?:-color)?:\s*var\((--[\w-]+)\)/.exec(rule?.body ?? "")?.[1];
 }
 
+// A HOST WRITES ON A DIFF: what it anchors to a line is drawn under that
+// line, once however the diff is laid out, and a line is picked by its own
+// number — its newer one, else its older — which is the number a finding
+// names. Mutation: draw a note under every line, or put the pick on an added
+// line's older slot, and this fails.
+describe("a diff a host writes on", () => {
+  const HUNKS: DiffHunk[] = [
+    {
+      skipped: 0,
+      lines: [same(1, 1, "keep"), removed(2, "old"), added(2, "new"), same(3, 3, "end")],
+    },
+  ];
+
+  test("draws a host's notes under the line they are on, and only there", () => {
+    for (const layout of ["unified", "split"] as const) {
+      const { container, unmount } = render(
+        <DiffView
+          hunks={HUNKS}
+          layout={layout}
+          notes={(line) => (line.after === 2 ? <p>finding on 2</p> : null)}
+        />,
+      );
+      const notes = container.querySelectorAll(".diff-view__notes");
+      expect(notes, layout).toHaveLength(1);
+      expect(notes[0]!.textContent).toBe("finding on 2");
+      unmount();
+    }
+  });
+
+  test("picks a line by its own number, and marks what the host picked", () => {
+    const pick = vi.fn();
+    render(<DiffView hunks={HUNKS} onPick={pick} picked={(line) => line.after === 3} />);
+    act(() => screen.getByRole("button", { name: "Line 2: pick it" }).click());
+    expect(pick).toHaveBeenCalledWith(HUNKS[0]!.lines[2], false);
+    act(() => screen.getByRole("button", { name: "Removed line 2: pick it" }).click());
+    expect(pick).toHaveBeenLastCalledWith(HUNKS[0]!.lines[1], false);
+    // ONE BUTTON A LINE, on its own number: four lines, four buttons.
+    expect(screen.getAllByRole("button")).toHaveLength(4);
+    const marked = document.querySelectorAll<HTMLElement>(".diff-view__line[data-picked]");
+    expect([...marked].map((l) => l.querySelector(".diff-view__text")?.textContent)).toEqual([
+      "end",
+    ]);
+  });
+
+  test("draws no button where the host picks nothing", () => {
+    render(<DiffView hunks={HUNKS} />);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+});
+
 // NO HUE. The design system's diffs paint an added line in the success
 // state's tint and a removed one in the danger state's; here colour carries
 // state, and a diff is not one. Every rule that can reach what the diff draws

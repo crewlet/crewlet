@@ -267,4 +267,53 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  // A CHANGE'S PAGE (`routes/code/change/`). Every one lands on the code log,
+  // whose position raises this tab's code floor, and every question a change
+  // page reads is in that domain's session set — its routing too — so none
+  // refreshes anything beyond it. Each names the change by its reference
+  // (`change`, web!42), which carries its repository, so `repo` is a
+  // property the tool takes and the page never needs to send.
+  code_review_change: {
+    // APPROVE, REQUEST CHANGES AND COMMENT: one review of one revision, with
+    // the findings the reader drafted on its lines (kept in the tab's
+    // session storage until this one press sends them all), and `carries`,
+    // the reader's own standing findings it keeps standing.
+    args: ["repo", "change", "revision", "verdict", "summary", "findings", "carries"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
+  code_comment_on_change: {
+    // THE CONVERSATION'S COMPOSER: a comment of its own; a reply to a thread
+    // or a finding; one on a line (`anchor`); and Resolve on a thread.
+    args: ["repo", "change", "body", "thread", "finding", "anchor", "resolve"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
+  code_request_review: {
+    // REQUEST REVIEW: ask reviewers, or take an ask back.
+    args: ["repo", "change", "reviewers", "withdraw", "note"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
+  code_close_change: {
+    // CLOSE AND REOPEN, against the version on screen (`expected_version`),
+    // so a close that raced a push is refused rather than closing what the
+    // reader did not see.
+    args: ["repo", "change", "expected_version", "reason", "reopen"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
+  code_apply_suggestions: {
+    // APPLY SUGGESTION on a finding: a commit on the change's branch putting
+    // the suggested lines in place, against the head on screen
+    // (`expected_head`), its finding resolved as a step.
+    args: ["repo", "change", "findings", "expected_head", "message"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
 } as const;
