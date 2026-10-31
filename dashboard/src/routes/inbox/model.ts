@@ -785,13 +785,25 @@ export function questionOf(row: InboxRow): string | null {
 }
 
 /**
+ * A row answered on this visit, as the lists place it: HELD where it stands
+ * (an answer the engine accepted and has not settled), or MOVED to Answered,
+ * settled for good, with the order it moved in on this visit (higher is
+ * newer).
+ */
+export type SettledRow = { row: InboxRow } & (
+  { moved?: false | undefined } | { moved: true; order: number }
+);
+
+/**
  * Needs you and Answered with each question in one of them, never both.
  *
  * A QUESTION ANSWERED ON THIS VISIT AND SETTLED (`settled`, by its row's key,
- * `moved`) leaves Needs you for the head of Answered, newest first, as the
- * row that was answered, and the engine's row for the same question is not
- * listed beside it. One HELD where it stands (an answer the engine accepted
- * and has not settled) stays in Needs you, and is not under Answered either.
+ * `moved`) leaves Needs you for the head of Answered, newest move first: as
+ * the row that was answered until the engine lists the question as answered,
+ * and as the engine's row from then on, which reads it as answered rather
+ * than as the open question it was. One HELD where it stands (an answer the
+ * engine accepted and has not settled) stays in Needs you, and is not under
+ * Answered either.
  * ANY OTHER question Answered lists has left Needs you: the two reads are
  * asked apart, and the open one can still list a question the person answered
  * a moment ago in another tab, which they must not see as waiting.
@@ -799,21 +811,22 @@ export function questionOf(row: InboxRow): string | null {
 export function pairAnswered(
   needs: readonly InboxRow[],
   answered: readonly InboxRow[],
-  settled: ReadonlyMap<string, { row: InboxRow; moved?: boolean | undefined }>,
+  settled: ReadonlyMap<string, SettledRow>,
 ): { needs: InboxRow[]; answered: InboxRow[] } {
   const moved = [...settled.values()]
-    .filter((s) => s.moved)
-    .map((s) => s.row)
-    .reverse();
+    .flatMap((s) => (s.moved ? [s] : []))
+    .sort((a, b) => b.order - a.order)
+    .map((s) => s.row);
   const movedKeys = new Set(moved.map((r) => r.key));
   const here = new Set([...needs.filter((r) => settled.has(r.key)), ...moved].map(questionOf));
+  const listed = new Map(answered.map((r) => [questionOf(r), r]));
   const closed = answered.filter((r) => !here.has(questionOf(r)));
   const gone = new Set(closed.map(questionOf));
   return {
     needs: needs.filter(
       (r) => !movedKeys.has(r.key) && (settled.has(r.key) || !gone.has(questionOf(r))),
     ),
-    answered: [...moved, ...closed],
+    answered: [...moved.map((r) => listed.get(questionOf(r)) ?? r), ...closed],
   };
 }
 

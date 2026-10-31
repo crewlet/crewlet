@@ -114,6 +114,7 @@ import {
   nextAfter,
   noticeRows,
   pairAnswered,
+  questionOf,
   readThrough,
   rowItem,
   rowKey,
@@ -134,16 +135,14 @@ const INBOX_POLL_MS = 30_000;
  */
 export const ADVANCE_MS = 700;
 
-/** A row answered here: how and with what, and where it stood in Needs you. */
-interface Settled extends Given {
-  row: InboxRow;
-  at: number;
-  /**
-   * Settled for good, so moved into the Answered group: false for an answer
-   * held where it stands until the engine settles it.
-   */
-  moved?: boolean;
-}
+/**
+ * A row answered here: how and with what, and where the lists place it
+ * ([SettledRow]). HELD where it stood in Needs you until the engine settles
+ * it, at its place among the rows there; or MOVED into the Answered group,
+ * settled for good, in the order it moved on this visit.
+ */
+type Settled = Given &
+  ({ row: InboxRow; moved?: false; at: number } | { row: InboxRow; moved: true; order: number });
 
 /**
  * Needs you with the rows answered here put back where they stood. The engine
@@ -163,7 +162,7 @@ function keepSettled(
   // ONLY WHAT IS HELD stays where it stood: a settled answer has moved to
   // Answered ([pairAnswered]).
   const held = [...settled.values()]
-    .filter((s) => !s.moved && !present.has(s.row.key))
+    .flatMap((s) => (!s.moved && !present.has(s.row.key) ? [s] : []))
     .sort((a, b) => a.at - b.at);
   for (const s of held) out.splice(Math.min(s.at, out.length), 0, s.row);
   return out;
@@ -241,6 +240,13 @@ export function Inbox() {
     pollMs: INBOX_POLL_MS,
   });
   const [answeredOpen, setAnsweredOpen] = useState(false);
+  // A TOGGLE OF ANSWERED IS THE ARRIVAL SEEN: opened, the group draws the row
+  // that landed in it without a wash of its own, and closed, it has nothing
+  // new left to show.
+  const toggleAnswered = useCallback((open: boolean) => {
+    setAnsweredOpen(open);
+    setArrived(undefined);
+  }, []);
   // THE SNOOZE BOUND, so a preset the engine would refuse is never offered.
   const person = useQuery("work_person", notices ? { handle: owner } : undefined, {
     enabled: notices,
@@ -271,7 +277,8 @@ export function Inbox() {
   const updates = useStableList(rows.updates, rowKeyOf);
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
   // THE ROW THAT HAS JUST LANDED IN ANSWERED, which washes the group's
-  // heading: set by an answer, never on a first draw.
+  // heading (and the row, where the group is open): set by an answer, never
+  // on a first draw, and spent once the reader opens or closes the group.
   const [arrived, setArrived] = useState<string | undefined>(undefined);
   // ANSWERED BEFORE THIS VISIT: a question answered here is in Needs you,
   // and one answered before it is under Answered, never in both places.
@@ -292,7 +299,8 @@ export function Inbox() {
   // AN ANSWERED ROW THE ADDRESS NAMES OPENS ITS GROUP, so the open row is
   // never one the list is hiding: a link to an answer, or a return to one.
   // NOT ONE ANSWERED HERE: the next item opens with it, and the row it left
-  // lands in the closed group's count rather than opening the group.
+  // lands in the closed group's count rather than opening the group. Where
+  // nothing is left to open, the move opens the group itself ([settle]).
   useEffect(() => {
     if (
       open &&
@@ -308,11 +316,18 @@ export function Inbox() {
   // pane, where the pane replaces it), the first one not yet dealt with, so the pane
   // is never an empty box beside a list with something in it. A row the URL
   // names that has just LEFT the list (an update read a moment ago) stays open
-  // until the next one opens: what happened to it is what the pane shows.
+  // until the next one opens: what happened to it is what the pane shows. A
+  // row ANSWERED HERE that the engine has since listed as answered is its
+  // row, found by the question the two share ([pairAnswered]): a run's
+  // answered row is keyed by the launch that asked as well as its turn.
   const held = useRef<InboxRow | null>(null);
+  const movedHere = settled.get(open);
   const named =
     order.find((r) => r.key === open) ??
     answered.find((r) => r.key === open) ??
+    (movedHere?.moved
+      ? answered.find((r) => questionOf(r) === questionOf(movedHere.row))
+      : undefined) ??
     (open && held.current?.key === open ? held.current : null);
   const selected =
     named ??
@@ -334,6 +349,14 @@ export function Inbox() {
   // fires rather than from this render: by then the list has been re-read.
   const live = useRef({ open, order, settled, index });
   live.current = { open, order, settled, index };
+  // THE MOVES ON THIS VISIT, counted, so Answered's head is in the order the
+  // rows moved ([pairAnswered]): a run's answer is held as sent before it
+  // moves, and its entry was made before rows answered in the meantime.
+  const moves = useRef(0);
+  // WHAT HAS MOVED, written as each answer moves rather than read off the
+  // last draw: two answers told in one tick both met a draw that had moved
+  // neither, so each moved the row, announced it and opened the next.
+  const moved = useRef(new Set<string>());
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const settle = useCallback(
@@ -360,11 +383,9 @@ export function Inbox() {
       if (label) {
         // ONCE: a second word on a row already moved (a press repeated before
         // the list drew again) answers nothing and moves nobody on twice.
-        if (live.current.settled.get(row.key)?.moved) return;
-        const at = live.current.order
-          .filter((r) => r.kind !== "notice" && r.kind !== "answered")
-          .findIndex((r) => r.key === row.key);
-        const given: Settled = { label, row, at: Math.max(0, at), moved: true };
+        if (moved.current.has(row.key)) return;
+        moved.current.add(row.key);
+        const given: Settled = { label, row, moved: true, order: ++moves.current };
         if (answer) given.answer = answer;
         setSettled((was) => new Map(was).set(row.key, given));
         setArrived(row.key);
@@ -377,6 +398,7 @@ export function Inbox() {
           before,
           new Set([
             ...live.current.settled.keys(),
+            ...moved.current,
             ...order.filter((r) => r.kind === "answered").map((r) => r.key),
           ]),
         );
@@ -387,7 +409,10 @@ export function Inbox() {
             : "Answered. Nothing else is waiting on you.",
         );
         window.clearTimeout(timer.current);
+        // NOTHING LEFT TO OPEN: the row stays open on its outcome, and the
+        // group it moved to opens on it, so the list never hides the open row.
         if (next) nav.filter({ row: next });
+        else setAnsweredOpen(true);
         return;
       }
       // NAMED FIRST, so the row stays open while it leaves the list.
@@ -469,13 +494,21 @@ export function Inbox() {
   });
   const showList = !single || !named;
   const showPane = !single || named !== null;
+  // THE ANSWER GIVEN TO THE OPEN ROW, where it moved to Answered and the
+  // engine has not listed it yet: the pane draws it in place of the controls
+  // that gave it, which would answer the question again.
+  const selectedHere = selected ? settled.get(selected.key) : undefined;
+  const answeredHere =
+    selected?.kind === "decision" && selectedHere?.moved ? selectedHere.answer : undefined;
   const given = useMemo(
     () =>
       new Map(
-        [...settled].map(
-          ([key, s]) =>
-            [key, s.answer ? { label: s.label, answer: s.answer } : { label: s.label }] as const,
-        ),
+        [...settled].map(([key, s]) => {
+          const told: Given = { label: s.label };
+          if (s.answer) told.answer = s.answer;
+          if (s.moved) told.moved = true;
+          return [key, told] as const;
+        }),
       ),
     [settled],
   );
@@ -536,7 +569,7 @@ export function Inbox() {
             answered={{
               rows: answered,
               open: answeredOpen,
-              onOpenChange: setAnsweredOpen,
+              onOpenChange: toggleAnswered,
               arrived,
             }}
             reader={owner}
@@ -608,6 +641,7 @@ export function Inbox() {
               selected ? (titleOf(titles, rowItem(selected)) ?? taskTitleOf(selected)) : undefined
             }
             onBack={single ? () => nav.filter({ row: null }) : undefined}
+            answered={answeredHere}
             onSettled={(label, answer, hold) => selected && settle(selected, label, answer, hold)}
           />
         )}

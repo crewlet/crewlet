@@ -1442,8 +1442,11 @@ const (
 	// entry script +0.8 KiB, all the kit's, and +0.2 KiB net elsewhere (the
 	// Inbox's answer motion +1.3 KiB, against the Overview tab Settings no
 	// longer draws, 1.0 KiB less, and My work's seat row, 0.4 KiB less).
-	// 5251 KiB.
-	treeBudget = 5<<20 + 131<<10
+	// 5251 KiB. The Inbox review fixes (a row answered here opened as
+	// answered, read-only until the engine lists it, the move guarded as it
+	// is written, the last answer opening Answered, an arrival washed once)
+	// took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk). 5252 KiB.
+	treeBudget = 5<<20 + 132<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -55,8 +55,11 @@ describe("what a room is called", () => {
 
 // WHAT A SENTENCE CALLS A ROOM, the one place a `#` is written. A channel's
 // glyph IS its `#`, so the words drawn beside a glyph are the bare title and
-// only words standing alone carry this. Mutation: add the `#` for a team's
-// room, a conversation or an unknown kind, and the matching case goes red.
+// only words standing alone carry this. A kind this build does not know is a
+// channel to every other sentence (`isDirect` says it is not a
+// conversation), so it reads as one here too. Mutation: add the `#` for a
+// team's room or a conversation, or drop it for a kind not yet known, and the
+// matching case goes red.
 describe("what a sentence calls a room", () => {
   test.each([
     ["public", "#general"],
@@ -64,8 +67,8 @@ describe("what a sentence calls a room", () => {
     ["unit", "general"],
     ["dm", "general"],
     ["group", "general"],
-    ["", "general"],
-    ["from-a-newer-engine", "general"],
+    ["", "#general"],
+    ["from-a-newer-engine", "#general"],
   ])("a %s room reads as %s", (kind, said) => {
     expect(roomWhere(kind, "general")).toBe(said);
   });
