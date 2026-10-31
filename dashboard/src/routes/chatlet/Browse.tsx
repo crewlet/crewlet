@@ -35,6 +35,7 @@ import {
 import { CompassGlyph, PlusGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
+import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -46,6 +47,7 @@ import type { ChatDirectoryRoom } from "~/protocol/index.ts";
 
 import { canJoin, membershipNote } from "./directory.ts";
 import { useChatNav } from "./nav.tsx";
+import { coverageOf } from "./page.ts";
 import { roomMark } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
@@ -90,6 +92,9 @@ export function BrowseView() {
   const nav = useChatNav();
   const create = useWriteAccess("create_channel");
   const answer = useQuery("chat_rooms", {});
+  // THE DIRECTORY'S OWN COVERAGE, since it is the answer this view is drawn
+  // from and the rail the frame also holds is not.
+  usePageCoverage(coverageOf(answer.data));
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<Kind>("all");
   const [sort, setSort] = useState<Sort>("activity");

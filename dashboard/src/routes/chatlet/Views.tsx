@@ -46,6 +46,7 @@ import {
 import { AtSignGlyph, MessagesSquareGlyph, SendGlyph } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
+import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -55,7 +56,13 @@ import { useClient } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor, type QueryResult } from "~/lib/useQuery.ts";
-import type { ChatActivityItem, ChatActivityKind, ChatKind, QueryMap } from "~/protocol/index.ts";
+import type {
+  ChatActivityItem,
+  ChatActivityKind,
+  ChatKind,
+  ChatServed,
+  QueryMap,
+} from "~/protocol/index.ts";
 
 import { bodyExcerpt } from "./Body.tsx";
 import { Composer } from "./Composer.tsx";
@@ -70,6 +77,7 @@ import { MessageRow } from "./MessageRow.tsx";
 import { PendingRow } from "./Pending.tsx";
 import { useChatFrame, useChatNav } from "./nav.tsx";
 import { matchesPerson, useChatPeople } from "./people.ts";
+import { coverageOf } from "./page.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { roomMark, roomTitle } from "./rooms.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
@@ -195,8 +203,13 @@ function handOff(button: Element | null = document.activeElement) {
  * `useQuery` and `socket.query` (`app/source.test.ts` refuses a question
  * handed through a variable, and the engine's reader gate reads the literal),
  * and hands both here to be paged and kept live.
+ *
+ * THE VIEW PUBLISHES ITS FIRST PAGE'S COVERAGE (`usePageCoverage`), as the
+ * room publishes its transcript's: the state bar describes the answer the
+ * reader is looking at, so a page a deferred record met is said to be
+ * incomplete rather than read as all there is.
  */
-function useReaderPages<A extends { next_cursor?: string }, T>(
+function useReaderPages<A extends ChatServed & { next_cursor?: string }, T>(
   first: QueryResult<A>,
   params: Record<string, unknown>,
   page: (cursor: string) => Promise<A>,
@@ -204,6 +217,7 @@ function useReaderPages<A extends { next_cursor?: string }, T>(
   idOf: (entry: T) => string,
 ) {
   const paged = usePaged(first, params, page, pick, idOf, (answer) => answer.next_cursor ?? "");
+  usePageCoverage(coverageOf(first.data));
   useCoalesced(useChatActivity(), paged.refresh);
   useCoalesced(useChatRead()?.revision ?? 0, paged.refresh);
   return { ...paged, first };
