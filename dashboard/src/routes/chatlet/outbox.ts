@@ -80,8 +80,8 @@ export interface Outgoing {
   /** What was typed. The handles it names and whether it addresses the room
    *  are the engine's reading of it, never a field this tab resolves. */
   body: string;
-  /** The records the words link to, sent as the message's links so the room
-   *  previews them (`Attach.tsx`'s `recordLinks`). */
+  /** What the words link to that the room previews, sent as the message's
+   *  links (`Attach.tsx`'s `previewLinks`). */
   links: string[];
   state: SendState;
   /**

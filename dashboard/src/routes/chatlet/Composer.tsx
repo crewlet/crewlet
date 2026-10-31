@@ -105,7 +105,7 @@ import { MAX_BODY_BYTES } from "~/contract/chat.ts";
 import { textBudget, type TextBudget } from "~/lib/format.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 
-import { AttachDialog, recordLink, recordLinks, type AttachKind } from "./Attach.tsx";
+import { AttachDialog, previewLinks, recordLink, type AttachKind } from "./Attach.tsx";
 import { ChatFace } from "./Face.tsx";
 import { draftKey, useChatDrafts } from "./drafts.ts";
 import { useChatFrame, useChatNav } from "./nav.tsx";
@@ -348,7 +348,7 @@ export function Composer({
       channelID,
       ...(threadRoot ? { threadRoot } : {}),
       body,
-      links: recordLinks(body),
+      links: previewLinks(body),
     });
     setValue("");
     onTyping?.(false);

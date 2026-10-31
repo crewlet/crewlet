@@ -53,7 +53,7 @@ import {
   type MarkdownFence,
 } from "@crewlethq/ui";
 import { ColourCode, InlineToken, LabelledLink, TokenRun } from "~/components/InlineToken.tsx";
-import { codeColour, type LinkMode } from "./inlineTokens.ts";
+import { codeColour, inlineTokens, type LinkMode } from "./inlineTokens.ts";
 import { inlineText, plainText } from "./markdownText.ts";
 
 // --- sectioning ------------------------------------------------------------
@@ -961,19 +961,30 @@ export function imageSources(source: string): string[] {
 
 /**
  * Every link target the document names, once each, in order: what a written
- * `[label](target)` points at, read by the same walk as [imageSources], so a
- * target inside a code span, which renders as text, is not one.
+ * `[label](target)` points at and an address written bare, read by the same
+ * walk as [imageSources], so a target inside a code span, which renders as
+ * text, is not one.
  */
 export function linkTargets(source: string): string[] {
   const out = new Set<string>();
+  // THE WORDS BETWEEN CONSTRUCTS are read for bare addresses as the renderer
+  // reads them (`inlineTokens`), which is where a pasted address is.
+  const bare = (text: string) => {
+    for (const token of inlineTokens(text)) if (token.kind === "address") out.add(token.text);
+  };
   const inline = (text: string) => {
-    for (const { groups: g } of markdownInline(text)) {
-      if (g.esc !== undefined || g.tick !== undefined || g.auto !== undefined) continue;
-      if (g.href !== undefined) out.add(g.href);
+    let at = 0;
+    for (const { index, end, groups: g } of markdownInline(text)) {
+      bare(text.slice(at, index));
+      at = end;
+      if (g.esc !== undefined || g.tick !== undefined) continue;
+      if (g.auto !== undefined) out.add(g.auto);
+      else if (g.href !== undefined) out.add(g.href);
       else if (g.src === undefined) {
         inline(g.strong ?? g.strongUnder ?? g.em ?? g.emUnder ?? g.del ?? "");
       }
     }
+    bare(text.slice(at));
   };
   eachRun(source, inline);
   return [...out];

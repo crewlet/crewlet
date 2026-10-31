@@ -10,10 +10,18 @@
  * reader may see it (`chat_unfurls`). The address is the dashboard's own,
  * built from the record's id by the route table, never typed.
  *
- * THE MESSAGE'S LINKS ARE THE RECORDS ITS WORDS LINK TO ([recordLinks]): read
- * from the body when it is sent, so a link the person deleted before sending
- * is not sent, and one they wrote by hand is, and sent as whole addresses on
- * this dashboard, which is what the room's preview read takes for a record.
+ * THE MESSAGE'S LINKS ARE WHAT ITS WORDS LINK TO THAT A ROOM PREVIEWS
+ * ([previewLinks]): this dashboard's records, as whole addresses on it, and
+ * pull requests on github.com, read from the body when it is sent, so a link
+ * the person deleted before sending is not sent, and one they wrote or pasted
+ * by hand is.
+ *
+ * NOTHING IS CHECKED AGAINST THE SENDER WHEN IT IS SENT, and nothing needs to
+ * be: a preview is read AS ITS READER (`chat_unfurls` asks each record's own
+ * question as the person looking at the message, and reads a pull request
+ * only under an owner the company's GitHub wiring names), so a link to
+ * something a reader may not open previews nothing for them, whoever sent
+ * it. A check of the sender would vouch for nobody who reads it.
  *
  * Each kind is searched by the read its own screen searches with: a task by
  * the work search, a page by its title, an artifact by the gallery's listing.
@@ -86,19 +94,31 @@ export function recordLink(hit: AttachHit): string {
 const RECORD_SCREENS: ReadonlySet<string> = new Set(["item", "page", "artifact"]);
 
 /**
- * The records `body` links to, as the message's links: each a whole address
- * of its page on this dashboard, rebuilt from its path, once each, in the
+ * A pull request on github.com, exactly as the room's preview read takes one
+ * (`https://github.com/{owner}/{repo}/pull/{n}`, nothing after the number):
+ * an owner is a GitHub login, a repository a GitHub name.
+ */
+const PULL_REQUEST = /^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9._-]+\/pull\/[1-9]\d*$/;
+
+/**
+ * The links `body` names that a room previews, as the message's links: each of
+ * this dashboard's records as a whole address of its page, rebuilt from its
+ * path, and each pull request on github.com as written; once each, in the
  * order written, and no more than a message carries ([MAX_MESSAGE_LINKS]).
  */
-export function recordLinks(body: string): string[] {
+export function previewLinks(body: string): string[] {
   const out = new Set<string>();
   for (const target of linkTargets(body)) {
+    if (out.size === MAX_MESSAGE_LINKS) break;
+    if (PULL_REQUEST.test(target)) {
+      out.add(target);
+      continue;
+    }
     const page = appRoute(target);
     if (page === null) continue;
     const where = resolve(page.path);
     if (!where.resolved || !RECORD_SCREENS.has(where.screen)) continue;
     out.add(new URL(page.canonical, location.href).href);
-    if (out.size === MAX_MESSAGE_LINKS) break;
   }
   return [...out];
 }

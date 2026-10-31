@@ -96,11 +96,11 @@ async function box(): Promise<HTMLTextAreaElement> {
 
 const posts = () => presses.filter((press) => press.tool === "post_message");
 
-describe("the records a message links to", () => {
-  // A RECORD A PERSON LINKS IS PREVIEWED like one a seat links: the composer
-  // sends the records its words link to as the message's links, whole
-  // addresses on this dashboard, once each, and never a page that is not a
-  // record or an address somewhere else.
+describe("what a message links to that the room previews", () => {
+  // A RECORD OR A PULL REQUEST A PERSON LINKS IS PREVIEWED like one a seat
+  // links: the composer sends this dashboard's records its words link to, as
+  // whole addresses on it, and the github.com pull requests they name, once
+  // each, and never a page that is not a record or any other address.
   const whole = (hash: string) => new URL(hash, location.href).href;
   const artifact = "0b0e9a8e-2f4c-4f7e-9d8a-5d1f0c6b7a10";
   const page = "6a3c1e2b-8d4f-4a9e-b7c6-1f2e3d4c5b6a";
@@ -127,12 +127,31 @@ describe("the records a message links to", () => {
     ]);
   });
 
+  test("take a github.com pull request pasted or linked, and no other address", async () => {
+    mount();
+    const field = await box();
+    fireEvent.change(field, {
+      target: {
+        value: [
+          "Review https://github.com/acme/api/pull/42 please,",
+          "[the same one](https://github.com/acme/api/pull/42),",
+          "not https://github.com/acme/api/issues/3, https://github.com/acme/api/pull/42/files,",
+          "http://github.com/acme/api/pull/5 or https://example.com/acme/api/pull/6",
+        ].join(" "),
+      },
+    });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]!.args.links).toEqual(["https://github.com/acme/api/pull/42"]);
+  });
+
   test("are as many as a message carries, and none for words alone", async () => {
     mount();
     const field = await box();
-    const many = Array.from(
-      { length: MAX_MESSAGE_LINKS + 2 },
-      (_, n) => `[GP-${n + 1}](#/worklet/GP-${n + 1})`,
+    const many = Array.from({ length: MAX_MESSAGE_LINKS + 2 }, (_, n) =>
+      n % 2 === 0
+        ? `[GP-${n + 1}](#/worklet/GP-${n + 1})`
+        : `https://github.com/acme/api/pull/${n + 1}`,
     );
     fireEvent.change(field, { target: { value: many.join(" ") } });
     fireEvent.keyDown(field, { key: "Enter" });
