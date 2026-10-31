@@ -87,17 +87,20 @@ export interface Press {
   /** The platform's command key: Command on a Mac, Control elsewhere. */
   mod?: boolean;
   /**
-   * Shift, for a LETTER only. A symbol that needs Shift to type (`?`, `+`)
-   * is written as the symbol, because that is what `KeyboardEvent.key`
-   * reports and what a reader's keycap says.
+   * Shift, for a LETTER or a key such as an arrow whose shifted press is
+   * another row's. A symbol that needs Shift to type (`?`, `+`) is written as
+   * the symbol, because that is what `KeyboardEvent.key` reports and what a
+   * reader's keycap says. `false` says the row fires only WITHOUT it.
    */
   shift?: boolean;
   /**
-   * Option on a Mac, Alt elsewhere. ONLY for a row a surface reads through
-   * [matchesRow] from inside itself — the palette's accelerators, pressed in
-   * its field, where a bare letter is a letter of the query and Alt is what
-   * turns it into a key. Matched by the physical key, because Option+A on a
-   * Mac types `å`. [useKeymap] refuses one, like Shift.
+   * Option on a Mac, Alt elsewhere. On a LETTER, only for a row a surface
+   * reads through [matchesRow] from inside itself (the palette's
+   * accelerators, pressed in its field, where a bare letter is a letter of
+   * the query and Alt is what turns it into a key), matched by the physical
+   * key because Option+A on a Mac types `å`; [useKeymap] refuses one. On any
+   * other key, such as an arrow, the key is reported as itself and a window
+   * chord compares the Alt.
    */
   alt?: boolean;
   /** The key pressed first, for a two-key sequence: `g` then `h`. */
@@ -641,20 +644,23 @@ export function useKeymap(handlers: Record<string, KeyHandler>): void {
     const run = typeof handler === "function" ? handler : handler.run;
     const when = typeof handler === "function" ? undefined : handler.when;
     row.presses.forEach((press, index) => {
-      if (press.alt) {
-        // Alt is read from inside a surface by `matchesRow`: a window chord
-        // compares no Alt and would fire for the plain letter.
-        throw new Error(`keymap: "${id}" names Alt and cannot be a window chord`);
-      }
-      if (press.shift) {
-        // A shifted letter is matched by `matchesRow`, never by a window
-        // chord, which compares no Shift and would fire for the plain letter.
-        throw new Error(`keymap: "${id}" names Shift and cannot be a window chord`);
+      if (press.alt && /^[a-z]$/.test(press.key)) {
+        // ALT ON A LETTER is read from inside a surface by `matchesRow`, by
+        // the physical key: Option composes the letter into another
+        // character on a Mac (`å` for A), so a window chord matched by `key`
+        // would never fire there. Alt on any other key (an arrow) reports
+        // the key itself and binds like any press.
+        throw new Error(`keymap: "${id}" names Alt on a letter and cannot be a window chord`);
       }
       const chord: Chord = {
         key: press.key,
         run: (e) => run(e, index),
         meta: press.mod,
+        // EXACT WHERE THE ROW SAYS: a row naming Alt or Shift fires only with
+        // it held, and one naming `shift: false` only without, so Alt with an
+        // arrow and Alt and Shift with the same arrow are two rows.
+        ...(press.alt !== undefined ? { alt: press.alt } : {}),
+        ...(press.shift !== undefined ? { shift: press.shift } : {}),
         whileTyping: row.whileTyping,
         when: typeof when === "function" ? when(index) : when,
       };
