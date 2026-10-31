@@ -605,7 +605,7 @@ describe("what was answered", () => {
     });
     // ANSWERED HERE AND SETTLED: the row moves to the head of Answered as the
     // row that was answered, and the engine's row for it is not listed too.
-    const moved = new Map([["run:turn-7", { row: parked("q1"), moved: true }]]);
+    const moved = new Map([["run:turn-7", { row: parked("q1"), moved: true as const, order: 1 }]]);
     expect(pairAnswered([parked("q1")], answeredRow, moved)).toEqual({
       needs: [],
       answered: [parked("q1")],
@@ -622,5 +622,24 @@ describe("what was answered", () => {
       needs: [parked("q2")],
       answered: answeredRow,
     });
+  });
+
+  // NEWEST FIRST BY WHEN EACH ROW MOVED, never by when it was first answered:
+  // a run's answer is held as sent before it settles, so its entry is made
+  // before a row answered and moved in the meantime. Mutation: order by the
+  // entries' insertion, and the run lands under the ask that moved before it.
+  test("Answered's head is in the order the rows moved, newest first", () => {
+    const run: InboxRow = {
+      kind: "decision",
+      key: "run:turn-7",
+      subject: { kind: "run", at: "x", run: { turn_id: "turn-7" } as unknown as SandboxRun },
+      notices: [],
+    };
+    const ask: InboxRow = { kind: "decision", key: "ask:c-12", subject: ASK, notices: [] };
+    const settled = new Map([
+      ["run:turn-7", { row: run, moved: true as const, order: 2 }],
+      ["ask:c-12", { row: ask, moved: true as const, order: 1 }],
+    ]);
+    expect(pairAnswered([], [], settled).answered).toEqual([run, ask]);
   });
 });

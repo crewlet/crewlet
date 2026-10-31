@@ -134,16 +134,14 @@ const INBOX_POLL_MS = 30_000;
  */
 export const ADVANCE_MS = 700;
 
-/** A row answered here: how and with what, and where it stood in Needs you. */
-interface Settled extends Given {
-  row: InboxRow;
-  at: number;
-  /**
-   * Settled for good, so moved into the Answered group: false for an answer
-   * held where it stands until the engine settles it.
-   */
-  moved?: boolean;
-}
+/**
+ * A row answered here: how and with what, and where the lists place it
+ * ([SettledRow]). HELD where it stood in Needs you until the engine settles
+ * it, at its place among the rows there; or MOVED into the Answered group,
+ * settled for good, in the order it moved on this visit.
+ */
+type Settled = Given &
+  ({ row: InboxRow; moved?: false; at: number } | { row: InboxRow; moved: true; order: number });
 
 /**
  * Needs you with the rows answered here put back where they stood. The engine
@@ -163,7 +161,7 @@ function keepSettled(
   // ONLY WHAT IS HELD stays where it stood: a settled answer has moved to
   // Answered ([pairAnswered]).
   const held = [...settled.values()]
-    .filter((s) => !s.moved && !present.has(s.row.key))
+    .flatMap((s) => (!s.moved && !present.has(s.row.key) ? [s] : []))
     .sort((a, b) => a.at - b.at);
   for (const s of held) out.splice(Math.min(s.at, out.length), 0, s.row);
   return out;
@@ -334,6 +332,10 @@ export function Inbox() {
   // fires rather than from this render: by then the list has been re-read.
   const live = useRef({ open, order, settled, index });
   live.current = { open, order, settled, index };
+  // THE MOVES ON THIS VISIT, counted, so Answered's head is in the order the
+  // rows moved ([pairAnswered]): a run's answer is held as sent before it
+  // moves, and its entry was made before rows answered in the meantime.
+  const moves = useRef(0);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const settle = useCallback(
@@ -361,10 +363,7 @@ export function Inbox() {
         // ONCE: a second word on a row already moved (a press repeated before
         // the list drew again) answers nothing and moves nobody on twice.
         if (live.current.settled.get(row.key)?.moved) return;
-        const at = live.current.order
-          .filter((r) => r.kind !== "notice" && r.kind !== "answered")
-          .findIndex((r) => r.key === row.key);
-        const given: Settled = { label, row, at: Math.max(0, at), moved: true };
+        const given: Settled = { label, row, moved: true, order: ++moves.current };
         if (answer) given.answer = answer;
         setSettled((was) => new Map(was).set(row.key, given));
         setArrived(row.key);
