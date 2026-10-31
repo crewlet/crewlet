@@ -47,8 +47,12 @@ func (committingLog) LastSeq(context.Context, string) (uint64, bool, error) { re
 // The index is one a node asked for the same read before this one established;
 // a barrier that started after the request reached that node and committed is
 // a bound on every write acknowledged before the request began, whichever
-// node's applier the read is then served from. The control appends: without
-// it a reader that never appended anything would pass the case.
+// node's applier the read is then served from. What the read waits for is
+// the record BEFORE the index, as it is before its own barrier — the barrier
+// writes no row on any node — so the position the waiter is handed is that
+// record's, spelled out here rather than derived, so a reader that waited for
+// the barrier itself again is seen. The control appends: without it a reader
+// that never appended anything would pass the case.
 func TestAReadHandedAReadIndexWaitsForItAndAppendsNothing(t *testing.T) {
 	t.Parallel()
 	var appends atomic.Int64
@@ -74,8 +78,9 @@ func TestAReadHandedAReadIndexWaitsForItAndAppendsNothing(t *testing.T) {
 	if got := appends.Load(); got != 1 {
 		t.Errorf("a read handed a read index appended %d more barrier(s)", got-1)
 	}
-	if got := waiter.last.Load(); got != held.Packed() {
-		t.Errorf("the read waited for %d, want the index it was handed (%d)", got, held.Packed())
+	if want := held.At(held.Seq - 1); waiter.last.Load() != want.Packed() {
+		t.Errorf("the read waited for %d, want the record before the index it was handed (%d)",
+			waiter.last.Load(), want.Packed())
 	}
 
 	// NOT AN INDEX FROM A GENERATION THIS NODE'S LOG HAS PASSED: its
@@ -89,14 +94,16 @@ func TestAReadHandedAReadIndexWaitsForItAndAppendsNothing(t *testing.T) {
 		t.Errorf("a read handed an index of a generation its log has passed appended %d "+
 			"barrier(s) of its own, want one", got-1)
 	}
-	if got := waiter.last.Load(); got != barrierAt.Packed() {
-		t.Errorf("the read waited for %d, want its own barrier's position (%d)", got, barrierAt.Packed())
+	if want := barrierAt.At(barrierAt.Seq - 1); waiter.last.Load() != want.Packed() {
+		t.Errorf("the read waited for %d, want the record before its own barrier (%d)",
+			waiter.last.Load(), want.Packed())
 	}
 }
 
 // A REFUSED READ SAYS WHAT IT PAID FOR, AND A NODE ASKED NEXT PAYS FOR NONE OF
-// IT. The first node appends its barrier and waits its whole bound for it:
-// refused `behind`, carrying the read index and the position it waited out.
+// IT. The first node appends its barrier and waits its whole bound for the
+// record before it: refused `behind`, carrying the read index (the barrier)
+// and the position it waited out (that record).
 // Handed both, the next node appends nothing and waits for nothing — refused
 // `behind` at once, its applier being no further on. Asked afresh, it
 // appended a barrier of its own and waited another whole read budget.
@@ -120,10 +127,10 @@ func TestARefusedReadSaysWhatItPaidForAndTheNextNodePaysForNone(t *testing.T) {
 		t.Fatalf("the first refusal came after %v, before the read budget (%v) it waits",
 			waited, statelog.ReadBudget)
 	}
-	if want := []statelog.Position{barrierAt}; !slices.Equal(first.Spent.Index, want) ||
-		!slices.Equal(first.Spent.Waited, want) {
-		t.Fatalf("the refusal says it paid for %+v, want the read index and the position it "+
-			"waited out, both %v", first.Spent, barrierAt)
+	if waited := barrierAt.At(barrierAt.Seq - 1); !slices.Equal(first.Spent.Index, []statelog.Position{barrierAt}) ||
+		!slices.Equal(first.Spent.Waited, []statelog.Position{waited}) {
+		t.Fatalf("the refusal says it paid for %+v, want the read index %v and the position it "+
+			"waited out, the record before it, %v", first.Spent, barrierAt, waited)
 	}
 
 	begun = time.Now()
