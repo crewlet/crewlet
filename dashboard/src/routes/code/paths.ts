@@ -5,7 +5,7 @@
 
 import { href } from "~/app/router.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
-import { changeRef, repoPath } from "~/lib/code.ts";
+import { changeRef, commitPath, repoPath } from "~/lib/code.ts";
 
 /** A repository page's tabs, the overview first: what a reader opens a repository for. */
 export const REPO_TABS = [
@@ -41,6 +41,23 @@ export function repoHref(repo: string, at: RepoAt = {}): string {
     if (value && !(key === "tab" && value === "overview")) query[key] = value;
   }
   return href(repoPath(repo), query);
+}
+
+/** A commit's page, by its whole id. */
+export function commitHref(repo: string, sha: string): string {
+  return href(commitPath(repo, sha));
+}
+
+/**
+ * A comparison of two revisions of a repository, `#/code/repos/{name}/compare`:
+ * `base=` (none is the default branch) and `head=`, each as a revision is
+ * named on the repository's page.
+ */
+export function compareHref(repo: string, at: { base?: string; head?: string } = {}): string {
+  const query: Record<string, string> = {};
+  if (at.base) query.base = at.base;
+  if (at.head) query.head = at.head;
+  return href([...repoPath(repo), "compare"], query);
 }
 
 /**

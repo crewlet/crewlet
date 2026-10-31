@@ -85,6 +85,8 @@ const Changes = lazyScreen("code", (m) => m.Changes);
 const ChangePage = lazyScreen("code", (m) => m.ChangePage);
 const Repositories = lazyScreen("code", (m) => m.Repositories);
 const RepositoryPage = lazyScreen("code", (m) => m.RepositoryPage);
+const CommitPage = lazyScreen("code", (m) => m.CommitPage);
+const ComparePage = lazyScreen("code", (m) => m.ComparePage);
 const Pushes = lazyScreen("code", (m) => m.Pushes);
 const OrgChart = lazyScreen("agents", (m) => m.OrgChart);
 const Roster = lazyScreen("agents", (m) => m.People);
@@ -190,6 +192,10 @@ export function screenFor(route: Resolved): ReactNode {
       return <Repositories />;
     case "code-repo":
       return <RepositoryPage key={route.repo} repo={route.repo} />;
+    case "code-commit":
+      return <CommitPage key={`${route.repo}/${route.sha}`} repo={route.repo} sha={route.sha} />;
+    case "code-compare":
+      return <ComparePage key={route.repo} repo={route.repo} />;
     case "code-pushes":
       return <Pushes />;
     case "org-chart":

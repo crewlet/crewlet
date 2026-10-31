@@ -31,22 +31,39 @@ export function revisionWord(repo: CodeRepoDetail, rev: string): string {
  * and the revision the address names where neither page holds it (a branch
  * past the first page, or a commit a Permalink names), so an address always
  * reads as itself.
+ *
+ * `unset` is what no revision means where it is not the default branch — a
+ * comparison's head, chosen or not — and the default branch is then listed
+ * by its name like any other.
  */
 export function RefPicker({
   repo,
   value,
   onChoose,
+  label = "Revision",
+  unset,
 }: {
   repo: CodeRepoDetail;
   value: string;
   onChoose: (rev: string) => void;
+  label?: string;
+  unset?: string;
 }) {
   const branches = useCodeQuery("code_refs", { name: repo.name });
   const tags = useCodeQuery("code_refs", { name: repo.name, prefix: TAG_PREFIX });
-  const options = [{ value: "", label: `${repo.default_branch} (default)` }];
+  const options = [
+    unset === undefined
+      ? { value: "", label: `${repo.default_branch} (default)` }
+      : { value: "", label: unset },
+  ];
   for (const r of branches.data?.refs ?? []) {
     const name = refName(r.ref).name;
-    if (name !== repo.default_branch) options.push({ value: name, label: name });
+    if (unset !== undefined || name !== repo.default_branch) {
+      options.push({
+        value: name,
+        label: name === repo.default_branch ? `${name} (default)` : name,
+      });
+    }
   }
   for (const r of tags.data?.refs ?? [])
     options.push({ value: r.ref, label: `tag ${refName(r.ref).name}` });
@@ -60,7 +77,7 @@ export function RefPicker({
       value={value}
       onChange={(next) => onChoose(String(next))}
       options={options}
-      ariaLabel="Revision"
+      ariaLabel={label}
       emptyMessage="No branch or tag matches"
       active={value !== ""}
     />

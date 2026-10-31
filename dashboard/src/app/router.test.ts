@@ -672,6 +672,39 @@ describe("the resolver", () => {
     ]);
   });
 
+  // A COMMIT'S PAGE NAMES ITS COMMIT WHOLE, and a comparison is its
+  // repository's; both trails lead back through the repository. Mutation:
+  // take an abbreviation as a commit's page, or drop the repository's crumb,
+  // and this fails.
+  test("a commit's page is by its whole id, and a comparison is its repository's", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    expect(resolve(["code", "repos", "web", "commits", sha])).toMatchObject({
+      screen: "code-commit",
+      repo: "web",
+      sha,
+      workspace: "code",
+    });
+    for (const short of ["0123456", sha.toUpperCase(), `${sha}0`]) {
+      expect(resolve(["code", "repos", "web", "commits", short]).resolved, short).toBe(false);
+    }
+    expect(resolve(["code", "repos", "web", "compare"])).toMatchObject({
+      screen: "code-compare",
+      repo: "web",
+    });
+    expect(crumbsFor(["code", "repos", "web", "commits", sha]).map((c) => c.label)).toEqual([
+      "Code",
+      "Repositories",
+      "web",
+      "0123456",
+    ]);
+    expect(crumbsFor(["code", "repos", "web", "compare"]).map((c) => c.label)).toEqual([
+      "Code",
+      "Repositories",
+      "web",
+      "Compare",
+    ]);
+  });
+
   // A CHANGE IS ITS REPOSITORY'S, at the path its reference is short for, and
   // numbered from 1: a number with a leading zero, or none, is no change's.
   // Mutation: read the number off any segment, and `042` is a change.

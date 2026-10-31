@@ -37,6 +37,7 @@ import {
   tabId,
 } from "@crewlethq/ui";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { closedBy } from "~/app/nav.ts";
 import { href } from "~/app/router.tsx";
@@ -49,7 +50,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import type { CodeOwner, CodeRepoDetail, CodeRuleGate } from "~/protocol/index.ts";
 import { PushHistory } from "../Pushes.tsx";
-import { REPO_TABS, repoHref, type RepoTab } from "../paths.ts";
+import { REPO_TABS, compareHref, repoHref, type RepoTab } from "../paths.ts";
 import { Files, Readme } from "./Files.tsx";
 import { Branches, Commits } from "./History.tsx";
 
@@ -106,6 +107,13 @@ export function RepositoryPage({ repo }: { repo: string }) {
   }
   return (
     <>
+      {detail.head && (
+        <PageActions>
+          <ButtonLink size="small" variant="secondary" href={compareHref(detail.name)}>
+            Compare
+          </ButtonLink>
+        </PageActions>
+      )}
       <header>
         <RepoHeader repo={detail} />
         <Tabs

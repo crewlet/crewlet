@@ -138,6 +138,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "a finding's Apply suggestion, on the line the finding is on",
     suite: "routes/code/change/ChangePage.test.tsx",
   },
+  "routes/code/commit/ComparePage.tsx": {
+    why:
+      "a comparison's Open change — one code_open_change of the branch compared into " +
+      "the base branch — and the dialog it opens",
+    suite: "routes/code/commit/CommitPage.test.tsx",
+  },
   "routes/work/NewTask.tsx": {
     why:
       "the New task sheet's Create — one create_work_item carrying the whole task — " +

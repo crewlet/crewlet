@@ -8,7 +8,9 @@
  * THE HISTORY is git's (`code_log`): the commits that changed the path, or any
  * path, newest first from the revision, a page at a time, each with the push
  * that introduced it where the answering git node's index holds it — who
- * pushed it, which the commit's own author line is not. A page is what the
+ * pushed it, which the commit's own author line is not — each opening the
+ * commit's own page, and each branch but the default offering a comparison
+ * with it. A page is what the
  * walk covered, so one can be short with more to come, and the first page is
  * held still from the press of Load older (`lib/usePaged.ts`).
  */
@@ -32,7 +34,7 @@ import type {
   CodeRefsAnswer,
   CodeRepoDetail,
 } from "~/protocol/index.ts";
-import { repoHref } from "../paths.ts";
+import { commitHref, compareHref, repoHref } from "../paths.ts";
 import { RefPicker, revisionWord } from "./refs.tsx";
 
 /** The repository's branches, the default first in name order as the engine lists them, each opening its files. */
@@ -118,6 +120,21 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
                   Commits →
                 </a>
               ),
+            },
+            {
+              key: "compare",
+              header: "Compare",
+              shrink: true,
+              drop: 2,
+              // WITH THE DEFAULT BRANCH, which a branch is proposed into
+              // unless a change names another; nothing for the default
+              // branch itself, which compares with nothing here.
+              cell: (r) =>
+                branchRev(repo, r) ? (
+                  <a className="t-link" href={compareHref(repo.name, { head: branchRev(repo, r) })}>
+                    Compare →
+                  </a>
+                ) : null,
             },
           ]}
         />
@@ -232,6 +249,7 @@ export function Commits({ repo }: { repo: CodeRepoDetail }) {
           rowKey={(c) => c.oid}
           // GIT'S ORDER: every parent after every child.
           serverSorted
+          rowHref={(c) => commitHref(repo.name, c.oid)}
           onLoadMore={paged.more ? paged.older : undefined}
           loadedNote={paged.more ? `${plural(rows.length, "commit")} loaded` : undefined}
           aria-label={`History of ${revisionWord(repo, rev)}`}

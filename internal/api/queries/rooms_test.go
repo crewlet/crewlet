@@ -389,23 +389,18 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // reads one of these deletes its line, as the Code workspace's Repositories
 // and Pushes deleted the lines of `code_repos` and `code_pushes`, Code ›
 // Changes and its peek those of `code_changes` and `code_change`, a change's
-// page its routing's, `code_change_routing`, and a repository's own page those
-// of `code_repo` (which `crewlet code status -repo` reads too) and of its
+// page its routing's, `code_change_routing`, a repository's own page those of
+// `code_repo` (which `crewlet code status -repo` reads too) and of its
 // content, `code_refs`, `code_tree`, `code_blob`, `code_log` and
-// `code_blame`. And a seat's reviews, read by a script on the path
-// api-endpoints.md prints (docs/reference/api-endpoints.md, "The code reads")
-// until a seat's page draws the reviews it gave. And a repository's diffs,
-// comparisons and commits, read by a script on the paths api-endpoints.md
-// prints ("A repository's content") until the workspace draws a commit's page
-// and a comparison. And the tracker's own inbox, `work_inbox`, which the Inbox
-// reads composed with the code host's through `inbox` and a script and a
-// seat's tool read alone.
+// `code_blame`, and a commit's page and a comparison those of `code_commit`,
+// `code_diff` and `code_compare`. And a seat's reviews, read by a script on
+// the path api-endpoints.md prints (docs/reference/api-endpoints.md, "The code
+// reads") until a seat's page draws the reviews it gave. And the tracker's own
+// inbox, `work_inbox`, which the Inbox reads composed with the code host's
+// through `inbox` and a script and a seat's tool read alone.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
 	"code_reviews":      "a script: GET /code/reviews, as docs/reference/api-endpoints.md prints it",
-	"code_diff":         "a script: GET /code/repos/{name}/diff, as docs/reference/api-endpoints.md prints it",
-	"code_compare":      "a script: GET /code/repos/{name}/compare, as docs/reference/api-endpoints.md prints it",
-	"code_commit":       "a script: GET /code/repos/{name}/commits/{sha}, as docs/reference/api-endpoints.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with the code host's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and

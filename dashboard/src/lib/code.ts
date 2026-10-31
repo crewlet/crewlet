@@ -432,6 +432,18 @@ export function repoPath(repo: string): string[] {
   return ["code", "repos", repo];
 }
 
+/** A commit's own page, by its whole id: `#/code/repos/{name}/commits/{sha}`. */
+export function commitPath(repo: string, sha: string): string[] {
+  return ["code", "repos", repo, "commits", sha];
+}
+
+/**
+ * Git's id of the tree with nothing in it, which git knows without holding
+ * it: what a root commit's change is measured from, so its diff is every file
+ * it holds (the engine's own `emptyTreeID`, internal/code/host/build.go).
+ */
+export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 /** The last segment of a path from a repository's root: what a listing names an entry by. */
 export function baseName(path: string): string {
   const cut = path.lastIndexOf("/");

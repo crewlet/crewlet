@@ -307,6 +307,18 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  code_open_change: {
+    // A COMPARISON'S OPEN CHANGE (`routes/code/commit/ComparePage.tsx`): the
+    // branch compared, proposed into the base branch, its title, description,
+    // work item (prefilled with the one the push that brought its head was
+    // charged to), reviewers to ask once it is open, and whether it opens as
+    // a draft. It names its repository, since no change exists yet to carry
+    // one.
+    args: ["repo", "branch", "target", "title", "body", "draft", "reviewers", "work_item"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
   code_apply_suggestions: {
     // APPLY SUGGESTION on a finding: a commit on the change's branch putting
     // the suggested lines in place, against the head on screen

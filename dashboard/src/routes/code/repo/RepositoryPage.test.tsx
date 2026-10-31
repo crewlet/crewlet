@@ -372,8 +372,8 @@ test("the branches are the engine's refs, each opening its files", async () => {
 
 // THE HISTORY IS READ AT THE REVISION AND THE PATH, with who pushed each
 // commit from the page that named it, and Load older asks the cursor.
-// Mutation: drop the path, or read who pushed off the commit's author, and
-// this fails.
+// Mutation: drop the path, read who pushed off the commit's author, or link a
+// commit anywhere but its own page, and this fails.
 test("the history is read at the revision and the path, with who pushed each commit", async () => {
   const asked = stubEngine();
   mount("#/code/repos/web?tab=commits&ref=feature&path=src");
@@ -381,6 +381,12 @@ test("the history is read at the revision and the path, with who pushed each com
   const grid = await screen.findByRole("table", { name: "History of feature" });
   expect(within(grid).getByText("Start the storefront")).toBeTruthy();
   expect(within(grid).getByText("CTO")).toBeTruthy();
+  // EACH COMMIT OPENS ITS OWN PAGE, by its whole id.
+  expect(
+    within(grid)
+      .getAllByRole("link")
+      .map((a) => a.getAttribute("href")),
+  ).toContain(`#/code/repos/web/commits/${HEAD}`);
   const first = reads(asked, "code_log")[0];
   expect(first?.searchParams.get("ref")).toBe("feature");
   expect(first?.searchParams.get("path")).toBe("src");

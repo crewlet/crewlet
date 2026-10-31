@@ -75,6 +75,14 @@ export const CONTAINER_SHAPE = /^[^a-z]+$/;
  * is no change's reference, so `…/changes/042` is no change's page.
  */
 export const CHANGE_NUMBER_SHAPE = /^[1-9][0-9]{0,15}$/;
+/**
+ * A commit's WHOLE id, as a commit's page names it: forty hex digits, the
+ * engine's repositories being object-format sha1 (`gitref.OIDHexLen`). An
+ * abbreviation is no page, because the engine's `code_commit` takes none —
+ * the object an abbreviation finds can change as objects arrive, and a page
+ * is an address that says the same thing tomorrow.
+ */
+export const COMMIT_ID_SHAPE = /^[0-9a-f]{40}$/;
 
 /** My work's sections below its queue. */
 export type MeSection =
@@ -207,6 +215,8 @@ export type FramedScreen =
   | { screen: "code-change"; repo: string; number: number }
   | { screen: "code-repos" }
   | { screen: "code-repo"; repo: string }
+  | { screen: "code-commit"; repo: string; sha: string }
+  | { screen: "code-compare"; repo: string }
   | { screen: "code-pushes" }
   | { screen: "principles" }
   | { screen: "brand" }
@@ -424,6 +434,18 @@ function code(rest: string[], screen: Make, under: Under): Route {
   // as a change's page does.
   if (first === "repos" && tail.length === 1 && tail[0]) {
     return screen({ screen: "code-repo", repo: tail[0] });
+  }
+  // A COMPARISON OF TWO OF ITS REVISIONS, which `base=` and `head=` name.
+  if (first === "repos" && tail.length === 2 && tail[0] && tail[1] === "compare") {
+    return screen({ screen: "code-compare", repo: tail[0] });
+  }
+  // A COMMIT'S OWN PAGE, by its whole id: see [COMMIT_ID_SHAPE].
+  if (first === "repos" && tail.length === 3 && tail[1] === "commits") {
+    const [repo, , sha] = tail;
+    if (repo && sha && COMMIT_ID_SHAPE.test(sha)) {
+      return screen({ screen: "code-commit", repo, sha });
+    }
+    return missing("code", under("Code"), "A commit's page names its commit by its whole id");
   }
   // A CHANGE'S OWN PAGE, under its repository: `repos/{name}/changes/{n}`,
   // the path its reference (web!42) is the short form of — and the engine's

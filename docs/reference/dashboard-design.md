@@ -1277,7 +1277,9 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/code` | **Code › Changes**, Code's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, standing blockers and when it was opened — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer or a need) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `peek=change:{repo}!{n}` |
 | `#/code/repos` | **Code › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its page | `status=active\|archived\|deleted\|purging` (none is active and archived) |
-| `#/code/repos/{name}` | **A repository**: its header (name, description, state, owner, default branch and head, which seats read it, last push, size) and tabs **Overview** (what it holds and the README at its default branch's root), **Files** (a directory's listing or a file's numbered lines at a revision, the lines picked ruled, its **Blame**, its **History** and a **Permalink** at the commit the revision resolved to), **Branches** (its live branches by name, each opening its files), **Commits** (the history at a revision, of a path or of every path, with who pushed each commit), **Pushes** (its push history) and **Settings** (its settings, rules, merge gates and path owners, shown and never edited here: a declared repository's lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place | `tab=overview\|files\|branches\|commits\|pushes\|settings` · on Files and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Files, `lens=blame` and `lines=` (`12`, or `12-20`) |
+| `#/code/repos/{name}` | **A repository**: its header (name, description, state, owner, default branch and head, which seats read it, last push, size) and tabs **Overview** (what it holds and the README at its default branch's root), **Files** (a directory's listing or a file's numbered lines at a revision, the lines picked ruled, its **Blame**, its **History** and a **Permalink** at the commit the revision resolved to), **Branches** (its live branches by name, each opening its files), **Commits** (the history at a revision, of a path or of every path, with who pushed each commit), **Pushes** (its push history) and **Settings** (its settings, rules, merge gates and path owners, shown and never edited here: a declared repository's lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place. Its page bar's **Compare** opens a comparison | `tab=overview\|files\|branches\|commits\|pushes\|settings` · on Files and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Files, `lens=blame` and `lines=` (`12`, or `12-20`) |
+| `#/code/repos/{name}/commits/{sha}` | **A commit**, by its whole id: its header (subject, short id, repository, author, when it was authored and committed, its parents), who pushed it — the seat or the credential, when and how, and the turn, coding run and work item behind a seat's push, as the engine recorded them — the changes it belongs to (those it merged, and those whose revision it heads), and what it changed against its first parent (a root commit's from git's empty tree) in the one `DiffView` *(hidden where the company hosts no code)*. An abbreviated id is Not Found | `file=` (a path) · `layout=unified\|split` |
+| `#/code/repos/{name}/compare` | **A comparison** of two revisions: how they relate (ahead, behind, their merge base), what merging the compared into the base would do (merges cleanly, or conflicts in which paths), what it changed since the two parted in the one `DiffView`, and the page bar's **Open change**, which proposes the compared branch into the base branch, prefilled with its head's subject and the work item its push was charged to *(hidden where the company hosts no code)* | `base=` (none is the default branch) · `head=` (none asks for it) · `file=` · `layout=unified\|split` |
 | `#/code/repos/{name}/changes/{n}` | **A change**, `web!42` in full: its header (reference, title, state, repository, branches, owner, revisions, work item) and the page bar's **Approve**, **Request changes**, **Comment**, **Request review** and **Close**/**Reopen**; tabs **Conversation** (its readiness, description, and its reviews, threads and revisions in the order their records landed, with a comment of the reader's own), **Files** (the revision's files and one file's patch in the one `DiffView`, every finding and thread under the line it is on, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head), **Commits** (its revisions and their facts), **Provenance** (who opened it, from which turn and coding run, for which work item, and how it ended) and **Woke** (whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|files\|commits\|provenance\|woke` · on Files, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
 | `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
@@ -7057,7 +7059,44 @@ section mounts.
   every activation, and lead to Settings › Configuration; one a tool made is
   changed by the code tools' lifecycle requests (`code_update_repo`,
   `code_protect_branch`). Content is not polled: a reader reading a file reads
-  the revision they opened.
+  the revision they opened. A commit of its history, and of a blame, opens
+  the commit's page; a branch offers a comparison with the default branch.
+- **A commit's page**, `#/code/repos/{name}/commits/{sha}`, names its commit
+  by its WHOLE id — the one spelling no push can move; an abbreviation is no
+  page, as `code_commit` takes none. It is the commit as the history lists it
+  beside what the ROWS say of it (`code_commit`): the push that introduced it,
+  by the answering git node's index of pushes and that push's row — who
+  pushed it, when and how, and the turn, the coding run and the work item
+  behind a seat's push, as the engine recorded them, which a commit's own
+  author line is not — or, where the index names none, why; and the changes
+  it belongs to, those it merged and those whose revision it heads, each
+  linking its page. What it changed is read against its first parent, as git
+  shows a commit (a merge's change is what it brought into the branch it was
+  made on; a root commit's every file it holds, from git's empty tree), by
+  both whole ids, so every page of it is immutable: the files a page at a
+  time, and one file's patch (`file=`, the first where none is named) in the
+  one `DiffView`, `layout=unified` or `split`. A change's revisions link
+  their heads here.
+- **A comparison**, `#/code/repos/{name}/compare`, compares `head=` with
+  `base=` (none is the default branch), each named as a revision on the
+  repository's page; with no head it asks for one. `code_compare` resolves
+  both in one read and answers how the two commits relate — their merge base,
+  which contains which, how many commits each has that the other lacks — and
+  the merge preview, asked of the repository's home git node by the two whole
+  ids the comparison answered, the one merge a change's mergeability is
+  recorded by: **Merges cleanly**, or **Conflicts** with the paths, or that
+  the home could not decide it in a read's time. The merge preview is the one
+  state the page wears a tone for. What head changed is read from the merge
+  base to head (the three-dot reading every code host shows), both whole.
+  **Open change** is one `code_open_change` of the compared branch into the
+  base branch, prefilled with the subject of the commit head stands at and the
+  work item the push that brought it was charged to (`<tracker>:<key>`, as
+  the engine stamped it), each the reader's to change or clear, with reviewers
+  and a draft; it is drawn for every reader and held with the reason where
+  head is not a branch, base is not one, the two are one branch, head has no
+  commit base lacks, a live change already proposes head's commit (which it
+  then links), or that commit is still being read. Nothing moves until the
+  engine answers, and an applied open leads to the change it opened.
 - **Pushes** is one repository's history, `code_pushes`, newest first in the
   order the pushes landed. The engine keeps a history per repository and none
   that spans them, so the section is narrowed to one by `repo=` — chosen from

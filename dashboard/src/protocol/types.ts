@@ -6693,6 +6693,9 @@ export interface CodePushRun {
   work_backend?: string;
   work_key?: string;
   model?: string;
+  /** The coding run behind a box's push, and the coding agent it ran: both or neither. */
+  run_id?: string;
+  coding_agent?: string;
 }
 
 /** One push as its repository's history keeps it (`code.PushRow`). */
@@ -7350,14 +7353,81 @@ export interface CodeGitAnswer {
   blob?: CodeBlobAnswer;
   log?: CodeLogAnswer;
   blame?: CodeBlameAnswer;
+  diff?: CodeDiffAnswer;
+  compare?: CodeCompareFacts;
   resolved?: Record<string, CodeResolved>;
   position?: LogPosition;
   pushed_by?: Record<string, CodePushedBy>;
   coverage?: CodeCoverage;
 }
 
+/** How two commits relate (`code.CompareAnswer`). */
+export interface CodeCompareFacts {
+  /** The commits compared, whole; their best common ancestor, absent for histories that share none. */
+  base: string;
+  head: string;
+  merge_base?: string;
+  /** Head contains base (a fast-forward from base to head), and the reverse. */
+  base_is_ancestor: boolean;
+  head_is_ancestor: boolean;
+  /** The commits head has that base lacks, and the reverse. */
+  ahead: number;
+  behind: number;
+  /** The first page of what head changed since the merge base; the counts are over all of it. */
+  files: CodeDiffFile[] | null;
+  total: number;
+  added: number;
+  deleted: number;
+}
+
+/**
+ * What merging head into base would do, as the repository's home merges it
+ * (`queries.CodeMergePreview`): `clean`, `conflict` with the paths, or
+ * `unknown` for a merge its home could not decide within a read's time.
+ */
+export interface CodeMergePreview {
+  state: "clean" | "conflict" | "unknown" | (string & {});
+  conflicts?: string[];
+  conflicts_omitted?: number;
+}
+
+/** `code_compare`: how two revisions relate, and the merge preview (`queries.CodeComparison`). */
+export interface CodeComparisonAnswer extends CodeGitAnswer {
+  preview: CodeMergePreview;
+}
+
+/** A change as a row about it names it (`code.ChangeName`): its repository, reference, title and state. */
+export interface CodeChangeName {
+  repo: string;
+  ref: string;
+  title: string;
+  state: CodeChangeState;
+}
+
+/**
+ * `code_commit`: one commit by its whole id (`queries.CodeCommit`) — as the
+ * history lists it, the push that introduced it (by the git node's index, and
+ * that push's row where the history still holds it) and the changes it
+ * belongs to: those whose merge it is and the revisions it heads.
+ */
+export interface CodeCommitAnswer {
+  repo: string;
+  commit: CodeLogCommit;
+  pushed_by?: CodePushedBy;
+  push?: CodePushRow;
+  coverage?: CodeCoverage;
+  merged?: CodeChangeName[];
+  revisions?: { change: CodeChangeName; n: number }[];
+  more?: boolean;
+  position: LogPosition;
+  level: ReadLevel;
+}
+
 /** The code questions the dashboard asks, and what each answers. */
 export interface CodeQueryMap {
+  code_commit: CodeCommitAnswer;
+  code_diff: CodeGitAnswer;
+  code_compare: CodeComparisonAnswer;
   code_repos: CodeReposAnswer;
   code_repo: CodeRepoAnswer;
   code_refs: CodeRefsAnswer;

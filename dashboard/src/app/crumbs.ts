@@ -278,6 +278,16 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       // A REPOSITORY IS ONE OF CODE'S REPOSITORIES: the trail leads back to
       // the listing, and names the repository as git does, in the code face.
       return inside("repos", { label: where.repo, mono: true });
+    case "code-commit":
+    case "code-compare":
+      // A COMMIT AND A COMPARISON ARE A REPOSITORY'S: the trail leads back to
+      // it, and names a commit by its short id, as git abbreviates one.
+      return [
+        ...inside("repos", { label: where.repo, mono: true, path: ["code", "repos", where.repo] }),
+        where.screen === "code-commit"
+          ? { label: where.sha.slice(0, 7), mono: true }
+          : { label: "Compare" },
+      ];
     case "code-pushes":
       return sectionPage("pushes");
     case "item": {

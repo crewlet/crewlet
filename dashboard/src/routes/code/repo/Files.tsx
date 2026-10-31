@@ -54,7 +54,7 @@ import type {
   CodeRepoDetail,
   CodeTreeEntry,
 } from "~/protocol/index.ts";
-import { repoHref } from "../paths.ts";
+import { commitHref, repoHref } from "../paths.ts";
 import { RefPicker, revisionWord } from "./refs.tsx";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
@@ -573,7 +573,10 @@ function Blame({
                 <td className="code-blame__commit">
                   {run && (
                     <span title={c?.subject ?? l.commit}>
-                      <span className="mono">{shortOID(l.commit)}</span> {c?.author ?? ""}
+                      <a className="mono prose-link" href={commitHref(repo.name, l.commit)}>
+                        {shortOID(l.commit)}
+                      </a>{" "}
+                      {c?.author ?? ""}
                       <span className="muted"> {c ? fmtDateTime(c.authored_at) : ""}</span>
                     </span>
                   )}

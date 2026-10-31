@@ -2867,6 +2867,21 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	code_open_change: {
+		args: [
+			"repo",
+			"branch",
+			"target",
+			"title",
+			"body",
+			"draft",
+			"reviewers",
+			"work_item"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
+	},
 	code_apply_suggestions: {
 		args: [
 			"repo",

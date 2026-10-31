@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 import { EmptyValue, Stack, Tag } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { codeReasonPhrase, refName, shortOID } from "~/lib/code.ts";
+import { codeReasonPhrase, commitPath, refName, shortOID } from "~/lib/code.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
@@ -36,7 +36,14 @@ export function Commits({
       {revisions.map((r) => (
         <li key={r.n} className="code-entry">
           <p>
-            <strong>Revision {r.n}</strong> <span className="mono">{shortOID(r.head)}</span>{" "}
+            <strong>Revision {r.n}</strong>{" "}
+            <a
+              className="mono prose-link"
+              href={href(commitPath(change.repo, r.head))}
+              title={r.head}
+            >
+              {shortOID(r.head)}
+            </a>{" "}
             {r.n === change.revision && <Tag appearance="outline">head</Tag>} pushed by{" "}
             {seatBadge(r.pusher).name} <span className="muted">{fmtDateTime(r.at)}</span>
           </p>
