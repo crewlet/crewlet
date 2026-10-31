@@ -66,11 +66,21 @@ func LimitsOf(c config.Code) Limits {
 // TWO — HALF — is the engine's rule for an untrusted class beside a trusted
 // one (a git node's seat git work holds half its read lane, [GitShare]): the
 // owners always keep half, and the outside seats share the other half among
-// themselves. A JUDGMENT CALL, taken as the product's: half, and no per-seat
-// bound within it — one outside seat can take the outside half from the
-// others, which a per-seat count would stop at the cost of a counter table
-// this build does not keep. A quarter would keep owners more and turn
-// cross-unit pushes away sooner.
+// themselves. A JUDGMENT CALL, taken as the product's: a quarter would keep
+// owners more and turn cross-unit pushes away sooner.
+//
+// NO PER-SEAT BOUND WITHIN THE OUTSIDE HALF, the product's call too: one
+// outside seat can take that half from the others. Not for want of a count:
+// a ref's row names the seat that set it inside its own namespace
+// (code_refs.seat, replicated 0087, written by [seatOf]), and those are the
+// only refs an outside seat can create, so a per-seat count of live refs is
+// one partial index away — over (repo_id, seat), of the rows with a target
+// and a seat — with no counter table. Bytes have no such owner: a pack holds
+// whatever its push sent, and once the repository's packs are compacted no
+// byte of them belongs to any one seat, so a per-seat bound could hold an
+// outside seat's refs and never its bytes. One shared half of each keeps the
+// two bounds alike; a per-seat bound on refs alone would still let one seat
+// take the outside bytes from the rest.
 const OutsideSeatShare = 2
 
 // BarrierRecordBytes is what one code-log barrier costs its stream, as the

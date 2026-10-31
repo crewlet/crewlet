@@ -3863,8 +3863,9 @@ rules the committer holds every such push to.
   repository its owners work in and refuse them every push. The other half is
   the owners': a person, and a seat of the owning unit, are held to the whole
   of each. The seats outside share their half, with no bound on any one of
-  them. The refusals are `repo_refs` and `repo_size`, each saying which half
-  it met.
+  them: once a repository's packs are compacted their bytes belong to no one
+  seat, so a bound per seat could hold its refs but never its bytes. The
+  refusals are `repo_refs` and `repo_size`, each saying which half it met.
 - **A daily quota.** A seat lands at most `code.limits.pushes_per_seat_day`
   pushes in one day on the company's calendar
   ([`timezone`](../getting-started/configuration.md#the-companys-clock)),
