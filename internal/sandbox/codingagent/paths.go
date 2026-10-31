@@ -12,6 +12,15 @@
 // (steer.go: Claude Code's hooks, [ClaudeCode]; OpenCode's plugin,
 // opencode_steer.js, [OpenCode]).
 //
+// # A run's commits credit Crewlet, through git
+//
+// A run whose request asks for it ([sandbox.RunRequest.Attribution]) has every
+// commit it authors as itself carry `Co-authored-by: Crewlet
+// <noreply@crewlet.ai>` and the run's own `Crewlet-Run:`, added by a git hook
+// the runner installs in the box and the wrapper points git at through the
+// run's environment — the same for every CLI, and whether or not the model
+// remembered anything (attribution.go, attribution_hook.sh).
+//
 // # A run's output is read as a stream
 //
 // A run's event stream and its error stream grow with the run, so neither is
@@ -179,6 +188,21 @@ func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values"
 // change inside it, so nothing is written there once the run's server starts —
 // the plugin itself writes nothing at all.
 func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
+
+// CommitAttribution is the DIRECTORY holding a run's commit attribution
+// (attribution.go): the hook ([Paths.AttributionHook]) and the directory the
+// run's core.hooksPath names ([Paths.GitHooks]). Under WorkDir, never in the
+// checkout, where a commit could carry it and a `git clean` could remove it;
+// and its own, removed whole before every run ([Runner.ClearArtifacts]).
+func (p Paths) CommitAttribution() string { return p.WorkDir() + "/commit-attribution" }
+
+// AttributionHook is the one script every hook name in [Paths.GitHooks] links
+// to.
+func (p Paths) AttributionHook() string { return p.CommitAttribution() + "/hook" }
+
+// GitHooks is the directory a run's core.hooksPath names, linking
+// [Paths.AttributionHook] under every hook git runs by name.
+func (p Paths) GitHooks() string { return p.CommitAttribution() + "/hooks" }
 
 // Findings is the agent's authoritative final report.
 //
