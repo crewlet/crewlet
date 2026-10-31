@@ -79,13 +79,15 @@ const INCOMPLETE: CoverageFacts = {
   },
 };
 
-// THE NEW TASK SHEET'S CODE IS IN BEFORE A CASE STARTS. The sheet is the work
-// chunk's, loaded on first open, and what these cases assert is that the
-// frame opens it, not how long a cold `import()` of that chunk takes under a
-// test transformer, which a `waitFor` would otherwise be measuring (the same
-// reason `App.test.tsx` loads every chunk first).
+// THE NEW TASK SHEET'S CODE AND THE PALETTE'S ARE IN BEFORE A CASE STARTS.
+// Each is a chunk loaded on first open, and what these cases assert is that
+// the frame opens it, not how long a cold `import()` of that chunk takes
+// under a test transformer, which a `waitFor` would otherwise be measuring
+// (the same reason `App.test.tsx` loads every chunk first). Left to the first
+// case that opened it, the palette was in only for the cases after that one,
+// so a case run alone found no dialog.
 beforeAll(async () => {
-  await loadChunk("worklet");
+  await Promise.all([loadChunk("worklet"), loadChunk("palette")]);
 });
 
 beforeEach(() => {
