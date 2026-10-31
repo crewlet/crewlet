@@ -16,7 +16,8 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { keyRow } from "~/app/keymap.ts";
-import { MAX_BODY_BYTES } from "~/contract/chat.ts";
+import { MAX_BODY_BYTES, MAX_MESSAGE_LINKS } from "~/contract/chat.ts";
+import { PAGE_ADDRESS_PREFIX } from "~/contract/links.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import type { QueryName } from "~/protocol/index.ts";
@@ -94,6 +95,56 @@ async function box(): Promise<HTMLTextAreaElement> {
 }
 
 const posts = () => presses.filter((press) => press.tool === "post_message");
+
+describe("the records a message links to", () => {
+  // A RECORD A PERSON LINKS IS PREVIEWED like one a seat links: the composer
+  // sends the records its words link to as the message's links, whole
+  // addresses on this dashboard, once each, and never a page that is not a
+  // record or an address somewhere else.
+  const whole = (hash: string) => new URL(hash, location.href).href;
+  const artifact = "0b0e9a8e-2f4c-4f7e-9d8a-5d1f0c6b7a10";
+  const page = "6a3c1e2b-8d4f-4a9e-b7c6-1f2e3d4c5b6a";
+
+  test("are sent as its links", async () => {
+    mount();
+    const field = await box();
+    fireEvent.change(field, {
+      target: {
+        value: [
+          "[GP-12 Rotate the tokens](#/worklet/GP-12) and",
+          `[the plan](${PAGE_ADDRESS_PREFIX}${page}), [the deck](#/artifacts/${artifact}),`,
+          "[GP-12 again](#/worklet/GP-12), [the room](#/chatlet/browse)",
+          "and [elsewhere](https://example.com/a)",
+        ].join(" "),
+      },
+    });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]!.args.links).toEqual([
+      whole("#/worklet/GP-12"),
+      whole(`${PAGE_ADDRESS_PREFIX}${page}`),
+      whole(`#/artifacts/${artifact}`),
+    ]);
+  });
+
+  test("are as many as a message carries, and none for words alone", async () => {
+    mount();
+    const field = await box();
+    const many = Array.from(
+      { length: MAX_MESSAGE_LINKS + 2 },
+      (_, n) => `[GP-${n + 1}](#/worklet/GP-${n + 1})`,
+    );
+    fireEvent.change(field, { target: { value: many.join(" ") } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0]!.args.links).toHaveLength(MAX_MESSAGE_LINKS);
+
+    fireEvent.change(field, { target: { value: "just words" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(posts()).toHaveLength(2));
+    expect(posts()[1]!.args).not.toHaveProperty("links");
+  });
+});
 
 describe("saying it", () => {
   test("Enter sends a chat message and Shift and Enter is a new line", async () => {

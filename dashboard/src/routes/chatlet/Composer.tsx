@@ -105,7 +105,7 @@ import { MAX_BODY_BYTES } from "~/contract/chat.ts";
 import { textBudget, type TextBudget } from "~/lib/format.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 
-import { AttachDialog, recordLink, type AttachKind } from "./Attach.tsx";
+import { AttachDialog, recordLink, recordLinks, type AttachKind } from "./Attach.tsx";
 import { ChatFace } from "./Face.tsx";
 import { draftKey, useChatDrafts } from "./drafts.ts";
 import { useChatFrame, useChatNav } from "./nav.tsx";
@@ -343,10 +343,12 @@ export function Composer({
 
   const send = () => {
     if (hold) return;
+    const body = value.trim();
     void scope.outbox.send({
       channelID,
       ...(threadRoot ? { threadRoot } : {}),
-      body: value.trim(),
+      body,
+      links: recordLinks(body),
     });
     setValue("");
     onTyping?.(false);

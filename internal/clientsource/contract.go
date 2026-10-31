@@ -124,6 +124,7 @@ var contract = []Entry{
 	{"MAX_TOPIC_CHARS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"MAX_PURPOSE_CHARS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"MAX_DIRECT_PARTICIPANTS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_MESSAGE_LINKS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"CHANNEL_NAME_PATTERN", ReadScalar, "internal/chatlet.TestTheDashboardsChannelNameGrammarIsTheEngines"},
 	{"TYPING_THROTTLE_MS", ReadScalar, "internal/presence.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
 	{"PENDING_REASK_MS", ReadScalar, "internal/chatlet.TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait"},

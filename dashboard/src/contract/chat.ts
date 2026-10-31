@@ -78,6 +78,15 @@ export const MAX_PURPOSE_CHARS = 250;
 export const MAX_DIRECT_PARTICIPANTS = 8;
 
 /**
+ * The most links one message carries, `chatlet.MaxLinks`: a message points at
+ * a page's worth of references at most, and there are no attachments beside
+ * them. The composer sends the records a message links to as its links
+ * (`routes/chatlet/Attach.tsx`'s `recordLinks`), so a body that links more
+ * sends the first of them rather than a message the engine refuses.
+ */
+export const MAX_MESSAGE_LINKS = 8;
+
+/**
  * How often a tab re-asserts that somebody is typing, in ms.
  *
  * THREE SECONDS, AT MOST HALF the engine's `presence.TypingLapse` (six): the

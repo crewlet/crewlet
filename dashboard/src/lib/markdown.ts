@@ -955,6 +955,32 @@ export function imageSources(source: string): string[] {
       else inline(g.label ?? g.strong ?? g.strongUnder ?? g.em ?? g.emUnder ?? g.del ?? "");
     }
   };
+  eachRun(source, inline);
+  return [...out];
+}
+
+/**
+ * Every link target the document names, once each, in order: what a written
+ * `[label](target)` points at, read by the same walk as [imageSources], so a
+ * target inside a code span, which renders as text, is not one.
+ */
+export function linkTargets(source: string): string[] {
+  const out = new Set<string>();
+  const inline = (text: string) => {
+    for (const { groups: g } of markdownInline(text)) {
+      if (g.esc !== undefined || g.tick !== undefined || g.auto !== undefined) continue;
+      if (g.href !== undefined) out.add(g.href);
+      else if (g.src === undefined) {
+        inline(g.strong ?? g.strongUnder ?? g.em ?? g.emUnder ?? g.del ?? "");
+      }
+    }
+  };
+  eachRun(source, inline);
+  return [...out];
+}
+
+/** Hand every run of inline text the renderer draws to `inline`, block by block. */
+function eachRun(source: string, inline: (text: string) => void): void {
   const block = (b: MarkdownBlock) => {
     switch (b.kind) {
       case "heading":
@@ -977,5 +1003,4 @@ export function imageSources(source: string): string[] {
     }
   };
   parseMarkdown(source ?? "").forEach(block);
-  return [...out];
 }

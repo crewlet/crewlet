@@ -347,6 +347,32 @@ func TestASeatsLinkToNoAddressIsRefusedInTheStoresWords(t *testing.T) {
 	}
 }
 
+// A MESSAGE'S LINKS ARE A SET: a link named twice is kept once, in the order
+// it was first written, so it counts once against [chatlet.MaxLinks] and is
+// previewed once. The tool surface reads every list argument that way
+// (argval.Strings, which trims, drops empties and keeps the first of a
+// repeat), so a person's composer and a seat's call land the same set.
+// Mutation: read `links` without argval's cleaning, and the stored links
+// carry the repeat.
+func TestAMessagesLinksAreASet(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	room := r.room(person("jane"), "launch", "eng").Channel.ID
+	seat := newSeatTools(t, r)
+	call := seat.run("run-1")
+	sent := []any{"https://example.com/b", "https://example.com/a", "https://example.com/b"}
+	res, err := call.surface.Execute(t.Context(), llm.ToolCall{Name: chatlet.PostMessageTool,
+		Arguments: map[string]any{"channel": room, "body": "both", "links": sent}})
+	if err != nil || res.Failed {
+		t.Fatalf("post_message: %v %s", err, res.Output)
+	}
+	r.drain()
+	if n := r.count(`SELECT COUNT(*) FROM chat_messages WHERE links = ?`,
+		`["https://example.com/b","https://example.com/a"]`); n != 1 {
+		t.Errorf("%d messages carry the links once each in the order written, want 1", n)
+	}
+}
+
 // seatTools is the seat `eng`'s own chat tools over a round's store, as a real
 // turn reaches them: behind the authority gate, through the tool surface a
 // turn's calls go through, which keeps the run's call log.

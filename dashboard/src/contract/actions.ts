@@ -313,7 +313,7 @@ export const ACTIONS = {
     // what tells a retry from a second remark: the outbox repeats an
     // unanswered message under the key it was first sent with
     // (`routes/chatlet/outbox.ts`).
-    args: ["channel", "body"],
+    args: ["channel", "body", "links"],
     domain: "chat",
     apps: ["chatlet"],
     refreshes: [],
@@ -322,7 +322,7 @@ export const ACTIONS = {
   reply_in_thread: {
     // THE THREAD PANE'S SEND: `reply_to` is the thread's root, and the engine
     // files a reply to a reply under the same one.
-    args: ["channel", "reply_to", "body"],
+    args: ["channel", "reply_to", "body", "links"],
     domain: "chat",
     apps: ["chatlet"],
     refreshes: [],
