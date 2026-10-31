@@ -194,24 +194,36 @@ func (c *Cache) MaintenanceCharge(n int64, limits code.Limits) int64 {
 // charge at its worst for a repository of n objects — each step over all of
 // them.
 func maintenanceCharge(n int64, limits code.Limits) int64 {
-	return max(publicationCharge(n, n, n, limits), compactionCharge(n, limits), expungeCharge(n, n, limits))
+	return max(publicationCharge(n, 0, n, n, limits), compactionCharge(n, limits), expungeCharge(n, n, limits))
 }
 
 // publishCharge is a publication's charge for its multi-pack-index layer and
-// bitmap over a repository of n objects ([Cache.AdmitPublication]).
-func publishCharge(n int64) int64 { return chargeOver(n, PublishBytesPerObject, n) }
+// bitmap over a repository of n objects, the layer written over base layers
+// of its chain ([Cache.AdmitPublication]): a ROOT's (base 0) at
+// PublishBytesPerObject, and one over a base at PublishTailBytesPerObject.
+func publishCharge(n int64, base int) int64 {
+	if base == 0 {
+		return chargeOver(n, PublishBytesPerObject, n)
+	}
+	return chargeOver(n, PublishTailBytesPerObject, n)
+}
 
 // AdmitPublication admits a publication of s's repository — a layer over
-// layerObjects objects, after a repack of repackObjects (0 for none) — or
-// refuses it at once, having started nothing, as [Cache.admitBackground]
-// says. Its steps run ONE AFTER ANOTHER in the one slot it reserves, so its
-// charge is the LARGEST of theirs, each with room for a clone of the whole
-// repository beside it:
+// layerObjects objects written over base layers of its chain (0 for a root),
+// after a repack of repackObjects (0 for none) — or refuses it at once,
+// having started nothing, as [Cache.admitBackground] says. Its steps run ONE
+// AFTER ANOTHER in the one slot it reserves, so its charge is the LARGEST of
+// theirs, each with room for a clone of the whole repository beside it:
 //
-//   - the multi-pack-index layer and its bitmap, PublishBytesPerObject an
-//     object of the WHOLE repository: the bitmap walks every commit however
-//     few objects the layer adds (git 2.56.0's writer reuses no bitmap of
-//     the base);
+//   - the multi-pack-index layer and its bitmap, an amount an object of the
+//     WHOLE repository: the bitmap walks every commit however few objects
+//     the layer adds (git 2.56.0's writer reuses no bitmap of the base) —
+//     PublishBytesPerObject for a ROOT, which writes every commit's bitmap,
+//     and PublishTailBytesPerObject for a layer over a base, the routine
+//     publication, which holds a fraction of that (its figure says how
+//     much). The root's figure, never the base's, is what a repository is
+//     PLACED by ([Cache.MaintenanceCharge]): its maintainer must be able to
+//     publish a root, and does whenever a whole chain is replaced;
 //   - the commit-graph layer with every changed-path filter,
 //     GraphLayerBytesPerObject an object of the layer;
 //   - the repack, a compaction's build over its inputs — CompactBytesPerObject
@@ -231,15 +243,15 @@ func publishCharge(n int64) int64 { return chargeOver(n, PublishBytesPerObject, 
 // pushed since its last publication unbitmapped, and every one pushed after.
 // The record goes when a publication of it is admitted, and when the rows'
 // chain moves — another node published it.
-func (c *Cache) AdmitPublication(s Synced, layerObjects, repackObjects int64, limits code.Limits) (*Admission,
-	error) {
+func (c *Cache) AdmitPublication(s Synced, base int, layerObjects, repackObjects int64, limits code.Limits) (
+	*Admission, error) {
 
-	if layerObjects < 1 || repackObjects < 0 {
-		return nil, fmt.Errorf("%w: a publication of a layer over %d objects after a repack of %d", ErrInvalid,
-			layerObjects, repackObjects)
+	if base < 0 || layerObjects < 1 || repackObjects < 0 {
+		return nil, fmt.Errorf("%w: a publication of a layer over %d objects on %d layers after a repack of %d",
+			ErrInvalid, layerObjects, base, repackObjects)
 	}
 	adm, err := c.admitBackground(s, stepPublishWork, func(objects int64) int64 {
-		return publicationCharge(objects, layerObjects, repackObjects, limits)
+		return publicationCharge(objects, base, layerObjects, repackObjects, limits)
 	})
 	if err == nil {
 		s.entry.mu.Lock()
@@ -250,10 +262,11 @@ func (c *Cache) AdmitPublication(s Synced, layerObjects, repackObjects int64, li
 }
 
 // publicationCharge is what a publication over a repository of objects
-// objects holds — a layer over layerObjects, after a repack of repackObjects
-// (0 for none): the largest of its steps' charges ([Cache.AdmitPublication]).
-func publicationCharge(objects, layerObjects, repackObjects int64, limits code.Limits) int64 {
-	mem := max(publishCharge(objects), chargeOver(layerObjects, GraphLayerBytesPerObject, objects))
+// objects holds — a layer over layerObjects written over base layers, after a
+// repack of repackObjects (0 for none): the largest of its steps' charges
+// ([Cache.AdmitPublication]).
+func publicationCharge(objects int64, base int, layerObjects, repackObjects int64, limits code.Limits) int64 {
+	mem := max(publishCharge(objects, base), chargeOver(layerObjects, GraphLayerBytesPerObject, objects))
 	if repackObjects > 0 {
 		mem = max(mem, chargeOver(repackObjects, CompactBytesPerObject, objects)+CompactWindowBytes(limits))
 	}
@@ -262,8 +275,8 @@ func publicationCharge(objects, layerObjects, repackObjects int64, limits code.L
 
 // RechargePublication holds a publication's admission to the charge of a
 // plan its holder made again over the same copy s pins — a layer over
-// layerObjects objects, after a repack of repackObjects — in place of the
-// charge it was admitted at, KEEPING ITS SLOT: at once where the new charge
+// layerObjects objects written over base layers, after a repack of
+// repackObjects — in place of the charge it was admitted at, KEEPING ITS SLOT: at once where the new charge
 // is no larger, and otherwise as [Cache.AdmitPublication] would admit it
 // beside everything else in flight, its own old charge out of the count and
 // the room the latest pass kept standing in it. On a refusal the admission
@@ -279,18 +292,21 @@ func publicationCharge(objects, layerObjects, repackObjects int64, limits code.L
 // store for its base again at the next pass, as long as the node stays busy.
 // The holder that plans again is the publication whose base the object store
 // lost a part of (internal/code/compact), and its new plan replaces more
-// layers: a larger layer, or a repack the packs it gathers now need, may pass
-// the first plan's charge.
-func (a *Admission) RechargePublication(s Synced, layerObjects, repackObjects int64, limits code.Limits) error {
+// layers: a larger layer, a repack the packs it gathers now need, or a ROOT
+// where the store lost a part of the chain's root — charged at the root's
+// figure, past a layer over a base — may pass the first plan's charge.
+func (a *Admission) RechargePublication(s Synced, base int, layerObjects, repackObjects int64,
+	limits code.Limits) error {
+
 	c := a.c
 	switch {
 	case a.step.bit != stepPublish:
 		return fmt.Errorf("%w: a %s admission holds no publication's charge", ErrInvalid, a.step.what)
 	case a.released.Load():
 		return fmt.Errorf("%w: a publication's admission released before its charge moved", ErrInvalid)
-	case layerObjects < 1 || repackObjects < 0:
-		return fmt.Errorf("%w: a publication of a layer over %d objects after a repack of %d", ErrInvalid,
-			layerObjects, repackObjects)
+	case base < 0 || layerObjects < 1 || repackObjects < 0:
+		return fmt.Errorf("%w: a publication of a layer over %d objects on %d layers after a repack of %d",
+			ErrInvalid, layerObjects, base, repackObjects)
 	}
 	if err := c.handedOut(s, "a publication's charge"); err != nil {
 		return err
@@ -299,7 +315,7 @@ func (a *Admission) RechargePublication(s Synced, layerObjects, repackObjects in
 	s.entry.mu.Lock()
 	objects := s.inc.objects
 	s.entry.mu.Unlock()
-	mem := publicationCharge(objects, layerObjects, repackObjects, limits)
+	mem := publicationCharge(objects, base, layerObjects, repackObjects, limits)
 	switch c.maint.recharge(&a.mem, mem, c.maintMemory) {
 	case admitted:
 		s.entry.mu.Lock()

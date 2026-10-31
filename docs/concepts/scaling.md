@@ -292,7 +292,12 @@ objects needs ONE git node whose background budget holds the larger of
 840 × N bytes and 790 × N bytes plus that window for it to be served with a
 bitmap anywhere, for the whole fleet, and every other git node installs the
 layers in a few MiB of memory and serves through them
-([Sizing git nodes](../guides/deployment.md#sizing-git-nodes)).
+([Sizing git nodes](../guides/deployment.md#sizing-git-nodes)). That is the
+charge of a ROOT, which the maintainer must be able to write; every
+publication after a repository's first is a layer over a base, whose bitmap
+holds a fraction of a root's and is charged 350 bytes an object rather than
+600, so the routine publications of a node's largest repositories leave
+its budget room for the rest of its work while they build.
 Measured on the node pin over a source repository's history of a gigabyte,
 three million objects, from the in-memory store (one run of each, on two
 cores): a git node writing the whole bitmap of its own took 13.5 seconds and

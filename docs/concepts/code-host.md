@@ -2722,10 +2722,11 @@ written again at once.
 **Memory.** Every git process a node runs over a whole repository holds memory
 in proportion to the repository's objects, measured over a source repository's
 history — the background index's writes on the node pin, git 2.56.0, and the
-check and a clone on git 2.43: about 600 bytes an object for the bitmap (560
-over 296 000 objects and 287 over three million: some 86 MiB, and about 257
-bytes an object past it), 80 for the index
-without one, 67 for the commit-graph, 192 for `crewlet code verify`'s
+check and a clone on git 2.43: about 600 bytes an object for the bitmap (388
+over 32 300 objects, 560 over 296 000 and 287 over three million: a share
+that rises to 100 MB and falls past it, with no fixed part at the small end),
+80 for the index without one and 1 MiB beside it whatever the repository's
+size, 67 for the commit-graph, 192 for `crewlet code verify`'s
 connectivity check, and a clone about 240 more than the 224 MiB its git
 transfer slot keeps for it — the clone of a repository with no bitmap walks
 its whole history. The commit-graph's figure includes its changed-path
@@ -2743,8 +2744,13 @@ for a transfer's room beside them, and six times
 [publication](#when-a-repository-is-published)'s steps run one after another,
 and it is charged the largest of theirs: 600 bytes an object of the whole
 repository for its bitmap — whose writer walks every commit however few
-objects the layer adds — 350 an object of the layer for its commit-graph
-layer, and a compaction's for its repack. A git node reads its
+objects the layer adds — when the layer is the chain's root, and 350 when it
+is written over a base, every publication after the first (a later layer's
+bitmap held 176, 312 and 90 bytes an object at 10 MB, 100 MB and a gigabyte,
+a root's 384, 560 and 287); 350 an object of the layer for its commit-graph
+layer; and a compaction's for its repack. A repository is placed on the node
+that maintains it by its root's charge, which its maintainer must be able to
+hold. A git node reads its
 memory — the least of the machine's and any cgroup limit set on its
 container — and keeps 224 MiB of it for every
 git transfer it admits at once and 896 MiB for each core its git runs on, for

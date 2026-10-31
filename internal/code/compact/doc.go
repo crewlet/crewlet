@@ -192,8 +192,9 @@
 // would refuse every merge of a large one and so its pushes — and six times
 // max_blob_bytes for its delta search, the first and the last what
 // BenchmarkCompact's and BenchmarkMidx's memory arms measured a build to hold
-// (# Measured); a publication's the largest of its bitmap's 600 an object of
-// the WHOLE repository, its graph layer's and its repack's, as BenchmarkMidx's
+// (# Measured); a publication's the largest of its bitmap's — 600 an object of
+// the WHOLE repository for a root, 350 for a layer over a base — its graph
+// layer's and its repack's, as BenchmarkMidx's
 // step=publish arms measured them, each beside room for a clone of
 // the repository, since a publication refused is slower, never a push
 // refused) — at the maintainer's limit, never the slot it keeps for a
@@ -326,8 +327,8 @@
 // [InputByteCap]'s half and the cache's CompactBytesPerObject and
 // CompactWindowBytes are BenchmarkCompact's (bench_test.go), whose arms and
 // what each decides are listed there; the publication's cadence ([Due]'s
-// constants) and the cache's PublishBytesPerObject and GraphLayerBytesPerObject
-// are BenchmarkMidx's (internal/code/cache's layers_bench_test.go), measured
+// constants) and the cache's PublishBytesPerObject, PublishTailBytesPerObject
+// and GraphLayerBytesPerObject are BenchmarkMidx's (internal/code/cache's layers_bench_test.go), measured
 // on the pin and stated where each is defined, which re-checks
 // CompactBytesPerObject by a publication's repack too. Every figure below is
 // of git 2.56.0 over the in-memory store, so what an S3

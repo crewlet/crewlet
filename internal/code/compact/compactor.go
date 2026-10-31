@@ -114,7 +114,7 @@ type Cache interface {
 	MaintenanceCharge(objects int64, limits code.Limits) int64
 	Damaged() []code.RepoRef
 	AdmitCompaction(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
-	AdmitPublication(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission,
+	AdmitPublication(s cache.Synced, base int, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission,
 		error)
 	AdmitExpunge(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
 	NewMergeScratch(ctx context.Context, s cache.Synced, id string, packs []string) (*cache.Scratch, error)

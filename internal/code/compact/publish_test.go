@@ -137,13 +137,13 @@ func (w *watched) Packs(s cache.Synced) []code.PackRow {
 	return packs
 }
 
-func (w *watched) AdmitPublication(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (
+func (w *watched) AdmitPublication(s cache.Synced, base int, layerObjects, repackObjects int64, limits code.Limits) (
 	*cache.Admission, error) {
 
 	w.mu.Lock()
 	w.admits++
 	w.mu.Unlock()
-	return w.counted.AdmitPublication(s, layerObjects, repackObjects, limits)
+	return w.counted.AdmitPublication(s, base, layerObjects, repackObjects, limits)
 }
 
 // NewLayerScratch records the chain file of every scratch it makes, as the
@@ -883,7 +883,7 @@ func TestThePublicationsAdmissionIsReleasedBeforeItsUploads(t *testing.T) {
 	}
 	var adm *cache.Admission
 	for deadline := time.Now().Add(10 * time.Second); ; {
-		adm, err = x.node().Cache().AdmitPublication(s, 1, 0, code.DefaultLimits())
+		adm, err = x.node().Cache().AdmitPublication(s, 0, 1, 0, code.DefaultLimits())
 		if err == nil || !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) {
 			break
 		}

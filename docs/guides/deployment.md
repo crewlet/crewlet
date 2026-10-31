@@ -2051,7 +2051,9 @@ the rest stay with their homes. A repository at the default `repo_max_bytes`,
 about 50 GB: the LARGE git node — 96 GiB of memory and 16 cores, whose
 background budget at the default lanes is about 68 GiB once it keeps 224 MiB
 for each of its 64 transfers and 896 MiB for each core — publishes it with
-room to spare, and one such node is all the fleet needs for a bitmap of it
+room to spare, and each routine publication of it, a layer over a base
+charged 350 bytes an object rather than the root's 600, reserves about 35 GB
+of that budget while it builds, and one such node is all the fleet needs for a bitmap of it
 everywhere. A repository NO git node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its

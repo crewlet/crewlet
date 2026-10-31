@@ -834,13 +834,15 @@ func DerivedFiles() []Derived {
 		Writes: []Write{
 			{Step: StepIndex, Trigger: TriggerRound, Lane: gitproc.ClassRead,
 				Deadline:       func(c Covers) time.Duration { return gitproc.PackWorkDeadline(c.IndexBytes) },
-				BytesPerObject: IndexBytesPerObject, Writer: Writer{maintainFile, procIndex}, Args: roundIndexArgs,
+				BytesPerObject: IndexBytesPerObject, BaseBytes: IndexBaseBytes, Writer: Writer{maintainFile, procIndex},
+				Args:  roundIndexArgs,
 				Holds: []FilePattern{{"objects/pack", midxLock()}}},
 			{Step: StepBitmap, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance, Deadline: maintained,
 				BytesPerObject: BitmapBytesPerObject, Writer: Writer{maintainFile, procIndex}, Args: bitmapArgs,
 				Holds: []FilePattern{{"objects/pack", midxLock()}, {"objects/pack", tmpBitmap()}}},
 			{Step: StepIndex, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance, Deadline: maintained,
-				BytesPerObject: IndexBytesPerObject, Writer: Writer{maintainFile, procIndex}, Args: plainArgs,
+				BytesPerObject: IndexBytesPerObject, BaseBytes: IndexBaseBytes, Writer: Writer{maintainFile, procIndex},
+				Args:  plainArgs,
 				Holds: []FilePattern{{"objects/pack", midxLock()}}},
 		},
 		Owns: []Owned{

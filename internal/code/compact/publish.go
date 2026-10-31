@@ -645,7 +645,7 @@ func (c *Compactor) admitOverItsBase(ctx context.Context, cand code.PublicationC
 	chain cache.Chain, live []code.PackRow, p layerPlan, cap int64, limits code.Limits) (*cache.Admission,
 	cache.Chain, layerPlan, Outcome, error) {
 
-	adm, err := c.o.Cache.AdmitPublication(s, p.objects, p.repack.objects(), limits)
+	adm, err := c.o.Cache.AdmitPublication(s, p.base, p.objects, p.repack.objects(), limits)
 	if err != nil {
 		out, refusal := c.admissionRefused(cand, err)
 		return nil, chain, p, out, refusal
@@ -674,7 +674,7 @@ func (c *Compactor) admitOverItsBase(ctx context.Context, cand code.PublicationC
 	// The layers it replaces besides are published ones: their packs, which
 	// the reservation gains, are none a compaction's plan merges.
 	c.reserve(cand.ID, p)
-	if err = adm.RechargePublication(s, p.objects, p.repack.objects(), limits); err != nil {
+	if err = adm.RechargePublication(s, p.base, p.objects, p.repack.objects(), limits); err != nil {
 		adm.Release()
 		out, refusal := c.admissionRefused(cand, err)
 		return nil, chain, p, out, refusal

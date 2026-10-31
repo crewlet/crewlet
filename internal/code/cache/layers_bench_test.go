@@ -684,7 +684,8 @@ func (p *layerArms) tipPlain(b *testing.B) {
 //     node floor's own git too, so the floor's figures stand beside the pin's.
 //   - layer=tail is every later one, at its due by packs: the tail of
 //     compact.PublishPacks pushes merged, and the layer over the output on
-//     the published chain — whose bitmap still walks the whole history.
+//     the published chain — whose bitmap still walks the whole history, and
+//     whose part=midx B/obj-repo decides cache.PublishTailBytesPerObject.
 func (p *layerArms) publish(b *testing.B) {
 	for _, git := range []string{gitPin, gitFloor} {
 		b.Run("layer=root/git="+git, func(b *testing.B) {

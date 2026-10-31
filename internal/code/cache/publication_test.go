@@ -31,14 +31,17 @@ func objectsOf(pushes []pushed) int64 {
 // A PUBLICATION IS CHARGED BY ITS LARGEST STEP, each with room for a clone of
 // its whole repository beside it: its steps run one after another in its one
 // slot, so its charge is the largest of the multi-pack-index layer and its
-// bitmap — PublishBytesPerObject an object of the WHOLE repository, however few
-// objects the layer adds, since the bitmap walks every commit — the
+// bitmap — an amount an object of the WHOLE repository, however few objects
+// the layer adds, since the bitmap walks every commit: PublishBytesPerObject
+// for a root, PublishTailBytesPerObject for a layer over a base — the
 // commit-graph layer — GraphLayerBytesPerObject an object of the layer — and
 // its repack — CompactBytesPerObject an object of what it merges, and the
 // delta window.
 //
-// Mutation: charge the bitmap by the layer's objects, and a layer of one
-// object over a repository of many fits a budget that holds no bitmap of it.
+// Mutations: charge the bitmap by the layer's objects, and a layer of one
+// object over a repository of many fits a budget that holds no bitmap of it;
+// charge a layer over a base at the root's figure, and it is refused a budget
+// that holds it.
 func TestAPublicationIsChargedByItsLargestStep(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -51,24 +54,27 @@ func TestAPublicationIsChargedByItsLargestStep(t *testing.T) {
 	limits := code.Limits{MaxBlobBytes: 1 << 20}
 	for _, c2 := range []struct {
 		name                  string
+		base                  int
 		layer, repack, charge int64
 	}{
-		{name: "the bitmap over the whole repository", layer: 1,
+		{name: "a root's bitmap over the whole repository", layer: 1,
 			charge: objects*cache.PublishBytesPerObject + clone},
+		{name: "a bitmap over the whole repository on a base", base: 1, layer: 1,
+			charge: objects*cache.PublishTailBytesPerObject + clone},
 		{name: "the commit-graph layer", layer: 10 * objects,
 			charge: 10*objects*cache.GraphLayerBytesPerObject + clone},
 		{name: "the repack and its window", layer: 1, repack: 100 * objects,
 			charge: 100*objects*cache.CompactBytesPerObject + clone + cache.CompactWindowBytes(limits)},
 	} {
 		cache.SetMaintenanceBudget(c, c2.charge-1)
-		_, err := c.AdmitPublication(s, c2.layer, c2.repack, limits)
+		_, err := c.AdmitPublication(s, c2.base, c2.layer, c2.repack, limits)
 		if !errors.Is(err, cache.ErrNoMemory) || !strings.Contains(err.Error(), fmt.Sprintf("needs about %d bytes",
 			c2.charge)) {
 			t.Errorf("%s: a publication on a budget a byte under its charge %d = %v, want ErrNoMemory at that "+
 				"charge", c2.name, c2.charge, err)
 		}
 		cache.SetMaintenanceBudget(c, c2.charge)
-		adm, err := c.AdmitPublication(s, c2.layer, c2.repack, limits)
+		adm, err := c.AdmitPublication(s, c2.base, c2.layer, c2.repack, limits)
 		if err != nil {
 			t.Errorf("%s: the same publication on a budget of exactly its charge = %v, want it admitted", c2.name, err)
 			continue
@@ -106,7 +112,7 @@ func TestAMaintainerIsPlacedByTheLargestChargeItsStepsAreAdmittedAt(t *testing.T
 				return c.AdmitExpunge(s, objects, limits)
 			},
 			"a publication whose layer and repack cover every object": func() (*cache.Admission, error) {
-				return c.AdmitPublication(s, objects, objects, limits)
+				return c.AdmitPublication(s, 0, objects, objects, limits)
 			},
 		}
 		cache.SetMaintenanceBudget(c, charge)
@@ -144,11 +150,13 @@ func TestAMaintainerIsPlacedByTheLargestChargeItsStepsAreAdmittedAt(t *testing.T
 // holds the new plan's charge in place of the first's, keeping its slot: as
 // the node's budget allows it in that place, refused ErrNoMemory past the
 // budget with its old charge kept, and its release gives back whatever it
-// holds then. A compaction's admission, or a released one, holds no
-// publication's charge.
+// holds then. A layer over a base planned again as a ROOT — the store lost a
+// part of the chain's root — moves to the root's figure. A compaction's
+// admission, or a released one, holds no publication's charge.
 //
-// Mutation: count the old charge beside the new, and a charge the budget holds
-// in its place is refused.
+// Mutations: count the old charge beside the new, and a charge the budget
+// holds in its place is refused; keep the base's figure for a plan become a
+// root, and a root the budget cannot hold is admitted.
 func TestAPublicationsChargeMovesInItsOwnSlot(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -162,37 +170,49 @@ func TestAPublicationsChargeMovesInItsOwnSlot(t *testing.T) {
 	large := repack*cache.CompactBytesPerObject + objects*gitproc.TransferBytesPerObject +
 		cache.CompactWindowBytes(limits)
 	cache.SetMaintenanceBudget(c, large)
-	adm, err := c.AdmitPublication(s, 1, 0, limits)
+	adm, err := c.AdmitPublication(s, 0, 1, 0, limits)
 	if err != nil {
 		t.Fatalf("a publication of a layer over one object = %v, want it admitted", err)
 	}
-	if err := adm.RechargePublication(s, 1, repack, limits); err != nil {
+	if err := adm.RechargePublication(s, 0, 1, repack, limits); err != nil {
 		t.Errorf("the charge of a plan with a repack, %d bytes on a budget of as many, = %v; want it held in "+
 			"the same slot", large, err)
 	}
-	if err := adm.RechargePublication(s, 1, 2*repack, limits); !errors.Is(err, cache.ErrNoMemory) {
+	if err := adm.RechargePublication(s, 0, 1, 2*repack, limits); !errors.Is(err, cache.ErrNoMemory) {
 		t.Errorf("a charge past the budget = %v, want ErrNoMemory", err)
 	}
-	if err := adm.RechargePublication(s, 1, 0, limits); err != nil {
+	if err := adm.RechargePublication(s, 0, 1, 0, limits); err != nil {
 		t.Errorf("a smaller charge = %v, want it held at once", err)
 	}
 	adm.Release()
-	if err := adm.RechargePublication(s, 1, 0, limits); !errors.Is(err, cache.ErrInvalid) {
+	if err := adm.RechargePublication(s, 0, 1, 0, limits); !errors.Is(err, cache.ErrInvalid) {
 		t.Errorf("a released admission's charge moved = %v, want ErrInvalid", err)
 	}
-	again, err := c.AdmitPublication(s, 1, repack, limits)
+	again, err := c.AdmitPublication(s, 0, 1, repack, limits)
 	if err != nil {
 		t.Errorf("a publication at the whole budget once the first was released = %v, want it admitted: the "+
 			"release gives back what it held", err)
 	} else {
 		again.Release()
 	}
+	onBase := objects*cache.PublishTailBytesPerObject + objects*gitproc.TransferBytesPerObject
+	cache.SetMaintenanceBudget(c, onBase)
+	over, err := c.AdmitPublication(s, 1, 1, 0, limits)
+	if err != nil {
+		t.Fatalf("a layer over a base on a budget of its charge %d = %v, want it admitted", onBase, err)
+	}
+	if err := over.RechargePublication(s, 0, 1, 0, limits); !errors.Is(err, cache.ErrNoMemory) {
+		t.Errorf("the same layer planned again as a root, on that budget = %v, want ErrNoMemory at the root's "+
+			"figure", err)
+	}
+	over.Release()
+	cache.SetMaintenanceBudget(c, large)
 	compaction, err := c.AdmitCompaction(s, objects, limits)
 	if err != nil {
 		t.Fatalf("a compaction of the repository = %v, want it admitted", err)
 	}
 	defer compaction.Release()
-	if err := compaction.RechargePublication(s, 1, 0, limits); !errors.Is(err, cache.ErrInvalid) {
+	if err := compaction.RechargePublication(s, 0, 1, 0, limits); !errors.Is(err, cache.ErrInvalid) {
 		t.Errorf("a compaction's admission charged as a publication = %v, want ErrInvalid", err)
 	}
 }
@@ -232,7 +252,7 @@ func TestAPublicationPastTheBudgetIsRefusedOnceAndRaisesTheAlarm(t *testing.T) {
 	refused := func(budget int64) {
 		t.Helper()
 		cache.SetMaintenanceBudget(c, budget)
-		if _, err := c.AdmitPublication(s, 1, 0, limits); !errors.Is(err, cache.ErrNoMemory) {
+		if _, err := c.AdmitPublication(s, 0, 1, 0, limits); !errors.Is(err, cache.ErrNoMemory) {
 			t.Fatalf("a publication on a budget of %d, under its charge %d = %v, want ErrNoMemory", budget, charge,
 				err)
 		}
@@ -277,7 +297,7 @@ func TestAPublicationPastTheBudgetIsRefusedOnceAndRaisesTheAlarm(t *testing.T) {
 	standing(1, "the room taken back, no publication admitted between")
 
 	cache.SetMaintenanceBudget(c, charge)
-	adm, err := c.AdmitPublication(s, 1, 0, limits)
+	adm, err := c.AdmitPublication(s, 0, 1, 0, limits)
 	if err != nil {
 		t.Fatalf("the publication once the node grew = %v, want it admitted", err)
 	}

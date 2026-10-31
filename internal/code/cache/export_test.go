@@ -367,24 +367,26 @@ func MemoryReserved(c *Cache) int64 { return c.memReserve }
 
 // BitmapCharge, IndexCharge, GraphCharge and FsckCharge are the memory each
 // step over repoID's current incarnation is charged at against the node's
-// budget: its own figure an object, and room beside it for one transfer of
-// the repository.
-func BitmapCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, BitmapBytesPerObject) }
+// budget: its own figure an object, its fixed part, and room beside it for
+// one transfer of the repository.
+func BitmapCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, BitmapBytesPerObject, 0) }
 
 // IndexCharge is the index without a bitmap's charge (BitmapCharge).
-func IndexCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, IndexBytesPerObject) }
+func IndexCharge(c *Cache, repoID string) int64 {
+	return chargeOf(c, repoID, IndexBytesPerObject, IndexBaseBytes)
+}
 
 // GraphCharge is the commit-graph's charge (BitmapCharge).
-func GraphCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, GraphBytesPerObject) }
+func GraphCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, GraphBytesPerObject, 0) }
 
 // FsckCharge is Verify's connectivity check's charge (BitmapCharge).
-func FsckCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, FsckBytesPerObject) }
+func FsckCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, FsckBytesPerObject, 0) }
 
-func chargeOf(c *Cache, repoID string, perObject int64) int64 {
+func chargeOf(c *Cache, repoID string, perObject, base int64) int64 {
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return chargeOver(e.current.objects, perObject, e.current.objects)
+	return chargeOver(e.current.objects, perObject, e.current.objects) + base
 }
 
 // ObjectsOf is how many objects repoID's current incarnation holds, as its
@@ -1247,7 +1249,7 @@ func WriteCharge(c *Cache, repoID string, w Write) int64 {
 	if w.Step == StepTipGraph {
 		return TipCharge(c, repoID)
 	}
-	return chargeOf(c, repoID, w.BytesPerObject)
+	return chargeOf(c, repoID, w.BytesPerObject, w.BaseBytes)
 }
 
 // PublishStep is a publication's `step` on the maintenance refusals' count and

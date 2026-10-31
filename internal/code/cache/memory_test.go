@@ -454,7 +454,7 @@ func TestAFullRoundsIndexIsHeldToTheNodesMemory(t *testing.T) {
 			_, row := w.push(t, repo, "refs/heads/main", nil)
 			objects += row.Objects
 		}
-		return objects * (cache.IndexBytesPerObject + gitproc.TransferBytesPerObject)
+		return objects*(cache.IndexBytesPerObject+gitproc.TransferBytesPerObject) + cache.IndexBaseBytes
 	}
 	mem, otherMem := pushed(repo), pushed(other)
 	indexed := 0
@@ -1087,10 +1087,11 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 		fmt.Sprintf("needs about %s bytes of memory for every object of a repository to write its bitmap",
 			spaced(cache.BitmapBytesPerObject)),
 		fmt.Sprintf("about %s bytes an object for the bitmap", spaced(cache.BitmapBytesPerObject)),
-		fmt.Sprintf("%d for the index without one, %d for the commit-graph, %d for `crewlet code verify`'s "+
-			"connectivity check, and a clone about %d more than the %s its git transfer slot keeps for it",
-			cache.IndexBytesPerObject, cache.GraphBytesPerObject, cache.FsckBytesPerObject,
-			gitproc.TransferBytesPerObject, amount(t, gitproc.TransferMemory)),
+		fmt.Sprintf("%d for the index without one and %s beside it whatever the repository's size, %d for the "+
+			"commit-graph,", cache.IndexBytesPerObject, amount(t, cache.IndexBaseBytes), cache.GraphBytesPerObject),
+		fmt.Sprintf("%d for `crewlet code verify`'s connectivity check, and a clone about %d more than the %s its "+
+			"git transfer slot keeps for it", cache.FsckBytesPerObject, gitproc.TransferBytesPerObject,
+			amount(t, gitproc.TransferMemory)),
 		fmt.Sprintf("keeps %s of it for every git transfer it admits at once and %s for each core its git runs on",
 			amount(t, gitproc.TransferMemory), amount(t, cache.ServingMemoryPerCore)),
 		fmt.Sprintf("the cores the memory backs at %s a core", amount(t, gitproc.CoreMemory)),
@@ -1100,7 +1101,8 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 		fmt.Sprintf("A node of %s a core leaves %s a core (%s on four cores: bitmaps of repositories of up to "+
 			"about %s objects, indexes of up to about %s); 16 GiB on four cores leaves %s: bitmaps of up to about "+
 			"%s objects, indexes of up to about %s.", amount(t, gitproc.CoreMemory), share, amount(t, shape),
-			atMost(shape/bitmap), atMost(shape/index), amount(t, large), atMost(large/bitmap), atMost(large/index)),
+			atMost(shape/bitmap), atMost((shape-cache.IndexBaseBytes)/index), amount(t, large), atMost(large/bitmap),
+			atMost((large-cache.IndexBaseBytes)/index)),
 		fmt.Sprintf("as many run at once as %s a core holds beside the largest", share),
 		fmt.Sprintf("%s a core and no more than one for each %s of its memory, each kept %s",
 			word(t, gitproc.TransfersPerProcess), amount(t, gitproc.TransferShare), amount(t, gitproc.TransferMemory)),
@@ -1117,6 +1119,8 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 			"whatever its length", spaced(cache.TipGraphBytesPerObject), amount(t, cache.TipGraphBaseBytes)),
 		fmt.Sprintf("it is charged the largest of theirs: %s bytes an object of the whole repository for its bitmap",
 			spaced(cache.PublishBytesPerObject)),
+		fmt.Sprintf("when the layer is the chain's root, and %s when it is written over a base",
+			spaced(cache.PublishTailBytesPerObject)),
 		fmt.Sprintf("%s an object of the layer for its commit-graph layer", spaced(cache.GraphLayerBytesPerObject)),
 		fmt.Sprintf("One write computes at most %s new filters", spaced(cache.MaxNewFilters)),
 		// A COMPACTION'S BUILD, charged as its admission charges it, in the

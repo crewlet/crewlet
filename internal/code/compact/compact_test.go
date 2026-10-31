@@ -368,7 +368,7 @@ func (c *counted) AdmitCompaction(s cache.Synced, objects int64, limits code.Lim
 	return c.Cache.AdmitCompaction(s, objects, limits)
 }
 
-func (c *counted) AdmitPublication(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (
+func (c *counted) AdmitPublication(s cache.Synced, base int, layerObjects, repackObjects int64, limits code.Limits) (
 	*cache.Admission, error) {
 
 	c.mu.Lock()
@@ -377,7 +377,7 @@ func (c *counted) AdmitPublication(s cache.Synced, layerObjects, repackObjects i
 	if publish != nil {
 		return publish(s, layerObjects, repackObjects, limits)
 	}
-	return c.Cache.AdmitPublication(s, layerObjects, repackObjects, limits)
+	return c.Cache.AdmitPublication(s, base, layerObjects, repackObjects, limits)
 }
 
 // answerAdmissions has every later compaction's admission answered by admit;

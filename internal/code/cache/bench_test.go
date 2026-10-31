@@ -1503,13 +1503,18 @@ func packOutFiltered(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir, filt
 //
 // Each over a repository of 64 packs of the history above, the previous
 // index and graph removed with the timer stopped. size is the packs' bytes,
-// about; objects and commits are what they hold.
+// about; objects and commits are what they hold. size=10MB, some 36 000
+// objects, is a repository under the sizes whose figures the charges an
+// object are read from: what its step=whole and step=publish hold is the
+// part of their memory no count of objects charges — the fixed part a
+// charge an object alone would admit a small repository's write without.
+// Neither the memory arms nor the own-mode stale arms run at it.
 func BenchmarkMidx(b *testing.B) {
 	quiet(b)
 	for _, arm := range []struct {
 		name  string
 		bytes int64
-	}{{"100MB", 100_000_000}, {"1GB", 1_000_000_000}, {"5GB", 5_000_000_000}} {
+	}{{"10MB", 10_000_000}, {"100MB", 100_000_000}, {"1GB", 1_000_000_000}, {"5GB", 5_000_000_000}} {
 		b.Run("size="+arm.name, func(b *testing.B) {
 			if arm.bytes > 1_000_000_000 {
 				gittest.Large(b, "a 5 GB history fast-imported, packed, stored and synced")
@@ -1517,7 +1522,7 @@ func BenchmarkMidx(b *testing.B) {
 			w := newSyncWorld(b, onMemory)
 			w.processes = runtime.NumCPU()
 			repo, src, commits, rows, total, objects := w.midxRepo(b, arm.bytes)
-			stale := arm.bytes <= 1_000_000_000
+			stale := arm.bytes >= 100_000_000 && arm.bytes <= 1_000_000_000
 			clk := newClock()
 			c := w.open(b, clk.on, func(o *cache.Options) { o.MaxBytes, o.Logger = 1<<40, nil })
 			s := w.sync(b, c, repo)
@@ -1560,7 +1565,8 @@ func BenchmarkMidx(b *testing.B) {
 			if !stale {
 				// No memory arms over 5 GB: its bitmap holds some 10 GB
 				// beside the history the in-memory store already holds,
-				// past what a machine that runs the rest has.
+				// past what a machine that runs the rest has. Nor at 10 MB,
+				// whose figures are the published layers' fixed parts.
 				return
 			}
 			w.memoryArms(b, c, s, repo, objects)

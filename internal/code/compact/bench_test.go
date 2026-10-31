@@ -1370,7 +1370,7 @@ func (u *unreached) AdmitCompaction(cache.Synced, int64, code.Limits) (*cache.Ad
 	return nil, errUnreached
 }
 
-func (u *unreached) AdmitPublication(cache.Synced, int64, int64, code.Limits) (*cache.Admission, error) {
+func (u *unreached) AdmitPublication(cache.Synced, int, int64, int64, code.Limits) (*cache.Admission, error) {
 	u.calls.Add(1)
 	return nil, errUnreached
 }
