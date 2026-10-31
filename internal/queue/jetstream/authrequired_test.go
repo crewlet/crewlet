@@ -16,10 +16,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
@@ -123,6 +125,12 @@ func TestAnExternalServerThatAuthenticatesNobodyIsRefused(t *testing.T) {
 		t.Parallel()
 		srv := externaltest.Start(t, queue.MaxPayloadBytes)
 		newQueueWith(t, Config{URL: srv.URL(), Token: externaltest.Token})
+		// And by a name, which the dial resolves itself ([infoDialer]).
+		_, port, err := net.SplitHostPort(srv.HostPort())
+		if err != nil {
+			t.Fatalf("the server's address: %v", err)
+		}
+		newQueueWith(t, Config{URL: "nats://localhost:" + port, Token: externaltest.Token})
 	})
 
 	t.Run("a live TLS server", func(t *testing.T) {
@@ -161,6 +169,167 @@ func TestAnExternalServerThatAuthenticatesNobodyIsRefused(t *testing.T) {
 			})
 		}
 	})
+}
+
+// ONE ATTEMPT AT A MEMBER TAKES ONE HANDSHAKE BUDGET, HOWEVER MANY ADDRESSES
+// ITS NAME HAS.
+//
+// The common Kubernetes shape is one stream.url name resolving to every pod
+// of the NATS cluster. Without a custom dialer the client shares its budget
+// among a name's addresses; handed one, it would hand each address the whole
+// budget, and a partitioned cluster of three would hold every attempt for
+// 6 s against the lease TTL the coordination store renews over this
+// connection. So the client skips its lookup and the dialer resolves the name
+// — that lookup bounded by the budget too — and dials each address with an
+// equal share of it. A literal IP is one address, dialled with all of it.
+//
+// Mutations: drop nats.SkipHostLookup and the client goes back to resolving
+// the name itself; give each address the whole budget and the attempt takes
+// three; leave the lookup unbounded and it waits on DNS for as long as DNS
+// takes.
+func TestOneAttemptAtAMemberTakesOneHandshakeBudgetHoweverManyAddressesItsNameHas(t *testing.T) {
+	t.Parallel()
+	opts, recorded, err := dialOptions(Config{})
+	if err != nil {
+		t.Fatalf("dialOptions: %v", err)
+	}
+	applied := nats.GetDefaultOptions()
+	for _, opt := range opts {
+		if err := opt(&applied); err != nil {
+			t.Fatalf("applying an option: %v", err)
+		}
+	}
+	if !applied.SkipHostLookup || applied.CustomDialer != recorded {
+		t.Fatalf("the client resolves a member's name itself (skip lookup %t, the "+
+			"recording dialer installed %t): it would hand the dialer each address "+
+			"in turn, each taking the whole budget",
+			applied.SkipHostLookup, applied.CustomDialer == recorded)
+	}
+
+	// A silent address answers nothing until its dial's own deadline.
+	type dialled struct {
+		address string
+		budget  time.Duration
+	}
+	silent := func(calls *[]dialled, mu *sync.Mutex) func(context.Context, string, string) (net.Conn, error) {
+		return func(ctx context.Context, _, address string) (net.Conn, error) {
+			deadline, ok := ctx.Deadline()
+			mu.Lock()
+			*calls = append(*calls, dialled{address, time.Until(deadline)})
+			mu.Unlock()
+			if !ok {
+				return nil, errors.New("a dial with no deadline")
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+	}
+
+	t.Run("a name resolving to three silent addresses", func(t *testing.T) {
+		t.Parallel()
+		d := newInfoDialer(recorded.budget)
+		var looked time.Duration
+		d.lookup = func(ctx context.Context, host string) ([]string, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return nil, errors.New("a lookup with no deadline")
+			}
+			looked = time.Until(deadline)
+			return []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}, nil
+		}
+		var (
+			mu    sync.Mutex
+			calls []dialled
+		)
+		d.connect = silent(&calls, &mu)
+		began := time.Now()
+		if _, err := d.Dial("tcp", "nats.example.com:4222"); err == nil {
+			t.Fatal("a member whose every address is silent was dialled")
+		}
+		took := time.Since(began)
+		if looked <= 0 || looked > externalHandshake {
+			t.Errorf("the lookup was given %v, want at most %v", looked, externalHandshake)
+		}
+		share := externalHandshake / 3
+		tried := map[string]bool{}
+		for _, c := range calls {
+			tried[c.address] = true
+			if c.budget > share || c.budget < share/2 {
+				t.Errorf("%s was dialled with %v, want an equal share of %v: %v",
+					c.address, c.budget, externalHandshake, share)
+			}
+		}
+		if len(calls) != 3 || len(tried) != 3 {
+			t.Errorf("dialled %v, want each of the three addresses once", calls)
+		}
+		// The shares end on wall-clock deadlines, so the attempt ends on
+		// the budget's; the second of slack is the runner's scheduling,
+		// a third of what giving every address the budget would cost.
+		if took > externalHandshake+time.Second {
+			t.Errorf("one attempt at the member took %v, want about %v", took, externalHandshake)
+		}
+	})
+
+	t.Run("a literal IP", func(t *testing.T) {
+		t.Parallel()
+		d := newInfoDialer(recorded.budget)
+		d.lookup = func(context.Context, string) ([]string, error) {
+			return nil, errors.New("a literal IP was looked up")
+		}
+		var (
+			mu    sync.Mutex
+			calls []dialled
+		)
+		d.connect = func(ctx context.Context, network, address string) (net.Conn, error) {
+			deadline, _ := ctx.Deadline()
+			mu.Lock()
+			calls = append(calls, dialled{address, time.Until(deadline)})
+			mu.Unlock()
+			return nil, errors.New("refused")
+		}
+		if _, err := d.Dial("tcp", "192.0.2.9:4222"); err == nil || err.Error() != "refused" {
+			t.Fatalf("Dial = %v, want the dial's own refusal", err)
+		}
+		if len(calls) != 1 || calls[0].address != "192.0.2.9:4222" ||
+			calls[0].budget > externalHandshake || calls[0].budget < externalHandshake/2 {
+			t.Errorf("dialled %v, want 192.0.2.9:4222 once with the whole %v", calls, externalHandshake)
+		}
+	})
+}
+
+// THE ADDRESSES BEHIND ONE NAME ARE DIALLED IN RANDOM ORDER.
+//
+// The client shuffled a name's addresses before it dialled them, which is
+// what spreads a fleet's connections across the members behind one service
+// name; the dialer that took the lookup over keeps it, where Go's own serial
+// dial takes them in DNS order and would put every node on one member.
+//
+// Mutation: dial the addresses in the order the lookup gave them and the
+// first is the one dialled every time. Sixty-four dials see both first with
+// a probability of one less 2⁻⁶³.
+func TestTheAddressesBehindOneNameAreDialledInRandomOrder(t *testing.T) {
+	t.Parallel()
+	d := newInfoDialer(externalHandshake)
+	d.lookup = func(context.Context, string) ([]string, error) {
+		return []string{"192.0.2.1", "192.0.2.2"}, nil
+	}
+	firsts := map[string]int{}
+	d.connect = func(_ context.Context, _, address string) (net.Conn, error) {
+		firsts[address]++
+		client, server := net.Pipe()
+		_ = server.Close()
+		return client, nil
+	}
+	for range 64 {
+		c, err := d.Dial("tcp", "nats.example.com:4222")
+		if err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+		_ = c.Close()
+	}
+	if len(firsts) != 2 {
+		t.Errorf("the first address dialled was always the same: %v", firsts)
+	}
 }
 
 // AN INFO LINE IS KEPT WHOLE, AND NOTHING AFTER IT OR PAST ITS BOUND.

@@ -758,11 +758,15 @@ entire point of that distinction. The coordination KV rides this same
 connection on purpose — one connection, one fate. An outage that outlasts the
 lease TTL (45 s unless `coordination.lease_ttl_seconds` says otherwise) does
 hand this node's seats to a peer, and that is the intended behaviour rather
-than something a reconnect policy should paper over. Each attempt — the dial,
-TLS and the NATS handshake — gets **2 seconds**, not the embedded member's
-listener budget: the loop tries the URLs in turn, and a member that silently
-drops packets holds every attempt at it for that long before a member that
-answers is asked, which is time the node spends not renewing its leases.
+than something a reconnect policy should paper over. Each attempt gets **2
+seconds** to connect, and 2 more for TLS and the NATS handshake, not the
+embedded member's listener budget: the loop tries the URLs in turn, and a
+member that silently drops packets holds every attempt at it for that long
+before a member that answers is asked, which is time the node spends not
+renewing its leases. A URL whose name resolves to several addresses — a
+headless Kubernetes service naming every pod of the cluster — shares those 2
+seconds among them, tried in a random order so a fleet's connections spread
+across the members, rather than taking 2 seconds for each.
 
 **A connection the client gives up on is a node restart.** Reconnecting for
 ever covers a server that goes away and comes back. It does not cover the

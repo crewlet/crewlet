@@ -1670,8 +1670,11 @@ func dial(cfg Config, at watched) (*nats.Conn, error) {
 	return nc, nil
 }
 
-// externalHandshake bounds each attempt to reach an EXTERNAL server: the dial,
-// the TLS handshake and INFO, CONNECT, PING, PONG.
+// externalHandshake bounds each attempt to reach an EXTERNAL server, a phase
+// at a time: the TCP connect to a member — every address its name resolves
+// to together, each dialled with an equal share ([infoDialer]), after a
+// lookup bounded the same — and then the TLS handshake and INFO, CONNECT,
+// PING, PONG, which the client bounds with it.
 //
 // # Two seconds, and why the embedded member's budget does not transfer
 //
@@ -1682,7 +1685,9 @@ func dial(cfg Config, at watched) (*nats.Conn, error) {
 // also how long the reconnect loop waits on each member of the pool: it tries
 // them in turn, and a member that silently drops packets — a partition, a host
 // that went away without closing anything — holds every attempt at it for
-// exactly this long before the next member is asked. The coordination store
+// exactly this long before the next member is asked, however many addresses
+// its name resolves to: a name naming every pod of the cluster shares the
+// budget among them rather than taking it once for each. The coordination store
 // rides this connection, and an outage past the lease TTL (45 s by default)
 // hands this node's seats to a peer, so each second here is a second a node
 // with a healthy member in its pool spends not renewing them. Two seconds is
@@ -1701,12 +1706,15 @@ const externalHandshake = 2 * time.Second
 // then be testing that NATS honours its own documented option rather than
 // that this package passes it.
 func dialOptions(cfg Config) ([]nats.Option, *infoDialer, error) {
-	// THE CLIENT'S OWN DIALER, kept: a custom one replaces it, and the
-	// client applies its Timeout only to the dialer it builds. So the TCP
-	// dial is bounded by the same [externalHandshake] here.
-	recorded := &infoDialer{dialer: net.Dialer{Timeout: externalHandshake}}
+	// THE CLIENT'S OWN DIALER'S BUDGET, kept: a custom one replaces it, and
+	// the client divides its Timeout among a name's addresses only for the
+	// dialer it builds. So the client skips its lookup and hands the
+	// member's name to the dialer, which resolves it and shares the same
+	// [externalHandshake] among its addresses: see [infoDialer].
+	recorded := newInfoDialer(externalHandshake)
 	opts := []nats.Option{
 		nats.SetCustomDialer(recorded),
+		nats.SkipHostLookup(),
 		nats.Name("crewlet"),
 		// Reconnect forever. A broker blip must not become a node
 		// restart: the coordination layer already distinguishes

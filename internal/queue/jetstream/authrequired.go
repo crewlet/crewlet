@@ -2,12 +2,15 @@ package jetstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/nats-io/nats.go"
 )
@@ -124,25 +127,65 @@ func heldToAuthentication(nc *nats.Conn, info []byte) (*nats.Conn, error) {
 // than judged on a prefix.
 const infoLineMax = 64 << 10
 
-// infoDialer is the external dial's TCP dialer, keeping the first line every
-// connection it opens reads: the server's INFO, which carries the tls_verify
-// nats.go does not parse ([requiresAuthentication]).
+// infoDialer is the external dial's TCP dialer: it dials one member of the
+// pool within the attempt's budget, and keeps the first line every connection
+// it opens reads — the server's INFO, which carries the tls_verify nats.go
+// does not parse ([requiresAuthentication]).
 //
-// It answers for the NEWEST connection it opened. A connect that tries a
-// cluster's members in turn opens one per attempt, and the one it completed
-// on is the last; a reconnect later opens more, and the dial asks before it
-// hands the connection to anybody.
+// # Why it resolves the member's name itself
+//
+// A custom dialer replaces the client's, and the client applies its budget
+// only to its own: without one, nats.go resolves a member's hostname to every
+// address it has and shortens its dialer's timeout to the budget divided by
+// their number, so one attempt at a member takes the budget IN TOTAL. Handed
+// a custom dialer it hands that dialer each resolved address in turn, and
+// each would take the whole budget: N × 2 s on the common Kubernetes shape,
+// one stream.url name (a headless or round-robin service) resolving to every
+// pod of the NATS cluster — 6 s an attempt for three members, 10 s for five,
+// on every pass of the reconnect loop, against the lease TTL the coordination
+// store riding this connection renews (see [externalHandshake]). So the dial
+// asks the client to skip its lookup (nats.SkipHostLookup) and does what the
+// client did: resolve the host, shuffle the addresses — the client's
+// spreading of its connections across the members behind one name, which
+// Go's own serial dial over a name's addresses does not do — and dial each
+// with an equal share of the budget, stopping at the first that answers. The
+// lookup is bounded by the same figure, where the client's was not bounded.
+//
+// # Which INFO it answers for
+//
+// The NEWEST connection it opened. A connect that tries a cluster's members
+// in turn opens one per attempt, and the one it completed on is the last; a
+// reconnect later opens more, and the dial asks before it hands the
+// connection to anybody.
 type infoDialer struct {
-	dialer net.Dialer
+	// budget bounds the lookup of a member's name, and then the dials to
+	// its addresses together.
+	budget time.Duration
+	// lookup and connect are the resolver and the TCP dial: a seam, so a
+	// test can stand a name with several silent addresses in for DNS and a
+	// partition.
+	lookup  func(ctx context.Context, host string) ([]string, error)
+	connect func(ctx context.Context, network, address string) (net.Conn, error)
 
 	mu     sync.Mutex
 	newest *infoConn
 }
 
-// Dial opens one connection and makes it the one [infoDialer.info] answers
-// for.
+// newInfoDialer is the dialer an external dial goes through, each attempt at
+// a member bounded by budget.
+func newInfoDialer(budget time.Duration) *infoDialer {
+	var tcp net.Dialer
+	return &infoDialer{
+		budget:  budget,
+		lookup:  net.DefaultResolver.LookupHost,
+		connect: tcp.DialContext,
+	}
+}
+
+// Dial opens one connection to the member at address and makes it the one
+// [infoDialer.info] answers for.
 func (d *infoDialer) Dial(network, address string) (net.Conn, error) {
-	c, err := d.dialer.Dial(network, address)
+	c, err := d.dialMember(network, address)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +194,43 @@ func (d *infoDialer) Dial(network, address string) (net.Conn, error) {
 	d.newest = recorded
 	d.mu.Unlock()
 	return recorded, nil
+}
+
+// dialMember dials the member at address — host:port, as the client hands it
+// with its own lookup skipped — within one attempt's budget: see
+// [infoDialer].
+func (d *infoDialer) dialMember(network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	addrs := []string{host}
+	if net.ParseIP(host) == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), d.budget)
+		addrs, err = d.lookup(ctx, host)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		if len(addrs) == 0 {
+			return nil, &net.DNSError{Err: "no addresses", Name: host, IsNotFound: true}
+		}
+		rand.Shuffle(len(addrs), func(i, j int) { addrs[i], addrs[j] = addrs[j], addrs[i] })
+	}
+	share := d.budget / time.Duration(len(addrs))
+	for _, addr := range addrs {
+		ctx, cancel := context.WithTimeout(context.Background(), share)
+		var c net.Conn
+		// Cancelled once the dial returns, which leaves a connection it
+		// made be: the context bounds the dial, never the connection.
+		c, err = d.connect(ctx, network, net.JoinHostPort(addr, port))
+		cancel()
+		if err == nil {
+			return c, nil
+		}
+	}
+	// The last address's failure, as the client answered for its own.
+	return nil, err
 }
 
 // info is the INFO line the newest connection read, or nil where it read
