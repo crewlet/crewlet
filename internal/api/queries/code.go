@@ -249,7 +249,9 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 
 // codeRefusal is a code read's failure in this surface's ONE vocabulary: a
 // repository that is not declared is [NotFound] (`not_declared`), naming it,
-// and so is a change it holds no such number of (`no_change`);
+// and so is a change it holds no such number of (`no_change`) and an object
+// or a path a revision does not hold (`no_object`); no git node able to
+// answer now is [ErrUnavailable];
 // a repository the asker's grant does not cover is [NotPermitted] with the
 // reader's own sentence; a level, a cursor or a parameter the reader refuses
 // is [ErrBadParams] with the reader's own sentence; and everything else — a
@@ -271,11 +273,30 @@ func codeRefusal(repo string, err error) error {
 			refusalSentence(err, code.ErrChangeNotFound))}
 	case errors.Is(err, code.ErrNotPermitted):
 		return &NotPermitted{Detail: refusalSentence(err, code.ErrNotPermitted)}
+	case errors.Is(err, code.ErrObjectNotFound), errors.Is(err, code.ErrNotATree), errors.Is(err, code.ErrNotABlob):
+		return &NotFound{Reason: ReasonNoObject, Detail: objectSentence(err)}
 	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
-		errors.Is(err, code.ErrInvalid):
+		errors.Is(err, code.ErrInvalid), errors.Is(err, code.ErrSliceTooLarge):
 		return fmt.Errorf("%w: %w", ErrBadParams, err)
+	case errors.As(err, new(*code.ErrGitUnready)), errors.Is(err, code.ErrNotServing):
+		// NO GIT NODE COULD ANSWER NOW — none holding the repository in
+		// time, every one behind its configuration or stopping — which is
+		// never an answer about the repository: a wait clears it.
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return err
+}
+
+// objectSentence is a read by object id's absence in the domain's own words:
+// an object id the repository holds no object of, or a path its revision
+// holds no such directory or file at.
+func objectSentence(err error) string {
+	for _, sentinel := range []error{code.ErrObjectNotFound, code.ErrNotATree, code.ErrNotABlob} {
+		if said, ok := builtin.RefusalSentence(err, sentinel); ok {
+			return said
+		}
+	}
+	return err.Error()
 }
 
 // refusalSentence is the sentence err carries past its sentinel's own Go text,

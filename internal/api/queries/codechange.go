@@ -42,13 +42,18 @@ import (
 //   - ReasonNoChange — the repository holds no change of that number;
 //   - ReasonNoRevision — the change holds no revision of that number;
 //   - the files gaps (code.FilesUnrecorded, code.FilesUnrelated) — the
-//     revision's files cannot be read from its facts, which no wait clears.
+//     revision's files cannot be read from its facts, which no wait clears;
+//   - ReasonNoObject — a read by object id names an object the repository
+//     holds no object of, or a path its revision holds no such directory or
+//     file at, in the git node's own sentence.
 //
 // A revision whose facts its home has not recorded YET (code.FilesPending)
-// is no absence: it is [ErrUnavailable], which a wait clears.
+// is no absence: it is [ErrUnavailable], which a wait clears — and so is a
+// read by object id no git node could answer in time.
 const (
 	ReasonNoChange   = "no_change"
 	ReasonNoRevision = "no_revision"
+	ReasonNoObject   = "no_object"
 )
 
 // codeChangePart is a part of one change the `code_change` question answers:

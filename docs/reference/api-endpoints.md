@@ -7314,8 +7314,12 @@ first read saw. A change's question adds these refusals to the code reads':
   was merged or closed before its home recorded its facts, so it has no base to
   read its files from, and `"reason": "unrelated"` for one whose head shares no
   history with its target — its change is every file of its head;
+- `404 not_found` with `"reason": "no_object"` for a `file` the revision does
+  not hold, or an object its repository's home git node holds no object of,
+  in the git node's own sentence;
 - `503 unavailable` for a revision of a live change whose facts its home has
-  not recorded yet, which it does within a minute of the push;
+  not recorded yet, which it does within a minute of the push, and for a read
+  by object id no git node holding the repository could answer in time;
 - `400 bad_params` for a parameter its part does not take: a `revision` to the
   revisions, a `file` to `files`, a `since_revision` that is not earlier, a
   `diff` naming no file.

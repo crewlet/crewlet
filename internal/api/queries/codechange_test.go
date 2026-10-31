@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -216,5 +217,52 @@ func TestAChangeQuestionRefusesWhatItsPartDoesNotTake(t *testing.T) {
 		"change": "9"})
 	if !errors.As(err, &missing) || missing.Reason != queries.ReasonNoChange {
 		t.Errorf("a change web does not hold answered %v, want not_found (no_change)", err)
+	}
+}
+
+// A CHANGE'S READ BY OBJECT ID REFUSES IN THIS SURFACE'S VOCABULARY. Its
+// files, a file's patch and the placing of its findings are asked of the
+// repository's home git node, which answers what no row does: an object or a
+// path the revision does not hold is not_found (`no_object`) in the git
+// node's own sentence; a read too large to answer whole is the request's to
+// narrow; and no git node able to answer now — none holding the repository in
+// time, or none serving the code host — is unavailable. None is a 500, and
+// none an answer about the change.
+//
+// Mutation: drop codeRefusal's object arm — a file the revision lacks is an
+// unclassified failure, red; drop its unready arm — a home still filling its
+// copy is one too, red.
+func TestAChangesReadByObjectIDRefusesInThisSurfacesVocabulary(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		err   error
+		check func(error) bool
+	}{
+		{"no file", fmt.Errorf("%w: revision 2 holds no file upload/gone.go", code.ErrNotABlob),
+			func(err error) bool {
+				var absent *queries.NotFound
+				return errors.As(err, &absent) && absent.Reason == queries.ReasonNoObject &&
+					strings.Contains(absent.Detail, "upload/gone.go")
+			}},
+		{"no object", fmt.Errorf("%w: web holds no object %s", code.ErrObjectNotFound, oid("2")),
+			func(err error) bool {
+				var absent *queries.NotFound
+				return errors.As(err, &absent) && absent.Reason == queries.ReasonNoObject
+			}},
+		{"too large", fmt.Errorf("%w: past its budget", code.ErrSliceTooLarge),
+			func(err error) bool { return errors.Is(err, queries.ErrBadParams) }},
+		{"no git node in time", &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: "filling its copy"},
+			func(err error) bool { return errors.Is(err, queries.ErrUnavailable) }},
+		{"no code host", fmt.Errorf("estate: %w", code.ErrNotServing),
+			func(err error) bool { return errors.Is(err, queries.ErrUnavailable) }},
+	} {
+		stub := &stubCode{answer: twoRevisions(atCodeSeq(30)),
+			git: func(code.GitQuery) (code.GitAnswer, error) { return code.GitAnswer{}, tc.err }}
+		_, err := askNative(t, queries.Sources{Code: stub}, "code_change", map[string]any{"name": "web",
+			"change": "1", "part": "diff", "file": "upload/gone.go"})
+		if !tc.check(err) {
+			t.Errorf("%s: a change's patch answered %v", tc.name, err)
+		}
 	}
 }
