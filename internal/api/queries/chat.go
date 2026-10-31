@@ -83,6 +83,8 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.MentionFeed, error)
 	RoomNames(ctx context.Context, viewer string,
 		fresh statelog.Freshness) (chatlet.RoomNames, error)
+	Directory(ctx context.Context, viewer string,
+		fresh statelog.Freshness) (chatlet.Directory, error)
 }
 
 // ChatSearcher is the keyword search over the company's chat, as this surface
@@ -310,6 +312,9 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 	}
 	listing, err := s.Chat.Channels(ctx, who, chatlet.ChannelsQuery{
 		Cursors: state.Cursors,
+		// THE ROOMS IN COMMON with another seat, which a profile lists:
+		// the viewer's own rooms that seat is in too.
+		With: p.String("with"),
 		// AN ARCHIVED ROOM IS READABLE FOR EVER and belongs in a search
 		// result or a deliberate visit rather than in the list somebody
 		// works out of.
@@ -334,7 +339,7 @@ func (s Sources) chatChannels(ctx context.Context, p Params) (any, error) {
 			// zeroed rather than carried, and a client ignoring
 			// `read_state` under-badges instead of telling every person
 			// they are a hundred behind everywhere.
-			summary.Unread, summary.UnreadCapped = 0, false
+			summary.Unread, summary.UnreadCapped, summary.Mentions = 0, false, 0
 		}
 		rooms = append(rooms, chatRoom{ChannelSummary: summary,
 			Muted: muted[summary.Channel.ID]})
@@ -368,6 +373,29 @@ func (s Sources) chatReadState(ctx context.Context, who string) (coord.ChatReadS
 		return coord.ChatReadState{}, false
 	}
 	return state, true
+}
+
+// chatRooms answers every named room the viewer may browse, joined or not,
+// the archived ones included, each with its member count, whether the viewer
+// is in it and when somebody last spoke there ([chatlet.Reader.Directory]).
+//
+// THE RAIL'S VERB, seated as every chat question is, and resolved by the
+// serving reader from this viewer, so a private room is listed to its members
+// alone.
+func (s Sources) chatRooms(ctx context.Context, p Params) (any, error) {
+	who, err := s.chatViewer(ctx, authz.ActionChatList)
+	if err != nil {
+		return nil, err
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	rooms, err := s.Chat.Directory(ctx, who, fresh)
+	if err != nil {
+		return nil, chatFailure(err)
+	}
+	return rooms, nil
 }
 
 // chatRoomNames answers the name of every room the viewer may READ, joined or

@@ -334,6 +334,143 @@ func servedFrom(a statelog.Answer) Served {
 	}
 }
 
+// ---- the directory: every room a viewer may read ----------------------- //
+
+// DirectoryRoom is one room as a browse of every room shows it: the room, how
+// many are in it, whether the viewer is, and when somebody last spoke there.
+type DirectoryRoom struct {
+	Channel Channel `json:"channel"`
+
+	// Members is how many seats are in the room.
+	Members int `json:"members"`
+
+	// Member says the viewer is one of them. A public room and a unit's
+	// room are readable without it; joining is what it offers.
+	Member bool `json:"member,omitempty"`
+
+	// LastAt is the broker's instant of the newest message somebody said
+	// there, nil for a room nobody has spoken in. A room event is not
+	// activity: a room somebody only joined is a quiet one.
+	LastAt *time.Time `json:"last_at,omitempty"`
+}
+
+// Directory is every named room a viewer may read.
+type Directory struct {
+	Served
+
+	// Rooms are the live rooms in name order, then the archived ones, the
+	// most recently archived first: [RoomNames]' order and bound. Never
+	// nil.
+	Rooms []DirectoryRoom `json:"rooms"`
+
+	// Truncated says rooms were left out past [MaxRoomNames], the archived
+	// ones first.
+	Truncated bool `json:"truncated,omitempty"`
+
+	// Unreadable is how many rooms this build could not present, a
+	// document a newer peer wrote or a kind it cannot classify.
+	Unreadable int `json:"unreadable,omitempty"`
+}
+
+// Directory answers every NAMED room the viewer may read, joined or not, the
+// archived ones included, each with its member count, whether the viewer is
+// in it and its last activity: what a person browses to find a room to join.
+//
+// [Reader.RoomNames]' SET AND ORDER, read by the same visibility predicate,
+// so a private room is listed to its members alone and a direct conversation
+// is never listed: it has no name to browse by. Then per room, as the rail
+// does, one seek for its member count and one for its newest message, which
+// [MaxRoomNames] bounds; and the viewer's own memberships in one statement.
+//
+// A SET READ, incomplete rather than refused under a deferred record, for
+// [Reader.Channels]' reason.
+func (r *Reader) Directory(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (Directory, error) {
+
+	who, err := viewerOf(viewer)
+	if err != nil {
+		return Directory{}, err
+	}
+	if fresh.Level == "" {
+		return Directory{}, errNoLevel("the rooms a viewer may browse")
+	}
+	var out Directory
+	answer, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true),
+		func(tx *sql.Tx) error {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			var err error
+			out, err = directory(ctx, tx, who)
+			return err
+		})
+	if err != nil {
+		return Directory{}, err
+	}
+	out.Served = servedFrom(answer)
+	return out, nil
+}
+
+// directory is [Reader.Directory] inside its read.
+func directory(ctx context.Context, tx *sql.Tx, who string) (Directory, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT c.document FROM chat_channels c
+		  WHERE c.name <> '' AND `+visibleWhere+`
+		  ORDER BY c.archived_at IS NOT NULL, c.archived_at DESC, c.name_norm`, who)
+	if err != nil {
+		return Directory{}, fmt.Errorf("chatlet: read the rooms %q may browse: %w", who, err)
+	}
+	out := Directory{Rooms: make([]DirectoryRoom, 0, 16)}
+	for rows.Next() {
+		var document []byte
+		if err = rows.Scan(&document); err != nil {
+			_ = rows.Close()
+			return Directory{}, fmt.Errorf("chatlet: scan a room to browse: %w", err)
+		}
+		room, decodeErr := DecodeChannel(document)
+		// MEMBER IS TRUE for [readableChannels]' reason: the predicate
+		// established it for every private row it admitted.
+		if decodeErr != nil || !Visible(who, room, true) {
+			out.Unreadable++
+			continue
+		}
+		if len(out.Rooms) == MaxRoomNames {
+			out.Truncated = true
+			break
+		}
+		out.Rooms = append(out.Rooms, DirectoryRoom{Channel: room})
+	}
+	if err = closeRows(rows, "the rooms "+who+" may browse"); err != nil {
+		return Directory{}, err
+	}
+	mine, err := handlesTx(ctx, tx,
+		`SELECT channel_id FROM chat_members WHERE handle = ?`, who)
+	if err != nil {
+		return Directory{}, err
+	}
+	member := make(map[string]bool, len(mine))
+	for _, id := range mine {
+		member[id] = true
+	}
+	for i := range out.Rooms {
+		entry := &out.Rooms[i]
+		entry.Member = member[entry.Channel.ID]
+		if err = tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM chat_members WHERE channel_id = ?`,
+			entry.Channel.ID).Scan(&entry.Members); err != nil {
+			return Directory{}, fmt.Errorf("chatlet: count room %s's members: %w",
+				entry.Channel.ID, err)
+		}
+		last, lastErr := lastMessage(ctx, tx, entry.Channel.ID)
+		if lastErr != nil {
+			return Directory{}, lastErr
+		}
+		if last != nil {
+			at := last.At
+			entry.LastAt = &at
+		}
+	}
+	return out, nil
+}
+
 // ---- the rail: one person's rooms -------------------------------------- //
 
 // ChannelsQuery asks for one person's channel list.

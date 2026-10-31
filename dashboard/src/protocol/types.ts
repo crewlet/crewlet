@@ -4212,6 +4212,35 @@ export interface ChatRoomNamesAnswer extends ChatServed {
   truncated?: boolean;
 }
 
+/** One room as Browse lists it — `chat_rooms`. */
+export interface ChatDirectoryRoom {
+  channel: ChatChannel;
+  /** How many people and agents are in it. */
+  members: number;
+  /** The reader is in it. A public room and a unit's room are readable
+   *  without it; joining is what Browse offers. */
+  member?: boolean;
+  /** The newest message's broker instant, room events excluded. Absent for a
+   *  room nobody has spoken in. */
+  last_at?: string;
+}
+
+/**
+ * Every NAMED room the reader may read, joined or not, the archived ones
+ * included — `chat_rooms`: what Browse lists, sorts and filters on the client.
+ * A private room is listed to its members alone, and a direct conversation is
+ * never listed. Live rooms in name order, then the archived ones, the most
+ * recently archived first.
+ */
+export interface ChatRoomsAnswer extends ChatServed {
+  rooms: ChatDirectoryRoom[];
+  /** Rooms were left out past `chatlet.MaxRoomNames` (1000), the archived
+   *  ones first. */
+  truncated?: boolean;
+  /** Rooms this build could not present, one a newer peer wrote. */
+  unreadable?: number;
+}
+
 /** One matched message. */
 export interface ChatHit {
   message_id: string;
@@ -7529,6 +7558,7 @@ export interface QueryMap {
   /* EVERY ROOM THE CALLER MAY READ, BY NAME, joined or not: what a room
      written in prose is told from a colour or an issue's number by. */
   chat_room_names: ChatRoomNamesAnswer;
+  chat_rooms: ChatRoomsAnswer;
   /* REGISTERED ONLY WHERE THE INDEX EXISTS, so a node with rooms and no index
      answers `unknown_query` rather than a ranking that finds nothing. */
   chat_search: ChatSearchAnswer;

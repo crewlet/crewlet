@@ -213,6 +213,12 @@ func (emptyChat) RoomNames(context.Context, string,
 	return chatlet.RoomNames{}, nil
 }
 
+func (emptyChat) Directory(context.Context, string,
+	statelog.Freshness) (chatlet.Directory, error) {
+
+	return chatlet.Directory{}, nil
+}
+
 func (emptyChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {
 	return estate.ChatSearchAnswer{Hits: []search.ChatHit{}}, nil
 }

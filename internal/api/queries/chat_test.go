@@ -48,7 +48,7 @@ import (
 // different posture from its siblings.
 var chatQuestions = []string{
 	"chat_channels", "chat_channel", "chat_messages", "chat_thread",
-	"chat_mentions", "chat_search", "chat_room_names",
+	"chat_mentions", "chat_search", "chat_room_names", "chat_rooms",
 }
 
 // chatAsked is a parameter set per question, so one table can ask all seven
@@ -224,6 +224,28 @@ func (s *stubChat) Mentions(_ context.Context, viewer string, q chatlet.MentionQ
 	}
 	out := s.mentions
 	out.Handle, out.Served = viewer, chatServed
+	return out, nil
+}
+
+// Directory answers every named room this viewer may browse, by the reader's
+// own rule: a private room only to a member of it, with its member count and
+// whether the viewer is in it.
+func (s *stubChat) Directory(_ context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.Directory, error) {
+
+	s.reads++
+	s.viewer, s.fresh = viewer, fresh
+	if s.err != nil {
+		return chatlet.Directory{}, s.err
+	}
+	out := chatlet.Directory{Served: chatServed, Rooms: []chatlet.DirectoryRoom{}}
+	for _, id := range slices.Sorted(maps.Keys(s.rooms)) {
+		if room := s.rooms[id]; room.Name != "" && s.see(viewer, id) == nil {
+			out.Rooms = append(out.Rooms, chatlet.DirectoryRoom{Channel: room,
+				Members: len(s.members[id]),
+				Member:  slices.Contains(s.members[id], viewer)})
+		}
+	}
 	return out, nil
 }
 

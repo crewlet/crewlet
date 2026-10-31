@@ -628,6 +628,12 @@ func (c Chat) RoomNames(ctx context.Context, viewer string,
 	return call(ctx, c.r, opChatRoomNames, nil, chatRoomNamesArgs{Viewer: viewer, Fresh: fresh})
 }
 
+// Directory answers every named room a viewer may browse.
+func (c Chat) Directory(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.Directory, error) {
+	return call(ctx, c.r, opChatDirectory, nil, chatRoomNamesArgs{Viewer: viewer, Fresh: fresh})
+}
+
 // settled raises the session floor to what a chat write reported.
 func (c Chat) settled(w chatlet.Written) { c.r.Observe(w.Outcome.Position) }
 

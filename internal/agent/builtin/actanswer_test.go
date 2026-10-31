@@ -781,6 +781,12 @@ func (f *ledgerFake) SetMembers(_ context.Context, actor chatlet.Actor, _ string
 	return f.chatWrite("members", actor)
 }
 
+func (f *ledgerFake) AddMembers(_ context.Context, actor chatlet.Actor, _ string,
+	handles []string) (chatlet.Written, []string, error) {
+	written, err := f.chatWrite("add", actor)
+	return written, handles, err
+}
+
 func (f *ledgerFake) Edit(_ context.Context, actor chatlet.Actor, _, _ string,
 	_ chatlet.EditMessage) (chatlet.Written, error) {
 	return f.chatWrite("edit", actor)

@@ -133,6 +133,14 @@ func (d *chatDesk) RoomNames(_ context.Context, viewer string,
 		Rooms: []chatlet.RoomName{{ID: "room-1", Name: "general", Kind: chatlet.KindPublic}}}, nil
 }
 
+func (d *chatDesk) Directory(_ context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.Directory, error) {
+	served := d.read("directory", viewer, fresh)
+	return chatlet.Directory{Served: served,
+		Rooms: []chatlet.DirectoryRoom{{Members: 3, Member: true,
+			Channel: chatlet.Channel{ID: "room-1", Name: "general", Kind: chatlet.KindPublic}}}}, nil
+}
+
 func (d *chatDesk) Readable(_ context.Context, viewer string,
 	fresh statelog.Freshness) ([]chatlet.ReadableRoom, error) {
 	d.read("readable", viewer, fresh)
@@ -210,6 +218,12 @@ func (d *chatDesk) PatchChannel(_ context.Context, actor chatlet.Actor, _ string
 func (d *chatDesk) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
 	_ []chatlet.Member) (chatlet.Written, error) {
 	return d.wrote("set_members", actor, "")
+}
+
+func (d *chatDesk) AddMembers(_ context.Context, actor chatlet.Actor, _ string,
+	handles []string) (chatlet.Written, []string, error) {
+	written, err := d.wrote("add_members", actor, "")
+	return written, handles, err
 }
 
 func (d *chatDesk) Join(_ context.Context, actor chatlet.Actor, _ string) (chatlet.Written, error) {

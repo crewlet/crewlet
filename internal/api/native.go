@@ -519,6 +519,15 @@ func (l liveChat) RoomNames(ctx context.Context, viewer string,
 	return r.RoomNames(ctx, viewer, fresh)
 }
 
+func (l liveChat) Directory(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.Directory, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.Directory{}, err
+	}
+	return r.Directory(ctx, viewer, fresh)
+}
+
 // liveChatSearch is chat's ranked search, resolved per question: the router's,
 // whose serving data node resolves the viewer's rooms beside the index it
 // reads.

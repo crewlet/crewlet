@@ -912,6 +912,7 @@ func Register(r *Registry, s Sources) {
 		// reader tells a room written in prose from a colour or an
 		// issue's number spelled the same way.
 		r.Register("chat_room_names", Requires(iam.GrantChatlet), s.chatRoomNames)
+		r.Register("chat_rooms", Requires(iam.GrantChatlet), s.chatRooms)
 		if s.ChatSearch != nil {
 			r.Register("chat_search", Requires(iam.GrantChatlet), s.chatSearch)
 		}

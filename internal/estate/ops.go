@@ -227,6 +227,8 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.MentionFeed, error)
 	RoomNames(ctx context.Context, viewer string,
 		fresh statelog.Freshness) (chatlet.RoomNames, error)
+	Directory(ctx context.Context, viewer string,
+		fresh statelog.Freshness) (chatlet.Directory, error)
 
 	// Readable is every room the viewer may READ, which is wider than the
 	// rooms it is in. It is no operation of its own: it is the
@@ -1805,6 +1807,17 @@ var opChatRoomNames = define("chat.room_names", opRead, chatDomain, false,
 			return chatlet.RoomNames{}, errNoHalf
 		}
 		return b.Chat.RoomNames(ctx, a.Viewer, a.Fresh)
+	})
+
+// EVERY ROOM A VIEWER MAY BROWSE, resolved by the serving reader from the
+// viewer that crossed, for [opChatRoomNames]' reason. Its arguments are that
+// read's own.
+var opChatDirectory = define("chat.directory", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatRoomNamesArgs) (chatlet.Directory, error) {
+		if b.Chat == nil {
+			return chatlet.Directory{}, errNoHalf
+		}
+		return b.Chat.Directory(ctx, a.Viewer, a.Fresh)
 	})
 
 // ChatQuery is one ranked search of the company's chat, as it crosses: the

@@ -66,6 +66,11 @@ func (*threadAnswerer) RoomNames(context.Context, string,
 	return chatlet.RoomNames{}, errors.New("only the thread is read here")
 }
 
+func (*threadAnswerer) Directory(context.Context, string,
+	statelog.Freshness) (chatlet.Directory, error) {
+	return chatlet.Directory{}, errors.New("only the thread is read here")
+}
+
 func (*threadAnswerer) Readable(context.Context, string,
 	statelog.Freshness) ([]chatlet.ReadableRoom, error) {
 	return nil, errors.New("only the thread is read here")

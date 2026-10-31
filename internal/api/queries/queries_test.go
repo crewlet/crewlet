@@ -306,7 +306,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 
 		"chat_channels": "chatlet", "chat_channel": "chatlet", "chat_messages": "chatlet",
 		"chat_thread": "chatlet", "chat_mentions": "chatlet", "chat_search": "chatlet",
-		"chat_room_names": "chatlet",
+		"chat_room_names": "chatlet", "chat_rooms": "chatlet",
 
 		"work_item":       "decided_by:" + string(authz.ActionWorkRead),
 		"turns":           "decided_by:" + string(authz.ActionSeatTrailRead),
