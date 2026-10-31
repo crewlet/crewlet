@@ -172,6 +172,18 @@ type UsageSeat struct {
 	Tokens []UsageTokens
 	Turns  UsageTurns
 	Reads  []UsageRead
+
+	// Code is the seat's changes and reviews on the code host
+	// ([DB.usageCode]); the zero value is a day it did none of them.
+	Code UsageCode
+}
+
+// UsageCode is what a seat did on the code host in the window, on this node:
+// the changes it opened and the reviews it gave, and the findings the reviews
+// of its own changes raised — each counted off the event its landing announced
+// ([types.ChangeOpened], [types.ReviewSubmitted]), on the node that landed it.
+type UsageCode struct {
+	ChangesOpened, ReviewsGiven, FindingsReceived int64
 }
 
 // UsageTokens is one (phase, worker, model, provider key) cell of a seat's
@@ -263,11 +275,12 @@ type UsageMark struct {
 	Fires, LastFire   int64
 }
 
-// usageEventTypes are the six records a day is derived from, taken from their
+// usageEventTypes are the eight records a day is derived from, taken from their
 // payload types for the reason [phaseCompleted] is: the phase completions and
 // the auxiliary records the spend is summed from, the completions a turn's
 // figures are read off, the turn's SUMMARY record (`agent_turn_completed`),
-// the knowledge reads, and the reads of unit repositories. The auxiliary
+// the knowledge reads, the reads of unit repositories, and the changes opened
+// and reviews given on the code host ([DB.usageCode]). The auxiliary
 // record is one of them so the fingerprint moves when it lands: a flush writes
 // it up to one ledger interval after its last call, stamped with that call's
 // instant, and a day whose only change was that row would otherwise never be
@@ -284,6 +297,8 @@ func usageEventTypes() []any {
 		types.AgentTurnCompleted{}.EventType(),
 		types.KnowledgeRead{}.EventType(),
 		types.CodeFetched{}.EventType(),
+		types.ChangeOpened{}.EventType(),
+		types.ReviewSubmitted{}.EventType(),
 	}
 }
 
@@ -629,6 +644,9 @@ func (d *DB) UsageForDay(ctx context.Context, w UsageWindow) (UsageDay, error) {
 		return UsageDay{}, err
 	}
 	if err := d.usageReads(ctx, w, seat, name); err != nil {
+		return UsageDay{}, err
+	}
+	if err := d.usageCode(ctx, w, seat); err != nil {
 		return UsageDay{}, err
 	}
 	schedules, err := d.usageSchedules(ctx, w)
@@ -1079,6 +1097,85 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 		   AND e.agent_id != '' AND ` + keptRowSQL + `
 		 ORDER BY e.event_time, e.event_id`,
 		[]any{types.KnowledgeRead{}.EventType(), EncodeTime(w.Start), EncodeTime(w.End)}
+}
+
+// usageCode counts the window's changes opened and reviews given per seat, and
+// the findings the reviews of each seat's own changes raised — off the events
+// their landings announced ([types.ChangeOpened], [types.ReviewSubmitted]),
+// which name every seat they count on by its agent id, resolved when they were
+// published: an opening on its owner, a review on its reviewer, and its
+// findings on the change's owner. A person is named by no agent id, and no
+// seat's day counts what a person did.
+//
+// EACH OPENING AND EACH REVIEW ONCE, by its change's or its review's id: its
+// landing is announced once (internal/code's announce.go), and counting the
+// thing rather than its rows is what keeps a second announcement of it — none
+// is published, but nothing here has to trust that — from counting twice.
+//
+// READ OUT OF THE PAYLOAD, never promoted columns: a seat opens and reviews at
+// most a change a turn, so a day holds a few of these records against the tens
+// of thousands of spend and read rows node/0052 promoted columns for.
+func (d *DB) usageCode(ctx context.Context, w UsageWindow, seat func(string) *UsageSeat) error {
+	query, args := usageCodeSQL(w)
+	rows, err := d.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("store: read the usage day's changes and reviews: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			agent, handle string
+			c             UsageCode
+		)
+		if err := rows.Scan(&agent, &handle, &c.ChangesOpened, &c.ReviewsGiven, &c.FindingsReceived); err != nil {
+			return fmt.Errorf("store: scan the usage day's changes and reviews: %w", err)
+		}
+		s := seat(agent)
+		if s.Handle == "" {
+			s.Handle = handle
+		}
+		s.Code = c
+	}
+	return rows.Err()
+}
+
+// usageCodeSQL is [DB.usageCode]'s statement and its arguments: one branch per
+// count, each over one event type and the window — [usageMarkSQL]'s reason —
+// folded by the seat and the thing counted, then by the seat, in seat order.
+func usageCodeSQL(w UsageWindow) (string, []any) {
+	opened, reviewed := types.ChangeOpened{}.EventType(), types.ReviewSubmitted{}.EventType()
+	start, end := EncodeTime(w.Start), EncodeTime(w.End)
+	return `
+		SELECT agent, MAX(handle), SUM(opened), SUM(reviewed), SUM(findings) FROM (
+			SELECT agent, MAX(handle) AS handle, MAX(opened) AS opened, MAX(reviewed) AS reviewed,
+			       MAX(findings) AS findings
+			  FROM (
+				SELECT e.agent_id AS agent, COALESCE(json_extract(e.payload, '$.owner'), '') AS handle,
+				       'opened:' || COALESCE(json_extract(e.payload, '$.change_id'), '') AS item,
+				       1 AS opened, 0 AS reviewed, 0 AS findings
+				  FROM crewlet_events AS e
+				 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+				   AND e.agent_id != '' AND ` + keptRowSQL + `
+				 UNION ALL
+				SELECT e.agent_id, COALESCE(json_extract(e.payload, '$.reviewer'), ''),
+				       'review:' || COALESCE(json_extract(e.payload, '$.review_id'), ''), 0, 1, 0
+				  FROM crewlet_events AS e
+				 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+				   AND e.agent_id != '' AND ` + keptRowSQL + `
+				 UNION ALL
+				SELECT json_extract(e.payload, '$.owner_agent_id'),
+				       COALESCE(json_extract(e.payload, '$.owner'), ''),
+				       'findings:' || COALESCE(json_extract(e.payload, '$.review_id'), ''), 0, 0,
+				       json_extract(e.payload, '$.findings')
+				  FROM crewlet_events AS e
+				 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+				   AND COALESCE(json_extract(e.payload, '$.owner_agent_id'), '') != ''
+				   AND COALESCE(json_extract(e.payload, '$.findings'), 0) > 0
+				   AND ` + keptRowSQL + `)
+			 GROUP BY agent, item)
+		 GROUP BY agent
+		 ORDER BY agent`,
+		[]any{opened, start, end, reviewed, start, end, reviewed, start, end}
 }
 
 // usageRepoReads folds the window's records of reads of `visibility: unit`

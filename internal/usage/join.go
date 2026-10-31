@@ -43,7 +43,8 @@ import (
 //
 // Every counter — a spend cell's six figures, a seat's turns, failures,
 // reviewed turns, send-backs, a read entry's count, a repository reader's reads
-// and the bytes they were sent — grows by addition, so it joins by MAX. A seat's first-pass turns do NOT grow (a review that sends a
+// and the bytes they were sent, a seat's changes opened, reviews given and
+// findings received — grows by addition, so it joins by MAX. A seat's first-pass turns do NOT grow (a review that sends a
 // turn back takes it out of them), and what does is its turns with an
 // unaccepted review, so it is that count that joins by max and the first-pass
 // figure is read back from it ([joinTurns]). A turn duration can move UP a bin
@@ -89,7 +90,8 @@ import (
 const (
 	appliedSeatHeadSQL = `
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,
-		       duration_hist, last_ended_at, reads_elided
+		       duration_hist, last_ended_at, reads_elided,
+		       changes_opened, reviews_given, findings_received
 		  FROM usage_turns
 		 WHERE day = ? AND node = ? AND agent_id = ?`
 	appliedSeatTokensSQL = `
@@ -146,16 +148,19 @@ func Applied(ctx context.Context, estate Estate, s Subject) (Record, bool, error
 				turns   Turns
 				hist    string
 				lastEnd int64
+				code    CodeDay
 			)
 			switch err := tx.QueryRowContext(ctx, appliedSeatHeadSQL, s.Day, s.Node, s.Seat).Scan(
 				&rec.Handle, &rec.Role, &turns.Count, &turns.Failed, &turns.Reviewed,
-				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided); {
+				&turns.FirstPass, &turns.SentBack, &hist, &lastEnd, &rec.ReadsElided,
+				&code.ChangesOpened, &code.ReviewsGiven, &code.FindingsReceived); {
 			case errors.Is(err, sql.ErrNoRows):
 				return nil
 			case err != nil:
 				return err
 			}
 			held = true
+			rec.Code = codeDayOf(code)
 			if err := turns.Durations.UnmarshalJSON([]byte(hist)); err != nil {
 				return err
 			}
@@ -332,6 +337,7 @@ func Join(derived, applied Record) Record {
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 		out.Reads, out.ReadsElided = joinReads(derived.Reads, derived.ReadsElided,
 			applied.Reads, applied.ReadsElided)
+		out.Code = joinCode(derived.Code, applied.Code)
 	case KindPerson:
 		out.Tokens = joinCells(derived.Tokens, applied.Tokens)
 	case KindSchedule:
@@ -378,6 +384,22 @@ func joinRepoReads(d []RepoRead, dElided int, a []RepoRead, aElided int) ([]Repo
 	held := max(len(d)+dElided, len(a)+aElided, len(all))
 	kept, _ := capRepoReads(all)
 	return kept, held - len(kept)
+}
+
+// joinCode joins a seat's code days: each figure counts openings, reviews or
+// findings that only accrue within a day, so each joins by max — nil for a
+// day neither side counted any of.
+func joinCode(d, a *CodeDay) *CodeDay {
+	var dc, ac CodeDay
+	if d != nil {
+		dc = *d
+	}
+	if a != nil {
+		ac = *a
+	}
+	return codeDayOf(CodeDay{ChangesOpened: max(dc.ChangesOpened, ac.ChangesOpened),
+		ReviewsGiven: max(dc.ReviewsGiven, ac.ReviewsGiven), FindingsReceived: max(dc.FindingsReceived,
+			ac.FindingsReceived)})
 }
 
 // joinTurns joins a seat's turn figures.

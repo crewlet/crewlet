@@ -125,6 +125,15 @@ type ChangeWriterOptions struct {
 	// Now is the decide's clock — a record's authored instant; nil takes the
 	// wall clock in UTC.
 	Now func() time.Time
+	// Events is this node's event stream, which a review whose record this
+	// writer landed is announced on (`review_submitted`, announce.go); nil
+	// announces none — a node with no queue records no event of any kind.
+	Events EventPublisher
+	// AgentIDs resolves a seat's handle to the agent id its day is counted
+	// under, as the committer's does ([CommitterOptions.AgentIDs]).
+	// REQUIRED with Events: a review announced without its reviewer's and
+	// its change owner's ids is counted on no seat's day.
+	AgentIDs func(handle string) (string, bool)
 	// Metrics records every write's outcome; nil records nothing.
 	Metrics *metrics.Recorder
 	// Logger is where a failed write is reported; nil is the package's.
@@ -141,6 +150,8 @@ type ChangeWriter struct {
 	seatRules func() (SeatRules, bool)
 	current   func() bool
 	now       func() time.Time
+	events    EventPublisher
+	agentIDs  func(string) (string, bool)
 	metrics   *metrics.Recorder
 	log       *slog.Logger
 
@@ -178,10 +189,15 @@ func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 	case o.SeatRules == nil:
 		return nil, errors.New("code: a change writer needs the epoch's chart (SeatRules) — a seat's write and " +
 			"every reviewer an ask names are judged by the chart, never by a default")
+	case o.Events != nil && o.AgentIDs == nil:
+		return nil, errors.New("code: a change writer that announces on an event stream needs AgentIDs — a " +
+			"review is counted on its reviewer's and its change owner's seat days by their agent ids, which only " +
+			"the chart says")
 	}
 	w := &ChangeWriter{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, retention: o.Retention, seatRules: o.SeatRules,
-		current: o.Current, now: o.Now, metrics: o.Metrics, log: o.Logger, clock: time.Now,
+		current: o.Current, now: o.Now, events: o.Events, agentIDs: o.AgentIDs, metrics: o.Metrics,
+		log: o.Logger, clock: time.Now,
 		flights: newFlights("change", ConversationWritesPerChange, "code.ConversationWritesPerChange",
 			ConversationWritesPerNode, "code.ConversationWritesPerNode"),
 	}
@@ -299,10 +315,17 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite) (Conv
 	//nolint:contextcheck // The publish is the writer's, not this caller's: it runs under the writer's own lifetime, so an asker that hangs up mid-publish never leaves the change's next write deciding beside a record still in flight.
 	go func() {
 		defer w.flights.landed()
-		defer release()
-		res, err := w.write(cw, seats)
+		res, err, fresh := w.write(cw, seats)
+		// THE CHANGE'S NEXT WRITE WAITS ON NONE OF THE ANNOUNCEMENT: its
+		// turn is released with the answer, and the announcement — a read
+		// and a publish, bounded by checkEventBudget — runs after both,
+		// still inside this publish's flight so Stop waits for it.
+		release()
 		w.count(cw, res, err)
 		done <- answer{res, err}
+		if fresh {
+			w.announceReview(cw)
+		}
 	}()
 	select {
 	case a := <-done:
@@ -351,8 +374,11 @@ func busyConversation(detail string) ConversationResult {
 func (w *ChangeWriter) Stop(ctx context.Context) { w.flights.stop(ctx, w.end) }
 
 // write publishes one write of a change's conversation and answers it — under
-// the writer's own lifetime and one CommitBudget.
-func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules) (ConversationResult, error) {
+// the writer's own lifetime and one CommitBudget — and whether it is a review
+// this call landed, which is announced once its answer is handed back
+// (announce.go): never one answered unchanged, from no record, nor a retry the
+// ledger collapsed onto an earlier landing, whose call announced it.
+func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules) (ConversationResult, error, bool) {
 	ctx, cancel := context.WithTimeout(w.life, CommitBudget)
 	defer cancel()
 	op, _ := cw.record()
@@ -399,7 +425,10 @@ func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules) (Conversatio
 			return decision, nil
 		},
 	})
-	return w.answer(ctx, cw, last, decided, res, err)
+	out, answerErr := w.answer(ctx, cw, last, decided, res, err)
+	fresh := cw.Review != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !out.Unchanged &&
+		!res.Collapsed
+	return out, answerErr, fresh
 }
 
 // answer is a write's answer from the publish's result and the last round's

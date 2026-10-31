@@ -135,7 +135,7 @@ func (n *node) mergedChange(id string) mergedChange {
 func mergeStream(t *testing.T, n *node) (*code.Committer, *announced) {
 	t.Helper()
 	stream := &announced{}
-	c, _ := committerOn(t, n, n.pub, func(o *code.CommitterOptions) { o.Events = stream })
+	c, _ := committerOn(t, n, n.pub, func(o *code.CommitterOptions) { o.Events, o.AgentIDs = stream, agentIDs })
 	return c, stream
 }
 
@@ -204,8 +204,8 @@ func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 			"its merge lands", greens)
 	}
 
-	waitAnnounced(t, stream, 1)
-	ev := stream.all()[0]
+	waitAnnouncedOf(t, stream, "change_merged", 1)
+	ev := stream.of("change_merged")[0]
 	payload, ok := ev.Data.(*types.ChangeMerged)
 	if !ok || ev.Type != "change_merged" || payload.ChangeID != change || payload.Number != 1 ||
 		payload.Commit != oidOf("M") || payload.MergedBy != "dev" || payload.Method != "merge" ||
@@ -223,7 +223,7 @@ func TestAMergeMovesTargetDeletesSourceInOneRecord(t *testing.T) {
 			"second record", again, n.end())
 	}
 	time.Sleep(20 * time.Millisecond)
-	if got := len(stream.all()); got != 1 {
+	if got := len(stream.of("change_merged")); got != 1 {
 		t.Fatalf("the merge was announced %d times, want once", got)
 	}
 }
@@ -317,10 +317,11 @@ func TestAnOverrideIsAPersons(t *testing.T) {
 		got.operator != "pat:ada" || got.why != "the release cannot wait" {
 		t.Fatalf("the overridden change's row is %+v, want merged by founder through pat:ada, the reason kept", got)
 	}
-	waitAnnounced(t, stream, 1)
-	if payload, ok := stream.all()[0].Data.(*types.ChangeMerged); !ok || payload.Override != "the release cannot wait" ||
+	waitAnnouncedOf(t, stream, "change_merged", 1)
+	merged := stream.of("change_merged")[0]
+	if payload, ok := merged.Data.(*types.ChangeMerged); !ok || payload.Override != "the release cannot wait" ||
 		payload.MergedBy != "founder" || payload.MergedByKind != "person" {
-		t.Fatalf("the override was announced as %+v, want founder's merge naming its reason", stream.all()[0].Data)
+		t.Fatalf("the override was announced as %+v, want founder's merge naming its reason", merged.Data)
 	}
 
 	// A QUEUE TARGET: main's gate requires unit.

@@ -125,6 +125,10 @@ type SeatDay struct {
 	// Tokens is the day's `total` over every spend cell of the seat on this
 	// node — input plus output, the cache counts being a breakdown of input.
 	Tokens int64
+
+	// Code is the seat's changes opened, reviews given and findings
+	// received on the code host that day on this node; zeros for none.
+	Code CodeDay
 }
 
 // SeatDays reads every node's head row for the company days q.From..q.To,
@@ -149,7 +153,7 @@ func scanSeatDay(rows *sql.Rows, day string) (SeatDay, error) {
 	var lastEnded int64
 	if err := rows.Scan(&r.Node, &r.AgentID, &r.Handle, &r.Role,
 		&r.Turns, &r.Failed, &r.Reviewed, &r.FirstPass, &r.SentBack,
-		&hist, &lastEnded); err != nil {
+		&hist, &lastEnded, &r.Code.ChangesOpened, &r.Code.ReviewsGiven, &r.Code.FindingsReceived); err != nil {
 		return r, err
 	}
 	if err := r.Durations.UnmarshalJSON([]byte(hist)); err != nil {

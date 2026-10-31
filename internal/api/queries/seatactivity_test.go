@@ -20,14 +20,31 @@ import (
 // the counts [spendFixture.day] writes — through the shipped applier.
 func (f *spendFixture) seatDay(node, day, handle string, turns usage.Turns, cells ...usage.Tokens) {
 	f.t.Helper()
-	f.seq++
-	r := usage.Record{
+	f.applySeat(usage.Record{
 		RecordEnvelope: usage.RecordEnvelope{Writer: node, Subject: usage.Subject{
 			Kind: usage.KindSeat, Node: node, Day: day, Seat: f.agentID(handle)}},
 		Handle: handle, Role: strings.ToUpper(handle),
 		Turns:  &turns,
 		Tokens: cells,
-	}
+	})
+}
+
+// seatCode publishes one node's seat-day of no turns that counts the seat's
+// changes and reviews.
+func (f *spendFixture) seatCode(node, day, handle string, code usage.CodeDay) {
+	f.t.Helper()
+	f.applySeat(usage.Record{
+		RecordEnvelope: usage.RecordEnvelope{Writer: node, Subject: usage.Subject{
+			Kind: usage.KindSeat, Node: node, Day: day, Seat: f.agentID(handle)}},
+		Handle: handle, Role: strings.ToUpper(handle), Turns: &usage.Turns{}, Code: &code,
+	})
+}
+
+// applySeat applies one seat record through the shipped applier.
+func (f *spendFixture) applySeat(r usage.Record) {
+	f.t.Helper()
+	f.seq++
+	node, day, handle := r.Subject.Node, r.Subject.Day, r.Handle
 	body, err := r.Encode()
 	if err != nil {
 		f.t.Fatalf("encode: %v", err)
@@ -242,6 +259,30 @@ func TestSeatActivityCarriesThePreviousWindowsTotals(t *testing.T) {
 	}
 	if plain := activityOf(t, f, map[string]any{"days": 7}); seatRow(t, plain, "lead").Previous != nil {
 		t.Error("previous totals came back unasked")
+	}
+}
+
+// A SEAT'S CHANGES AND REVIEWS ARE EVERY NODE'S DAYS, SUMMED: the changes it
+// opened, the reviews it gave and the findings its own changes received, over
+// the window and — asked for — the window before, each day counted in the one
+// it falls in.
+//
+// Mutation: sum only the window's rows into the previous totals, or leave the
+// code day out of the fold — the counts read zero, red.
+func TestSeatActivityCountsASeatsChangesAndReviews(t *testing.T) {
+	t.Parallel()
+	f := newSpendFixture(t)
+	f.seatCode("node-a", "2026-09-24", "lead", usage.CodeDay{ChangesOpened: 2, FindingsReceived: 5})
+	f.seatCode("node-b", "2026-09-25", "lead", usage.CodeDay{ChangesOpened: 1, ReviewsGiven: 3})
+	f.seatCode("node-a", "2026-09-15", "lead", usage.CodeDay{ReviewsGiven: 4, FindingsReceived: 1})
+
+	lead := seatRow(t, activityOf(t, f, map[string]any{"days": 7, "previous": true}), "lead")
+	if lead.ChangesOpened != 3 || lead.ReviewsGiven != 3 || lead.FindingsReceived != 5 {
+		t.Errorf("lead opened %d, reviewed %d and received %d findings; want both nodes' days in the window "+
+			"summed: 3, 3, 5", lead.ChangesOpened, lead.ReviewsGiven, lead.FindingsReceived)
+	}
+	if p := lead.Previous; p == nil || p.ChangesOpened != 0 || p.ReviewsGiven != 4 || p.FindingsReceived != 1 {
+		t.Errorf("previous = %+v, want the window before's 4 reviews and 1 finding", lead.Previous)
 	}
 }
 

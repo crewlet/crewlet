@@ -611,6 +611,8 @@ func registeredStatements() map[string]statement {
 		// written back by an upsert, which reads no row to find the one it
 		// writes (changewrite_internal_test.go holds what it rewrites).
 		"change row": {changeRowSQL, []any{"repo-1-change-000001"}, []string{changeKey + " (id=?)"}},
+		// A REVIEW'S ANNOUNCEMENT reads its row by its key (announce.go).
+		"review row": {reviewRowSQL, []any{"review-1"}, []string{"sqlite_autoindex_code_reviews_1 (id=?)"}},
 		"live change on": {liveChangeOnSQL, []any{"repo-1", "refs/heads/f000001"},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
 		// THE LIVE CHANGES A PUSH RECORD MOVES — a decide's and an apply's —

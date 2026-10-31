@@ -1062,6 +1062,10 @@ func (p *Publisher) Records(day string, d store.UsageDay) ([]Record, error) {
 				Reviewed: s.Turns.Reviewed, FirstPass: s.Turns.FirstPass,
 				SentBack: s.Turns.SentBack, LastEndedAt: s.Turns.LastEndedAt,
 			},
+			// NONE FOR A DAY WITH NO CHANGE OR REVIEW, so such a day stays
+			// the base format every build reads.
+			Code: codeDayOf(CodeDay{ChangesOpened: s.Code.ChangesOpened, ReviewsGiven: s.Code.ReviewsGiven,
+				FindingsReceived: s.Code.FindingsReceived}),
 		}
 		if p.deps.Handle != nil {
 			// THE ORGANISATION NAMES A SEAT IT STILL HOLDS, which is

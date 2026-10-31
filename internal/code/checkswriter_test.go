@@ -60,6 +60,24 @@ func (a *announced) all() []*events.Event {
 	return slices.Clone(a.events)
 }
 
+// of is every event of one wire type the stream was handed, in order: a
+// committer announces merges and opened changes on one stream.
+func (a *announced) of(eventType string) []*events.Event {
+	return slices.DeleteFunc(a.all(), func(ev *events.Event) bool { return ev.Type != eventType })
+}
+
+// waitAnnouncedOf waits for the stream to hold n events of eventType.
+func waitAnnouncedOf(t *testing.T, stream *announced, eventType string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for len(stream.of(eventType)) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("the stream holds %d %s announcements, want %d", len(stream.of(eventType)), eventType, n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // checksWriterOn is a checks writer on n over a counter of what it appends,
 // announcing on an event stream of its own, with a recorder of its own.
 func checksWriterOn(t testing.TB, n *node) (*code.ChecksWriter, *appendCounter, *announced, *metrics.Recorder) {

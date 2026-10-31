@@ -62,6 +62,8 @@ func init() {
 	events.Register[CodeFetched]()
 	events.Register[CodeCheckFinished]()
 	events.Register[ChangeMerged]()
+	events.Register[ChangeOpened]()
+	events.Register[ReviewSubmitted]()
 }
 
 // CodeFetchedVia is how a unit repository's contents were read.
@@ -343,6 +345,158 @@ func (e ChangeMerged) SummaryFor(actor string) string {
 		strings.TrimPrefix(e.Target, "refs/heads/") + " (" + e.Method + ")"
 	if e.Override != "" {
 		what += ", overriding its merge gate: " + e.Override
+	}
+	return lead(actor, what)
+}
+
+// ChangeOpened records that a change was OPENED (internal/code's change_open,
+// or a push whose options asked for one): its row written, numbered and owned
+// by whoever opened it. Published ONCE, by the data node whose committer
+// landed the record that opened it, on that record's apply — never by an
+// applier, which every data node runs, and never for a retry its operation
+// ledger collapsed onto the record, which the landing's own call announced.
+//
+// # Why an event, beside the row
+//
+// The row is the change, replicated; the event is what the OWNER'S DAY counts
+// (store.DB.UsageForDay, a seat's `changes_opened`), from the publishing
+// node's own event log, as a day counts every other activity it derives — a
+// count read off the replicated rows at a day's close would count each change
+// on every data node. So the event names its owner's agent id where the owner
+// is a seat ([ChangeOpened.Agent], the `agent_id` column a seat's day groups
+// by), resolved when it is published: a person's change is counted on no
+// seat's day, since a person has none.
+//
+// # Fed, and stored
+//
+// One a change, as a merge is: what a person watching the company's work
+// wants to see begin, and bounded by the turns and pushes that open them.
+type ChangeOpened struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when the change opened.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// ChangeID is the change, Number its number on the repository — web!42's
+	// 42 — Target the branch it proposes into and Title its title.
+	//
+	// THE BRANCH IS `target_ref`, never `target`: the event store promotes
+	// `target` as an A2A participant's handle (internal/store's tag keys)
+	// and files the event under whichever seat answers to it.
+	ChangeID string `json:"change_id"`
+	Number   int64  `json:"number"`
+	Target   string `json:"target_ref"`
+	Title    string `json:"title"`
+
+	// Owner is who opened it — a seat by its handle, or a person by the
+	// human seat they hold — and OwnerKind which (internal/code's PartyKind:
+	// agent, person).
+	Owner     string `json:"owner"`
+	OwnerKind string `json:"owner_kind"`
+
+	// Agent is the owner's agent id, "" for a person or a seat the
+	// publishing node's chart did not hold: the seat whose day counts it.
+	Agent string `json:"agent_id"`
+
+	// ByPush is a change a push opened from its options, rather than a
+	// change tool or the API.
+	ByPush bool `json:"by_push"`
+}
+
+// EventType is the "change_opened" wire type.
+func (ChangeOpened) EventType() string { return "change_opened" }
+
+// Actor is who opened it, overriding the envelope's source — the node that
+// landed the record, which opened nothing.
+func (e ChangeOpened) Actor() string { return e.Owner }
+
+// AgentID is the owner's agent id, "" for a person.
+func (e ChangeOpened) AgentID() string { return e.Agent }
+
+// SummaryFor names the change by its reference (web!42), the branch it
+// proposes into and its title.
+func (e ChangeOpened) SummaryFor(actor string) string {
+	what := "opened " + e.RepoName + "!" + strconv.FormatInt(e.Number, 10) + " into " +
+		strings.TrimPrefix(e.Target, "refs/heads/")
+	if e.Title != "" {
+		what += ": " + e.Title
+	}
+	return lead(actor, what)
+}
+
+// ReviewSubmitted records that a REVIEW of a change was given (internal/code's
+// review): its verdict on one revision and the findings it raised. Published
+// ONCE, by the data node whose change writer landed the record, on that
+// record's apply — never by an applier, and never for a retry its operation
+// ledger collapsed onto the record.
+//
+// # Two seats' days count it
+//
+// The REVIEWER'S, which gave it (a seat's `reviews_given`), and the change's
+// OWNER'S, which received its findings (`findings_received`): so the event
+// names both agent ids, each resolved when it is published — Agent the
+// reviewer's, the `agent_id` column a seat's day groups by, and OwnerAgent the
+// owner's — and either is "" for a person, whose day is no seat's.
+//
+// # Fed, and stored
+//
+// A review is one turn's result at most — every review a seat gives is a turn
+// of its own — so the feed carries fewer of them than of the turns beside
+// them, and a person watching the company's work wants to see one land.
+type ReviewSubmitted struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when the review applied.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// ChangeID is the change, Number its number on the repository, ReviewID
+	// the review and Revision the revision of the change it judged.
+	ChangeID string `json:"change_id"`
+	Number   int64  `json:"number"`
+	ReviewID string `json:"review_id"`
+	Revision int64  `json:"revision"`
+
+	// Reviewer is who gave it — a seat by its handle, or a person by the
+	// human seat they hold — ReviewerKind which, and Agent the reviewer's
+	// agent id, "" for a person.
+	Reviewer     string `json:"reviewer"`
+	ReviewerKind string `json:"reviewer_kind"`
+	Agent        string `json:"agent_id"`
+
+	// Verdict is the review's (internal/code's Verdict: approve,
+	// request_changes, comment) and Findings how many findings it raised.
+	Verdict  string `json:"verdict"`
+	Findings int64  `json:"findings"`
+
+	// Owner is the change's owner, OwnerKind which kind of party, and
+	// OwnerAgent the owner's agent id, "" for a person: the seat whose day
+	// counts the findings received.
+	Owner      string `json:"owner"`
+	OwnerKind  string `json:"owner_kind"`
+	OwnerAgent string `json:"owner_agent_id"`
+}
+
+// EventType is the "review_submitted" wire type.
+func (ReviewSubmitted) EventType() string { return "review_submitted" }
+
+// Actor is who reviewed, overriding the envelope's source — the node that
+// landed the record, which reviewed nothing.
+func (e ReviewSubmitted) Actor() string { return e.Reviewer }
+
+// AgentID is the reviewer's agent id, "" for a person.
+func (e ReviewSubmitted) AgentID() string { return e.Agent }
+
+// SummaryFor names the change by its reference, the verdict, the revision it
+// judged and how many findings it raised.
+func (e ReviewSubmitted) SummaryFor(actor string) string {
+	what := "reviewed " + e.RepoName + "!" + strconv.FormatInt(e.Number, 10) + " (revision " +
+		strconv.FormatInt(e.Revision, 10) + "): " + strings.ReplaceAll(e.Verdict, "_", " ")
+	switch e.Findings {
+	case 0:
+	case 1:
+		what += ", 1 finding"
+	default:
+		what += ", " + strconv.FormatInt(e.Findings, 10) + " findings"
 	}
 	return lead(actor, what)
 }

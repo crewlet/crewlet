@@ -28,11 +28,11 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 			// be one the suite proved and the migration did not.
 			Encode: encodeSuiteRecord,
 			// THE VERSIONED-FIELD TABLE: the repo_read kind and its four
-			// fields, at version 2 — each brought by a record that carries
-			// it (carryingSuiteField), which fails on the first row
-			// somebody adds without a case. A kind this build's successor
-			// adds is a row keyed on the kind's value, and brings its
-			// record the same way.
+			// fields, at version 2, and a seat's code day, at 3 — each
+			// brought by a record that carries it (carryingSuiteField),
+			// which fails on the first row somebody adds without a case. A
+			// kind this build's successor adds is a row keyed on the kind's
+			// value, and brings its record the same way.
 			Fields:   usage.VersionedFields(),
 			Carrying: carryingSuiteField,
 			Kinds: []string{string(usage.KindSeat), string(usage.KindSchedule),
@@ -49,13 +49,14 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 // carryingSuiteField builds a valid record carrying the named versioned field,
 // with its version left for the encoder to stamp.
 //
-// EVERY ROW TODAY IS THE repo_read KIND'S, so each record is a repository's
-// day — the kind's row, the repository it names and its readers ride every one
-// of them, all at version 2 — with the field the row names set where the base
-// repo_read record would leave it out. A row added to the table without a case
-// here fails the suite rather than passing unexamined: a record that did not
-// carry the field would be stamped below it and reported as the path being
-// wrong, which is a fixture fault dressed as a domain one.
+// THE repo_read KIND'S ROWS are each a repository's day — the kind's row, the
+// repository it names and its readers ride every one of them, all at version
+// 2 — with the field the row names set where the base repo_read record would
+// leave it out; THE CODE DAY'S is a seat's day carrying its changes and
+// reviews, at version 3. A row added to the table without a case here fails
+// the suite rather than passing unexamined: a record that did not carry the
+// field would be stamped below it and reported as the path being wrong, which
+// is a fixture fault dressed as a domain one.
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 	rec := suiteRepoRead("suite-carrying", "", 0)
 	switch field.Name {
@@ -64,6 +65,15 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 		rec.RepoName = "platform"
 	case "Record.RepoReadersElided":
 		rec.RepoReadersElided = 3
+	case "Record.Code":
+		seat := usage.Record{
+			RecordEnvelope: usage.RecordEnvelope{Writer: "suite-node",
+				Subject: usage.Subject{Kind: usage.KindSeat, Node: "suite-node", Day: "2026-09-23",
+					Seat: "suite-carrying"}},
+			Handle: "dev", Turns: &usage.Turns{Count: 1},
+			Code: &usage.CodeDay{ChangesOpened: 1, ReviewsGiven: 2, FindingsReceived: 3},
+		}
+		return seat.Encode()
 	default:
 		return nil, fmt.Errorf("no suite record carries %s — add a case that sets it", field.Name)
 	}

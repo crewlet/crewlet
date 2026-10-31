@@ -269,6 +269,8 @@ func TestAFullSeatDayRecordFitsOneMessage(t *testing.T) {
 					LastQuery: query})
 			}
 			r.ReadsElided = math.MaxInt32
+			r.Code = &usage.CodeDay{ChangesOpened: math.MaxInt64, ReviewsGiven: math.MaxInt64,
+				FindingsReceived: math.MaxInt64}
 			encoded, err := r.Encode()
 			if err != nil {
 				t.Fatalf("encode: %v", err)

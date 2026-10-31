@@ -251,6 +251,41 @@ known size:
   company and leaves only that seat's counter short of it, logged as
   `coord_kv_budget_spend_uncounted`.
 
+## A seat's changes and reviews
+
+Beside its turns and its spend, a seat's day counts what it did on the
+[code host](../concepts/code-host.md): the **changes it opened**, the **reviews
+it gave**, and the **findings it received** — every finding a review raised on
+a change the seat owns, counted on the owner rather than on the reviewer,
+whose day counts the review. They are kept in the same replicated `usage`
+domain as the spend, for the same 181 days, and summed across every node.
+
+| Figure | Counted when | On whose day |
+|---|---|---|
+| `changes_opened` | A change is opened — by a change tool, the API, or a push's `-o change` options | The change's owner, the seat that opened it |
+| `reviews_given` | A review of a change lands | The seat that gave it |
+| `findings_received` | A review that raised findings lands | The seat that owns the change it judged, whoever reviewed it — a person included |
+
+Each is counted once, by the data node whose record landed it, from the
+`change_opened` and `review_submitted` events that node announces (see
+[the event system](../concepts/event-system.md)) — never once per data node,
+and never again for a retried write the code log collapsed onto the first. A
+**person** has no seat day: a change a person opens or a review a person gives
+is counted nowhere, though a person's review still counts its findings on the
+seat whose change it judged. A change carries no spend of its own: its turns'
+tokens are the seat's spend as ever.
+
+The seat activity answer reads them (`GET /agents/activity`, the
+`seat_activity` question in the
+[API reference](../reference/api-endpoints.md)): `changes_opened`,
+`reviews_given` and `findings_received` over the window, and over the window
+before it when `previous=true`.
+
+A seat's day that counts any of them is usage record version 3, so during a
+rolling upgrade a node still on an older build keeps that day aside, unapplied,
+until it is upgraded, rather than applying it without them; a day with none of
+them stays readable by every build.
+
 ## Cache share
 
 Every figure carries the prompt cache's share of its input: `cache_read_tokens`

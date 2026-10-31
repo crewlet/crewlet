@@ -176,27 +176,38 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 	if !r.Turns.LastEndedAt.IsZero() {
 		lastEnded = store.EncodeTime(r.Turns.LastEndedAt)
 	}
+	// A DAY WITH NO CHANGE OR REVIEW carries no code day and writes zeros:
+	// the record REPLACES the seat's day, so a figure an earlier record of
+	// it held and this one does not is gone, never kept.
+	var code CodeDay
+	if r.Code != nil {
+		code = *r.Code
+	}
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO usage_turns
 			(day, node, agent_id, handle, role, turns, failed, reviewed,
 			 first_pass, sent_back, duration_hist, last_ended_at, reads_elided,
-			 version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 changes_opened, reviews_given, findings_received, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (day, node, agent_id) DO UPDATE SET
-			handle        = excluded.handle,
-			role          = excluded.role,
-			turns         = excluded.turns,
-			failed        = excluded.failed,
-			reviewed      = excluded.reviewed,
-			first_pass    = excluded.first_pass,
-			sent_back     = excluded.sent_back,
-			duration_hist = excluded.duration_hist,
-			last_ended_at = excluded.last_ended_at,
-			reads_elided  = excluded.reads_elided,
-			version       = excluded.version`,
+			handle            = excluded.handle,
+			role              = excluded.role,
+			turns             = excluded.turns,
+			failed            = excluded.failed,
+			reviewed          = excluded.reviewed,
+			first_pass        = excluded.first_pass,
+			sent_back         = excluded.sent_back,
+			duration_hist     = excluded.duration_hist,
+			last_ended_at     = excluded.last_ended_at,
+			reads_elided      = excluded.reads_elided,
+			changes_opened    = excluded.changes_opened,
+			reviews_given     = excluded.reviews_given,
+			findings_received = excluded.findings_received,
+			version           = excluded.version`,
 		s.Day, s.Node, s.Seat, r.Handle, r.Role, r.Turns.Count, r.Turns.Failed,
 		r.Turns.Reviewed, r.Turns.FirstPass, r.Turns.SentBack, string(hist),
-		lastEnded, r.ReadsElided, version); err != nil {
+		lastEnded, r.ReadsElided, code.ChangesOpened, code.ReviewsGiven, code.FindingsReceived,
+		version); err != nil {
 		return 0, fmt.Errorf("usage: write the head of %s: %w", s, err)
 	}
 	rows := 1

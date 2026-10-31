@@ -451,9 +451,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				// configuration decides no seat's push (Reconciler.Admits
 				// through SetAdmits, read per proposal).
 				Current: e.admits,
-				// AND THE NODE'S EVENT STREAM a merge this committer landed
-				// is announced on, once, from here.
-				Events:  e.codeEvents(),
+				// AND THE NODE'S EVENT STREAM a merge or an opened change
+				// this committer landed is announced on, once, from here,
+				// naming each seat by the agent id its day is counted
+				// under, off the live epoch.
+				Events: e.codeEvents(), AgentIDs: e.codeAgentID,
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code committer: %w", err)
@@ -461,10 +463,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// AND ITS SIBLING, which the estate asks a change's
 			// conversation of on the same node: the same epoch's chart
 			// a reviewer and a seat are judged by, the same posture gate
-			// and the same retention its repo_deleted sentence names.
+			// and the same retention its repo_deleted sentence names — and
+			// the same event stream a review it landed is announced on.
 			if n.changeWriter, err = code.NewChangeWriter(code.ChangeWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
+				Events: e.codeEvents(), AgentIDs: e.codeAgentID,
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code change writer: %w", err)

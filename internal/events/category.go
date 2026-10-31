@@ -332,6 +332,14 @@ var categories = map[string]placement{
 	// AUTHENTICATED-rated: every one is a merge a seat's or a person's
 	// credential asked, its pace set by the changes they open.
 	"change_merged": {"system", RateAuthenticated},
+	// A change opened, and a review of one given — PERSISTED, since the
+	// owner's and the reviewer's seat days count them from these rows
+	// (changes_opened, reviews_given, findings_received), and FED: each is
+	// one a change or one a review, a turn's result at most, so fewer than
+	// the turns the feed already carries beside them. AUTHENTICATED-rated:
+	// each is a write a seat's or a person's credential asked.
+	"change_opened":    {"system", RateAuthenticated},
+	"review_submitted": {"system", RateAuthenticated},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that

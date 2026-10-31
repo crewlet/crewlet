@@ -104,10 +104,6 @@ func TestARepoReadRecordIsVersionTwoAndCarriesOnlyItsReaders(t *testing.T) {
 	if v, err := stamp(seatRecord("node-a", "2026-09-23", "seat-1", "m")); err != nil || v != 1 {
 		t.Errorf("a seat's day is stamped %d (%v), want the base format's 1", v, err)
 	}
-	if usage.RecordVersion != 2 {
-		t.Errorf("this build reads version %d, want 2", usage.RecordVersion)
-	}
-
 	for _, bad := range []usage.Subject{
 		{Kind: usage.KindRepoRead, Node: "node-a", Day: "2026-09-23"},
 		{Kind: usage.KindRepoRead, Node: "node-a", Day: "2026-09-23", Repo: "repo-1", Seat: "s"},

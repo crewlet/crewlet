@@ -248,9 +248,15 @@ type CommitterOptions struct {
 	// instant; nil takes the wall clock in UTC.
 	Now func() time.Time
 	// Events is this node's event stream, which a merge whose record this
-	// committer landed is announced on (`change_merged`); nil announces none
-	// — a node with no queue records no event of any kind.
+	// committer landed is announced on (`change_merged`), and a change it
+	// opened (`change_opened`, announce.go); nil announces none — a node with
+	// no queue records no event of any kind.
 	Events EventPublisher
+	// AgentIDs resolves a seat's handle to the agent id its day is counted
+	// under (ADR-0013), off the node's live epoch — false for a human seat
+	// and a handle the chart does not hold. REQUIRED with Events: an opened
+	// change announced without its owner's id is counted on no seat's day.
+	AgentIDs func(handle string) (string, bool)
 	// Metrics records the batch sizes and the busy refusals; nil records
 	// nothing.
 	Metrics *metrics.Recorder
@@ -286,6 +292,7 @@ type Committer struct {
 	current   func() bool
 	now       func() time.Time
 	events    EventPublisher
+	agentIDs  func(string) (string, bool)
 	metrics   *metrics.Recorder
 	log       *slog.Logger
 
@@ -583,11 +590,14 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 		return nil, errors.New("code: a committer needs the epoch's chart and calendar (SeatRules) — " +
 			"a seat's push is judged by its grant on the chart and counted on the company's day, " +
 			"never by a default")
+	case o.Events != nil && o.AgentIDs == nil:
+		return nil, errors.New("code: a committer that announces on an event stream needs AgentIDs — an " +
+			"opened change is counted on its owner seat's day by the seat's agent id, which only the chart says")
 	}
 	c := &Committer{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, limits: o.Limits, retention: o.Retention,
-		seatRules: o.SeatRules, current: o.Current, now: o.Now, events: o.Events, metrics: o.Metrics,
-		log:  o.Logger,
+		seatRules: o.SeatRules, current: o.Current, now: o.Now, events: o.Events, agentIDs: o.AgentIDs,
+		metrics: o.Metrics, log: o.Logger,
 		idle: CommitterIdle, nodeBytes: CommitterNodeBytes, queueEntries: MaxQueueEntries, clock: time.Now,
 		repos: map[string]*repoCommitter{}, stopping: make(chan struct{}),
 	}
@@ -1108,7 +1118,28 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 		}
 		q.answer <- answers[i]
 	}
+	c.announceOpened(repoID, pushOpenings(answers))
 	return carried
+}
+
+// pushOpenings is every change a batch's pushes opened, each once: a push
+// answered applied FROM THIS BATCH'S OWN ROW whose change says it opened —
+// never one the batch found landed before it (Collapsed), whose own batch
+// announced it, and never a pending or unknown push's, which may yet apply
+// nowhere.
+func pushOpenings(answers []answered) []opening {
+	var out []opening
+	for _, a := range answers {
+		r := a.res
+		if a.carried || a.err != nil || r.Outcome != statelog.OutcomeApplied || r.Answer.Collapsed ||
+			r.Answer.Change == nil || !r.Answer.Change.Opened {
+			continue
+		}
+		if !slices.ContainsFunc(out, func(o opening) bool { return o.changeID == r.Answer.Change.ChangeID }) {
+			out = append(out, opening{changeID: r.Answer.Change.ChangeID, byPush: true})
+		}
+	}
+	return out
 }
 
 // withinRecord refuses a decision past a record's bytes or rows, which the

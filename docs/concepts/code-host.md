@@ -1507,6 +1507,14 @@ operation id, so a review asked again is the review that landed.
   beside the room it saves for whom the change concerns. Split it into two
   reviews of the same revision, which supersede nothing of each other.
 
+**What a seat's day counts of them.** The node whose committer opened a change
+announces a `change_opened` event once, and the node whose change writer landed
+a review a `review_submitted` event — after the write is answered, never for a
+retry its operation ledger collapsed. Each names the seats it counts on by their
+agent ids, and a seat's day of usage counts the changes it opened, the reviews
+it gave, and the findings reviews raised on the changes it owns — see
+[Budgets and spend § A seat's changes and reviews](../guides/budgets-and-spend.md#a-seats-changes-and-reviews).
+
 ### Findings
 
 A **finding** points at lines of one revision — a file, a side of the

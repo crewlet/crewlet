@@ -191,8 +191,11 @@ var classified = map[string]struct {
 		"its share of a repository outside its unit — and the calendar its day is counted on"},
 	"code.CommitterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
 		"a seat's push behind it is handed to the repository's next committer, decided nowhere here"},
-	"code.CommitterOptions.Now":     {seamNone, "the decide's clock"},
-	"code.CommitterOptions.Events":  {seamNone, "the node's event stream an applied merge is announced on"},
+	"code.CommitterOptions.Now": {seamNone, "the decide's clock"},
+	"code.CommitterOptions.Events": {seamNone, "the node's event stream an applied merge and an opened " +
+		"change are announced on"},
+	"code.CommitterOptions.AgentIDs": {seamNone, "the agent id an opened change's announcement names its " +
+		"owner by, read once its answer is handed back — no decide reads it, and no row it decides from"},
 	"code.CommitterOptions.Metrics": {seamNone, "the node's instruments"},
 	"code.CommitterOptions.Logger":  {seamNone, "where a failed batch is reported"},
 
@@ -206,7 +209,10 @@ var classified = map[string]struct {
 	"code.ChangeWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
 		"a write the chart judges behind it is handed to the repository's next committing node, decided " +
 		"nowhere here"},
-	"code.ChangeWriterOptions.Now":     {seamNone, "the decide's clock"},
+	"code.ChangeWriterOptions.Now":    {seamNone, "the decide's clock"},
+	"code.ChangeWriterOptions.Events": {seamNone, "the node's event stream a review it landed is announced on"},
+	"code.ChangeWriterOptions.AgentIDs": {seamNone, "the agent ids a review's announcement names its reviewer " +
+		"and its change's owner by, read once its answer is handed back — no decide reads them"},
 	"code.ChangeWriterOptions.Metrics": {seamNone, "the node's instruments"},
 	"code.ChangeWriterOptions.Logger":  {seamNone, "where a failed write is reported"},
 

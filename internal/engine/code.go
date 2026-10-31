@@ -167,15 +167,24 @@ func OperatorCode(e *Engine) (estate.CodeSeam, bool) {
 
 // codeEvents is the event stream this node's code host announces what its
 // records applied on — the checks writer an applied ending, the committer an
-// applied merge — its queue's, the one every event of this node is published
-// to; and nil, never a typed nil, where it holds none: a node with no queue
-// records no event of any kind.
+// applied merge and an opened change, the change writer a review — its
+// queue's, the one every event of this node is published to; and nil, never a
+// typed nil, where it holds none: a node with no queue records no event of any
+// kind.
 func (e *Engine) codeEvents() code.EventPublisher {
 	if e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
 	return e.backends.Queue
 }
+
+// codeAgentID is the agent id a seat's day is counted under, off the LIVE
+// epoch at the moment an opened change or a review is announced
+// ([code.CommitterOptions.AgentIDs]) — the same resolution the event log files
+// a participant's handle by ([store.DB.SetEventSeats]), so the event's
+// `agent_id` and its party rows name one seat. False for a human seat, a
+// handle the chart does not hold, and a node with no company active.
+func (e *Engine) codeAgentID(handle string) (string, bool) { return seatAgentID(e.Company(), handle) }
 
 // stopCommitter ends this node's committer: a proposal queued on it is
 // answered "not serving", which every asker reads as a node that ran nothing

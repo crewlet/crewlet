@@ -35,14 +35,15 @@ import (
 // A record above it is RETAINED at its position rather than skipped, so a
 // newer peer's shape survives a rolling upgrade in both directions. A seat's,
 // a schedule's and a person's day are the base format, version 1; a unit
-// repository's readers ([KindRepoRead]) are version 2.
+// repository's readers ([KindRepoRead]) are version 2; and a seat's day that
+// carries its changes and reviews ([Record.Code]) is version 3.
 //
 // IT IS THE CEILING THIS BUILD READS, NOT WHAT IT WRITES: a record is stamped
 // with the lowest version that reads what it carries ([Record.Encode], over
 // [versionedFields]), so a field a later build adds holds back only the records
 // that carry it. It moves only with the table, and exactly to the table's
 // highest version.
-const RecordVersion = 2
+const RecordVersion = 3
 
 // baseRecordVersion is version 1, the base format: what a record carrying no
 // versioned field is stamped at.
@@ -50,11 +51,15 @@ const baseRecordVersion = 1
 
 // versionedFields is every field a usage record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it:
-// the repo_read kind and the four fields only it carries, at version 2. A
-// build at version 1 RETAINS a repository's readers — under the identity their
-// writer stated ([RecordEnvelope.SubjectID]) — rather than faulting at a kind
-// it has no applier for, and applies them once it is upgraded; every other
-// record stays at 1 and every build applies it.
+// the repo_read kind and the four fields only it carries, at version 2, and a
+// seat's code day ([Record.Code]), at 3. A build at version 1 RETAINS a
+// repository's readers — under the identity their writer stated
+// ([RecordEnvelope.SubjectID]) — rather than faulting at a kind it has no
+// applier for, and applies them once it is upgraded; a build at 1 or 2 retains
+// a seat's day that carries its changes and reviews rather than applying it
+// with them dropped, which would replace the day every upgraded node holds
+// with one counting none; every other record stays at 1 and every build
+// applies it.
 //
 // ADDING A FIELD TO A RECORD IS ADDING A ROW HERE, on the tracker's terms: an
 // older build decodes a field it has no home for AROUND — it reads the
@@ -80,6 +85,7 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Record.RepoName", Since: 2, Path: []string{"repo_name"}},
 	{Name: "Record.RepoReads", Since: 2, Path: []string{"repo_reads"}},
 	{Name: "Record.RepoReadersElided", Since: 2, Path: []string{"repo_readers_elided"}},
+	{Name: "Record.Code", Since: 3, Path: []string{"code"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -414,9 +420,33 @@ type Record struct {
 	RepoReads         []RepoRead `json:"repo_reads,omitempty"`
 	RepoReadersElided int        `json:"repo_readers_elided,omitempty"`
 
+	// Code is a seat's changes and reviews on the code host that day, nil
+	// for a day with none of them — so a seat's day that has none stays the
+	// base format every build reads (record version 3 only where it is set).
+	Code *CodeDay `json:"code,omitempty"`
+
 	// Extra carries fields a newer build wrote, so a record round-trips
 	// losslessly through a node that cannot interpret them.
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// CodeDay is what a seat did on the code host on its day, on its node: the
+// changes it opened, the reviews it gave, and the findings the reviews of its
+// own changes raised — counted on the OWNER, since a finding is work its
+// change received (store.UsageCode, counted off the events the landings
+// announced). Every figure only grows within a day, so it joins by max.
+type CodeDay struct {
+	ChangesOpened    int64 `json:"changes_opened,omitempty"`
+	ReviewsGiven     int64 `json:"reviews_given,omitempty"`
+	FindingsReceived int64 `json:"findings_received,omitempty"`
+}
+
+// codeDayOf is c as a record carries it: nil for a day with none.
+func codeDayOf(c CodeDay) *CodeDay {
+	if c == (CodeDay{}) {
+		return nil
+	}
+	return &c
 }
 
 // RepoRead is one reader's reads of a unit repository on a day, by one way.
@@ -530,7 +560,7 @@ type Fire struct {
 var knownKeys = []string{
 	"v", "op_id", "subject", "subject_id", "created_at", "gen", "writer", "scope",
 	"handle", "role", "tokens", "turns", "reads", "reads_elided", "fires",
-	"repo_name", "repo_reads", "repo_readers_elided",
+	"repo_name", "repo_reads", "repo_readers_elided", "code",
 }
 
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
@@ -611,6 +641,9 @@ func (r Record) validateBody() error {
 	if r.Subject.Kind != KindRepoRead && (r.RepoName != "" || len(r.RepoReads) > 0 || r.RepoReadersElided != 0) {
 		return fmt.Errorf("usage: the %s record on %s carries a repository's readers", r.Subject.Kind, r.Subject)
 	}
+	if err := r.validateCode(); err != nil {
+		return err
+	}
 	switch r.Subject.Kind {
 	case KindRepoRead:
 		return r.validateRepoReads()
@@ -643,6 +676,31 @@ func (r Record) validateBody() error {
 				"reads or handle, or a schedule's fires — a person's day is its spend "+
 				"alone, named by its subject", r.Subject)
 		}
+	}
+	return nil
+}
+
+// validateCode refuses a code day a record cannot carry: on any kind but a
+// seat's — a person's changes and reviews are counted on no seat, and a
+// schedule or a repository opens none — a negative figure, or every figure
+// zero, which a writer leaves out ([codeDayOf]): carried, it would stamp the
+// record version 3 and hold back every older build from a day that counts
+// nothing they cannot read.
+func (r Record) validateCode() error {
+	if r.Code == nil {
+		return nil
+	}
+	c := *r.Code
+	switch {
+	case r.Subject.Kind != KindSeat:
+		return fmt.Errorf("usage: the %s record on %s carries a seat's changes and reviews", r.Subject.Kind,
+			r.Subject)
+	case c.ChangesOpened < 0 || c.ReviewsGiven < 0 || c.FindingsReceived < 0:
+		return fmt.Errorf("usage: the seat record on %s counts %+v of its changes and reviews — no figure of "+
+			"a day is below zero", r.Subject, c)
+	case c == CodeDay{}:
+		return fmt.Errorf("usage: the seat record on %s carries a code day of zeros — a day with no change "+
+			"or review carries none, and stays readable by every build", r.Subject)
 	}
 	return nil
 }

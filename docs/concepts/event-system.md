@@ -443,6 +443,26 @@ change_merged              # a change a MERGE RECORD merged into its
                            # applier, never for a retry its operation ledger
                            # collapsed. STORED AND FED (code-host.md, "A
                            # merge, end to end")
+change_opened              # a change was opened — by a change tool, the
+                           # API, or a push's options (`by_push`):
+                           # repository by id and name, the change, its
+                           # number, target branch and title, and its owner
+                           # (a seat's handle or a person's human seat) with
+                           # the owner seat's `agent_id`. Published ONCE, by
+                           # the data node whose committer landed the record,
+                           # never for a collapsed retry; the owner's seat
+                           # day counts it as `changes_opened`. STORED AND
+                           # FED (budgets-and-spend.md, "A seat's changes and
+                           # reviews")
+review_submitted           # a review of a change was given: the change and
+                           # its number, the review, the revision it judged,
+                           # its verdict and how many findings it raised, the
+                           # reviewer with its `agent_id`, and the change's
+                           # owner with `owner_agent_id`. Published ONCE, by
+                           # the data node whose change writer landed the
+                           # record; the reviewer's seat day counts it as
+                           # `reviews_given`, the owner's its findings as
+                           # `findings_received`. STORED AND FED
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its
