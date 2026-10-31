@@ -151,8 +151,15 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   },
   "routes/chatlet/Room.tsx": {
     why:
-      "a room's Join, Leave and Mute, and a message's Edit, Delete and reactions — the " +
-      "room's own refusal said once above the transcript, each control held by its own tool",
+      "a room's Join bar in place of its composer, for a room the reader may read and is " +
+      "not in (join_channel), the room's own refusal said once above the transcript",
+    suite: "routes/chatlet/Access.test.tsx",
+  },
+  "routes/chatlet/scope.tsx": {
+    why:
+      "a message's reactions, Edit and Delete, and the reader's Save and Mark unread " +
+      "(react_to_message, edit_message, delete_message, mark_chat_read), each held by its " +
+      "own tool wherever the message is drawn",
     suite: "routes/chatlet/Access.test.tsx",
   },
   "routes/chatlet/Chat.tsx": {

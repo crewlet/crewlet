@@ -52,12 +52,26 @@ export const WRITE_READERS = [
   },
 ];
 
+/**
+ * Why a control is held, as the reader is told: its title, or the words it is
+ * described by (a kit control that says its reason beside itself, a menu
+ * item's description), or null when it is not held.
+ */
+export function holdOf(control: HTMLElement): string | null {
+  const held =
+    control.getAttribute("aria-disabled") === "true" || (control as HTMLButtonElement).disabled;
+  if (!held) return null;
+  const said = (control.getAttribute("aria-describedby") ?? "")
+    .split(" ")
+    .map((id) => (id ? document.getElementById(id)?.textContent : ""))
+    .join(" ")
+    .trim();
+  return control.getAttribute("title") ?? (said || control.textContent);
+}
+
 /** A control held with `reason`: drawn, refusing the press, and saying why. */
 export async function heldWith(control: HTMLElement, reason: string): Promise<void> {
-  await waitFor(() => expect(control.getAttribute("title")).toBe(reason));
-  expect(
-    control.getAttribute("aria-disabled") === "true" || (control as HTMLButtonElement).disabled,
-  ).toBe(true);
+  await waitFor(() => expect(holdOf(control)).toBe(reason));
 }
 
 /** What every chat read is served at, for a suite's answers. */

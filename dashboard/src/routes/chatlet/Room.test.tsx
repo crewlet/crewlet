@@ -47,6 +47,7 @@ import {
   type Pressed,
 } from "~/test/chat.tsx";
 import { LinkHostsProvider } from "~/lib/linkHosts.ts";
+import { holdOf } from "~/test/chatAccess.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { session } from "~/protocol/session.ts";
 import { PAGE } from "./page.ts";
@@ -851,17 +852,6 @@ function detailOf(over: Record<string, unknown>, member = true) {
     member,
     members: [],
   };
-}
-
-/** Whether a control is held, and with which sentence. */
-function holdOf(control: HTMLElement): string | null {
-  if (control.getAttribute("aria-disabled") !== "true") return null;
-  const said = (control.getAttribute("aria-describedby") ?? "")
-    .split(" ")
-    .map((id) => (id ? document.getElementById(id)?.textContent : ""))
-    .join(" ")
-    .trim();
-  return control.getAttribute("title") ?? (said || control.textContent);
 }
 
 test("an archived room still takes a change to what was said in it", async () => {
