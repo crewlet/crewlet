@@ -401,12 +401,12 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "i",
     place: "you",
     renderer: "none",
-    // THE TRACKER'S: the inbox is the notices the tracker routed to the
-    // reader's record, beside the seat and budget conditions waiting on a
-    // person. NOT HIDDEN with the tracker, because those conditions arrive
-    // under every backend: where the company runs no Crewlet Works the
-    // screen draws them and says where asks and mentions go instead.
-    grants: ["tracker"],
+    // EVERY SIGNED-IN PERSON'S: the inbox is composed from every native
+    // domain's notices (the engine's `inbox`), each read under its own
+    // permission — the tracker's with Tracker, the code host's held to each
+    // repository's grant — beside the seat and budget conditions waiting on
+    // a person. So it names no app: a person without Tracker still hears
+    // about the changes they are asked to review.
     sections: [],
   },
   {

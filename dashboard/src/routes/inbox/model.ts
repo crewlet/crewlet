@@ -18,6 +18,14 @@
  * but two quiet links at its end, Snoozed and Earlier, each read when it is
  * opened: a filter bar is read every time, and these are opened rarely.
  *
+ * EVERY NATIVE DOMAIN'S NOTICES, ONE LIST. The engine composes the inbox
+ * (`inbox`): the tracker's notices and the code host's, interleaved by when
+ * each happened, each source read under its own permission. A tracker notice
+ * is a `notice` row as it always was, its own shape in the composed notice's
+ * `extra`; a code notice is a `change` row. Each domain keeps the marks over
+ * its own notices on its own log, so a row is marked through its own source's
+ * tool, and "Mark all read" reads each source through its own newest notice.
+ *
  * AN ASK IS ONE ROW, NOT TWO. The notice that told a person they were asked
  * and the decision the ask IS are the same question, so while the ask is in
  * Needs you its notices ride on it rather than being listed again under
@@ -45,7 +53,13 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
 import type { DecisionSubject } from "~/lib/decisions.ts";
-import type { WorkAskRow, WorkInboxAnswer, WorkInboxNotice } from "~/protocol/index.ts";
+import type {
+  CodeInboxNotice,
+  InboxAnswer,
+  InboxNotice,
+  WorkAskRow,
+  WorkInboxNotice,
+} from "~/protocol/index.ts";
 
 export type InboxRow =
   | {
@@ -57,7 +71,24 @@ export type InboxRow =
       notices: WorkInboxNotice[];
     }
   | { kind: "condition"; key: string; at?: string; item: Attention }
-  | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice };
+  | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice }
+  | { kind: "change"; key: string; at: string; notice: CodeInboxNotice };
+
+/** A row a reader marks: an update from either source. */
+export type NoticeRow = Extract<InboxRow, { kind: "notice" | "change" }>;
+
+/** Whether a row is an update a reader marks, from either source. */
+export function isNoticeRow(row: InboxRow): row is NoticeRow {
+  return row.kind === "notice" || row.kind === "change";
+}
+
+/**
+ * A code notice's row key: the record id behind a prefix of its own, so a
+ * code record and a tracker record can never name one row in the URL.
+ */
+export function changeRowKey(recordId: string): string {
+  return `change:${recordId}`;
+}
 
 /** The two groups the list always draws. */
 export interface InboxRows {
@@ -76,15 +107,16 @@ export interface InboxRows {
 export function inboxRows(input: {
   subjects: readonly DecisionSubject[];
   conditions: readonly Attention[];
-  /** The unread notices that are not snoozed: what Updates lists. */
-  notices: readonly WorkInboxNotice[];
+  /** The unread notices that are not snoozed, every source's: what Updates lists. */
+  notices: readonly InboxNotice[];
 }): InboxRows {
   const { subjects, conditions, notices } = input;
   const byAsk = new Map<string, WorkInboxNotice[]>();
   for (const n of notices) {
-    const ask = n.ask?.comment;
+    if (n.source !== "tracker") continue;
+    const ask = n.extra.ask?.comment;
     if (!ask) continue;
-    byAsk.set(ask, [...(byAsk.get(ask) ?? []), n]);
+    byAsk.set(ask, [...(byAsk.get(ask) ?? []), n.extra]);
   }
   const attached = new Set<string>();
   const needs: InboxRow[] = subjects.map((subject) => {
@@ -101,14 +133,17 @@ export function inboxRows(input: {
   };
 }
 
-/** Notices as rows, for Updates and for the Snoozed and Earlier links. */
-export function noticeRows(notices: readonly WorkInboxNotice[]): InboxRow[] {
-  return notices.map((notice) => ({
-    kind: "notice",
-    key: notice.record_id,
-    at: notice.at,
-    notice,
-  }));
+/**
+ * Notices as rows, for Updates and for the Snoozed and Earlier links, in the
+ * order the engine composed them: a tracker notice as a `notice` row, a code
+ * notice as a `change` row.
+ */
+export function noticeRows(notices: readonly InboxNotice[]): InboxRow[] {
+  return notices.map((n): InboxRow =>
+    n.source === "code"
+      ? { kind: "change", key: changeRowKey(n.record_id), at: n.at, notice: n.extra }
+      : { kind: "notice", key: n.record_id, at: n.at, notice: n.extra },
+  );
 }
 
 /**
@@ -118,7 +153,7 @@ export function noticeRows(notices: readonly WorkInboxNotice[]): InboxRow[] {
  * that is not snoozed, read or not, so Earlier is that page with the unread
  * ones taken out (they are in Updates already).
  */
-export function earlierOf(notices: readonly WorkInboxNotice[]): WorkInboxNotice[] {
+export function earlierOf(notices: readonly InboxNotice[]): InboxNotice[] {
   return notices.filter((n) => n.read);
 }
 
@@ -144,28 +179,42 @@ export function nextAfter(
   return following ?? now.find(open) ?? null;
 }
 
+/** Where "Mark all read" reads each source through, where it has anything unread. */
+export interface ReadThrough {
+  tracker: string | null;
+  code: string | null;
+}
+
 /**
- * Where "Mark all read" reads through: the newest position among the notices
- * LOADED, as `<stream>@<generation>:<sequence>`.
+ * Where "Mark all read" reads through: for EACH SOURCE, the newest position
+ * among its notices LOADED, as `<stream>@<generation>:<sequence>`.
+ *
+ * ONE POSITION PER SOURCE, because each domain counts its own log: a
+ * position on the tracker's log says nothing about the code log's, so the
+ * gesture is two writes, each through its own source's newest notice.
  *
  * THE NEWEST LOADED, never "everything": a notice that arrived after this
  * page was drawn is one the person has not seen, and reading through it on
- * their behalf would mark it without them. Null when nothing loaded is
- * unread, since the gesture would change nothing.
+ * their behalf would mark it without them. Null for a source with nothing
+ * loaded unread, since its gesture would change nothing.
  */
-export function readThrough(notices: readonly WorkInboxNotice[]): string | null {
-  let newest: WorkInboxNotice | null = null;
+export function readThrough(notices: readonly InboxNotice[]): ReadThrough {
+  const newest: Record<"tracker" | "code", InboxNotice | null> = { tracker: null, code: null };
   for (const n of notices) {
     if (n.read) continue;
+    const held = newest[n.source];
+    const at = n.position;
     if (
-      !newest ||
-      n.log_generation > newest.log_generation ||
-      (n.log_generation === newest.log_generation && n.log_seq > newest.log_seq)
+      !held ||
+      (at.generation ?? 0) > (held.position.generation ?? 0) ||
+      ((at.generation ?? 0) === (held.position.generation ?? 0) && at.seq > held.position.seq)
     ) {
-      newest = n;
+      newest[n.source] = n;
     }
   }
-  return newest ? `${newest.log_stream}@${newest.log_generation}:${newest.log_seq}` : null;
+  const spelled = (n: InboxNotice | null) =>
+    n ? `${n.position.stream}@${n.position.generation ?? 0}:${n.position.seq}` : null;
+  return { tracker: spelled(newest.tracker), code: spelled(newest.code) };
 }
 
 // ---------------------------------------------------------------------------
@@ -233,6 +282,10 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
       if (n.actor_kind === "system") return null;
       return whoOf(index, n.actor, n.actor_kind);
     }
+    case "change":
+      // A CODE NOTICE NAMES NOBODY: the code host keeps who it reached and
+      // why, and the change's own page says who said what.
+      return null;
   }
   return null;
 }
@@ -244,6 +297,7 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
  */
 export function rowName(row: InboxRow, who: Who | null): string {
   if (who) return who.name;
+  if (row.kind === "change") return row.notice.change_ref;
   return row.kind === "condition" ? "The company" : "The engine";
 }
 
@@ -278,6 +332,8 @@ export function rowItem(row: InboxRow): ItemRef | null {
       const item = noticeItem(row.notice);
       return item.id || item.key ? item : null;
     }
+    case "change":
+      return null;
   }
   return null;
 }
@@ -301,8 +357,21 @@ export function rowKey(row: InboxRow): string {
       return "";
     case "notice":
       return row.notice.subject_key ?? "";
+    case "change":
+      return "";
   }
   return "";
+}
+
+/**
+ * What a code notice says: the change's title as its row's line, and what the
+ * record said — a comment, a review's summary, the description it opened with
+ * — as the quieter words after it.
+ */
+export function changeWords(notice: CodeInboxNotice): { text: string; excerpt?: string } {
+  const text = notice.change?.title || notice.change_ref;
+  const said = plainText(notice.excerpt ?? "");
+  return said ? { text, excerpt: said } : { text };
 }
 
 /**
@@ -471,7 +540,7 @@ export function moment(at: string, now: number): string {
  */
 export function inboxQuiet(input: {
   /** The Updates answer, or null where there is none (unanswered, or nobody signed in). */
-  answer: WorkInboxAnswer | null;
+  answer: InboxAnswer | null;
   /** The notices are part of this view: a reader with a record of their own. */
   bound: boolean;
   error: boolean;
@@ -484,7 +553,7 @@ export function inboxQuiet(input: {
   if (error || shown > 0) return null;
   if (!bound) return { title: "Nothing needs a decision", hint: `Checked and clear: ${watched}.` };
   if (!answer) return null;
-  return (answer.seen_through?.seq ?? 0) > 0
+  return answer.sources.some((s) => (s.seen_through?.seq ?? 0) > 0)
     ? {
         title: "You are caught up",
         hint: "Read updates are under Earlier updates.",

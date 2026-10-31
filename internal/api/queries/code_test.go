@@ -103,6 +103,8 @@ func (s *stubCode) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 		a.Repo = stubRepo(q.Repo)
 	case code.ReadCommit:
 		a.Repo, a.Commit = stubRepo(q.Repo), &code.CommitChanges{Commit: q.Commit}
+	case code.ReadInbox:
+		a.Inbox = &code.InboxPage{Handle: q.Inbox.Handle}
 	}
 	return a, nil
 }

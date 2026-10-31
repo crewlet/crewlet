@@ -3,7 +3,8 @@
  * two quiet links (Snoozed and Earlier).
  *
  * PAGED FORWARD, NEVER CUT. The engine answers fifty notices at a time
- * (`inbox.MaxRows`) with a cursor behind a full page, so a list that
+ * (`inbox.MaxRows`), every native domain's composed into one list, with a
+ * cursor behind a full page that resumes each domain where the page left it, so a list that
  * read one page and stopped would hide the fifty-first snooze for as long as
  * the first fifty stood. Each "Show more" reads the page after the last one
  * shown, through the pager every paged list shares (`lib/usePaged.ts`).
@@ -27,18 +28,13 @@ import { useClient } from "~/lib/store-hooks.ts";
 import { usePageHold, usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import type {
-  LogRefusal,
-  QueryRefusal,
-  WorkInboxAnswer,
-  WorkInboxNotice,
-} from "~/protocol/index.ts";
+import type { InboxAnswer, InboxNotice, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 
 export interface Paged {
   /** Every page's notices in the order read, or null until the first answers. */
-  notices: WorkInboxNotice[] | null;
+  notices: InboxNotice[] | null;
   /** The first page's answer, for what it says about the whole: the one held, while one is. */
-  first: WorkInboxAnswer | null;
+  first: InboxAnswer | null;
   /** More lie past the last page read. */
   more: boolean;
   /** A page's read was refused, by the engine's own code. */
@@ -54,10 +50,13 @@ type Params = Record<string, string | number | boolean>;
 /** No question: the list is closed, or nobody is bound to read it as. */
 const NO_PARAMS: Params = {};
 
-/** A page's notices, the history row each came from, and the cursor after them. */
-const noticesOf = (a: WorkInboxAnswer) => a.notices ?? [];
-const noticeIdOf = (n: WorkInboxNotice) => n.record_id;
-const noticesAfter = (a: WorkInboxAnswer) => a.next_cursor ?? "";
+/**
+ * A page's notices, each by its source and the record it came from — two
+ * domains' record ids are two spaces — and the cursor after them.
+ */
+const noticesOf = (a: InboxAnswer) => a.notices ?? [];
+const noticeIdOf = (n: InboxNotice) => `${n.source}:${n.record_id}`;
+const noticesAfter = (a: InboxAnswer) => a.next_cursor ?? "";
 
 /**
  * `inboxOf` is the record the notices are kept under (`ViewerState.owner`),
@@ -68,8 +67,8 @@ export function usePagedInbox(params: Params | undefined, pollMs: number, inboxO
   // THE PAGES BELONG TO ONE QUESTION. Asked a different one (another person,
   // another scope), the cursors of the last are meaningless and are dropped.
   const asked = params ?? NO_PARAMS;
-  const hold = usePageHold<WorkInboxAnswer>(asked);
-  const first = useQuery("work_inbox", asked, {
+  const hold = usePageHold<InboxAnswer>(asked);
+  const first = useQuery("inbox", asked, {
     enabled: params !== undefined,
     pollMs,
     refetchOnInboxOf: inboxOf,
@@ -78,8 +77,7 @@ export function usePagedInbox(params: Params | undefined, pollMs: number, inboxO
   const paged = usePaged(
     hold,
     first,
-    (cursor) =>
-      socket.query("work_inbox", withFloor("work_inbox", JSON.stringify({ ...asked, cursor }))),
+    (cursor) => socket.query("inbox", withFloor("inbox", JSON.stringify({ ...asked, cursor }))),
     noticesOf,
     noticeIdOf,
     noticesAfter,

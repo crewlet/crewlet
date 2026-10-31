@@ -2802,6 +2802,18 @@ var ACTIONS = {
 		domain: "tracker",
 		refreshes: [],
 		scope: "person"
+	},
+	code_mark_inbox: {
+		args: [
+			"read",
+			"unread",
+			"snooze",
+			"unsnooze",
+			"read_through"
+		],
+		domain: "code",
+		refreshes: [],
+		scope: "person"
 	}
 };
 //#endregion
@@ -2914,7 +2926,8 @@ var SESSION_QUERIES = {
 		"work_routing",
 		"work_flow",
 		"company_feed",
-		"decisions"
+		"decisions",
+		"inbox"
 	],
 	pages: [
 		"pages",
@@ -2939,7 +2952,8 @@ var SESSION_QUERIES = {
 		"code_blame",
 		"code_diff",
 		"code_compare",
-		"code_commit"
+		"code_commit",
+		"inbox"
 	]
 };
 //#endregion

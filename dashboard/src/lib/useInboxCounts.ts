@@ -49,11 +49,14 @@
  * backpressure or a reconnect is never re-sent and a node that cannot decide
  * the watch sends none until it can.
  *
- * # Only with Tracker
+ * # Every native domain's, for every signed-in person
  *
- * The inbox is the tracker's, so a reader without Tracker is asked nothing
- * and has no count: the sidebar draws the Inbox row locked instead of a
- * figure the engine would refuse.
+ * The inbox is composed by the engine from every native domain's notices
+ * (`inbox`): the tracker's where the company runs Crewlet Works and the reader
+ * holds Tracker, the code host's where it hosts code, each under its own
+ * permission on the engine's side. So the count is asked for every reader
+ * with a record wherever the company runs either, and a reader without
+ * Tracker counts the code host's notices.
  */
 
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
@@ -78,15 +81,15 @@ export interface InboxCounts {
  * viewer's own is: a push for any other never reaches the tab.
  */
 function useInboxRead(owner: string, enabled: boolean, watched: boolean): InboxCounts {
-  // THE NOTICES ARE CREWLET WORKS': where the company runs another tracker or
-  // none the engine refuses the read, and it was asked on a timer behind every
-  // screen of every tab all the same.
+  // ASKED WHERE THE COMPANY RUNS A SOURCE OF NOTICES: where it runs neither
+  // Crewlet Works nor the code host there is nothing to count, and the read
+  // would be asked on a timer behind every screen of every tab all the same.
   const ask = useServicesAsk();
   const inbox = useQuery(
-    "work_inbox",
+    "inbox",
     owner ? { handle: owner, limit: INBOX_PAGE, unread: true, primary_only: true } : undefined,
     {
-      enabled: enabled && ask.tracker && owner !== "",
+      enabled: enabled && (ask.tracker || ask.code) && owner !== "",
       pollMs: 60_000,
       refetchOnInboxOf: watched ? owner : "",
     },
@@ -107,7 +110,9 @@ const Reading = createContext<InboxCounts | null>(null);
  */
 export function InboxCountsProvider({ children }: { children: ReactNode }) {
   const viewer = useViewer();
-  const counts = useInboxRead(viewer.owner, viewer.tracker, true);
+  // NO APP: every signed-in person has an inbox (the engine's `inbox` reads each
+  // source under its own permission).
+  const counts = useInboxRead(viewer.owner, true, true);
   return createElement(Reading.Provider, { value: counts }, children);
 }
 
@@ -136,7 +141,7 @@ export function useInboxCounts(): InboxCounts {
  * figure on your own profile and the badge in the sidebar are one answer and
  * cannot name two numbers. Anybody else's (a lead or an admin reading a
  * colleague's day) is the same question asked of their inbox, which the
- * engine answers only to them, with Tracker; `enabled` is the caller's word
+ * engine answers only to them and their lead; `enabled` is the caller's word
  * that this reader may ask. It used to be the length of the person record's `unread` list, which
  * is not a count at all: it holds the EXCEPTIONS below the read mark, notices
  * marked unread again, so a person with fifty waiting read "Unread 0".

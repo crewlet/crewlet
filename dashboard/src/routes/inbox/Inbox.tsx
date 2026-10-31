@@ -80,12 +80,14 @@ import {
   earlierOf,
   inboxQuiet,
   inboxRows,
+  isNoticeRow,
   nextAfter,
   noticeRows,
   readThrough,
   rowItem,
   rowKey,
   type InboxRow,
+  type ReadThrough,
 } from "./model.ts";
 
 /**
@@ -156,13 +158,16 @@ export function Inbox() {
   // reconnect is never sent again.
   const owner = viewer.owner;
   const bound = owner !== "";
-  // THE NOTICES ARE CREWLET WORKS', and asked only where the company runs it:
-  // elsewhere the engine refuses every one of these reads.
+  // THE NOTICES ARE EVERY NATIVE DOMAIN'S, composed by the engine (`inbox`):
+  // the tracker's where the company runs Crewlet Works and the reader holds
+  // Tracker, the code host's where it hosts code — each under its own
+  // permission, which the engine decides — so they are asked for every reader
+  // with a record, and a company running neither answers an empty list.
   const runs = useServicesRun();
   const backends = useBackends();
-  const notices = bound && runs.tracker;
+  const notices = bound && (runs.tracker || runs.code);
   const updatesRead = useQuery(
-    "work_inbox",
+    "inbox",
     notices ? { handle: owner, limit: INBOX_PAGE, unread: true, snoozed: "exclude" } : undefined,
     { enabled: notices, pollMs: INBOX_POLL_MS, refetchOnInboxOf: owner },
   );
@@ -187,9 +192,11 @@ export function Inbox() {
     enabled: bound,
     pollMs: INBOX_POLL_MS,
   });
-  // THE SNOOZE BOUND, so a preset the engine would refuse is never offered.
-  const person = useQuery("work_person", notices ? { handle: owner } : undefined, {
-    enabled: notices,
+  // THE SNOOZE BOUND, so a preset the engine would refuse is never offered:
+  // the tracker's person record states it, and the code host keeps the same
+  // rule (internal/inbox's MaxSnoozeAhead).
+  const person = useQuery("work_person", bound && runs.tracker ? { handle: owner } : undefined, {
+    enabled: bound && runs.tracker,
   });
   const attention = useAttention();
 
@@ -247,7 +254,7 @@ export function Inbox() {
       const before = live.current.order.map((r) => r.key);
       if (label) {
         const at = live.current.order
-          .filter((r) => r.kind !== "notice")
+          .filter((r) => !isNoticeRow(r))
           .findIndex((r) => r.key === row.key);
         setSettled((was) => new Map(was).set(row.key, { label, row, at: Math.max(0, at) }));
       }
@@ -332,12 +339,12 @@ export function Inbox() {
 
   return (
     <div className="inbox-frame" data-phone-pane={phone && named ? "true" : undefined}>
-      {/* MARK ALL READ IS THE TRACKER'S: hidden where the company runs none,
-          and otherwise drawn for every reader, held with its reason where
-          there is nothing of theirs to mark. */}
-      {runs.tracker && (
+      {/* MARK ALL READ IS EVERY SOURCE'S: hidden where the company runs no
+          source of notices, and otherwise drawn for every reader, held with
+          its reason where there is nothing of theirs to mark. */}
+      {(runs.tracker || runs.code) && (
         <PageActions>
-          <MarkAllRead through={notices ? readThrough(loaded) : null} />
+          <MarkAllRead through={notices ? readThrough(loaded) : NOTHING_TO_READ} />
         </PageActions>
       )}
 
@@ -387,10 +394,10 @@ export function Inbox() {
             index={index}
             now={now}
             loading={notices && updatesRead.loading && !updatesRead.data}
-            quiet={runs.tracker ? quiet : null}
+            quiet={runs.tracker || runs.code ? quiet : null}
             more={Boolean(updatesRead.data?.next_cursor)}
             bound={notices}
-            elsewhere={runs.tracker ? null : elsewhereLine(backends?.tracker ?? null)}
+            elsewhere={runs.tracker || runs.code ? null : elsewhereLine(backends?.tracker ?? null)}
             refusal={
               // A READ THAT FAILED IS SAID, never drawn as a quiet list: each
               // read's own refusal, where the rows it would have given go.
@@ -427,8 +434,8 @@ export function Inbox() {
         {showPane && (
           <InboxPane
             row={selected}
-            empty={runs.tracker ? undefined : paneElsewhere(backends?.tracker ?? null)}
-            listEmpty={Boolean(quiet) && runs.tracker}
+            empty={runs.tracker || runs.code ? undefined : paneElsewhere(backends?.tracker ?? null)}
+            listEmpty={Boolean(quiet) && (runs.tracker || runs.code)}
             index={index}
             now={now}
             zone={zone}
@@ -472,29 +479,46 @@ export function paneElsewhere(tracker: OrgServices["tracker"] | null): {
   return { title: "No asks or mentions arrive here", description };
 }
 
+/** A page with nothing unread on it, from either source. */
+const NOTHING_TO_READ: ReadThrough = { tracker: null, code: null };
+
 /**
- * "Mark all read", which reads through the NEWEST UPDATE LOADED and nothing
- * past it: an update that arrived after this page was drawn is one the person
- * has not seen.
+ * "Mark all read", which reads EACH SOURCE through the NEWEST UPDATE LOADED of
+ * its and nothing past it: an update that arrived after this page was drawn
+ * is one the person has not seen. Each domain keeps its own marks on its own
+ * log, so the gesture is one write to each source with anything unread here —
+ * `mark_inbox` for the tracker's notices, `code_mark_inbox` for the code
+ * host's — and the list is re-read past both.
  */
-function MarkAllRead({ through }: { through: string | null }) {
-  const write = useAct("mark_inbox");
+function MarkAllRead({ through }: { through: ReadThrough }) {
+  const tracker = useAct("mark_inbox");
+  const code = useAct("code_mark_inbox");
+  const nothing = !through.tracker && !through.code;
+  // THE BUTTON STANDS FOR WHICHEVER WRITE IT SENDS FIRST, so its access and
+  // its busy state are that write's; the other's refusal is shown beside it.
+  const lead = through.tracker || !through.code ? tracker : code;
   return (
     <>
       <WriteButton
-        write={write}
+        write={lead}
         size="small"
         variant="ghost"
         leadingIcon={<CheckGlyph size="sm" />}
         showRefusal={false}
-        blocked={through ? undefined : "Nothing on this page is unread."}
-        onPress={() =>
-          through && void write.run({ read_through: through }, { done: "Marked all read" })
-        }
+        blocked={nothing ? "Nothing on this page is unread." : undefined}
+        onPress={() => {
+          if (through.tracker) {
+            void tracker.run({ read_through: through.tracker }, { done: "Marked all read" });
+          }
+          if (through.code) {
+            void code.run({ read_through: through.code }, { done: "Marked all read" });
+          }
+        }}
       >
         Mark all read
       </WriteButton>
-      <RefusalNote write={write} />
+      <RefusalNote write={tracker} />
+      <RefusalNote write={code} />
     </>
   );
 }

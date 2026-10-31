@@ -62,7 +62,7 @@ function shellAs(grants: string[]) {
           name: "Ana Lee",
           kind: "human",
         });
-      case "work_inbox":
+      case "inbox":
         asks.inbox++;
         return Promise.resolve({
           handle: "ana",
@@ -111,15 +111,16 @@ test("the shell watches the viewer's seat and asks for their inbox again when it
   expect(watched).toEqual(["ana", ""]);
 });
 
-// THE INBOX IS THE TRACKER'S: a reader without Tracker is watched for nothing
-// and asked no inbox — the engine would refuse both. Mutation: watch whatever
-// the viewer holds and the seat is watched.
-test("a reader without Tracker is watched for nothing and asked no inbox", async () => {
+// THE INBOX IS EVERY SIGNED-IN PERSON'S: it is composed from every native
+// domain's notices, each read under its own permission on the engine's side,
+// so a reader without Tracker is watched and asked their inbox all the same.
+// Mutation: gate the watch on Tracker again and the seat is not watched.
+test("a reader without Tracker is watched and asked their inbox", async () => {
   const { watched, asks } = shellAs(["knowledge"]);
   await afterMicrotasks();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  expect(watched.filter(Boolean)).toEqual([]);
-  expect(asks.inbox).toBe(0);
+  expect(watched.filter(Boolean)).toEqual(["ana"]);
+  expect(asks.inbox).toBeGreaterThan(0);
 });

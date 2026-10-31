@@ -26,10 +26,10 @@ import (
 // A WATCH IS DECIDED LIKE THE INBOX QUESTION ABOUT THE SAME SEAT.
 //
 // A watch installs this node's routing for a seat's `inbox_changed` frames —
-// whose inbox moved, when, under which reason — so it takes the rule the
-// `work_inbox` question takes about that seat: the seat's own holder, whoever
-// leads it through the chart, or an admin — each with the tracker, whose
-// frames these are. Any resolved caller could
+// whose inbox moved, in which domain, when, under which reason — so it takes
+// the rule the composed `inbox` question takes about that seat: the seat's own
+// holder, whoever leads it through the chart, or an admin, with no app, since
+// the frames announce every native domain's notices. Any resolved caller could
 // watch any seat before, which made the routing index a way to follow somebody
 // else's inbox the question itself refused.
 //

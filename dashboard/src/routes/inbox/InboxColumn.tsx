@@ -30,6 +30,8 @@ import type { ItemRef } from "~/lib/work.ts";
 import {
   askQuestion,
   budgetLine,
+  changeWords,
+  isNoticeRow,
   moment,
   noticeText,
   noticeTitle,
@@ -238,6 +240,8 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
         ? { text: noticeTitle(row.notice), excerpt: said }
         : { text: noticeTitle(row.notice) };
     }
+    case "change":
+      return changeWords(row.notice);
   }
   return { text: "" };
 }
@@ -252,7 +256,7 @@ function qualifierOf(row: InboxRow): { word: string; danger: boolean } | null {
 
 /** When, as the row's end says it: back at a snooze's end, since a condition began. */
 function whenOf(row: InboxRow, now: number): string {
-  if (row.kind === "notice" && row.notice.snoozed && row.notice.snoozed_until) {
+  if (isNoticeRow(row) && row.notice.snoozed && row.notice.snoozed_until) {
     return `back ${moment(row.notice.snoozed_until, now)}`;
   }
   if (row.kind === "condition") return row.at ? `since ${moment(row.at, now)}` : "";
@@ -281,7 +285,7 @@ function InboxItem({
   const item = rowItem(row);
   const words = rowWords(row, index);
   const qualifier = settled ? null : qualifierOf(row);
-  const unread = row.kind === "notice" && !row.notice.read && !row.notice.snoozed;
+  const unread = isNoticeRow(row) && !row.notice.read && !row.notice.snoozed;
   return (
     <Row
       title={rowName(row, who)}
@@ -291,7 +295,7 @@ function InboxItem({
       leading={<Badge row={row} who={who} />}
       excerpt={words.excerpt}
       unread={unread}
-      actionable={row.kind !== "notice" && !settled}
+      actionable={!isNoticeRow(row) && !settled}
       done={settled !== undefined}
       doneLabel={settled}
       selected={selected}
@@ -340,6 +344,14 @@ export function Badge({ row, who, size = 24 }: { row: InboxRow; who: Who | null;
     return (
       <span className="attention-icon inbox-badge" data-severity={row.item.severity}>
         <NamedGlyph name={row.item.icon} size="sm" />
+      </span>
+    );
+  }
+  // A CODE NOTICE is about a change, which the code host's own mark draws.
+  if (row.kind === "change") {
+    return (
+      <span className="attention-icon inbox-badge" aria-hidden="true">
+        <NamedGlyph name="code" size="sm" />
       </span>
     );
   }

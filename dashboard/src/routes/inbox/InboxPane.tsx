@@ -64,7 +64,9 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { Attention } from "~/lib/attention.ts";
 import { detailItem, itemAddress } from "~/lib/work.ts";
+import { reasonPhrase } from "~/lib/reasons.ts";
 import type {
+  CodeInboxNotice,
   SandboxRun,
   WorkAskRow,
   WorkDecisionEvidence,
@@ -74,6 +76,7 @@ import {
   askContext,
   askQuestion,
   budgetLine,
+  changeWords,
   firstSentence,
   moment,
   noticeNote,
@@ -244,8 +247,73 @@ function OpenPane({
           onSettled={onSettled}
         />
       );
+    case "change":
+      return (
+        <ChangeNoticePane
+          notice={row.notice}
+          frame={frame}
+          now={now}
+          zone={zone}
+          maxSnoozeAhead={maxSnoozeAhead}
+          onSettled={onSettled}
+        />
+      );
   }
   return null;
+}
+
+/**
+ * A notice the code host routed: the change it is about, why it reached this
+ * reader, what the record said and what the change says, and the reader's own
+ * marks over it (`code_mark_inbox`). Reviewing the change is the change's own
+ * page's.
+ */
+function ChangeNoticePane({
+  notice,
+  frame,
+  now,
+  zone,
+  maxSnoozeAhead,
+  onSettled,
+}: {
+  notice: CodeInboxNotice;
+  frame: Frame;
+  now: number;
+  zone: string | undefined;
+  maxSnoozeAhead: number | undefined;
+  onSettled: (label: string | null) => void;
+}) {
+  const words = changeWords(notice);
+  const body = notice.change?.body ?? "";
+  return (
+    <ReadingPane>
+      {frame.byline(
+        <>
+          <strong>{notice.change_ref}</strong> in {notice.repo}
+        </>,
+        reasonPhrase(notice.reason),
+      )}
+      <ReadingPaneTitle>{words.text}</ReadingPaneTitle>
+      {words.excerpt && (
+        <ReadingPaneQuote>
+          <p>{words.excerpt}</p>
+        </ReadingPaneQuote>
+      )}
+      {body && (
+        <ReadingPaneLead>
+          <p>{notice.change?.body_cut ? `${body}…` : body}</p>
+        </ReadingPaneLead>
+      )}
+      <NoticeActions
+        notice={notice}
+        source="code"
+        now={now}
+        zone={zone}
+        maxSnoozeAhead={maxSnoozeAhead}
+        onSettled={() => onSettled(null)}
+      />
+    </ReadingPane>
+  );
 }
 
 /** "Answered Exact search", where the controls that answered it were. */
@@ -696,6 +764,7 @@ function NoticePane({
       )}
       <NoticeActions
         notice={notice}
+        source="tracker"
         now={now}
         zone={zone}
         maxSnoozeAhead={maxSnoozeAhead}

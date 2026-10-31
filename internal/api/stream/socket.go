@@ -686,13 +686,16 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 //
 // A watch installs a row in the hub's routing index, on this node, on behalf of
 // a caller, and it stays there until the socket goes away. What it buys is the
-// `inbox_changed` frames for that seat — which say whose inbox moved, when and
-// under which reason — so it is decided exactly as the `work_inbox` question
-// about that seat is: [authz.ActionPersonRead], which admits the seat's own
-// holder, whoever leads it through the chart, and an admin — each holding the
-// tracker, whose notices are the ones a frame announces today. Any
-// resolved caller could watch any seat before, which made the routing index a
-// way to follow somebody else's inbox that the question itself refused.
+// `inbox_changed` frames for that seat — which say whose inbox moved, in which
+// domain, when and under which reason — so it is decided exactly as the
+// composed `inbox` question about that seat is: [authz.ActionInbox], which
+// admits the seat's own holder, whoever leads it through the chart, and an
+// admin, WITH NO APP — a frame announces the code host's notices as well as
+// the tracker's, and a person who uses no tracker has an inbox all the same.
+// Decided as the tracker's person record, a reader without Tracker was never
+// told their code notices moved. Any resolved caller could watch any seat
+// before, which made the routing index a way to follow somebody else's inbox
+// that the question itself refused.
 //
 // THREE ANSWERS, and none of them closes the socket:
 //
@@ -825,7 +828,7 @@ func (w *watching) resolve(ctx context.Context, principal iam.Principal,
 // with.
 func (w *watching) mayLook(principal iam.Principal) iam.MayLook {
 	return func(ctx context.Context, login string) error {
-		d := authz.Decide(ctx, principal, authz.ActionPersonRead, authz.Object{
+		d := authz.Decide(ctx, principal, authz.ActionInbox, authz.Object{
 			Kind: authz.KindPerson, Owner: login, Unresolved: true,
 		}, w.chart, time.Now())
 		switch {
@@ -901,7 +904,7 @@ func (a *watchAnswer) frame(id int64) Envelope {
 func (w *watching) decide(ctx context.Context, principal iam.Principal,
 	seat string) *watchAnswer {
 
-	d := authz.Decide(ctx, principal, authz.ActionPersonRead,
+	d := authz.Decide(ctx, principal, authz.ActionInbox,
 		authz.Object{Kind: authz.KindPerson, Owner: seat}, w.chart, time.Now())
 	switch {
 	case d.Unknown():

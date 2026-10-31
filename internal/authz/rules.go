@@ -183,10 +183,15 @@ const (
 	ActionCodeApplySuggestions Action = "code_apply_suggestions"
 
 	// --- somebody's own record -------------------------------------- //
-	ActionPersonRead    Action = "get_person"
-	ActionMyWork        Action = "my_work"
-	ActionInboxRead     Action = "work_inbox"
-	ActionInboxMark     Action = "mark_inbox"
+	ActionPersonRead Action = "get_person"
+	ActionMyWork     Action = "my_work"
+	ActionInboxRead  Action = "work_inbox"
+	ActionInboxMark  Action = "mark_inbox"
+	// ActionInbox is reading a person's COMPOSED inbox — every native
+	// domain's notices in one list (the query registry's `inbox`). DOTTED:
+	// no tool serves it, a seat being woken rather than shown a list, and
+	// `work_inbox` stays the tracker's own question and tool.
+	ActionInbox         Action = "inbox.read"
 	ActionPinsSet       Action = "set_pins"
 	ActionViewSave      Action = "save_work_view"
 	ActionPrioritiesSet Action = "set_priorities"
@@ -892,7 +897,13 @@ var rules = map[Action]rule{
 	ActionInboxRead:     {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
 	ActionPrioritiesSet: {class: ClassOwnOrLead, app: iam.GrantTracker, recency: iam.RecencyAny},
 	ActionInboxMark:     {class: ClassOwnRecord, app: iam.GrantTracker, recency: iam.RecencyAny},
-	ActionPinsSet:       {class: ClassOwnRecord, app: iam.GrantTracker, recency: iam.RecencyAny},
+	// THE COMPOSED INBOX IS NO APP'S: its halves are each read under their
+	// own permission — the tracker's notices with the tracker app, the code
+	// host's held to each repository's grant — so a person who uses no
+	// tracker opens it and reads the changes they are asked to review. Whose
+	// it is stays the lead relation, as `work_inbox`'s is.
+	ActionInbox:   {class: ClassOwnOrLead, recency: iam.RecencyAny},
+	ActionPinsSet: {class: ClassOwnRecord, app: iam.GrantTracker, recency: iam.RecencyAny},
 
 	// --- using the knowledge base ------------------------------------ //
 	ActionPageRead:      {class: ClassApp, app: iam.GrantKnowledge, recency: iam.RecencyAny},

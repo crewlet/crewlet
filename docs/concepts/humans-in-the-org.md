@@ -461,10 +461,19 @@ on where the work lives:
 - **The engine's own inbox.** Every change to the
   [native tracker](task-engine.md) writes a notice to each person it concerns,
   under the one reason that routed it to them (`assignee`, `mention`,
-  `blocking`, …). It is the `work_inbox` question, and the dashboard's
-  Inbox — the tracker's, so reading it takes the `tracker` app. Somebody
-  without it still sees a question a colleague put to them on a work item,
-  among their decisions, and may open that item and post their answer to it
+  `blocking`, …), and so does every record about a change on the company's
+  [own code host](code-host.md) (`mention`, `review_requested`,
+  `changes_requested`, …). The two are **one inbox**: the `inbox` question
+  (`GET /inbox`) and the dashboard's Inbox interleave every native domain's
+  notices by when each happened, and open to **every signed-in person** —
+  whose inbox it is is the composed question's own rule, your own or a
+  report's you lead, with no app. Each domain's notices are then read under
+  that domain's own permission: the tracker's with the `tracker` app (the
+  `work_inbox` question, which stays the tracker's own), the code host's held
+  to your grant on each change's repository — which every person holds on
+  every repository. Somebody without Tracker still sees a question a
+  colleague put to them on a work item, among their decisions, and may open
+  that item and post their answer to it
   ([You may answer what you were asked](identity-and-access.md#what-each-app-opens));
   agents send everything else through the tracker, which is why the
   dashboard warns when Tracker is left unticked for a person.
@@ -522,12 +531,12 @@ sequenceDiagram
 - **The dashboard watches your own seat** as soon as its socket opens, and
   again on every reconnect: the rail's inbox badge, the Inbox screen and My
   work re-ask within half a second of the frame. The frame carries identifiers
-  and a count — the domain, the seat, the task, the reason — and never what
-  the notice says, which is read through `work_inbox` as before.
+  and a count — the domain, the seat, the subject, the reason — and never what
+  the notice says, which is read through `inbox` as before.
 - **A watch is decided like the inbox itself.** You may watch your own seat;
-  a lead may watch a seat they lead; an administrator may watch any — each with
-  the `tracker` app, since a watch is decided as a read of that person's
-  tracker record, whose notices are the ones a frame announces today. The
+  a lead may watch a seat they lead; an administrator may watch any — with no
+  app, since a watch is decided as the composed inbox's own read, whose frames
+  announce the code host's notices beside the tracker's. The
   frame itself asks nothing more: it reaches exactly the sockets whose watch
   of the seat was allowed. A watch
   this node cannot decide — it runs no company yet — is not installed,
@@ -542,6 +551,31 @@ A token or service account bound to no seat watches the record kept under its
 login: what it
 follows, and what names it. See [Acting as your
 seat](#acting-as-your-seat-on-the-dashboard-and-the-api).
+
+**Each domain keeps its own marks.** What you did about a notice — read it,
+put it off until an instant, or read everything up to here — is kept by the
+domain that told you, on its own log, beside the notices it marks: a position
+is a place on ONE log, so "read through here" on the tracker's says nothing
+about the code host's. The rules are one set every domain shares (a mark is
+one gesture, never the lists; a snooze is at most a year ahead; reading
+through a position never moves it backwards), and each domain has its tool:
+`mark_inbox` marks the tracker's notices, `code_mark_inbox` the code host's —
+your own record only, written as the person who holds the seat, and refused
+for anybody else whatever their authority, since marking somebody's mail read
+is a gesture nobody asked a lead to make. A code mark names the `record_id` a
+code notice carries, and is refused naming it when that record reached
+somebody else; its `read_through` is a position on the code log
+(`CREWLET_CODE_LOG@<generation>:<sequence>`). The dashboard's **Mark all
+read** sends both, each reading its own domain through the newest of its
+notices on the page.
+
+A page of the composed inbox is fifty notices, newest first across both
+domains, and its `next_cursor` carries one position per domain — where that
+domain's notices on the page ended — so the next page resumes each exactly
+where it stopped. Each code notice carries what its change says at the read:
+its title and state, the work item it implements, the first kibibyte of its
+description and the findings seats raised that stand open on it, by
+severity.
 
 **The queue is whoever signed in.** `#/inbox`, one click from the landing
 screen (Home), is the queue of the principal the request resolved to — a person

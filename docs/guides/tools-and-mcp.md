@@ -532,6 +532,15 @@ never offered it, a seat watching who reads the code being a model watching the
 people it works for. `GET /code/repos/{name}/readers` answers the same pages
 to a script.
 
+**Nor is `code_mark_inbox`**, which the operator catalogue serves beside the
+code writes: a person's own marks over their code notices — the ones the
+`inbox` question answers under `source: "code"` — read, unread, snoozed, or
+read through a position on the code log, one gesture at a time, exactly as
+`mark_inbox` marks the tracker's. Each domain keeps the marks over its own
+notices on its own log, so each has its tool. It writes the caller's own record
+and nobody else's, and a seat is never offered it: a seat is woken, never shown
+an inbox ([How a person learns they have work](../concepts/humans-in-the-org.md#how-a-person-learns-they-have-work)).
+
 ### The deployment's health
 
 Two read-only tools, `fleet_health` and `code_status`, read the deployment as

@@ -260,6 +260,11 @@ func fullSurface(t *testing.T) *operator.Server {
 				Writer: struct{ builtin.PageWriter }{},
 			},
 			Knowledge: struct{ builtin.KnowledgeSearcher }{},
+			// THE CODE HOST'S HALF, its writes wired: the dashboard marks a
+			// code notice through `code_mark_inbox`, which the catalogue
+			// serves only beside the code host's writes.
+			Code: builtin.CodeDeps{Code: &listingHost{}, Requesters: noRequesters{}, Chart: authz.NoChart{},
+				Writer: struct{ builtin.CodeWriter }{}},
 		}),
 		Org:    func() *org.Organization { return nil },
 		Runs:   builtin.RunDeps{Desk: struct{ builtin.RunDesk }{}},

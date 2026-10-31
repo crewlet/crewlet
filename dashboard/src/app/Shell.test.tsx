@@ -215,7 +215,7 @@ describe("the state bar's coverage", () => {
  * sends.
  */
 const EMPTY: Record<string, unknown> = {
-  work_inbox: { handle: "ada", notices: [], primary_reasons: [] },
+  inbox: { handle: "ada", notices: [], primary_reasons: [], sources: [] },
   work_views: { complete: true, views: [] },
   work_saved_views: { complete: true, views: [] },
   work_projects: { projects: [] },
@@ -305,12 +305,19 @@ describe("the Inbox badge", () => {
   test("asks the engine for unread primary notices, and counts what it answers", async () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
     const { store, socket } = answering(
-      { work_inbox: { handle: "ada", notices: [notice("assignee", 1)], primary_reasons: [] } },
+      {
+        inbox: {
+          handle: "ada",
+          notices: [notice("assignee", 1)],
+          primary_reasons: [],
+          sources: [],
+        },
+      },
       asked,
     );
     mountShell(store, socket);
     await settle();
-    const inbox = asked.find((a) => a.what === "work_inbox");
+    const inbox = asked.find((a) => a.what === "inbox");
     expect(inbox?.params).toMatchObject({ handle: "ada", unread: true, primary_only: true });
     const row = screen.getByRole("link", { name: /^Inbox/ });
     expect(row.textContent).toContain("1");
@@ -319,10 +326,11 @@ describe("the Inbox badge", () => {
   // A PAGE THE ENGINE HAD MORE THAN is a floor, and says so.
   test("a page with more behind it is drawn as a floor", async () => {
     const { store, socket } = answering({
-      work_inbox: {
+      inbox: {
         handle: "ada",
         notices: [notice("assignee", 1), notice("mention", 2)],
         primary_reasons: [],
+        sources: [],
         next_cursor: "c-2",
       },
     });
@@ -335,7 +343,7 @@ describe("the Inbox badge", () => {
   // reader checks, and it would be there permanently on a quiet company.
   test("nothing waiting draws no figure", async () => {
     const { store, socket } = answering({
-      work_inbox: { handle: "ada", notices: [], primary_reasons: [] },
+      inbox: { handle: "ada", notices: [], primary_reasons: [], sources: [] },
     });
     mountShell(store, socket);
     await settle();
@@ -752,9 +760,9 @@ describe("the sidebar's figures", () => {
     mountShell(store, socket, child);
     await settle();
     expect(asked.filter((a) => a.what === "viewer")).toHaveLength(1);
-    expect(
-      asked.filter((a) => a.what === "work_inbox" && a.params?.primary_only === true),
-    ).toHaveLength(1);
+    expect(asked.filter((a) => a.what === "inbox" && a.params?.primary_only === true)).toHaveLength(
+      1,
+    );
   });
 
   // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, not

@@ -114,6 +114,9 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/activity", what: "work_activity"},
 	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
 	{method: "GET", pattern: "/work/inbox", what: "work_inbox"},
+	// AND THE COMPOSED INBOX, every native domain's notices in one list —
+	// no domain's path, since it is no domain's (queries' composedInbox).
+	{method: "GET", pattern: "/inbox", what: "inbox"},
 	// A TASK'S THREAD, deeper than the detail's own page, with the task as
 	// `item=`. A literal segment rather than /work/{id}/comments, which
 	// net/http refuses beside /work/projects/{key}: neither is more specific

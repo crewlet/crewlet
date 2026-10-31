@@ -258,4 +258,13 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  // THE CODE HOST'S HALF OF AN INBOX'S MARKS: each domain keeps the marks over
+  // its own notices on its own log, so a code notice is marked here and
+  // "Mark all read" sends both.
+  code_mark_inbox: {
+    args: ["read", "unread", "snooze", "unsnooze", "read_through"],
+    domain: "code",
+    refreshes: [],
+    scope: "person",
+  },
 } as const;

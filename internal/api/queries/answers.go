@@ -807,6 +807,13 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil || s.Sandbox != nil {
 		r.Register("decisions", Everybody(), s.decisions)
 	}
+	// ONE INBOX FROM EVERY NATIVE DOMAIN, registered wherever either half
+	// is wired: whose inbox is the composed question's own verb, own or
+	// lead WITH NO APP, and each half is read under its own permission —
+	// see [Sources.composedInbox].
+	if s.Work != nil || s.Code != nil {
+		r.Register("inbox", DecidedBy(authz.ActionInbox), s.composedInbox)
+	}
 	if s.Pages != nil {
 		r.Register("pages", Requires(iam.GrantKnowledge), s.pageList)
 		r.Register("page", Requires(iam.GrantKnowledge), s.page)

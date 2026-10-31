@@ -44,6 +44,7 @@ export const SESSION_QUERIES = {
     "work_flow",
     "company_feed",
     "decisions",
+    "inbox",
   ],
   pages: ["pages", "page", "containers", "page_activity", "page_revision", "company_feed"],
   code: [
@@ -62,5 +63,6 @@ export const SESSION_QUERIES = {
     "code_diff",
     "code_compare",
     "code_commit",
+    "inbox",
   ],
 } as const;

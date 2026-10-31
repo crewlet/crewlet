@@ -4424,6 +4424,101 @@ export interface WorkInboxNotice {
   snoozed_until?: string;
 }
 
+/** A position on one domain's log, as a mark reads through it. */
+export interface InboxPosition {
+  stream: string;
+  generation?: number;
+  seq: number;
+}
+
+/** What a code notice carries of its change, read with the page
+ *  (`code.NoticeChange`). */
+export interface CodeNoticeChange {
+  title: string;
+  state: string;
+  work_item?: { backend: string; id: string; key: string; project?: string };
+  /** The description's first KiB; `body_cut` says there is more. */
+  body?: string;
+  body_cut?: boolean;
+  /** The findings seats raised that stand open, by severity. */
+  agent_findings?: Record<string, number>;
+}
+
+/** One notice the code host routed to a person (`code.InboxNotice`). */
+export interface CodeInboxNotice {
+  record_id: string;
+  log_seq: number;
+  log_stream: string;
+  log_generation: number;
+  at: string;
+  reason: string;
+  primary: boolean;
+  addressed: boolean;
+  fallback?: boolean;
+  repo: string;
+  change_id: string;
+  /** The change's name, web!42. */
+  change_ref: string;
+  excerpt?: string;
+  change?: CodeNoticeChange;
+  read: boolean;
+  snoozed?: boolean;
+  snoozed_until?: string;
+}
+
+/** One notice of a person's COMPOSED inbox (`inbox.Notice`): what every source
+ *  says alike, and the source's own notice whole in `extra`. */
+export type InboxNotice =
+  InboxNoticeOf<"tracker", WorkInboxNotice> | InboxNoticeOf<"code", CodeInboxNotice>;
+
+export interface InboxNoticeOf<S extends string, E> {
+  source: S;
+  record_id: string;
+  /** Where it sits on its source's log: what that source's mark reads through. */
+  position: InboxPosition;
+  at: string;
+  reason: string;
+  primary: boolean;
+  addressed: boolean;
+  fallback?: boolean;
+  kind: string;
+  subject: { id: string; key?: string; title?: string };
+  excerpt?: string;
+  actor?: string;
+  actor_kind?: string;
+  read: boolean;
+  snoozed?: boolean;
+  snoozed_until?: string;
+  extra: E;
+}
+
+/** One source a composed inbox read, and what it said of the person's marks. */
+export interface InboxSourceState {
+  name: "tracker" | "code";
+  seen_through?: InboxPosition;
+  primary_reasons: string[];
+  /** The newest notice of this source the page carries. */
+  newest?: InboxPosition;
+}
+
+/** A page of a person's composed inbox — every native domain's notices,
+ *  interleaved by when each happened (`inbox.Page`). */
+export interface InboxAnswer {
+  handle: string;
+  notices: InboxNotice[];
+  /** The sources read: each one the reader may read, and no other. */
+  sources: InboxSourceState[];
+  /** Counts over THIS PAGE. */
+  unread: number;
+  primary: number;
+  /** One position per source, past this page; absent once every source is read. */
+  next_cursor?: string;
+  /** The WEAKEST level a source was read at: the page is no fresher than its stalest half. */
+  read_level?: ReadLevel;
+  /** Every source read held every notice its scan reached. */
+  complete: boolean;
+}
+
 /** The ask a notice or a feed row is about, as it stands at the read. */
 export interface WorkAskView {
   /** The ask's own comment id — what an answer names in `answers`. */
@@ -6385,6 +6480,7 @@ export interface ArtifactPresencePush {
 export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
+  inbox: InboxAnswer;
   agent: AgentAnswer;
   live_call: LiveCallAnswer;
   agent_memory: AgentMemory;

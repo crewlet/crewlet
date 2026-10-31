@@ -15,6 +15,7 @@ import {
   inboxRows,
   nextAfter,
   noticeNote,
+  noticeRows,
   noticeTitle,
   readThrough,
   rowItem,
@@ -24,7 +25,14 @@ import {
   type InboxRow,
 } from "./model.ts";
 import type { DecisionSubject } from "~/lib/decisions.ts";
-import type { SandboxRun, WorkAskRow, WorkInboxNotice } from "~/protocol/index.ts";
+import type {
+  CodeInboxNotice,
+  InboxAnswer,
+  InboxNotice,
+  SandboxRun,
+  WorkAskRow,
+  WorkInboxNotice,
+} from "~/protocol/index.ts";
 import { itemAddress } from "~/lib/work.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { withDerived } from "~/test/org.ts";
@@ -43,6 +51,56 @@ function notice(id: string, extra: Partial<WorkInboxNotice> = {}): WorkInboxNoti
     subject_id: "t",
     read: false,
     ...extra,
+  };
+}
+
+/** A tracker notice as the composed inbox carries it. */
+function composed(n: WorkInboxNotice): InboxNotice {
+  return {
+    source: "tracker",
+    record_id: n.record_id,
+    position: { stream: n.log_stream, generation: n.log_generation, seq: n.log_seq },
+    at: n.at,
+    reason: n.reason,
+    primary: n.primary,
+    addressed: n.addressed,
+    kind: n.kind,
+    subject: { id: n.subject_id, key: n.subject_key },
+    read: n.read,
+    extra: n,
+  };
+}
+
+/** A code notice as the composed inbox carries it. */
+function codeNotice(id: string, extra: Partial<CodeInboxNotice> = {}): InboxNotice {
+  const n: CodeInboxNotice = {
+    record_id: id,
+    log_seq: 7,
+    log_stream: "CREWLET_CODE_LOG",
+    log_generation: 1,
+    at: "2026-09-27T11:00:00Z",
+    reason: "review_requested",
+    primary: true,
+    addressed: true,
+    repo: "web",
+    change_id: "change-1",
+    change_ref: "web!42",
+    change: { title: "Retry the upload once", state: "open" },
+    read: false,
+    ...extra,
+  };
+  return {
+    source: "code",
+    record_id: n.record_id,
+    position: { stream: n.log_stream, generation: n.log_generation, seq: n.log_seq },
+    at: n.at,
+    reason: n.reason,
+    primary: n.primary,
+    addressed: n.addressed,
+    kind: "change",
+    subject: { id: n.change_id, key: n.change_ref, title: n.change?.title },
+    read: n.read,
+    extra: n,
   };
 }
 
@@ -76,8 +134,8 @@ describe("the rows", () => {
       subjects: [ASK],
       conditions: [],
       notices: [
-        notice("r-1", { ask: { comment: "c-12", asked_of: "jane", open: true } }),
-        notice("r-2"),
+        composed(notice("r-1", { ask: { comment: "c-12", asked_of: "jane", open: true } })),
+        composed(notice("r-2")),
       ],
     });
     expect(rows.needs).toHaveLength(1);
@@ -89,10 +147,19 @@ describe("the rows", () => {
 
   test("Earlier lists only what is read, since the engine answers read and unread alike", () => {
     expect(
-      earlierOf([notice("a"), notice("b", { read: true }), notice("c", { read: true })]).map(
-        (n) => n.record_id,
-      ),
+      earlierOf(
+        [notice("a"), notice("b", { read: true }), notice("c", { read: true })].map(composed),
+      ).map((n) => n.record_id),
     ).toEqual(["b", "c"]);
+  });
+
+  test("a code notice is a change row, keyed apart from every tracker record", () => {
+    const rows = noticeRows([composed(notice("r-1")), codeNotice("r-1")]);
+    expect(rows.map((r) => [r.kind, r.key])).toEqual([
+      ["notice", "r-1"],
+      ["change", "change:r-1"],
+    ]);
+    expect(rowName(rows[1]!, null)).toBe("web!42");
   });
 });
 
@@ -175,13 +242,28 @@ describe("what an ask says", () => {
 describe("mark all read", () => {
   test("reads through the newest unread notice loaded, by generation then sequence", () => {
     expect(
+      readThrough(
+        [
+          notice("a", { log_generation: 1, log_seq: 90 }),
+          notice("b", { log_generation: 2, log_seq: 3 }),
+          notice("c", { log_generation: 2, log_seq: 40, read: true }),
+        ].map(composed),
+      ),
+    ).toEqual({ tracker: "CREWLET_TRACKER_LOG@2:3", code: null });
+    expect(readThrough([composed(notice("a", { read: true }))])).toEqual({
+      tracker: null,
+      code: null,
+    });
+  });
+
+  test("reads each source through its own newest notice, never one through the other's", () => {
+    expect(
       readThrough([
-        notice("a", { log_generation: 1, log_seq: 90 }),
-        notice("b", { log_generation: 2, log_seq: 3 }),
-        notice("c", { log_generation: 2, log_seq: 40, read: true }),
+        composed(notice("a", { log_generation: 1, log_seq: 90 })),
+        codeNotice("x", { log_generation: 1, log_seq: 4 }),
+        codeNotice("y", { log_generation: 1, log_seq: 2 }),
       ]),
-    ).toBe("CREWLET_TRACKER_LOG@2:3");
-    expect(readThrough([notice("a", { read: true })])).toBeNull();
+    ).toEqual({ tracker: "CREWLET_TRACKER_LOG@1:90", code: "CREWLET_CODE_LOG@1:4" });
   });
 });
 
@@ -239,7 +321,17 @@ describe("the snooze presets", () => {
 
 describe("the quiet sentences", () => {
   const base = { bound: true, error: false, shown: 0, watched: "every seat's own state" };
-  const answer = { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 };
+  const answer: InboxAnswer = {
+    handle: "jane",
+    notices: [],
+    sources: [
+      { name: "tracker", primary_reasons: [] },
+      { name: "code", primary_reasons: [] },
+    ],
+    unread: 0,
+    primary: 0,
+    complete: true,
+  };
 
   test("say nothing before an answer, beside a refusal or over rows", () => {
     expect(inboxQuiet({ ...base, answer: null })).toBeNull();
@@ -249,9 +341,15 @@ describe("the quiet sentences", () => {
 
   test("claim no read history for a person who never marked one", () => {
     expect(inboxQuiet({ ...base, answer })?.title).toBe("Nothing has reached you yet");
-    expect(inboxQuiet({ ...base, answer: { ...answer, seen_through: { seq: 4 } } })?.title).toBe(
-      "You are caught up",
-    );
+    // EITHER SOURCE'S READ POSITION is evidence of having read something.
+    const read = (name: "tracker" | "code"): InboxAnswer => ({
+      ...answer,
+      sources: answer.sources.map((s) =>
+        s.name === name ? { ...s, seen_through: { stream: "S", seq: 4 } } : s,
+      ),
+    });
+    expect(inboxQuiet({ ...base, answer: read("tracker") })?.title).toBe("You are caught up");
+    expect(inboxQuiet({ ...base, answer: read("code") })?.title).toBe("You are caught up");
   });
 
   test("name what the conditions were measured over for a reader who is nobody", () => {

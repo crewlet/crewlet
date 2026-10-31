@@ -395,11 +395,14 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // change's four, read by a script on the paths api-endpoints.md prints for
 // each (docs/reference/api-endpoints.md, "The code reads") until the
 // workspace draws a change's own page and a seat's reviews: the questions
-// land with the engine's change tools, which the dashboard follows. And a
+// land with the engine's change tools, which the dashboard follows. A
 // repository's content, its refs, files, history, blame, diffs, comparisons
 // and commits, read by a script on the paths api-endpoints.md prints
 // ("A repository's content") until the workspace draws a repository's own
 // page (m4-u2's Repository, Commit and Compare pages delete these lines).
+// And the tracker's own inbox, `work_inbox`, which the Inbox reads composed
+// with the code host's through `inbox` and a script and a seat's tool read
+// alone.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo":           "crewlet code status -repo",
 	"code_repo_readers":   "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
@@ -415,6 +418,13 @@ var readOutsideTheDashboard = map[string]string{
 	"code_diff":           "a script: GET /code/repos/{name}/diff, as docs/reference/api-endpoints.md prints it",
 	"code_compare":        "a script: GET /code/repos/{name}/compare, as docs/reference/api-endpoints.md prints it",
 	"code_commit":         "a script: GET /code/repos/{name}/commits/{sha}, as docs/reference/api-endpoints.md prints it",
+	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
+	// with the code host's through `inbox` since that question landed: it
+	// stays the tracker's question and its tool's (`work_inbox`, a seat's and
+	// a person's assistant's), read by a script on the path the reference
+	// prints.
+	"work_inbox": "a script: GET /work/inbox, as docs/reference/api-endpoints.md prints it, and the tracker's " +
+		"own tool work_inbox",
 }
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.

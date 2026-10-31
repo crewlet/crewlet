@@ -353,6 +353,10 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		// anything is read: an admin's, since the answer names the people
 		// who read it, which no repository's grant gives.
 		"code_repo_readers": "decided_by:" + string(authz.ActionCodeRepoReaders),
+		// AND THE COMPOSED INBOX, whose own verb decides whose inbox — own
+		// or lead, no app — and whose halves are each read under their own
+		// permission inside it.
+		"inbox": "decided_by:" + string(authz.ActionInbox),
 	}
 	r := queries.NewRegistry()
 	queries.Register(r, everySeam(t))

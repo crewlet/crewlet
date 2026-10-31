@@ -338,6 +338,7 @@ var personalQuestions = map[string]bool{
 	"work_inbox":    true,
 	"conversations": true,
 	"decisions":     true,
+	"inbox":         true,
 }
 
 // askNative runs one question against a registry built from these sources,
@@ -1605,6 +1606,15 @@ var sessionQuestions = []sessionQuestion{
 	{"code_commit", []string{"code"}, map[string]any{"name": "web", "sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"},
 		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
 		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
+	// THE COMPOSED INBOX: the tracker's notices and the code host's, each
+	// half at the floor of its own log, so a "mark all read" that wrote a
+	// record on each is read back past both (inbox.go).
+	{"inbox", []string{"tracker", "code"}, map[string]any{"handle": "ana"},
+		func(s stubs) statelog.ReadLevel { return s.work.inboxQuery.Level },
+		func(s stubs) []bound {
+			return append(handed(s.work.inboxQuery.MaxLag, s.work.inboxQuery.MaxLagSeq),
+				handedWhole(s.code.last().Fresh)...)
+		}, nil},
 }
 
 // handed is the bound of a reader of one log, as its stub recorded the two

@@ -141,7 +141,7 @@ const QUIET = {
   company_feed: { rows: [], complete: true },
   work_projects: { projects: [], total: 0, census: {}, complete: true },
   sandbox_runs: { runs: [] },
-  work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+  inbox: { handle: "jane", notices: [], sources: [], unread: 0, primary: 0 },
 };
 
 type Answer = unknown | ((params: Record<string, unknown>) => Promise<unknown>);
