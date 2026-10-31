@@ -65,6 +65,21 @@ func (d directory) SeatHolders(context.Context) ([]iamdomain.SeatHolder, error) 
 	}, nil
 }
 
+// SeatHolder is the one seat's entry of [directory.SeatHolders], and nobody for
+// a seat it does not list.
+func (d directory) SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error) {
+	holders, err := d.SeatHolders(ctx)
+	if err != nil {
+		return iamdomain.SeatHolder{}, false, err
+	}
+	for _, h := range holders {
+		if h.Seat == seat {
+			return h, true, nil
+		}
+	}
+	return iamdomain.SeatHolder{}, false, nil
+}
+
 // MachineToken is the row held under id: [machineID]'s token, or the absent
 // row — this node's applied position and vouch, and nothing found — for any
 // other id, as the directory answers one.
@@ -179,6 +194,42 @@ func TestSeatHoldersCrossWhole(t *testing.T) {
 	want, _ := directory{}.SeatHolders(t.Context())
 	if !reflect.DeepEqual(holders, want) {
 		t.Fatalf("seat holders = %+v, want %+v", holders, want)
+	}
+}
+
+// ONE SEAT'S HOLDER CROSSES AS ITS OWN QUESTION — the seat named on the wire
+// and the three answers kept apart: a holder at their stage, a removal's
+// tombstone, and nobody. A turn composes the person it acts for from it on
+// every tool call, so it asks the serving node about that seat alone, and an
+// unreadable directory is UNKNOWN rather than a seat nobody holds, which the
+// turn would read as one the chart alone speaks for.
+func TestASeatHolderCrossesAsOneSeatsAnswer(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	f.nodes["data-a"].set(func(n *fakeNode) { n.directory = directory{} })
+	for _, tc := range []struct {
+		seat string
+		want iamdomain.SeatHolder
+		held bool
+	}{
+		{"jane", iamdomain.SeatHolder{Seat: "jane", Person: "p-1", Stage: iam.StageSuspended}, true},
+		{"sam", iamdomain.SeatHolder{Seat: "sam", Person: "p-2", Removed: true}, true},
+		{"nobody", iamdomain.SeatHolder{}, false},
+	} {
+		holder, held, err := f.client.Identity().SeatHolder(t.Context(), tc.seat)
+		if err != nil || held != tc.held || holder != tc.want {
+			t.Errorf("seat %s's holder = (%+v, %v, %v), want (%+v, %v)", tc.seat,
+				holder, held, err, tc.want, tc.held)
+		}
+	}
+
+	f.nodes["data-a"].set(func(n *fakeNode) {
+		n.directory = directory{err: store.ErrNoEstate}
+	})
+	if holder, held, err := f.client.Identity().SeatHolder(t.Context(), "jane"); !errors.Is(err,
+		store.ErrNoEstate) || held || holder != (iamdomain.SeatHolder{}) {
+		t.Fatalf("an unreadable directory's holder = (%+v, %v, %v), want its error",
+			holder, held, err)
 	}
 }
 

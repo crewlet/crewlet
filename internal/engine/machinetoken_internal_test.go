@@ -44,6 +44,10 @@ func (d tokenDirectory) SeatHolders(context.Context) ([]iamdomain.SeatHolder, er
 	return nil, d.err
 }
 
+func (d tokenDirectory) SeatHolder(context.Context, string) (iamdomain.SeatHolder, bool, error) {
+	return iamdomain.SeatHolder{}, false, d.err
+}
+
 func (d tokenDirectory) MachineToken(_ context.Context, id string) (credential.TokenRow, error) {
 	if d.err != nil {
 		return credential.TokenRow{}, d.err

@@ -579,6 +579,15 @@ func (i Identity) SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, erro
 	return call(ctx, i.r, opSeatHolders, nil, struct{}{})
 }
 
+// SeatHolder answers who holds one seat, and whether anybody does, read in one
+// snapshot on the node that answered — [Identity.SeatHolders]' answer for that
+// seat alone, as two seeks rather than the whole directory. An error is
+// UNKNOWN, never a seat nobody holds.
+func (i Identity) SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error) {
+	out, err := call(ctx, i.r, opSeatHolder, nil, seatArgs{Seat: seat})
+	return out.Holder, out.Held, err
+}
+
 // MachineToken answers the row a presented machine token is checked against —
 // [credential.CheckToken]'s input — as a data node holds it, for a node that
 // holds no identity rows of its own.

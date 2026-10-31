@@ -218,7 +218,9 @@ type UsageReader interface {
 
 // IdentityReader is the identity directory's read side, as a node holding no
 // data asks it: the two questions its seats and its party registry put to the
-// directory, the one a request presenting a machine token puts, and no others.
+// directory — whose record a login names, and who holds the seats, every one
+// for the registry and ONE for a turn composing the person it acts for — the
+// one a request presenting a machine token puts, and no others.
 //
 // FACTS AND NOT VERDICTS, exactly as [iamdomain.Reader] answers them: the row a
 // login binds and how far the serving node can vouch for it, the seats the
@@ -232,6 +234,7 @@ type IdentityReader interface {
 	PersonByLoginVouched(ctx context.Context, login string) (iamdomain.Sighting,
 		iamdomain.Vouch, error)
 	SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error)
+	SeatHolder(ctx context.Context, seat string) (iamdomain.SeatHolder, bool, error)
 	MachineToken(ctx context.Context, id string) (credential.TokenRow, error)
 }
 
@@ -1845,6 +1848,38 @@ var opSeatHolders = define("identity.seat_holders", opRead, identityDomain, fals
 			return nil, errNoHalf
 		}
 		return b.Identity.SeatHolders(ctx)
+	})
+
+// seatArgs names the one seat a holder question is about.
+type seatArgs struct {
+	Seat string
+}
+
+// heldSeat is who holds one seat, and whether anybody does: the directory's
+// three-valued answer with its error crossing apart, as every error does.
+type heldSeat struct {
+	Holder iamdomain.SeatHolder
+	Held   bool
+}
+
+// WHO HOLDS ONE HUMAN SEAT — [opSeatHolders]' answer for that seat alone, by
+// the same rule, read as two seeks on the serving node
+// ([iamdomain.Reader.SeatHolder]). It is what a seat's turn composes the
+// person it acts for from on every call of a tool that reads or writes for
+// somebody, so it must cost the same however many people the company has hired
+// or removed, where the whole set grows with both. An error is UNKNOWN and
+// crosses as one, never "nobody holds it", which a turn would read as a seat
+// the chart alone speaks for.
+var opSeatHolder = define("identity.seat_holder", opRead, identityDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a seatArgs) (heldSeat, error) {
+		if b.Identity == nil {
+			return heldSeat{}, errNoHalf
+		}
+		holder, held, err := b.Identity.SeatHolder(ctx, a.Seat)
+		if err != nil {
+			return heldSeat{}, err
+		}
+		return heldSeat{Holder: holder, Held: held}, nil
 	})
 
 // WHAT A PRESENTED MACHINE TOKEN IS CHECKED AGAINST, read in one snapshot —
