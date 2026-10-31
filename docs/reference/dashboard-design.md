@@ -7472,7 +7472,10 @@ as they are typed in.
   so, because a zero would claim the reader is caught up; a list past its bound
   says so too. Browse rooms and New message stand at its foot. Pinned (a
   per-browser choice), it is a column beside the conversation; on a chat area
-  under 760px it is never pinned.
+  under 760px it is never pinned. Pinning and unpinning ease the column open
+  and shut with the kit's motion, the panel sliding in and out at its own
+  width, so the conversation resizes beside it rather than jumping; under
+  reduced motion the column simply appears and goes.
 - **Panes** stand beside the conversation, and lie over it on a screen under
   980px (a whole narrow chat area under 760px); the widths are
   `app/layout.ts`'s, which keep the transcript to its floor at every step.

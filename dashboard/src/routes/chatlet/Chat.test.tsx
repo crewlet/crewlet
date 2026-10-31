@@ -383,6 +383,62 @@ describe("the Rooms panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Unpin the panel" }));
     await waitFor(() => expect(localStorage.getItem(STORAGE_KEYS.chatletRoomsDocked)).toBe("0"));
   });
+
+  // UNPINNING EASES THE COLUMN SHUT rather than dropping it: the kit's dock
+  // column keeps the panel drawn, inert, while its width eases to nothing
+  // beside the conversation, and takes it away when that motion ends. Focus
+  // that was in the panel goes to Menu, which brings the panel back, as the
+  // panel starts to leave. jsdom runs no transitions, so the motion is the
+  // column's own `getAnimations`, finished by the suite. Mutation: take the
+  // panel away on the press and the first expectation goes red; hand the dock
+  // no way back and the focus one does; ignore the motion and the last does.
+  test("unpinning keeps the panel, inert, until its column has eased shut", async () => {
+    let close = () => {};
+    const finished = new Promise<void>((resolve) => (close = resolve));
+    const motion = {
+      playState: "running",
+      effect: { getComputedTiming: () => ({ endTime: 300 }) },
+      finished,
+    } as unknown as Animation;
+    const had = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getAnimations");
+    Object.defineProperty(HTMLElement.prototype, "getAnimations", {
+      configurable: true,
+      value(this: HTMLElement) {
+        return this.classList.contains("chat-dock") ? [motion] : [];
+      },
+    });
+    try {
+      localStorage.setItem(STORAGE_KEYS.chatletRoomsDocked, "1");
+      mountScreen({ answer: chatAnswers([room(GENERAL, "general")]) });
+      await screen.findByRole("navigation", { name: "Rooms" });
+      const unpin = screen.getByRole("button", { name: "Unpin the panel" });
+      unpin.focus();
+      fireEvent.click(unpin);
+      const leaving = document.querySelector(".chat-dock .crewlet-dock-column__panel");
+      expect(leaving, "the panel is still drawn while its column eases shut").toBeTruthy();
+      expect(leaving?.hasAttribute("inert")).toBe(true);
+      expect(document.activeElement, "focus goes to Menu, which brings it back").toBe(
+        screen.getByRole("button", { name: /^Menu/ }),
+      );
+      await flush(async () => {
+        (motion as { playState: string }).playState = "finished";
+        close();
+      });
+      await waitFor(() =>
+        expect(
+          document.querySelector(".chat-dock .crewlet-dock-column__panel"),
+          "gone once it has closed",
+        ).toBeNull(),
+      );
+      expect(
+        document.querySelector(".chat-dock"),
+        "the column stays, as wide as nothing",
+      ).toBeTruthy();
+    } finally {
+      if (had) Object.defineProperty(HTMLElement.prototype, "getAnimations", had);
+      else delete (HTMLElement.prototype as { getAnimations?: unknown }).getAnimations;
+    }
+  });
 });
 
 describe("the top bar", () => {

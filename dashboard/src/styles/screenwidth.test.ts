@@ -128,9 +128,13 @@ test("Chatlet's columns follow the screen's width, where the transcript keeps it
   const app = rule(chatFrame, ".chat-app");
   expect(app).toMatch(new RegExp(`--chat-dock:\\s*${CHAT_DOCK_WIDTH}px;`));
   expect(app).toMatch(new RegExp(`--chat-pane:\\s*${CHAT_PANE_WIDTH}px;`));
-  expect(rule(chatFrame, ".chat-app.is-docked.has-pane")).toMatch(
-    /grid-template-columns:\s*var\(--chat-dock\) minmax\(0, 1fr\) var\(--chat-pane\);/,
+  expect(rule(chatFrame, ".chat-app.has-pane")).toMatch(
+    /grid-template-columns:\s*auto minmax\(0, 1fr\) var\(--chat-pane\);/,
   );
+  // THE DOCK'S TRACK IS THE KIT'S DOCK COLUMN, as wide as the width it is
+  // handed while pinned: the arithmetic's.
+  const rooms = readFileSync(join(SRC, "routes/chatlet/RoomsPanel.tsx"), "utf8");
+  expect(rooms).toMatch(/<DockColumn\b[^>]*\bwidth="var\(--chat-dock\)"/);
 
   // THE FOLDS, at the module's widths: the snug columns, then the pane over
   // the conversation.

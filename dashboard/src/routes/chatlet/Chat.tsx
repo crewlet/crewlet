@@ -396,6 +396,9 @@ function DialogHost() {
 function ChatLayout({ children }: { children: ReactNode }) {
   const nav = useChatNav();
   const area = useContext(ChatAreaContext);
+  // MENU BRINGS THE PANEL BACK, so it is where focus goes when the panel is
+  // unpinned from inside the dock.
+  const menu = useRef<HTMLButtonElement>(null);
   const className = [
     "chat-app",
     nav.rooms.docked && "is-docked",
@@ -414,9 +417,9 @@ function ChatLayout({ children }: { children: ReactNode }) {
     <LayerHost className="chat-layer">
       <RoomScopeProvider channelID={room}>
         <div ref={area} className={className}>
-          {nav.rooms.docked && <RoomsDock />}
+          {!nav.narrow && <RoomsDock docked={nav.rooms.docked} back={() => menu.current} />}
           <section className="chat-main" aria-label="Conversation">
-            <ChatTopBar />
+            <ChatTopBar menu={menu} />
             {children}
           </section>
           {nav.pane && <ChatPaneHost pane={nav.pane} onClose={nav.closePane} />}
