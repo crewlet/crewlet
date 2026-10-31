@@ -8,12 +8,22 @@
  */
 
 import {
+  CHANGE_NEEDS,
+  CHANGE_STATES,
   COMMAND_OUTCOMES,
+  PRECONDITION_KINDS,
   REPO_NAME,
   REPO_NAME_MAX_BYTES,
   REPO_STATUSES,
 } from "~/contract/code.ts";
-import type { CodePushCommand, CodePushCounts, CodeRepoStatus } from "~/protocol/index.ts";
+import type {
+  CodeChangeState,
+  CodePrecondition,
+  CodePushCommand,
+  CodePushCounts,
+  CodeReadiness,
+  CodeRepoStatus,
+} from "~/protocol/index.ts";
 
 /** The engine's repository grammar, compiled once. */
 const REPO_NAME_PATTERN = new RegExp(REPO_NAME);
@@ -148,3 +158,161 @@ export const REPO_STATUS_FILTERS: readonly { value: string; label: string }[] = 
   { value: "", label: "Active and archived" },
   ...REPO_STATUSES.map((status) => ({ value: status, label: REPO_STATUS_WORDS[status] })),
 ];
+
+/**
+ * A change's reference as a person writes it — its repository's name, `!`,
+ * its number on that repository: `web!42` (`code.ChangeRef`).
+ */
+export function changeRef(repo: string, number: number): string {
+  return `${repo}!${number}`;
+}
+
+/** A change's number: a whole number from 1, as a repository numbers them. */
+const CHANGE_NUMBER = /^[1-9][0-9]{0,15}$/;
+
+/**
+ * A change named by its reference (`web!42`), or null for anything that is
+ * not one — a name no repository can have, or a number a repository never
+ * gives. The repository's grammar is the engine's ([isRepoName]), so a
+ * reference that parses here is one the engine can be asked about.
+ */
+export function parseChangeRef(text: string): { repo: string; number: number } | null {
+  const cut = text.indexOf("!");
+  if (cut <= 0) return null;
+  const repo = text.slice(0, cut);
+  const digits = text.slice(cut + 1);
+  if (!isRepoName(repo) || !CHANGE_NUMBER.test(digits)) return null;
+  const number = Number(digits);
+  return Number.isSafeInteger(number) ? { repo, number } : null;
+}
+
+/** A state of a change this build knows (`contract/code.ts`). */
+type KnownChangeState = (typeof CHANGE_STATES)[number];
+
+/**
+ * Each state of a change in words: what a row's mark says and what the
+ * listing's filter offers. Keyed on the contract's set, so a state the engine
+ * grows is a type error here until it has its words.
+ */
+const CHANGE_STATE_WORDS: Readonly<Record<KnownChangeState, string>> = {
+  draft: "Draft",
+  open: "Open",
+  closed: "Closed",
+  merged: "Merged",
+};
+
+function knownChangeState(state: CodeChangeState): state is KnownChangeState {
+  return (CHANGE_STATES as readonly string[]).includes(state);
+}
+
+/** A change's state in a word — one a newer engine names, as it is. */
+export function changeStateWord(state: CodeChangeState): string {
+  return knownChangeState(state) ? CHANGE_STATE_WORDS[state] : state;
+}
+
+/** A state a change still moves from: draft or open (`code.ChangeState.Live`). */
+export function changeLive(state: CodeChangeState): boolean {
+  return state === "draft" || state === "open";
+}
+
+/**
+ * The value of the listing's state filter that names no state: every change,
+ * whatever its state — which the engine lists only where a repository, a work
+ * item, a reviewer or a need narrows the walk, since it keeps no index of
+ * every change the company holds (`code.ReadQuery.State`).
+ */
+export const EVERY_STATE = "all";
+
+/**
+ * The listing's states a reader picks from, as the `state` the engine takes —
+ * the live states first, in the engine's order — and, last, [EVERY_STATE].
+ */
+export const CHANGE_STATE_FILTERS: readonly { value: string; label: string }[] = [
+  ...CHANGE_STATES.map((state) => ({ value: state, label: CHANGE_STATE_WORDS[state] })),
+  { value: EVERY_STATE, label: "Every state" },
+];
+
+/** A need a listing of changes asks about (`contract/code.ts`). */
+export type ChangeNeed = (typeof CHANGE_NEEDS)[number];
+
+/**
+ * What each need lists, in words — keyed on the contract's set, so a need the
+ * engine grows is a type error here until it has its words.
+ */
+const CHANGE_NEED_WORDS: Readonly<Record<ChangeNeed, string>> = {
+  review: "Waiting on a review",
+  fix: "Waiting on a fix",
+  me: "Waiting on me",
+  person: "Waiting on a person",
+};
+
+/**
+ * The listing's needs a reader picks from: none first — the listing narrowed
+ * by nothing it waits on — then ME, the question a reader opens Code with,
+ * then the rest in the engine's order.
+ */
+export const CHANGE_NEED_FILTERS: readonly { value: string; label: string }[] = [
+  { value: "", label: "Waiting on anybody" },
+  { value: "me", label: CHANGE_NEED_WORDS.me },
+  ...CHANGE_NEEDS.filter((need) => need !== "me").map((need) => ({
+    value: need,
+    label: CHANGE_NEED_WORDS[need],
+  })),
+];
+
+/** Whether a string is a need the engine lists by. */
+export function isChangeNeed(value: string): value is ChangeNeed {
+  return (CHANGE_NEEDS as readonly string[]).includes(value);
+}
+
+/** A precondition kind this build knows (`contract/code.ts`). */
+type KnownPreconditionKind = (typeof PRECONDITION_KINDS)[number];
+
+/**
+ * Each precondition of a merge, named as a checklist names it: what the change
+ * must be, never what is wrong with it — the engine's sentence beside it says
+ * that. Keyed on the contract's set.
+ */
+const PRECONDITION_WORDS: Readonly<Record<KnownPreconditionKind, string>> = {
+  draft: "Open for review",
+  facts: "Measured against its target",
+  approval: "Approved",
+  human_approval: "Approved by a person",
+  owners_approval: "Approved for every path owner",
+  blocker: "No standing blocker",
+  check: "Checks passed",
+  mergeable: "Merges cleanly",
+  merge_authority: "Merged by someone who may",
+  queue: "Landed by its queue",
+};
+
+/** A precondition in words — one a newer engine judges, by its kind. */
+export function preconditionWord(kind: string): string {
+  return (PRECONDITION_KINDS as readonly string[]).includes(kind)
+    ? PRECONDITION_WORDS[kind as KnownPreconditionKind]
+    : kind.replace(/_/g, " ");
+}
+
+/**
+ * How many standing blockers hold a change back: those its readiness names
+ * and those it counts beyond them — none where the blocker precondition is
+ * met, or the change is no longer live and has no readiness.
+ */
+export function standingBlockers(readiness: CodeReadiness | undefined): number {
+  const blocker = readiness?.preconditions.find((p) => p.kind === "blocker");
+  if (!blocker || blocker.state === "met") return 0;
+  return (blocker.blockers?.length ?? 0) + (blocker.blockers_omitted ?? 0);
+}
+
+/**
+ * The precondition a readiness's first sentence is about — its first unmet
+ * one, else its first still being computed — or null for a ready change: what
+ * the listing's Meter is titled by and a reader acts on next.
+ */
+export function firstUnready(readiness: CodeReadiness): CodePrecondition | null {
+  return (
+    readiness.preconditions.find((p) => p.state === "unmet") ??
+    readiness.preconditions.find((p) => p.state === "computing") ??
+    null
+  );
+}

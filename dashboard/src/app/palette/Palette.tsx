@@ -140,6 +140,7 @@ import {
   commandHits,
   destinationGroups,
   destinationHits,
+  changeHits,
   idHits,
   matchingSeats,
   matchingUnits,
@@ -972,7 +973,7 @@ export function CommandPalette({
         push(`go-${g.place}`, g.label, asItems([...g.hits, ...extra]));
       }
     } else {
-      push("ids", "Open by id", asItems(idHits(term, nav)));
+      push("ids", "Open by id", asItems([...changeHits(term, nav, runs), ...idHits(term, nav)]));
       push(
         "go",
         "Go to",

@@ -59,6 +59,7 @@ const RevisionPeek = lazyScreen("settings", (m) => m.RevisionPeek);
 const PersonPeek = lazyScreen("settings", (m) => m.PersonPeek);
 const PagePeek = lazyScreen("knowledge", (m) => m.PagePeek);
 const ContainerPeek = lazyScreen("knowledge", (m) => m.ContainerPeek);
+const ChangePeek = lazyScreen("code", (m) => m.ChangePeek);
 
 /**
  * What every peek is handed.
@@ -101,6 +102,7 @@ export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.React
   credential: ({ id }) => <CredentialPeek name={id} />,
   revision: ({ id }) => <RevisionPeek id={id} />,
   person: ({ id }) => <PersonPeek id={id} />,
+  change: ({ id }) => <ChangePeek reference={id} />,
 };
 
 /** Whether this kind can be peeked at all. */

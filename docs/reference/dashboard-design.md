@@ -770,7 +770,7 @@ Settings and Preferences as glyphs beside them.
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
 | **Work** | `#/work` | — |
-| **Code** | `#/code/repos` | none, and never a lock: no app gates code, every person reads every repository, and the engine holds each answer to the reader's own grant. Hidden where the company hosts no code in the engine (`code.native`). See [The Code workspace](#the-code-workspace) |
+| **Code** | `#/code` | none, and never a lock: no app gates code, every person reads every repository, and the engine holds each answer to the reader's own grant. Hidden where the company hosts no code in the engine (`code.native`). See [The Code workspace](#the-code-workspace) |
 | **Knowledge** | `#/knowledge` | — |
 | **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
 | **Live** | `#/live` | the agents working now, beside the working mark, the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on the org chart's row it sent a reader looking for a running turn to the chart |
@@ -1265,7 +1265,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
-| `#/code/repos` | **Code › Repositories**, Code's landing: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its pushes *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))*. Code's bare head names no section and is Not Found, saying Code opens on Repositories | `status=active\|archived\|deleted\|purging` (none is active and archived) |
+| `#/code` | **Code › Changes**, Code's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, standing blockers and when it was opened — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer or a need) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `peek=change:{repo}!{n}` |
+| `#/code/repos` | **Code › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its pushes | `status=active\|archived\|deleted\|purging` (none is active and archived) |
 | `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
 | `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the adopted version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, adopting a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
@@ -6908,9 +6909,9 @@ table the socket's query errors use.
 ## The Code workspace
 
 Code is the company's git repositories as the engine hosts them
-([Code Host](../concepts/code-host.md)): a Workspace row after Work, `g o`,
-landing on **Repositories** at `#/code/repos`, its sections drawn as tabs in
-the page header. It is drawn only where the company hosts code in the engine —
+([Code Host](../concepts/code-host.md)), and the changes proposed to them: a
+Workspace row after Work, `g o`, landing on **Changes** at `#/code`, its
+sections drawn as tabs in the page header. It is drawn only where the company hosts code in the engine —
 `services.code` on the org projection — and is hidden, never locked, where it
 is `none`, an address under it answered by the service notice. It names no
 app: every person reads every repository (ADR-0058), and the engine holds each
@@ -6918,6 +6919,42 @@ answer to the reader's own grant on the repository, leaving out of a listing
 what a seat may not read, so nothing waits on the reader's access before a
 section mounts.
 
+- **Changes** is the engine's listing of changes, `code_changes`, a page at
+  a time in the order of the ONE index its filters lead — a work item's
+  changes, an owner's in a state, a repository's, the company's in a state, or
+  the changes waiting on somebody — so a page is what the engine READ, can be
+  short or empty with a cursor, and is never re-sorted. **The engine keeps no
+  index of every change**: a listing names a state, a repository, a work item,
+  a reviewer or what its changes wait on, and is refused naming none. So the
+  section lists the OPEN changes until told otherwise (`state=`, the engine's
+  `CHANGE_STATES`, held to `code.ChangeStates`), and **Every state** is offered
+  only where a repository, a work item, a reviewer or a need narrows the walk —
+  said in place, never sent, where nothing does. **Waiting on** is the
+  engine's `needs` (`CHANGE_NEEDS`, held to `code.Needs`): on me, on a review,
+  on a fix, on a person. `repo=` is chosen in the bar from the repositories the
+  reader may read; `owner=`, `reviewer=` and `work=` arrive from a link (the
+  peek's owner and work item) and are said in the bar with a Clear. **A row's
+  readiness is the engine's judgement**, made again on the read that answered
+  it against its own chart (`code.ReadinessOf`): a Meter of the preconditions
+  met of how many, drawn as done only when every one is, and titled by the
+  engine's sentence of the first that is not; the **Blockers** are that
+  readiness's standing blockers, named and counted beyond, never a count of
+  rows this screen does not hold; a change no longer live has neither. The
+  listing carries no instant of a change's last record, so the row's time is
+  when it was **Opened**, and no conversation counters, so it counts the
+  standing blockers rather than the open findings. **Needs a person** is a band
+  above the grid: the engine's `needs=person` listing, the first five, each
+  with the sentence of what it waits on — a change whose first unmet
+  precondition waits on persons alone, which no agent will be woken to move —
+  and nothing at all where none waits. A row, and a band's reference, opens the
+  change in the peek (`peek=change:web!42`), which reads the change itself
+  (`code_change`): its branches, owner, revisions and work item (the owner's
+  other open changes, and every change of the item, one link each), its
+  readiness — every precondition in the engine's order (`PRECONDITION_KINDS`
+  and `PRECONDITION_STATES`, held to `code.PreconditionKinds` and
+  `code.PreconditionStates`) with where it stands and the engine's sentence —
+  its conversation's counts and its authors. A change's reference typed in
+  ⌘K (`web!42`) opens it too, parsed by the engine's grammar.
 - **Repositories** is the engine's listing, `code_repos`, by name and a page
   at a time. A page is what the engine SCANNED, not what it kept, so one can
   be short, or empty with a cursor, and the grid pages with Load more until no

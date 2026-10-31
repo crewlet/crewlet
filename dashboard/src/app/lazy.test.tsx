@@ -114,6 +114,7 @@ describe("which chunk draws a screen", () => {
     expect(at("company", "budgets")).toBe("spend");
     expect(at("settings", "spend")).toBe("spend");
     expect(at("work", "ENG-4")).toBe("work");
+    expect(at("code")).toBe("code");
     expect(at("code", "repos")).toBe("code");
     expect(at("code", "pushes")).toBe("code");
   });

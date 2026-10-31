@@ -33,6 +33,8 @@ import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
 import { sequenceWords } from "../keymap.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 import { KIND_WORDS } from "~/lib/artifacts/words.ts";
+import { changeRef, parseChangeRef } from "~/lib/code.ts";
+import { refToken } from "../frame/objects.ts";
 import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
 
 /**
@@ -433,6 +435,29 @@ export function idHits(term: string, nav: Navigator): Hit[] {
       label: id,
       hint: "as a turn",
       go: () => nav.to(["live", "turns", id]),
+    },
+  ];
+}
+
+/**
+ * A change's reference is a destination too: `web!42` — a repository's name,
+ * `!`, its number — opens that change, offered first and exactly as a pasted
+ * id is, wherever the company hosts its code in the engine. Parsed by the
+ * engine's own grammar (`lib/code.ts`), so a term that only looks like one
+ * offers nothing.
+ */
+export function changeHits(term: string, nav: Navigator, runs: ServicesRun): Hit[] {
+  if (!runs.code) return [];
+  const named = parseChangeRef(term.trim());
+  if (!named) return [];
+  const reference = changeRef(named.repo, named.number);
+  return [
+    {
+      id: `change-${reference}`,
+      icon: "diff",
+      label: reference,
+      hint: "Open the change",
+      go: () => nav.to(["code"], { peek: refToken({ kind: "change", id: reference }) }),
     },
   ];
 }

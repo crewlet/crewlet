@@ -63,7 +63,7 @@ test("a company hosting no code in the engine is offered no Code", () => {
   expect(rows).not.toContain("code");
   expect(rows).toEqual(expect.arrayContaining(["work", "knowledge"]));
   const places = DESTINATIONS.filter((d) => !serviceShown(d, none)).map((d) => d.key);
-  expect(places.sort()).toEqual(["code", "code-pushes"]);
+  expect(places.sort()).toEqual(["code", "code-pushes", "code-repos"]);
   expect(serviceOfPath(["code", "pushes"])).toBe("code");
   expect(pathShown(["code", "repos"], none)).toBe(false);
   expect(pathShown(["work"], none)).toBe(true);

@@ -11579,3 +11579,25 @@ a.live-row:focus-visible {
     flex-direction: column;
   }
 }
+
+/* CODE › CHANGES' "NEEDS A PERSON" BAND: the changes an agent company cannot
+   move on its own, above the grid. A ruled box rather than a callout, since
+   nothing here is a fault: it is a list, read first. */
+.code-person-band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-block-end: var(--spacing-4);
+  padding: var(--spacing-3) var(--spacing-4);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.code-person-band__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

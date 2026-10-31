@@ -391,11 +391,13 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // (builtin.ReadersOf). The decision [TestEveryQueryThisServerAnswersHasAReader]
 // asks to be taken in the open, and held both ways there: the first room that
 // reads one of these deletes its line, as the Code workspace's Repositories
-// and Pushes deleted the lines of `code_repos` and `code_pushes`. And a
-// change's four, read by a script on the paths api-endpoints.md prints for
-// each (docs/reference/api-endpoints.md, "The code reads") until the
-// workspace draws a change's own page and a seat's reviews: the questions
-// land with the engine's change tools, which the dashboard follows. A
+// and Pushes deleted the lines of `code_repos` and `code_pushes`, and Code ›
+// Changes and its peek those of `code_changes` and `code_change`. And a
+// change's routing and a seat's reviews, read by a script on the paths
+// api-endpoints.md prints for each (docs/reference/api-endpoints.md, "The
+// code reads") until the workspace draws a change's own page and a seat's
+// reviews: the questions land with the engine's change tools, which the
+// dashboard follows. And a
 // repository's content, its refs, files, history, blame, diffs, comparisons
 // and commits, read by a script on the paths api-endpoints.md prints
 // ("A repository's content") until the workspace draws a repository's own
@@ -406,8 +408,6 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 var readOutsideTheDashboard = map[string]string{
 	"code_repo":           "crewlet code status -repo",
 	"code_repo_readers":   "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
-	"code_changes":        "a script: GET /code/changes, as docs/reference/api-endpoints.md prints it",
-	"code_change":         "a script: GET /code/repos/{name}/changes/{n}, as docs/reference/api-endpoints.md prints it",
 	"code_change_routing": "a script: GET /code/repos/{name}/changes/{n}/routing, as docs/reference/api-endpoints.md prints it",
 	"code_reviews":        "a script: GET /code/reviews, as docs/reference/api-endpoints.md prints it",
 	"code_refs":           "a script: GET /code/repos/{name}/refs, as docs/reference/api-endpoints.md prints it",

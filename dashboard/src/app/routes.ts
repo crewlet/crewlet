@@ -197,6 +197,7 @@ export type FramedScreen =
   | { screen: "work-search" }
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
+  | { screen: "code-changes" }
   | { screen: "code-repos" }
   | { screen: "code-pushes" }
   | { screen: "principles" }
@@ -400,17 +401,15 @@ function work(rest: string[], screen: Make, under: Under): Route {
 }
 
 /**
- * Code's sections, each a list that takes no tail: the repositories the
- * engine hosts, and one repository's pushes, which `repo=` names rather than a
- * segment, since a section is a path and the repository is what it is
- * narrowed to. The bare `#/code` names neither: the Code row lands on its
- * Repositories, and an address is one page.
+ * Code's sections, each a list that takes no tail: the company's changes, at
+ * the bare `#/code` — the row's landing, as Work's projects are at `#/work` —
+ * the repositories the engine hosts, and one repository's pushes, which
+ * `repo=` names rather than a segment, since a section is a path and the
+ * repository is what it is narrowed to.
  */
 function code(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) {
-    return missing("code", "Code itself", "Code opens on Repositories");
-  }
+  if (first === undefined) return screen({ screen: "code-changes" });
   if (tail.length > 0) return missing("code", under("Code"));
   switch (first) {
     case "repos":

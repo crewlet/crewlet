@@ -201,9 +201,11 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   // said nothing but the selected row did about which section it was.
   //
   // THE LANDING IS THE SECTION AT THE ROW'S OWN ADDRESS, never one as deep as
-  // it: Code lands on `#/code/repos`, and its Pushes, `#/code/pushes`, is as
-  // deep and is not its landing — judged by depth it lost its own crumb, and
-  // the trail and the tab both read "Code" over somebody's pushes.
+  // it: a row landing on a section one segment under its head (Code once
+  // landed on `#/code/repos`) has sibling sections as deep (its Pushes,
+  // `#/code/pushes`) that are not its landing — judged by depth, a sibling
+  // lost its own crumb, and the trail and the tab both read the row's name
+  // over somebody's pushes.
   const listed = row.renderer === "column";
   const section = (key: string): Section | undefined => row.sections.find((s) => s.key === key);
   const landing = (s: Section) =>
@@ -264,6 +266,8 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       return where.id ? inside("views", named(labels, where.id)) : sectionPage("views");
     case "project":
       return [root(row, true), { ...projectCrumb(labels, where.key), switch: "project" }];
+    case "code-changes":
+      return sectionPage("changes");
     case "code-repos":
       return sectionPage("repos");
     case "code-pushes":

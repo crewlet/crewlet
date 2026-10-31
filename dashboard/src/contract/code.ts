@@ -72,3 +72,55 @@ export const REPO_NAME =
  * [REPO_NAME] by `internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar`.
  */
 export const REPO_NAME_MAX_BYTES = 63;
+
+/**
+ * Where a change (`web!42`) is in its life, in the engine's order
+ * (`code.ChangeStates`): the live states first, draft and open, then closed
+ * and merged. What Code › Changes asks its listing for (`state`) and what a
+ * row says it is. HELD BOTH WAYS, in order, by
+ * `internal/code.TestTheDashboardKnowsEveryStateOfAChange`: a state the engine
+ * grew that this lacks is one nobody can list, and one this keeps that the
+ * engine dropped is a choice every listing refuses.
+ */
+export const CHANGE_STATES = ["draft", "open", "closed", "merged"] as const;
+
+/**
+ * What a listing of changes can ask its changes to be waiting on, in the
+ * engine's order (`code.Needs`): a review the asker owes, a fix their own
+ * change owes, either of the two, or a PERSON — a change whose readiness's
+ * first unmet precondition waits on persons alone, which the "Needs a person"
+ * band lists. Each lists LIVE changes. HELD BOTH WAYS, in order, by
+ * `internal/code.TestTheDashboardKnowsEveryNeedOfAListingOfChanges`.
+ */
+export const CHANGE_NEEDS = ["review", "fix", "me", "person"] as const;
+
+/**
+ * Every precondition a live change's readiness judges, ONE A KIND, in the
+ * order a change moves through them (`code.PreconditionKinds`): it is opened
+ * for review, its head is measured, approved by each kind of approval its
+ * target's gate asks, cleared of its blockers, checked, merges cleanly, and is
+ * merged by somebody who may — then landed by its queue. The order a
+ * readiness lists them in and reads its first unmet one by, so the words a
+ * screen keys on this cannot be out of their place. HELD BOTH WAYS, in order,
+ * by `internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange`.
+ */
+export const PRECONDITION_KINDS = [
+  "draft",
+  "facts",
+  "approval",
+  "human_approval",
+  "owners_approval",
+  "blocker",
+  "check",
+  "mergeable",
+  "merge_authority",
+  "queue",
+] as const;
+
+/**
+ * Where one precondition stands (`code.PreconditionStates`): met; unmet,
+ * waiting on somebody it names; or still being computed by the engine — a
+ * revision's facts or its merge its home has not recorded — which waits on
+ * nobody. Held with [PRECONDITION_KINDS].
+ */
+export const PRECONDITION_STATES = ["met", "unmet", "computing"] as const;

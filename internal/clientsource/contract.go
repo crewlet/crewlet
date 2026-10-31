@@ -253,6 +253,10 @@ var contract = []Entry{
 	{"COMMAND_OUTCOMES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryOutcomeOfACommand"},
 	{"REPO_NAME", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
 	{"REPO_NAME_MAX_BYTES", ReadScalar, "internal/code.TestTheDashboardNamesARepositoryByTheEnginesGrammar"},
+	{"CHANGE_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfAChange"},
+	{"CHANGE_NEEDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryNeedOfAListingOfChanges"},
+	{"PRECONDITION_KINDS", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange"},
+	{"PRECONDITION_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryPreconditionOfAChange"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},

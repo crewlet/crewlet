@@ -35,7 +35,13 @@ import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
-import type { COMMAND_OUTCOMES, REPO_STATUSES } from "../contract/code.ts";
+import type {
+  CHANGE_STATES,
+  COMMAND_OUTCOMES,
+  PRECONDITION_KINDS,
+  PRECONDITION_STATES,
+  REPO_STATUSES,
+} from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
@@ -6751,10 +6757,192 @@ export interface CodePushesAnswer extends CodePage {
   pushes?: CodePushRow[];
 }
 
+/**
+ * Where a change is in its life (`contract/code.ts`'s `CHANGE_STATES`, held to
+ * `code.ChangeStates`), or a state a newer engine names, shown as it is.
+ */
+export type CodeChangeState = (typeof CHANGE_STATES)[number] | (string & {});
+
+/**
+ * What a change's rows name a principal as (`code.PartyKind`): a seat by its
+ * handle, or a person by the human seat they hold.
+ */
+export type CodePartyKind = "agent" | "person" | (string & {});
+
+/** One principal a change's readiness names (`code.Party`). */
+export interface CodeParty {
+  handle: string;
+  kind: CodePartyKind;
+}
+
+/**
+ * Who may clear one standing blocker (`code.ClearedBy`): its raiser, the seats
+ * that maintain the repository, and — always — any person.
+ */
+export interface CodeClearedBy {
+  raiser: CodeParty;
+  maintainers?: string[];
+  persons?: boolean;
+}
+
+/** One standing blocker a readiness names (`code.Blocker`). */
+export interface CodeBlocker {
+  finding_id: string;
+  /** `open`, or the answer an author gave: `resolved`, `wont_fix` or `disputed`. */
+  state: string;
+  cleared_by: CodeClearedBy;
+}
+
+/**
+ * One precondition of a change's merge, judged (`code.Precondition`): its kind
+ * (`PRECONDITION_KINDS`), where it stands (`PRECONDITION_STATES`), whom an
+ * unmet one waits on, a blocker precondition's standing blockers, and the
+ * engine's one sentence about it.
+ */
+export interface CodePrecondition {
+  kind: (typeof PRECONDITION_KINDS)[number] | (string & {});
+  state: (typeof PRECONDITION_STATES)[number] | (string & {});
+  waits_on?: CodeParty[];
+  blockers?: CodeBlocker[];
+  blockers_omitted?: number;
+  detail: string;
+}
+
+/**
+ * Whether a live change may merge (`code.Readiness`), judged by the engine on
+ * the read that answered it: every precondition one a kind, in the engine's
+ * order, how many are met of how many, and the sentence of the first that is
+ * not.
+ */
+export interface CodeReadiness {
+  met: number;
+  total: number;
+  first: string;
+  preconditions: CodePrecondition[];
+}
+
+/** A change as its row holds it (`code.ChangeRow`). */
+export interface CodeChangeRow {
+  id: string;
+  repo_id: string;
+  /** Its number on its repository: `web!42`'s 42. */
+  number: number;
+  title: string;
+  state: CodeChangeState;
+  /** The branch it proposes, and the branch it proposes it into, each in full. */
+  source_ref: string;
+  target_ref: string;
+  /** The source branch's head at its latest revision, and that revision's number. */
+  head: string;
+  revision: number;
+  owner: string;
+  owner_kind: CodePartyKind;
+  owner_operator_id?: string;
+  work_item?: WorkItemRef;
+  created_turn?: string;
+  created_run?: string;
+  opened_at: string;
+  opened_position: LogPosition;
+  closed_at?: string;
+  close_reason?: string;
+  merged_at?: string;
+  merged_via?: string;
+  merge_oid?: string;
+  merged_by?: string;
+  merged_by_kind?: CodePartyKind;
+  merged_operator_id?: string;
+  override_reason?: string;
+  /** How long its description is; absent for none. */
+  body_bytes?: number;
+  /** The records that changed the row — what a lifecycle write expects. */
+  version: number;
+  position: LogPosition;
+}
+
+/** A change as a listing draws it (`code.ChangeSummary`). */
+export interface CodeChangeSummary extends CodeChangeRow {
+  /** Its repository's name, and its reference: `web!42`. */
+  repo: string;
+  ref: string;
+  /** The reader's access to its repository: read, review, write or maintain. */
+  access?: string;
+  /** Absent for a change that is no longer live, which merges nothing. */
+  readiness?: CodeReadiness;
+}
+
+/**
+ * `code_changes`: the changes a listing's filters name — a page READ, not
+ * kept, so one can be short or empty with a cursor — in the order the index
+ * its filters lead walks.
+ */
+export interface CodeChangesAnswer extends CodePage {
+  /** Absent on a page that holds none. */
+  changes?: CodeChangeSummary[];
+}
+
+/** One author of a change (`code.ChangeAuthor`), from the revision they first wrote. */
+export interface CodeChangeAuthor {
+  author: string;
+  kind: CodePartyKind;
+  first_revision: number;
+  position: LogPosition;
+}
+
+/**
+ * What a change's conversation counts (`code.ConversationRow`): its comments,
+ * its reviews, its findings none of its authors has answered, its standing
+ * blockers, and how many reviewers' latest verdict asks for changes.
+ */
+export interface CodeConversationRow {
+  comments: number;
+  reviews: number;
+  open_findings: number;
+  open_blockers: number;
+  changes_requested: number;
+  version: number;
+  position: LogPosition;
+}
+
+/**
+ * Whether a change's latest merged revision merges into its target, as its
+ * home git node recorded it (`code.MergeabilityRow`).
+ */
+export interface CodeMergeabilityRow {
+  revision: number;
+  target_ref: string;
+  target_oid: string;
+  state: "clean" | "conflict" | "unknown" | (string & {});
+  conflicts?: string[];
+  conflicts_omitted?: number;
+  node: string;
+  at: string;
+}
+
+/** One change in detail (`code.ChangeDetail`): its summary, description and authors. */
+export interface CodeChangeDetail extends CodeChangeSummary {
+  body?: string;
+  authors: CodeChangeAuthor[];
+  /** Absent for a change nobody has discussed. */
+  conversation?: CodeConversationRow;
+  /** Absent for a change its home has merged no revision of yet. */
+  mergeability?: CodeMergeabilityRow;
+}
+
+/**
+ * `code_change`, a part at a time: the change's detail rides the first page of
+ * its revisions (no `part`, or `part=revisions`), and each other part answers
+ * its own page beside the change.
+ */
+export interface CodeChangeAnswer extends CodePage {
+  change?: CodeChangeDetail;
+}
+
 /** The code questions the dashboard asks, and what each answers. */
 export interface CodeQueryMap {
   code_repos: CodeReposAnswer;
   code_pushes: CodePushesAnswer;
+  code_changes: CodeChangesAnswer;
+  code_change: CodeChangeAnswer;
 }
 
 export type CodeQueryName = keyof CodeQueryMap;

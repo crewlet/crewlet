@@ -37,6 +37,7 @@ export type ObjectKind =
   | "credential"
   | "revision"
   | "person"
+  | "change"
   | "notice";
 
 export interface ObjectRef {
@@ -130,6 +131,10 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   // never a login, which a rename moves to somebody else. Read in its peek
   // beside People, which is the only page a directory row has.
   person: { label: "Person", pathOf: () => ["settings", "people"], peekIsPage: true },
+  // A CHANGE BY ITS REFERENCE, `web!42`: the name a person writes it by, and
+  // one the `!` keeps whole in a query value. Read beside Code › Changes,
+  // which is where it is opened from and what a copied link lands on.
+  change: { label: "Change", pathOf: () => ["code"], mono: true, peekIsPage: true },
   // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER. It is a row in
   // somebody's inbox naming a change to something else, so its "page" is the
   // inbox that holds it — and that is where it is read in place and marked,

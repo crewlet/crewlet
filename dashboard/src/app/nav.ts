@@ -32,8 +32,8 @@
  * says otherwise) and an address is in the row owning the LONGEST prefix of
  * it: `#/company/org/roster` is the Org chart's, `#/company` alone is the
  * Overview's. Settings lands on its first section, `#/settings/models`, and
- * owns all of `#/settings`; Code lands on its Repositories, `#/code/repos`,
- * and owns all of `#/code`.
+ * owns all of `#/settings`; Code lands on its Changes, `#/code`, and owns
+ * all of it.
  *
  * # Addresses that moved
  *
@@ -687,20 +687,23 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
-    // THE COMPANY'S CODE, after its work: the git repositories the engine
-    // hosts for it and every push into them. A workspace of its own rather
-    // than a section of Work, because its objects are not tasks and read
-    // another log (the code host's), and nothing in it is the tracker's.
+    // THE COMPANY'S CODE, after its work: the changes proposed to the git
+    // repositories the engine hosts for it, the repositories, and every push
+    // into them. A workspace of its own rather than a section of Work,
+    // because its objects are not tasks and read another log (the code
+    // host's), and nothing in it is the tracker's.
     key: "code",
     label: "Code",
     icon: "code",
-    // IT LANDS ON ITS REPOSITORIES and holds every address under `#/code`, as
-    // Settings lands on its first section: each section is at the address it
-    // keeps for good, so a link copied today is still the page tomorrow.
-    path: ["code", "repos"],
+    // IT LANDS ON ITS CHANGES, at its own bare address, as Work lands on its
+    // projects: what a reader opens Code for is what waits on a review, a fix
+    // or a person, and the repositories are a section beside it. It holds
+    // every address under `#/code`, each section at the address it keeps for
+    // good, so a link copied today is still the page tomorrow.
+    path: ["code"],
     owns: ["code"],
-    hint: "The repositories the engine hosts, and who pushed what into them",
-    keywords: ["git", "repositories", "repos", "clone", "source", "code host"],
+    hint: "Changes waiting on a review, the repositories the engine hosts, and who pushed what",
+    keywords: ["git", "clone", "source", "code host"],
     // `g o`, the one letter of Code's name no other chord holds: `c` is the
     // Principles', `d` Schedules' and `e` Brand's. Taking `c` would move the
     // Principles to their own initial, `p`, which switches project, so giving
@@ -720,12 +723,21 @@ export const WORKSPACES: WorkspaceRow[] = [
     service: "code",
     sections: [
       {
+        // THE LANDING: the company's changes, by what they wait on.
+        key: "changes",
+        label: "Changes",
+        icon: "diff",
+        path: ["code"],
+        hint: "Every change proposed to a repository, and what each waits on",
+        keywords: ["change", "pull request", "merge request", "review", "needs a person"],
+      },
+      {
         key: "repos",
         label: "Repositories",
         icon: "square-code",
         path: ["code", "repos"],
         hint: "Every repository the engine hosts, its owner and its last push",
-        keywords: ["repository", "default branch"],
+        keywords: ["repository", "repos", "default branch"],
       },
       {
         key: "pushes",
