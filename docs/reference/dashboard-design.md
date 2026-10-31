@@ -6244,7 +6244,10 @@ lets each column scroll on its own, as a task does with its body and its rail
 (`.inbox-list`, `.inbox-pane`). Each column is exactly the main region's
 height, so `100cqb` is its view too, and on that screen those columns are the
 page's scrollers: a box inside one hands the wheel to the column, not to
-`#screen-scroll`. And a **box inside the page** may scroll its own content, on
+`#screen-scroll`. Chatlet asks for the height FLUSH (`useFillScreen(true, {
+flush: true })`, the kit's `fill="flush"`): its conversation runs edge to edge
+under the page bar, so the content column drops its inset, its measure and
+its gap. And a **box inside the page** may scroll its own content, on
 the two conditions below.
 
 The shell hands the kit that id as its `mainId`, and everything that needs the

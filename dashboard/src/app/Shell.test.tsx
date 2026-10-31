@@ -15,6 +15,7 @@ import { noteReader } from "~/lib/reader.ts";
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
+import { useFillScreen } from "./fill.tsx";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
 import { loadChunk } from "./lazyScreen.ts";
@@ -1425,6 +1426,32 @@ describe("the drawer's key", () => {
     } finally {
       win.restore();
     }
+  });
+});
+
+// A SCREEN ASKS FOR THE HEIGHT, and Chatlet for it flush to the sheet's
+// edges: the shell hands the kit what was asked, and gives the scroller back
+// when the screen goes.
+describe("the height a screen asks for", () => {
+  function Filling({ flush }: { flush?: boolean }) {
+    useFillScreen(true, { flush });
+    return <div>the filling screen</div>;
+  }
+
+  const root = () => document.querySelector(".crewlet-app-shell")!;
+
+  test("is the remaining height inside the page's inset", () => {
+    frame(<Filling />);
+    expect(root().classList.contains("crewlet-app-shell--fill")).toBe(true);
+    expect(root().classList.contains("crewlet-app-shell--fill-flush")).toBe(false);
+  });
+
+  test("is flush to the sheet's edges where the screen asks for that", () => {
+    const { show } = frame(<Filling flush />);
+    expect(root().classList.contains("crewlet-app-shell--fill-flush")).toBe(true);
+    show(<Bare />);
+    expect(root().classList.contains("crewlet-app-shell--fill")).toBe(false);
+    expect(root().classList.contains("crewlet-app-shell--fill-flush")).toBe(false);
   });
 });
 

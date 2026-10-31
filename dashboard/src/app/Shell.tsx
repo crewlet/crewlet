@@ -128,7 +128,7 @@ import { useModalLayerOpen } from "~/lib/keys.ts";
 import { runningTarget } from "~/lib/turns.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
-import { FillRequest } from "./fill.tsx";
+import { FillRequest, type FillShape } from "./fill.tsx";
 import { OwnHeaderRequest, OwnHeaderSlot } from "./frame/OwnHeader.tsx";
 import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 
@@ -525,7 +525,7 @@ function Frame({ children }: { children: ReactNode }) {
   // `app/fill.tsx` for why this is a request and not a selector. The kit's
   // `fill` is what honours it: the scroller stops scrolling and the content
   // column takes the height that is left.
-  const [filling, setFilling] = useState(false);
+  const [filling, setFilling] = useState<FillShape>(false);
   // AND ONE THAT ASKED FOR A NARROWER PEEK — a canvas, which the rail shrinks
   // rather than narrows. See `app/frame/peekWidth.ts`.
   const [restingPeek, setRestingPeek] = useState<number | null>(null);
