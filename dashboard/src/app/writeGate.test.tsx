@@ -179,21 +179,34 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "a reader who cannot act is sent nothing at all",
     suite: "routes/chatlet/Access.test.tsx",
   },
-  "routes/chatlet/StartRoom.tsx": {
-    why: "the New room dialog's Create (create_channel)",
-    suite: "routes/chatlet/Access.test.tsx",
+  "routes/chatlet/Dialogs.tsx": {
+    why:
+      "Chatlet's dialogs: New room's Create (create_channel), Add people's Add " +
+      "(add_channel_members) and an admin's auto-join switch, a topic's, a description's " +
+      "and a template's Save (update_channel), and a delete's Delete (delete_message)",
+    suite: "routes/chatlet/Dialogs.test.tsx",
   },
-  "routes/chatlet/StartDirect.tsx": {
-    why: "the New direct message dialog's Open (open_dm)",
-    suite: "routes/chatlet/Access.test.tsx",
+  "routes/chatlet/Details.tsx": {
+    why: "a room's details pane: Leave room (leave_channel)",
+    suite: "routes/chatlet/Details.test.tsx",
   },
-  "routes/chatlet/RoomSettings.tsx": {
-    why: "a room's topic and purpose, saved from its Topic dialog (update_channel)",
-    suite: "routes/chatlet/Access.test.tsx",
+  "routes/chatlet/notify.tsx": {
+    why: "how a room reaches its reader, every message, mentions or muted (mark_chat_read)",
+    suite: "routes/chatlet/Details.test.tsx",
+  },
+  "routes/chatlet/Thread.tsx": {
+    why: "a thread pane's Follow and Following (mark_chat_read)",
+    suite: "routes/chatlet/Thread.test.tsx",
+  },
+  "routes/chatlet/Views.tsx": {
+    why:
+      "the reader's views: Activity marking a row read, Threads' Unfollow and Saved's " +
+      "Remove (mark_chat_read), and New message opening a conversation (open_dm)",
+    suite: "routes/chatlet/Views.test.tsx",
   },
   "routes/chatlet/Browse.tsx": {
-    why: "the Find a room dialog's Join on each room the reader is not in (join_channel)",
-    suite: "routes/chatlet/Access.test.tsx",
+    why: "Browse rooms' Join on each room the reader may join (join_channel)",
+    suite: "routes/chatlet/Browse.test.tsx",
   },
 };
 
@@ -401,8 +414,14 @@ describe("the source", () => {
       const file = join(SRC, suite);
       expect(existsSync(file), `${path} names ${suite}, which does not exist`).toBe(true);
       const text = readFileSync(file, "utf8");
+      // THE CHAT SUITES DRAW FROM ONE LIST of the readers who cannot act
+      // (`test/chatAccess.ts`), so a suite that renders for `WRITE_READERS`
+      // is held to that list's own readers rather than to a copy of it.
+      const readers = text.includes("WRITE_READERS")
+        ? readFileSync(join(SRC, "test/chatAccess.ts"), "utf8")
+        : text;
       for (const block of ["anonymous", "not_served"]) {
-        expect(text, `${suite} never draws ${path} for a reader who is ${block}`).toContain(
+        expect(readers, `${suite} never draws ${path} for a reader who is ${block}`).toContain(
           `WRITE_REASONS.${block}`,
         );
       }

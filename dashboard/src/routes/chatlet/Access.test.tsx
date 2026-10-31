@@ -20,58 +20,19 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
-import { pick } from "~/testing.tsx";
-import { noAccessReason, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
-import { needsWords } from "~/lib/access.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ADA, actEngine, mountChat, type Pressed } from "~/test/chat.tsx";
+import { WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 import { LoneRoom } from "./testkit.tsx";
 
-import { Browse } from "./Browse.tsx";
 import { Chat } from "./Chat.tsx";
 import { packPosition, ReadCursors, useReadCursors } from "./cursor.ts";
-import { RoomSettings } from "./RoomSettings.tsx";
-import { StartDirect } from "./StartDirect.tsx";
-import { StartRoom } from "./StartRoom.tsx";
 
-/** The four readers who may not make a chat change, and the sentence each is told. */
-const READERS = [
-  {
-    who: "nobody signed in",
-    viewer: { login: "", owner: "", handle: "", name: "", kind: "", grants: [], acts: [] },
-    reason: WRITE_REASONS.anonymous,
-  },
-  {
-    // THE APP FIRST: a remedy they can ask an admin for, where "this engine
-    // does not make this change for you" would send them nowhere.
-    who: "a person without the Chatlet app",
-    viewer: { ...ADA, grants: ["worklet"], acts: [] },
-    reason: noAccessReason(["chatlet"]),
-  },
-  {
-    who: "a person the engine makes no chat change for",
-    viewer: { ...ADA, acts: [] },
-    reason: WRITE_REASONS.not_served,
-  },
-  {
-    // HOLDING CHATLET AND NO SEAT: the engine offers a seated verb to nobody
-    // acting as themselves, so `acts` names none and every control says so.
-    who: "a credential acting as no seat",
-    viewer: {
-      ...ADA,
-      login: "ci:deploy",
-      owner: "ci:deploy",
-      handle: "",
-      name: "",
-      kind: "",
-      acts: [],
-    },
-    reason: WRITE_REASONS.not_served,
-  },
-];
+const READERS = WRITE_READERS;
 
 const served = {
   read_level: "session",
@@ -115,14 +76,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   location.hash = "#/";
 });
-
-/** A control held with `reason`: drawn, refusing the press, and saying why. */
-async function heldWith(control: HTMLElement, reason: string) {
-  await waitFor(() => expect(control.getAttribute("title")).toBe(reason));
-  expect(
-    control.getAttribute("aria-disabled") === "true" || (control as HTMLButtonElement).disabled,
-  ).toBe(true);
-}
 
 test.each(READERS)("a room's every write is drawn for $who, held with why", async (reader) => {
   const cursors = new ReadCursors({ flush: async () => undefined });
@@ -286,87 +239,6 @@ test.each(OPENERS)(
 
     fireEvent.click(within(rail).getByRole("button", { name: control }));
     expect(screen.queryByRole("dialog")).toBeNull();
-  },
-);
-
-test.each(READERS)("a new room is drawn for $who, held with why", async (reader) => {
-  mountChat(<StartRoom people={[]} onClose={() => {}} />, { viewer: reader.viewer });
-  fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "launch" } });
-  await heldWith(screen.getByRole("button", { name: /create/i }), reader.reason);
-});
-
-test.each(READERS)("a direct conversation is drawn for $who, held with why", async (reader) => {
-  const people = [{ value: "bo", label: "Bo Chen", description: "bo", group: "People" }];
-  mountChat(<StartDirect people={people} onClose={() => {}} />, { viewer: reader.viewer });
-  pick(screen.getByRole("combobox", { name: /people in this conversation/i }), /Bo Chen/);
-  await heldWith(screen.getByRole("button", { name: /^open$/i }), reader.reason);
-});
-
-test.each(READERS)("what a room is for is drawn for $who, held with why", async (reader) => {
-  mountChat(<RoomSettings channel={channel as never} member onClose={() => {}} />, {
-    viewer: reader.viewer,
-  });
-  fireEvent.change(screen.getByLabelText(/^Topic/), { target: { value: "Shipping October" } });
-  await heldWith(screen.getByRole("button", { name: /^save$/i }), reader.reason);
-});
-
-// THE ROOM SEARCH IS CHATLET'S, so a reader who does not hold Chatlet — nobody
-// signed in among them — is not asked for at all (`useSearchQuery`): no room
-// comes back for a Join to be held on, and the dialog says what the search
-// needs instead. Everybody else finds the room, and its Join is held with
-// their reason.
-const holdsChat = (reader: (typeof READERS)[number]) =>
-  (reader.viewer.grants as readonly string[]).includes("chatlet");
-
-/** The Find a room dialog, searched for "launch", answering one room. */
-function browse(viewer: Record<string, unknown>) {
-  const view = mountChat(<Browse onClose={() => {}} />, {
-    viewer,
-    answer: async (what) => {
-      if (what === "chat_search") {
-        return {
-          hits: [{ message_id: "m-9", channel_id: "open-1", at: "", score: 1 }],
-          searched: 1,
-          read_level: "session",
-          position: served.position,
-        };
-      }
-      if (what === "chat_channel") {
-        return {
-          ...served,
-          channel: { ...channel, id: "open-1", name: "launch" },
-          revision: 1,
-          message_seq: 1,
-          member: false,
-          members: [],
-        };
-      }
-      return {};
-    },
-  });
-  fireEvent.change(screen.getByRole("searchbox", { name: /find a room/i }), {
-    target: { value: "launch" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: /^search$/i }));
-  return view;
-}
-
-test.each(READERS.filter(holdsChat))(
-  "a room to join is drawn for $who, held with why",
-  async (reader) => {
-    browse(reader.viewer);
-    await screen.findByText("#launch");
-    await heldWith(screen.getByRole("button", { name: /^join$/i }), reader.reason);
-  },
-);
-
-test.each(READERS.filter((reader) => !holdsChat(reader)))(
-  "the room search is not asked for $who, and says what it needs",
-  async (reader) => {
-    const { socket } = browse(reader.viewer);
-    expect(await screen.findByText(needsWords("Search", ["chatlet"]))).toBeTruthy();
-    expect(socket.query.mock.calls.some(([what]) => what === "chat_search")).toBe(false);
-    expect(screen.queryByRole("button", { name: /^join$/i })).toBeNull();
   },
 );
 

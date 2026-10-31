@@ -958,8 +958,8 @@ describe("every class the dashboard names", () => {
 // app's tabs, its setup form and disconnect dialog), `access.css`, the
 // agents' access table an integration's Agents tab and an agent's Access tab
 // share, `chatlet-frame.css`, Chatlet's frame (its grid, top bar and Rooms
-// panel), and `chatlet-room.css`, a Chatlet room's transcript and composer.
-// Each is
+// panel), `chatlet-room.css`, a Chatlet room's transcript and composer, and
+// `chatlet-panes.css`, Chatlet's panes, dialogs and views. Each is
 // appended after the entry's sheets, so each of its rules must select a class
 // of the screen it arrives with, or a tie it wins would change other screens
 // from the moment a reader first opened that one.
@@ -995,6 +995,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "chatlet-room.css": {
     importer: "routes/chatlet/Room.tsx",
     owns: /\.chat-[a-z-]+\b/,
+  },
+  "chatlet-panes.css": {
+    importer: "routes/chatlet/Pane.tsx",
+    owns: /\.chat-[a-z_-]+\b/,
   },
   "folders.css": {
     importer: "routes/artifacts/MoveDialog.tsx",

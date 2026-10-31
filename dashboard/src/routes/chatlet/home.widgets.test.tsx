@@ -1,7 +1,8 @@
 /**
- * Chatlet's widgets on Home: the rail's question and the mention feed's, read as
- * the seat the session holds — and nothing asked of a reader the engine would
- * only refuse, or before the engine has said the company runs Chatlet.
+ * Chatlet's widgets on Home: the frame's reading of the reader's rooms and the
+ * Activity feed's mentions, read as the seat the session holds, and nothing
+ * asked of a reader the engine would only refuse, or before the engine has
+ * said the company runs Chatlet.
  */
 
 import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
@@ -15,11 +16,41 @@ import { INCOMPLETE_NOTE } from "~/components/work.tsx";
 import { NOTHING_TO_LIST } from "~/routes/home/board/kit.tsx";
 import { widgets } from "./home.widgets.tsx";
 import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
+import { ChatRoomsProvider } from "~/lib/chatRooms.ts";
 
-/** A widget mounted as Home mounts it, on a company the engine says runs Chatlet. */
+/**
+ * A widget mounted as Home mounts it, inside the frame's reading of the
+ * reader's rooms, on a company the engine says runs Chatlet.
+ */
 function mountHome(children: ReactNode, opts: Parameters<typeof mountChat>[1] = {}) {
-  return mountChat(children, { services: NATIVE_SERVICES, ...opts });
+  return mountChat(<ChatRoomsProvider>{children}</ChatRoomsProvider>, {
+    services: NATIVE_SERVICES,
+    ...opts,
+  });
 }
+
+/** One mention in the Activity feed, as `chat_activity` answers it. */
+const mention = (extra: Record<string, unknown> = {}) => ({
+  key: "mention:m-2",
+  kind: "mention",
+  message_id: "m-2",
+  channel_id: "c-general",
+  channel_name: "general",
+  channel_kind: "public",
+  actor: "bo",
+  actor_kind: "human",
+  excerpt: "@ada can you look?",
+  at: "2026-10-18T09:00:00Z",
+  unread: true,
+  ...extra,
+});
+
+const FEED = (items: unknown[], extra: Record<string, unknown> = {}) => ({
+  items,
+  unread: { mention: items.length, reply: 0 },
+  read_state: true,
+  ...extra,
+});
 
 const ROOMS = widgets.find((w) => w.key === "chatlet.unread")!;
 const MENTIONS = widgets.find((w) => w.key === "chatlet.mentions")!;
@@ -200,59 +231,49 @@ describe("unread rooms, live", () => {
 });
 
 describe("mentions", () => {
-  test("lists the newest mentions, a thread's opening its thread", async () => {
+  test("lists the newest mentions from Activity, a thread's opening its thread", async () => {
     const { Component } = MENTIONS;
     const { socket } = mountHome(<Component params={{}} />, {
-      answers: {
-        chat_mentions: {
-          handle: "ada",
-          mentions: [
-            {
-              message_id: "m-2",
-              channel_id: "c-general",
-              channel_name: "general",
-              channel_kind: "public",
-              thread_root: "m-1",
-              author: "bo",
-              excerpt: "@ada can you look?",
-              at: "2026-10-18T09:00:00Z",
-              position: "CREWLET_CHAT_LOG@1:9",
-            },
-          ],
-        },
-      },
+      answers: { chat_activity: FEED([mention({ thread_root: "m-1" })]) },
     });
     await settle();
-    // THE FEED'S NEWEST PAGE, cut to what the card draws.
-    const asked = socket.query.mock.calls.find(([what]) => what === "chat_mentions");
-    expect(asked?.[1]).toMatchObject({ limit: 5 });
+    // ACTIVITY'S NEWEST PAGE OF MENTIONS, cut to what the card draws.
+    const asked = socket.query.mock.calls.find(([what]) => what === "chat_activity");
+    expect(asked?.[1]).toMatchObject({ kind: "mention", limit: 5 });
     expect(screen.getByText(/@ada can you look\?/)).toBeTruthy();
-    expect(
-      screen
-        .getByText(/#general · in a thread/)
-        .closest("a")
-        ?.getAttribute("href"),
-    ).toBe("#/chatlet/c-general?thread=m-1");
+    const link = screen
+      .getByText(/#general · in a thread/)
+      .closest("a")
+      ?.getAttribute("href");
+    expect(link).toContain("#/chatlet/c-general?");
+    expect(decodeURIComponent(link ?? "")).toContain("pane=thread:c-general:m-1");
+  });
+
+  test("a mention in a room lands the room on its message", async () => {
+    const { Component } = MENTIONS;
+    mountHome(<Component params={{}} />, { answers: { chat_activity: FEED([mention()]) } });
+    await settle();
+    expect(screen.getByText("#general").closest("a")?.getAttribute("href")).toBe(
+      "#/chatlet/c-general?message=m-2",
+    );
   });
 
   test("a frame anywhere re-reads the newest page", async () => {
     const { Component } = MENTIONS;
     const { socket, store } = mountHome(<Component params={{}} />, {
-      answers: { chat_mentions: { handle: "ada", mentions: [] } },
+      answers: { chat_activity: FEED([]) },
     });
     await waitFor(() => expect(screen.getByText("Nobody has named you")).toBeTruthy());
     await pause(50);
-    const before = asks(socket, "chat_mentions");
+    const before = asks(socket, "chat_activity");
     expect(before).toBe(1);
     posted(store, 1);
-    await waitFor(() => expect(asks(socket, "chat_mentions")).toBe(before + 1));
+    await waitFor(() => expect(asks(socket, "chat_activity")).toBe(before + 1));
   });
 
   test("nobody has named the reader", async () => {
     const { Component } = MENTIONS;
-    mountHome(<Component params={{}} />, {
-      answers: { chat_mentions: { handle: "ada", mentions: [] } },
-    });
+    mountHome(<Component params={{}} />, { answers: { chat_activity: FEED([]) } });
     await settle();
     expect(screen.getByText("Nobody has named you")).toBeTruthy();
   });
@@ -290,7 +311,7 @@ describe("an answer that could not account for everything", () => {
   test("the feed says so rather than that nobody named the reader", async () => {
     const { Component } = MENTIONS;
     mountHome(<Component params={{}} />, {
-      answers: { chat_mentions: { handle: "ada", mentions: [], complete: false } },
+      answers: { chat_activity: FEED([], { complete: false }) },
     });
     await settle();
     expect(screen.queryByText("Nobody has named you")).toBeNull();

@@ -9499,57 +9499,6 @@ a.live-row:focus-visible {
   padding-right: var(--spacing-2);
 }
 
-/* ONE ROW OF A RANKED OR DATED LIST: a mention in the feed, a hit in Search
-   chat. The room and the moment on one line, the words under it, and a rule
-   between rows. Chatlet's own rather than a shared list row, because the shared
-   one went with the search screen it was drawn for, and a class two screens
-   lean on is one neither owns. */
-.chat-hit {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-3);
-  border-bottom: 1px solid var(--color-border-default);
-  min-width: 0;
-  color: inherit;
-  text-decoration: none;
-}
-.chat-hit:last-child {
-  border-bottom: none;
-}
-.chat-hit:hover {
-  background: var(--color-surface-hover);
-}
-.chat-hit:focus-visible {
-  outline: 2px solid var(--color-brand-accent);
-  outline-offset: -2px;
-}
-
-.chat-thread {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  min-width: 0;
-  min-height: 0;
-  padding: var(--spacing-3);
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-}
-.chat-thread-head {
-  align-items: center;
-  padding-bottom: var(--spacing-2);
-  border-bottom: 1px solid var(--color-border-default);
-}
-.chat-thread-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-
 /* ---- Artifacts ------------------------------------------------------- */
 
 /* THE GALLERY'S FIELD is a search box in the page bar, as Agents' finder. */

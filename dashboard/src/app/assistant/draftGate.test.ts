@@ -128,9 +128,8 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/artifacts/RenameDialog.tsx": "modal: renaming an artifact",
   "routes/chatlet/Attach.tsx":
     "modal: a search for a task, page or artifact to link, in its dialog",
-  "routes/chatlet/RoomSettings.tsx": "modal: a room's topic and purpose, in its dialog",
-  "routes/chatlet/StartDirect.tsx": "modal: opening a direct conversation, in its dialog",
-  "routes/chatlet/StartRoom.tsx": "modal: making a room, in its dialog",
+  "routes/chatlet/Dialogs.tsx":
+    "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
   "routes/settings/AccessDialogs.tsx": "modal: an access change, in its dialog",
   "routes/worklet/NewProject.tsx": "modal: a new project's owner and key",

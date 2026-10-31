@@ -9,6 +9,8 @@
  * corner carries the activity's own mark) draws the face without its badge.
  */
 
+import type { ReactNode } from "react";
+
 import type { AvatarSize, AvatarStackMember } from "@crewlethq/ui";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
 
@@ -19,6 +21,8 @@ export function ChatFace({
   size = "md",
   status = true,
   decorative = true,
+  mark,
+  markLabel,
 }: {
   person: ChatPerson;
   size?: AvatarSize;
@@ -26,6 +30,12 @@ export function ChatFace({
   status?: boolean;
   /** The face beside the name says nothing the name does not; a face alone names its seat. */
   decorative?: boolean;
+  /**
+   * A mark on the corner in place of the state: what a row is about where
+   * the seat's state is not (an activity's kind). Wins over `status`.
+   */
+  mark?: ReactNode;
+  markLabel?: string;
 }) {
   return (
     <SeatAvatar
@@ -34,7 +44,11 @@ export function ChatFace({
       avatar={person.avatar}
       size={size}
       decorative={decorative}
-      {...(status && person.status ? { status: person.status } : {})}
+      {...(mark !== undefined
+        ? { mark, markLabel }
+        : status && person.status
+          ? { status: person.status }
+          : {})}
     />
   );
 }

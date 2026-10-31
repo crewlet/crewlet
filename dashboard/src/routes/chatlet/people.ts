@@ -198,26 +198,3 @@ export function matchesPerson(person: ChatPerson, query: string): boolean {
 export function handlesOf(chosen: readonly string[]): string[] {
   return [...new Set(chosen.map((handle) => handle.trim()).filter(Boolean))];
 }
-
-/** One seat, in the shape `TagsInput` offers options in. */
-export interface PersonOption {
-  value: string;
-  label: string;
-  description: string;
-  group: string;
-}
-
-/**
- * Everybody this viewer can name, minus the viewer, as `TagsInput` options:
- * [chatPeople]'s order, grouped under People and Agents.
- */
-export function peopleOptions(seats: readonly Seat[], viewer: string): PersonOption[] {
-  return chatPeople({ seats }, [])
-    .everyone.filter((person) => person.handle !== viewer)
-    .map((person) => ({
-      value: person.handle,
-      label: person.name,
-      description: person.handle,
-      group: person.kind === "human" ? "People" : "Agents",
-    }));
-}

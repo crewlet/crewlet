@@ -23,7 +23,6 @@ import { LoneRoom } from "./testkit.tsx";
 
 import { ReadCursors } from "./cursor.ts";
 import { Mentions } from "./Mentions.tsx";
-import { Search } from "./Search.tsx";
 
 afterEach(() => {
   cleanup();
@@ -75,12 +74,6 @@ const CASES: { list: string; hash: string; refused: string; draw: () => ReactNod
     hash: "#/chatlet/room-1?thread=m-1",
     refused: "chat_thread",
     draw: () => <LoneRoom channelID="room-1" viewer="ada" nameOf={name} cursors={cursors()} />,
-  },
-  {
-    list: "a search",
-    hash: "#/chatlet/search?q=launch",
-    refused: "chat_search",
-    draw: () => <Search channels={[]} viewer="ada" nameOf={name} />,
   },
 ];
 

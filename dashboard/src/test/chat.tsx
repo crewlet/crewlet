@@ -43,6 +43,7 @@ const CHAT_ACTS = [
   "create_channel",
   "open_dm",
   "update_channel",
+  "add_channel_members",
   "mark_chat_read",
 ];
 
