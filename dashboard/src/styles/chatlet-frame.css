@@ -52,13 +52,22 @@
 
 /* UNDER 980PX A PANE LIES OVER THE CONVERSATION rather than beside it, at
    its own width from the end edge, so the transcript keeps its floor behind
-   it and comes back whole when the pane closes. */
+   it and comes back whole when the pane closes.
+
+   THE PANE IS A DESCENDANT OF THE GRID, NOT ITS CHILD. It is drawn inside
+   the pane host (`routes/chatlet/Pane.tsx`), which draws no box
+   (`display: contents`), so the panel is the grid's item while a selector
+   still walks the markup. Written as a child, these two rules matched
+   nothing: a pane in a two-track grid took a row of its own under the
+   conversation, which is how opening Ask Crewlet beside a room dropped its
+   details to the foot of the screen. `Chat.test.tsx` holds every rule here
+   to the pane as the screen draws it. */
 @container page (width < 980px) {
   .chat-app.has-pane {
     position: relative;
     grid-template-columns: auto minmax(0, 1fr);
   }
-  .chat-app.has-pane > .chat-pane {
+  .chat-app.has-pane .chat-pane {
     position: absolute;
     inset: 0 0 0 auto;
     width: min(var(--chat-pane), 92%);
@@ -68,14 +77,17 @@
 }
 
 /* A NARROW CHAT AREA (`CHAT_NARROW`, measured by the frame) pins nothing,
-   draws no dock, and gives a pane the whole of it. */
+   draws no dock, and gives a pane the whole of it: the whole of what the
+   reader can see, so it ends where the assistant stands over the area's end
+   as an overlay (`--chat-cover-end`, `routes/chatlet/Chat.tsx`), and the
+   frame counts the area narrow by what is left. */
 .chat-app.is-narrow {
   position: relative;
   grid-template-columns: minmax(0, 1fr);
 }
-.chat-app.is-narrow > .chat-pane {
+.chat-app.is-narrow .chat-pane {
   position: absolute;
-  inset: 0;
+  inset: 0 var(--chat-cover-end, 0px) 0 0;
   width: auto;
   z-index: var(--z-index-overlay);
   border-inline-start: none;
