@@ -37,8 +37,10 @@ import {
   defineWidgets,
   gapsOf,
 } from "~/routes/home/board/kit.tsx";
-import { useChatActivity, useChatFrames, useChatRead, useCoalesced } from "./live.ts";
-import { badgesAreMeasured, isDirect, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
+import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
+import { useChatFrames } from "./live.ts";
+import { badgesAreMeasured, isDirect } from "~/lib/chatRooms.ts";
+import { roomMark, roomTitle, unreadLabel } from "./rooms.ts";
 
 const ROWS = 5;
 

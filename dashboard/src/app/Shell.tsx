@@ -80,6 +80,7 @@ import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts"
 import { LinkHostsProvider } from "~/lib/linkHosts.ts";
 import { ProjectKeysProvider } from "~/lib/projectKeys.ts";
 import { RoomNamesProvider } from "~/lib/roomNames.ts";
+import { ChatRoomsProvider } from "~/lib/chatRooms.ts";
 import { ViewerProvider, useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
@@ -412,7 +413,9 @@ function PageCover({ over, children }: { over: boolean; children: ReactNode }) {
  * how much is waiting on them, how much open work is on them, and where the
  * company's apps live, which project keys are real and which rooms a `#name`
  * may be, which every rendered link, key and room reads (`lib/linkHosts.ts`,
- * `lib/projectKeys.ts`, `lib/roomNames.ts`).
+ * `lib/projectKeys.ts`, `lib/roomNames.ts`), and the reader's own rooms, which
+ * the sidebar's Chatlet badge and the Chatlet screen both draw
+ * (`lib/chatRooms.ts`).
  *
  * All three are standing reads, and the first two used to be made per caller
  * — the viewer by the frame, the sidebar and the Inbox count, the count by the
@@ -432,7 +435,9 @@ export function FrameReadings({ children }: { children: ReactNode }) {
         <QueueCountProvider>
           <LinkHostsProvider>
             <ProjectKeysProvider>
-              <RoomNamesProvider>{children}</RoomNamesProvider>
+              <RoomNamesProvider>
+                <ChatRoomsProvider>{children}</ChatRoomsProvider>
+              </RoomNamesProvider>
             </ProjectKeysProvider>
           </LinkHostsProvider>
         </QueueCountProvider>

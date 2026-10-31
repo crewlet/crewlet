@@ -48,7 +48,8 @@ import {
 } from "~/protocol/index.ts";
 import { comparePositions } from "~/protocol/session.ts";
 
-import { isDirect, knownKind, NEWER_ROOM } from "./rooms.ts";
+import { isDirect } from "~/lib/chatRooms.ts";
+import { knownKind, NEWER_ROOM } from "./rooms.ts";
 
 /**
  * How many candidate rooms one pass resolves.

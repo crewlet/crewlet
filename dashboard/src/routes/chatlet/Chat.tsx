@@ -85,7 +85,7 @@ import type { ChatChannelSummary, ChatChannelsAnswer } from "~/protocol/index.ts
 
 import { Browse } from "./Browse.tsx";
 import { useReadCursors } from "./cursor.ts";
-import { useChatActivity, useChatRead, useCoalesced } from "./live.ts";
+import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
 import { Mentions } from "./Mentions.tsx";
 import { coverageOf } from "./page.ts";
 import { useOutbox } from "./outbox.ts";
@@ -94,7 +94,8 @@ import { Room } from "./Room.tsx";
 import { Search } from "./Search.tsx";
 import { StartDirect } from "./StartDirect.tsx";
 import { StartRoom } from "./StartRoom.tsx";
-import { badgesAreMeasured, isDirect, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
+import { badgesAreMeasured, isDirect } from "~/lib/chatRooms.ts";
+import { roomMark, roomTitle, unreadLabel } from "./rooms.ts";
 
 /** Which of the three lists the main column is showing. */
 export type ChatView = "room" | "mentions" | "search";

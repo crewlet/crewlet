@@ -11,12 +11,8 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
+import { isDirect } from "~/lib/chatRooms.ts";
 import type { ChatChannel, ChatKind } from "~/protocol/index.ts";
-
-/** Whether this room is addressed by who is in it rather than by a name. */
-export function isDirect(kind: ChatKind): boolean {
-  return kind === "dm" || kind === "group";
-}
 
 /**
  * Whether this build can classify the room at all.
@@ -132,17 +128,4 @@ export function roomTitle(channel: ChatChannel, opts: TitleOptions = {}): string
 export function unreadLabel(unread: number, capped: boolean | undefined): string {
   if (unread <= 0) return "";
   return capped ? "99+" : String(unread);
-}
-
-/**
- * Whether the badge on a row means anything at all.
- *
- * A COUNT WITH NO READ STATE BEHIND IT IS NOT A ZERO. When the coordination
- * record could not be read the engine zeroes every count and says so with
- * `read_state: false` — and drawing that as "you are caught up everywhere"
- * is the one wrong answer, because it is indistinguishable from the truth
- * until somebody misses a message.
- */
-export function badgesAreMeasured(answer: { read_state?: boolean } | null | undefined): boolean {
-  return answer?.read_state === true;
 }

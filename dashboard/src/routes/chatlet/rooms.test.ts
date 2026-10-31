@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "vitest";
 
-import { badgesAreMeasured, knownKind, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
+import { knownKind, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
 import type { ChatChannel } from "~/protocol/index.ts";
 
 const channel = (over: Partial<ChatChannel> = {}): ChatChannel => ({
@@ -70,11 +70,5 @@ describe("the unread badge", () => {
     // The same number WITHOUT the flag is a real count of a hundred.
     expect(unreadLabel(100, false)).toBe("100");
     expect(unreadLabel(0, false)).toBe("");
-  });
-
-  test("a rail with no read state behind it is not a rail with nothing unread", () => {
-    expect(badgesAreMeasured({ read_state: true })).toBe(true);
-    expect(badgesAreMeasured({ read_state: false })).toBe(false);
-    expect(badgesAreMeasured(null)).toBe(false);
   });
 });

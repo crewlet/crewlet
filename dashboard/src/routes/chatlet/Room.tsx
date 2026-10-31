@@ -78,13 +78,8 @@ import {
 import { Composer } from "./Composer.tsx";
 import { markRead, packPosition, type ReadCursors } from "./cursor.ts";
 import { canJoin, canLeave, membershipNote } from "./directory.ts";
-import {
-  useChatFocus,
-  useChatFrames,
-  useChatPresence,
-  useChatRead,
-  useSettledIDs,
-} from "./live.ts";
+import { useChatFocus, useChatFrames, useChatPresence, useSettledIDs } from "./live.ts";
+import { useChatRead } from "~/lib/chatLive.ts";
 import {
   answersFor,
   EMPTY_TAIL,
@@ -99,7 +94,8 @@ import {
 import type { OutboxHandle } from "./outbox.ts";
 import { coverageOf, PAGE } from "./page.ts";
 import { RoomSettings } from "./RoomSettings.tsx";
-import { isDirect, knownKind, NEWER_ROOM, roomKindLabel, roomMark, roomTitle } from "./rooms.ts";
+import { isDirect } from "~/lib/chatRooms.ts";
+import { knownKind, NEWER_ROOM, roomKindLabel, roomMark, roomTitle } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { ThreadPane } from "./Thread.tsx";

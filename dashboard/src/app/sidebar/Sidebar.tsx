@@ -103,6 +103,7 @@ import { artifactPath } from "~/app/routes.ts";
 import { usePins } from "~/lib/artifacts/pins.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
+import { attentionFigure, useChatAttention } from "~/lib/chatRooms.ts";
 import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
 import { EnginePanel, engineReading } from "./EnginePanel.tsx";
 import { RailBoundary } from "../boundaries.tsx";
@@ -146,6 +147,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // earlier socket may have left behind, are not drawn.
   const unserved = accessRefused !== null;
   const inbox = useInboxCounts();
+  const chat = useChatAttention();
   const runs = useServicesRun();
   const known = useServicesKnown();
   const needsYou = useNeedsYouCount(viewer.owner !== "" && known && !runs.tracker);
@@ -187,6 +189,18 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       : needsYou !== null && needsYou > 0
         ? { badge: { value: String(needsYou), label: "waiting on your decision" } }
         : {},
+    // WHAT WAITS ON THE READER IN CHATLET: the unread messages that name
+    // them, and every unread direct message, in the rooms they have not muted
+    // (`lib/chatRooms.ts`). A badge, because each of them is addressed to the
+    // reader; none where the counts were not measured or nothing waits.
+    chatlet: chat
+      ? {
+          badge: {
+            value: attentionFigure(chat),
+            label: "unread mentions and direct messages",
+          },
+        }
+      : {},
     // NOTHING ON YOU IS NO FIGURE, as nothing waiting is no badge: a zero
     // beside the row is a mark a reader checks, and it would be there for
     // good on a quiet day.

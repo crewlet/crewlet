@@ -25,7 +25,7 @@ import { fmtDateTime } from "~/lib/format.ts";
 import { session } from "~/protocol/session.ts";
 import { mountChat } from "~/test/chat.tsx";
 
-import { LIVE_REFETCH_MS } from "./live.ts";
+import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 import { Mentions } from "./Mentions.tsx";
 import { PAGE } from "./page.ts";
 

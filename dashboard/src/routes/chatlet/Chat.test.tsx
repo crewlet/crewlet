@@ -25,7 +25,7 @@ import { ToastProvider } from "@crewlethq/ui";
 
 import { Chat } from "./Chat.tsx";
 import { READ_FLUSH_MS, useReadCursors, type ReadCursors } from "./cursor.ts";
-import { LIVE_REFETCH_MS } from "./live.ts";
+import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 import { workspaceRow } from "~/app/nav.ts";
 import { Router, href, samePath } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";

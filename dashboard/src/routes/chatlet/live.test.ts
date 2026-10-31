@@ -15,7 +15,8 @@ import { describe, expect, test, vi } from "vitest";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { Store, type ChatChange, type RoomMember } from "~/protocol/index.ts";
 import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
-import { chatRoomPresence, framesSince, LIVE_REFETCH_MS, useChatFrames } from "./live.ts";
+import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
+import { chatRoomPresence, framesSince, useChatFrames } from "./live.ts";
 
 function change(channel: string, op: string): ChatChange {
   return {

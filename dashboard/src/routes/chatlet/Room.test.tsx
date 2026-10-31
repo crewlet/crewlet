@@ -27,7 +27,7 @@ import {
 } from "~/app/assistant/context.ts";
 
 import { ReadCursors } from "./cursor.ts";
-import { LIVE_REFETCH_MS } from "./live.ts";
+import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 import { SHORTEN_FIRST } from "./Composer.tsx";
 import { DELETE_IN_FLIGHT, EDIT_IN_FLIGHT, NOTHING_CHANGED } from "./Transcript.tsx";
 import { MAX_BODY_BYTES, PENDING_REASK_MS } from "~/contract/chat.ts";

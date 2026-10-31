@@ -37,7 +37,8 @@ import type { ChatChannelSummary } from "~/protocol/index.ts";
 import { CHAT_SEARCH_PAGE } from "~/contract/chat.ts";
 
 import { MAX_BROWSE_ROOMS, useRoomDetails } from "./directory.ts";
-import { isDirect, roomTitle } from "./rooms.ts";
+import { isDirect } from "~/lib/chatRooms.ts";
+import { roomTitle } from "./rooms.ts";
 
 export function Search({
   channels,

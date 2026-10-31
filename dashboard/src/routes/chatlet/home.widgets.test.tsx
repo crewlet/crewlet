@@ -14,7 +14,7 @@ import { ADA, NATIVE_SERVICES, mountChat } from "~/test/chat.tsx";
 import { INCOMPLETE_NOTE } from "~/components/work.tsx";
 import { NOTHING_TO_LIST } from "~/routes/home/board/kit.tsx";
 import { widgets } from "./home.widgets.tsx";
-import { LIVE_REFETCH_MS } from "./live.ts";
+import { LIVE_REFETCH_MS } from "~/lib/chatLive.ts";
 
 /** A widget mounted as Home mounts it, on a company the engine says runs Chatlet. */
 function mountHome(children: ReactNode, opts: Parameters<typeof mountChat>[1] = {}) {
