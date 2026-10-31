@@ -668,8 +668,15 @@
 // keep it (its daemon's start, the first status, 417 ms); a one-file commit
 // 172, 161 and 88 ms. At 10 000 files the status took 18, 15, 8.4 and 4.0 ms.
 // A session of an agent's commands in a blobless clone — 200 rounds, its
-// lazy fetches leaving 602 packs — never ran git's automatic gc, so gc.auto
-// is left as git has it.
+// lazy fetches leaving 602 packs — never ran git's automatic maintenance on
+// them (2.55.0 and newer behave as maintenance.strategy=geometric, whose
+// geometric repack never fires on lazy-fetch promisor packs), and the packs
+// slowed every command as they gathered: a status 2.4 to 10.4 ms of CPU, a
+// `log -p` 49 to 157 ms, a commit 11 to 32 ms, first ten rounds against last
+// ten. Every bound git's configuration offers costs the session more than
+// the 5 % of its git CPU a box's maintenance is held to, and more the longer
+// the history — its gc 12.5 % at 20 MB and 40 % at 100 MiB, keeping big
+// packs 30 and 67 %, the incremental repack 32 and 68 % — so nothing is set.
 //
 // BORROWING THE NODE'S COPY (BenchmarkBoxDissociate): a box's checkout and a
 // build reading every file, by the coding recipe, took 1.14 s of a 100 MiB

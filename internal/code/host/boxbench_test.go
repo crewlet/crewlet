@@ -395,10 +395,15 @@ func boxClones(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, box *ben
 // a setting is adopted by is judged on medians, the gain larger than the
 // spread (code-sandbox.md, "What a clone costs").
 //
-// session/gc=foreground|detached runs commands of an agent's shape in a
-// blobless coding clone of a history (boxSession) until git's own automatic
-// gc runs, and reports what it cost against the session's git
-// (gc-cpu-share) and whether any command met its lock.
+// session/history=20MB|100MB/maintenance=git|gc|gc-small runs sessionRounds
+// rounds of an agent's commands in a blobless coding clone of a history
+// (boxSession, sessionSizes):
+// with git's own automatic maintenance, with its gc task turned on, and with
+// that gc keeping every pack of at least sessionKeepPack — and, where a gc
+// runs, gc=foreground|detached. Each reports the packs the lazy fetches
+// leave, what the commands cost as they gather — status, log -p and commit,
+// the first ten rounds against the last ten — and what the gcs cost against
+// the session's git (gc-cpu-share), and whether any command met their lock.
 func BenchmarkBoxWorktree(b *testing.B) {
 	codetest.Quiet(b)
 	for _, files := range []int{10_000, 100_000, 1_000_000} {
@@ -456,22 +461,73 @@ func BenchmarkBoxWorktree(b *testing.B) {
 		})
 	}
 	b.Run("session", func(b *testing.B) {
-		f, p := benchFleet(b, memobj.New(), 1)
-		rows, tip := boxHistory(b, f, p, sessionBytes)
-		for _, gc := range []string{"foreground", "detached"} {
-			b.Run("gc="+gc, func(b *testing.B) {
-				var overrides []string
-				if gc == "foreground" {
-					// So the gc's CPU is the CPU of the command that started
-					// it, which waits for it: detached, no process waits for
-					// it and its CPU is counted nowhere.
-					overrides = []string{"gc.autoDetach", "false", "maintenance.autoDetach", "false"}
+		for _, size := range sessionSizes {
+			b.Run("history="+size.name, func(b *testing.B) {
+				f, p := benchFleet(b, memobj.New(), 1)
+				rows, tip := boxHistory(b, f, p, size.bytes)
+				for _, arm := range []struct {
+					name     string
+					settings []string
+					detached []bool
+				}{
+					// git's own: on 2.55.0 and newer, no task of its automatic
+					// maintenance repacks a blobless clone's lazy-fetch packs,
+					// so no gc runs to be counted, attached or not.
+					{"maintenance=git", nil, []bool{false}},
+					// Its gc task on: gc --auto's own trigger, gc.autoPackLimit's
+					// fifty packs, then every pack repacked into one.
+					{"maintenance=gc", []string{"maintenance.gc.enabled", "true"}, size.detached},
+					// The same, keeping every pack of at least
+					// sessionKeepPack — the clone's own — so a gc writes the
+					// lazy fetches' alone.
+					{"maintenance=gc-small", []string{"maintenance.gc.enabled", "true", "gc.bigPackThreshold",
+						sessionKeepPack}, size.detached},
+					// The incremental repack task on: a multi-pack-index over
+					// the packs, and the small ones repacked in batches —
+					// work that follows the packs, not the history.
+					{"maintenance=incremental", []string{"maintenance.incremental-repack.enabled", "true"},
+						size.detached},
+				} {
+					for _, detached := range arm.detached {
+						name := arm.name
+						overrides := slices.Clone(arm.settings)
+						if len(arm.detached) > 1 {
+							name += "/gc=foreground"
+							if detached {
+								name = arm.name + "/gc=detached"
+							}
+						}
+						if !detached {
+							// So a gc's CPU is the CPU of the command that
+							// started it, which waits for it: detached, no
+							// process waits for it and its CPU is counted
+							// nowhere.
+							overrides = append(overrides, "gc.autoDetach", "false", "maintenance.autoDetach", "false")
+						}
+						b.Run(name, func(b *testing.B) {
+							box := newBenchBox(b, f, rows, gittest.Require(b), overrides...)
+							boxSession(b, box, boxRepo(rows, tip, nil), !detached)
+						})
+					}
 				}
-				box := newBenchBox(b, f, rows, gittest.Require(b), overrides...)
-				boxSession(b, box, boxRepo(rows, tip, nil), gc == "foreground")
 			})
 		}
 	})
+}
+
+// sessionSizes are the session arms' histories: twenty megabytes, 26 files
+// of a directory over 8 960 commits, a few hundred versions each — history
+// enough for every `log -p` a session reads — whose gcs are counted
+// attached and detached; and 100 MiB, five times the commits and trees
+// every gc repacks, which is what a gc's cost follows and a lazy fetch's
+// pack does not, counted attached alone.
+var sessionSizes = []struct {
+	name     string
+	bytes    int64
+	detached []bool
+}{
+	{"20MB", 20_000_000, []bool{false, true}},
+	{"100MB", 100 << 20, []bool{false}},
 }
 
 // boxCheckouts is an op=checkout arm: a fresh box's coding recipe of repo an
@@ -640,20 +696,25 @@ func stopMonitor(b *testing.B, box *benchBox, dir string) {
 	})
 }
 
-// sessionBytes is the session arm's history: twenty megabytes, 26 files of a
-// directory over 8 960 commits, a few hundred versions each — history enough
-// for every `log -p` a session reads.
-const sessionBytes = 20_000_000
-
-// sessionRounds bounds a session that never crosses git's automatic gc: each
-// of the shape's rounds lazily fetches at least one pack, so gc.autoPackLimit's
-// fifty is crossed within about fifty rounds, and two hundred is four times
-// that.
+// sessionRounds is a session's length: each of the shape's rounds lazily
+// fetches about three packs, so gc.autoPackLimit's fifty is crossed within
+// about seventeen rounds where a gc runs at all, and two hundred is a dozen
+// of its gcs — and, where none runs, six hundred packs to read the commands'
+// cost against.
 const sessionRounds = 200
 
-// sessionAfter is how many rounds a detached gc's session runs past the round
-// its gc rewrote the packs in, so the commands of the gc's whole life ran.
-const sessionAfter = 5
+// sessionTrend is how many rounds at each end of a session the commands'
+// cost is compared over: the first ten against the last ten, medians, so the
+// round a gc ran in moves neither.
+const sessionTrend = 10
+
+// sessionKeepPack is the maintenance=gc-small arm's gc.bigPackThreshold: a
+// pack of a mebibyte or more is kept as it is, so a gc repacks only the
+// lazy fetches' small packs and the pack an earlier gc made of them, never
+// the clone's own — every commit and tree of the history, several megabytes
+// at the session's twenty, 179 MB at a gigabyte's — which a gc would
+// otherwise repack whole every fifty lazy fetches.
+const sessionKeepPack = "1m"
 
 // sessionCommands are a session's round, in order; the empty one is three
 // changes of the round's file with their patches (sessionCommand).
@@ -686,32 +747,33 @@ func sessionCommand(r, s int, files []string, base string) string {
 // changes with their patches, each pass over the files further back
 // (sessionCommand), which is what makes a blobless clone fetch (each diff's
 // missing blobs: a lazy fetch, and so a pack), the recent log, and four files
-// of the tree changed and committed — until
-// git's own automatic gc has rewritten the clone's packs (fewer than before a
-// command) and, detached, sessionAfter rounds more; or sessionRounds rounds.
-// A session an operation.
+// of the tree changed and committed — sessionRounds of them, an operation.
 //
 // Every command's CPU — its own and its waited children's, the lazy fetches
-// among them — is the session's git. FOREGROUND, the gc runs inside the
-// command that started it, which waits for it: its CPU is that command's
-// above the median of the same command in every other round, and its share
-// is of the session's git through the gc's round. DETACHED, as a box's git
-// runs it, no process waits for the gc and its CPU is counted nowhere: that
-// arm reports the commands that ran while the gc held its gc.pid, and any
-// command that failed or named a lock.
+// among them — is the session's git. A GC is a pack count that fell, during
+// a command or between two. FOREGROUND, a gc runs inside the command that
+// started it, which waits for it: its CPU is that command's above the median
+// of the same command in the rounds no gc ran in, and its share is of the
+// session's git. DETACHED, as a box's git runs it, no process waits for it
+// and its CPU is counted nowhere: that arm reports the commands that ran
+// while a gc held its gc.pid, and any command that failed or named a lock.
 //
-// Reported: rounds, the rounds before the gc; packs, the most the clone held;
-// gc-cpu-ms, session-cpu-ms and gc-cpu-share (foreground); beside and
-// lock-failures (detached).
+// Reported: gcs; packs, the most the clone held, and packs-end; the median
+// CPU of status, log -p and commit over the first and the last sessionTrend
+// rounds (status-first-ms, status-last-ms, log-p-…, commit-…), what the
+// packs a session gathers cost each command; session-cpu-ms; gc-cpu-ms and
+// gc-cpu-share (foreground); beside and lock-failures (detached).
 func boxSession(b *testing.B, box *benchBox, repo sandbox.RunRepo, foreground bool) {
 	b.Helper()
 	step, err := sandbox.CloneRecipe(repo, sandbox.CloneCoding)
 	if err != nil {
 		b.Fatal(err)
 	}
+	trend := map[int]string{0: "status", 2: "log-p", 4: "commit"}
 	var (
-		rounds, packsMost, beside, locks, sessions int
-		gcCPU, total                               time.Duration
+		gcs, packsMost, packsEnd, beside, locks, sessions int
+		gcCPU, total                                      time.Duration
+		first, last                                       = map[int]time.Duration{}, map[int]time.Duration{}
 	)
 	for b.Loop() {
 		dir := b.TempDir()
@@ -720,14 +782,12 @@ func boxSession(b *testing.B, box *benchBox, repo sandbox.RunRepo, foreground bo
 		stopMonitor(b, box, clone)
 		files := trackedFiles(b, clone)
 		pid := filepath.Join(clone, ".git", "gc.pid")
-		var cpu [][]time.Duration
-		gcAt, gcStep := -1, -1
-		var session time.Duration
-		for r := 0; r < sessionRounds; r++ {
-			if gcAt >= 0 && (foreground || r > gcAt+sessionAfter) {
-				break
-			}
-			row := make([]time.Duration, len(sessionCommands))
+		cpu := make([][]time.Duration, sessionRounds)
+		gcRan := make([][]bool, sessionRounds)
+		packs := packCount(b, clone)
+		for r := range sessionRounds {
+			cpu[r] = make([]time.Duration, len(sessionCommands))
+			gcRan[r] = make([]bool, len(sessionCommands))
 			for s := range sessionCommands {
 				command := sessionCommand(r, s, files, repo.Base)
 				if s == len(sessionCommands)-1 {
@@ -736,6 +796,9 @@ func boxSession(b *testing.B, box *benchBox, repo sandbox.RunRepo, foreground bo
 					}
 				}
 				before, running := packCount(b, clone), fileExists(pid)
+				if before < packs {
+					gcs++ // a detached gc's, between two commands
+				}
 				_, used, out, err := boxTimed(b, clone, box.env, command)
 				if running || fileExists(pid) {
 					beside++
@@ -747,55 +810,79 @@ func boxSession(b *testing.B, box *benchBox, repo sandbox.RunRepo, foreground bo
 					locks++
 					b.Logf("round %d: %q beside a detached gc: %v\n%s", r, command, err, out)
 				}
-				now := packCount(b, clone)
-				packsMost = max(packsMost, before, now)
-				row[s] = used
-				if gcAt < 0 && now < before {
-					gcAt, gcStep = r, s
+				packs = packCount(b, clone)
+				packsMost = max(packsMost, before, packs)
+				cpu[r][s] = used
+				total += used
+				if packs < before {
+					gcs++
+					gcRan[r][s] = true
 				}
 			}
-			cpu = append(cpu, row)
-			if gcAt < 0 || gcAt == r {
-				for _, c := range row {
-					session += c
-				}
-			}
+		}
+		// THE CLONE STILL KNOWS WHICH OBJECTS ITS REMOTE PROMISED: whatever
+		// repacked the lazy fetches' packs kept every object they held
+		// marked a promisor's, or a blob the clone never fetched reads as
+		// missing rather than as one to fetch.
+		if out, err := boxTry(b, clone, box.env,
+			"git rev-list --objects --all --missing=allow-promisor >/dev/null"); err != nil {
+			b.Fatalf("after %d rounds the clone cannot account for the objects it lacks: %v\n%s", sessionRounds,
+				err, out)
 		}
 		sessions++
-		total += session
-		if gcAt < 0 {
-			b.Logf("the session's git never ran its automatic gc in %d rounds (%d packs at most)", sessionRounds,
-				packsMost)
-			rounds += sessionRounds
-			continue
-		}
-		rounds += gcAt
-		if foreground {
-			var others []time.Duration
-			for r, row := range cpu {
-				if r != gcAt {
-					others = append(others, row[gcStep])
+		packsEnd += packs
+		for s := range sessionCommands {
+			var quiet []time.Duration
+			for r := range sessionRounds {
+				if !gcRan[r][s] {
+					quiet = append(quiet, cpu[r][s])
 				}
 			}
-			if len(others) == 0 {
-				b.Fatalf("the gc ran in the session's first round: no round to read its command's own cost from")
+			slices.Sort(quiet)
+			for r := range sessionRounds {
+				if gcRan[r][s] && foreground && len(quiet) > 0 {
+					gcCPU += max(cpu[r][s]-quiet[len(quiet)/2], 0)
+				}
 			}
-			slices.Sort(others)
-			gcCPU += max(cpu[gcAt][gcStep]-others[len(others)/2], 0)
-			b.Logf("the gc ran in round %d's %q", gcAt, sessionCommand(gcAt, gcStep, files, repo.Base))
+			if _, ok := trend[s]; ok {
+				first[s] += medianOf(cpu[:sessionTrend], s, gcRan[:sessionTrend])
+				last[s] += medianOf(cpu[sessionRounds-sessionTrend:], s, gcRan[sessionRounds-sessionTrend:])
+			}
 		}
 	}
 	n := float64(sessions)
-	b.ReportMetric(float64(rounds)/n, "rounds")
+	ms := func(d time.Duration) float64 { return float64(d) / n / float64(time.Millisecond) }
+	b.ReportMetric(float64(gcs)/n, "gcs")
 	b.ReportMetric(float64(packsMost), "packs")
+	b.ReportMetric(float64(packsEnd)/n, "packs-end")
+	for s, name := range trend {
+		b.ReportMetric(ms(first[s]), name+"-first-ms")
+		b.ReportMetric(ms(last[s]), name+"-last-ms")
+	}
+	b.ReportMetric(ms(total), "session-cpu-ms")
 	if foreground {
-		b.ReportMetric(float64(gcCPU)/n/float64(time.Millisecond), "gc-cpu-ms")
-		b.ReportMetric(float64(total)/n/float64(time.Millisecond), "session-cpu-ms")
+		b.ReportMetric(ms(gcCPU), "gc-cpu-ms")
 		b.ReportMetric(float64(gcCPU)/float64(total), "gc-cpu-share")
 		return
 	}
 	b.ReportMetric(float64(beside)/n, "beside")
 	b.ReportMetric(float64(locks)/n, "lock-failures")
+}
+
+// medianOf is the median CPU of command s over rows, leaving out a row whose
+// s ran a gc (ran) — what the command costs, the gc it started apart.
+func medianOf(rows [][]time.Duration, s int, ran [][]bool) time.Duration {
+	var took []time.Duration
+	for r, row := range rows {
+		if !ran[r][s] {
+			took = append(took, row[s])
+		}
+	}
+	if len(took) == 0 {
+		return 0
+	}
+	slices.Sort(took)
+	return took[len(took)/2]
 }
 
 // trackedFiles is every file of the clone at dir's tip, by path.

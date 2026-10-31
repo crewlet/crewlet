@@ -786,7 +786,8 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # BenchmarkPushSmall's gigabyte history and an hour BenchmarkCloneCold's
 # 2 000-push tree; its coding boxes' (BenchmarkBoxClone, BenchmarkBoxWorktree,
 # BenchmarkBoxDissociate) took twelve minutes more at one count of ten
-# operations on two E-cores, and their gigabyte arms twenty at one, the
+# operations on two E-cores, BenchmarkBoxWorktree's eleven sessions of an
+# agent's commands about twelve more at one, and their gigabyte arms twenty at one, the
 # million-file tree's unmeasured (BENCH_TIME=10x, or 1x, each figure says
 # which); its engine writes' two benchmarks, BenchmarkEngineWrite and
 # BenchmarkEngineCommit, took nine to eleven minutes at BENCH_TIME=10x on two
