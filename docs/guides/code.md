@@ -456,45 +456,25 @@ log. One that ended **errored** measured nothing: its box or its setup failed
 the engine queues it again, up to its third attempt; a file naming a cell or a
 secret the company does not allow is `defs_invalid`, and is not queued again.
 
-## What your seats read
+## Seats and code
 
-Nothing to set up: once the company hosts code, every seat reads the
-repositories with eleven of the twenty-nine [code
-tools](tools-and-mcp.md#the-companys-code), on the server — a file's lines, a directory,
-what changed between two commits, how two commits relate, whether a fix
-reached a branch and which push put it there, a path's history and who last
-changed each line of a file, and a repository's changes: what each one
-changes, its findings placed in the revision it reads and what changed since
-an earlier revision — with no clone and no token. A seat itself holds
-no git credential: a seat whose `role.code.access` is `full_access` changes the
-repositories through the other eighteen — a small change committed to a
-branch, a commit reverted or picked, a branch created or deleted, each built on
-the server and landed as one push in its name ([Engine-built
-commits](../concepts/code-host.md#engine-built-commits)), a scratch repository
-of its own made for an experiment ([Repositories made by
-tools](../concepts/code-host.md#repositories-made-by-tools)), and a change
-opened, edited, closed, reviewed and discussed ([Or with a
-tool](#open-a-change-from-a-push)) — each held to the grant below. A
-`read_only` or `review` seat is not offered those eighteen at all, since its
-grant would refuse every one of them on every repository.
+Nothing to set up: once the company hosts code, your seats work in its
+repositories through the twenty-nine [code
+tools](tools-and-mcp.md#the-companys-code), on the server and in their own
+names. A seat holds no git credential and needs none. Every seat reads with
+eleven of the tools; a seat whose `role.code.access` is `full_access` also
+changes the repositories with the other eighteen; and a seat whose role has a
+sandbox works in a clone besides. What each may do is its grant, derived from
+the chart ([Who may read and push](../concepts/code-host.md#who-may-read-and-push)).
 
-A seat whose role has a [sandbox](../concepts/code-sandbox.md) also works in a
-clone: it names the repositories in `run_sandbox`'s `repos`, and the engine
-clones each into the coding box — on the seat's own branch for the work item
-by default — and hands that run a credential of its own, which pushes only
-what the run was given and its seat may push, and ends with the run
-([Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)).
-When the run ends, the seat is told what it pushed from the code host's own
-record of its pushes — each branch it moved, from where to where, and the
-change it heads — not from what the run says of itself
-([What a run pushed is reported for it](../concepts/code-sandbox.md#what-a-run-pushed-is-reported-for-it)).
-A run can work on a change — `change: web!42` puts it on that change's branch,
-from its head — or ask for one: `open_change` opens a change from the run's
-branch once the run has succeeded, once, carrying the seat's work item
-([A run's changes](../concepts/code-sandbox.md#a-runs-changes)).
-Every node that runs seats needs `CREWLET_BOX_GIT_URL` for it, the address a
-box reaches the git nodes' `/box/git/` at
-([Deployment](deployment.md#exposing-webhooks-without-the-admin-api)).
+### What your seats read
+
+Every seat reads the repositories with eleven of the code tools — a file's
+lines, a directory, what changed between two commits, how two commits relate,
+whether a fix reached a branch and which push put it there, a path's history
+and who last changed each line of a file, and a repository's changes: what
+each one changes, its findings placed in the revision it reads and what
+changed since an earlier revision — with no clone and no token.
 
 What each seat may read is its grant, from the chart: its
 [`role.code.access`](../getting-started/configuration.md#role-fields-summary) caps it, and a
@@ -505,6 +485,210 @@ every read of it refused. Your own assistant reads through the same tools on
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
 as you, which reads every repository; asked by you, `code_get_repo` also hands
 out the URL to clone from, on `api.external_url`.
+
+### What your seats change
+
+A seat at `full_access` changes the repositories with the other eighteen code
+tools, one change a call: a commit of up to 1 000 file operations to a branch
+(`code_commit_files`), a commit reverted or picked onto one (`code_revert`,
+`code_cherry_pick`), a branch created or deleted (`code_create_branch`,
+`code_delete_branch`), a repository created, changed, renamed, archived,
+deleted, restored or protected ([below](#scratch-repositories)), and a change
+opened, edited, closed, reviewed and discussed ([Or with a
+tool](#open-a-change-from-a-push)). A `read_only` or `review` seat — and
+`read_only` is what a seat that sets none runs at — is offered the eleven
+reads alone, none of the eighteen. Your assistant has the same eighteen, as
+you.
+
+**A commit is built on the server and lands as one push** in the seat's name
+([Engine-built commits](../concepts/code-host.md#engine-built-commits)). The
+git node holding the repository builds it over exactly the directories it
+touches — never a checkout, so a commit to a repository of a hundred thousand
+files costs what it changes — checks its objects as it checks a `git push`,
+and lands it through the committer, the protections and the limits a
+person's push meets. A call names the head it read (`expected_head`), so a
+branch that moved meanwhile is refused `stale` rather than overwritten: the
+seat reads it again and decides. And a call asked again — retried after a
+timeout, or made on another git node when the first went silent — is the same
+push carrying the same commit, landed once.
+
+**Who a commit names.** Its author is the seat: its role's `name`, and the
+`email` the role states or, where it states none a commit can name (a
+`${VAR}` reference is never written into history), `<handle>@` the code
+host's identity domain. Set [`code.identity_domain`](../getting-started/configuration.md#code)
+to a domain of yours, so those addresses read as your company's in every
+clone; unset, they end `@seats.invalid`, a name nobody can own:
+
+```yaml
+code:
+  native: true
+  identity_domain: example.com   # docs-writer, stating no email, commits as docs-writer@example.com
+```
+
+Its committer is the engine, `Crewlet <engine@example.com>`. That marks the
+commits the code host built in your history and proves nothing — any git
+client can write the same committer — so who made a commit is its push's
+record, never the commit ([Reading a seat's pushes](#reading-a-seats-pushes)).
+Nothing is added to the message.
+
+**Where a seat may commit** is its grant: a seat in the owning unit writes the
+repository's branches, its unit's lead also forces and deletes them, and every
+`full_access` seat owns `seats/<its handle>/` on every repository it reads,
+where a seat outside the unit puts its work in place of a fork. Beyond its
+grant, a seat's push is held to what a person's never is ([A seat's
+push](../concepts/code-host.md#a-seats-push)):
+
+- **A protected branch takes no seat's push**, its unit's lead's included
+  (`protected_direct`): `direct_push: persons`, what a rule says unless it
+  says `none`, is a person's push alone. A seat's work reaches `main` when a
+  person pushes it: the seat commits to a branch of its own and opens a change
+  of it for you to read.
+- **A seat outside the owning unit fills at most half** of the repository's
+  refs and half its bytes, so the owners always keep room to push
+  (`repo_refs`, `repo_size`).
+- **A seat lands at most `code.limits.pushes_per_seat_day` pushes a day**
+  ([The daily quota](#the-daily-quota), `push_quota`).
+- **A data node behind the company's configuration decides no seat's push**:
+  the revision it failed to apply may be the one that took the seat's grant
+  away, so the repository's next committer decides it.
+
+What each refusal means is in [What a write is
+refused](../concepts/code-host.md#what-a-write-is-refused), and the seat's tool
+answers with the same code and sentence.
+
+### Scratch repositories
+
+A seat that wants somewhere to try something makes a **scratch repository**
+of its own with `code_create_repo`: named after the seat, `<handle>.<name>` —
+`docs-writer.parser-spike` — and owned by it. Only that seat creates one, at
+`full_access`. It takes no protection rule, it is searched with `grep` and
+never indexed, and the seat changes, renames, archives, deletes and restores
+it as it does any repository it maintains. Two settings bound them:
+
+```yaml
+code:
+  scratch:
+    max_per_seat: 50   # 0..1000; 0 lets no seat make one. Unset is 50
+    idle_days: 7       # 1..365; untouched this long, one is deleted. Unset is 7
+```
+
+- **`max_per_seat`** counts **every** scratch repository a seat owns until it
+  is purged, a deleted one included, so a seat creating and deleting in a loop
+  holds no more; past it a create is refused `scratch_limit`.
+- **`idle_days`**: one with no push, rename, settings change or restore for
+  that long is **deleted** by the `code-retention` duty, and restorable for
+  `code.deleted_retention_days` before it is purged. Reading it is no
+  activity; an archived one is kept; and one a live turn has named is never
+  taken from under it, however long the turn waits ([A scratch repository's
+  idle expiry](../concepts/code-host.md#a-scratch-repositorys-idle-expiry)).
+  The duty's `code_retention_pass` line counts the ones it `expired` and the
+  idle ones a turn kept (`scratch_held`).
+
+You never create a scratch repository — it is a seat's — and you maintain
+every one: archive one to keep it, or restore a deleted one before its purge
+with `code_restore_repo`, from your assistant.
+
+A unit's effective lead at `full_access` may also create a **project**
+repository for its unit with the same tool — one label, like a declared one,
+and counted with the declared ones against the 10 000 the code host holds
+(`repo_limit`). On a repository it maintains a seat may add or tighten a
+protection with `code_protect_branch`, never remove or loosen one: that is
+yours ([Who may change a
+protection](../concepts/code-host.md#who-may-change-a-protection)). A
+repository `code.repos` declares refuses every tool's request
+(`config_managed`): change its declaration instead. Everything a tool may do
+to a repository is in [Repositories made by
+tools](../concepts/code-host.md#repositories-made-by-tools).
+
+### Renaming a repository
+
+A repository a tool made is renamed with `code_update_repo`'s `rename_to`, by
+the seat that maintains it or by you through your assistant. The new name
+keeps its kind's form: a scratch repository keeps its seat's handle
+(`docs-writer.parser`), and a project stays one label. **The old name
+redirects for 30 days**: a clone or a fetch of the old URL still works — git
+prints `warning: redirecting to` the new one where it sends its credential up
+front — while a push to the old name is refused, naming the new one and when
+the old one stops serving. Point every clone at the new name:
+
+```sh
+git remote set-url origin https://crewlet.example.com/git/docs-writer.parser.git
+```
+
+Nothing else takes the old name while it redirects, renaming back takes it
+back, and once the 30 days are over it is free. A **declared** repository is
+not renamed this way: its name in `code.repos` is its address, so a new name
+there deletes it and creates another ([Declare
+repositories](#declare-repositories)).
+
+### The daily quota
+
+A seat lands at most `code.limits.pushes_per_seat_day` pushes a day on the
+company's [calendar](../getting-started/configuration.md#the-companys-clock),
+every repository together and every push it lands — built by its tools or sent
+from its coding box: 1 000 unless set, about thirty-three times the thirty
+pushes a seat of the reference company makes a day. It is a bound on a seat
+pushing in a loop, not a budget, and your pushes are never counted:
+
+```yaml
+code:
+  limits:
+    pushes_per_seat_day: 1000   # 1..100000; one seat's pushes a company day
+```
+
+Past it, a push is refused whole as `push_quota`, its sentence naming when the
+count starts again — the company's next midnight — and **nothing records it**:
+a record of every refusal of a runaway seat would cost the code log what the
+quota exists to bound, so a refused push is not in the push history. A seat
+that meets it is pushing in a loop: read what its turns are doing before you
+raise the bound. Its git work is already done by then — the pack it built is
+stored, named by nothing, and deleted by the object collector a day later.
+
+### Reading a seat's pushes
+
+Every push a seat lands names the seat and **the turn that made it**: its
+turn, the work item that turn was charged to and the model it ran on, stamped
+by the engine from the call — never read from the commit, which any client
+could have written. `crewlet code status -repo` prints the turn and the work
+item in `BY`, and for a push from a coding box its run and the coding agent
+the box ran ([`crewlet code status`](../reference/cli.md#crewlet-code-status)):
+
+```text
+PUSHED AT             BY                                                                NODE    REFS  RESULT
+2026-10-12 09:31 UTC  docs-writer (turn 0192f6a1-…, native ENG-12)                      data-a  1     ok refs/heads/seats/docs-writer/eng-12 4c1d2e3..8a7b6c5
+2026-10-12 09:02 UTC  swe (claude-code run 7f3e9c2a-…, turn 0192f69c-…, native ENG-42)  data-b  1     ok refs/heads/seats/swe/eng-42 0000000..1f2e3d4
+```
+
+and `GET /code/repos/{name}/pushes` answers each with `actor_kind` `agent`,
+the seat's handle as `actor`, how its pack was built (`via`: `engine` for a
+commit its tools built, `git` for its coding box's push) and the run behind it
+under `run` — `turn_id`, `work_backend` and `work_key`, `model`, and for a
+box's push `run_id` and `coding_agent` ([API
+Endpoints](../reference/api-endpoints.md#the-code-host-git-and-code)). Going
+the other way, from a commit to whoever landed it, `code_landed_in`,
+`code_log` and `code_blame` name the push behind each commit ([Which push
+landed a commit](../concepts/code-host.md#which-push-landed-a-commit)).
+
+### Working in a clone
+
+A seat whose role has a [sandbox](../concepts/code-sandbox.md) also works in a
+clone: it names the repositories in `run_sandbox`'s `repos`, and the engine
+clones each into the coding box — on the seat's own branch for the work item
+by default — and hands that run a credential of its own, which pushes only
+what the run was given and its seat may push, and ends with the run
+([Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)).
+Its pushes are held to the seat's rules above, and when the run ends, the seat
+is told what it pushed from the code host's own record of its pushes — each
+branch it moved, from where to where, and the change it heads — not from what
+the run says of itself
+([What a run pushed is reported for it](../concepts/code-sandbox.md#what-a-run-pushed-is-reported-for-it)).
+A run can work on a change — `change: web!42` puts it on that change's branch,
+from its head — or ask for one: `open_change` opens a change from the run's
+branch once the run has succeeded, once, carrying the seat's work item
+([A run's changes](../concepts/code-sandbox.md#a-runs-changes)).
+Every node that runs seats needs `CREWLET_BOX_GIT_URL` for it, the address a
+box reaches the git nodes' `/box/git/` at
+([Deployment](deployment.md#exposing-webhooks-without-the-admin-api)).
 
 ## Who read a unit's repository
 

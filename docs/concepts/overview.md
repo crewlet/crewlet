@@ -15,7 +15,7 @@ The framework models the same structures found in real companies:
 - **Organizational hierarchy** — departments, teams, and individual roles; seats are held by AI agents or [human teammates](humans-in-the-org.md)
 - **Communication** — channels, direct messages, and external tools (Slack or self-hosted [Mattermost](../integrations/mattermost.md), the work-item tracker, the code host)
 - **Task management** — the engine's own work tracker by default (items, threads, hand-offs, a board and an MCP surface), or an external PM tool it deliberately mirrors none of (Jira, GitHub/GitLab issues) — see [The Tracker](task-engine.md)
-- **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md); beside those, a company can host its git repositories in the engine itself (`code.native`) — repositories declared in its configuration, kept as replicated rows with each push's bytes in the object store — see [Code Host](code-host.md)
+- **Code hosting** — agents read, review, and track code via GitHub or GitLab MCP tools, and author code through the [code sandbox](code-sandbox.md); beside those, a company can host its git repositories in the engine itself (`code.native`) — repositories declared in its configuration or made by a seat's tools, kept as replicated rows with each push's bytes in the object store, which seats read on the server and change through engine-built commits landed as pushes in their own names — see [Code Host](code-host.md)
 - **Knowledge** — a shared knowledge base behind one seam, either the engine's own pages (keyword over a BM25 index this node holds, semantic over embeddings the fleet derives once, or the two fused by reciprocal rank fusion — `hybrid` is the default) or a live Confluence search, plus a per-agent private diary (vector similarity computed by the database — hybrid vector ∪ recency candidate selection)
 - **Decision-making** — structured DACI framework with clear authority
 
@@ -227,7 +227,10 @@ internal/
 │                         #   and sync paths, in the order a push reaches them.
 │                         #   host/ is smart HTTP for persons: the receive
 │                         #   pipeline in a scratch, the hook relay, and `ok`
-│                         #   told only from a push's applied row. codetest/
+│                         #   told only from a push's applied row — and the
+│                         #   engine-built commit a seat's or a person's
+│                         #   tool asks for, built over the trees it
+│                         #   touches and landed as that same push. codetest/
 │                         #   is the one suite every code-host topology
 │                         #   passes — Run on one data node (SoloNode), and
 │                         #   RunFleet on the three-member fleet codecluster/
