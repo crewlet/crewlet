@@ -123,15 +123,19 @@ func (c ShareClass) Valid() bool { return c.Weight() > 0 }
 // beside sixty-four of one CI token's clones — a person's clone is granted
 // the first slot released rather than the sixty-fifth: BenchmarkTransferShare
 // measures its wait for a slot at 60 ms at the p99 there, one release's turn,
-// against 1.46 s in arrival order (one count of twenty clones). Beside coding
-// boxes too — the CI token's sixty-four and sixty-four boxes, half of them
-// reading at the slowest pace a transfer is waited on (its runs arms, on a
-// lane of two slots, one count of five hundred clones) — the person's clone
-// took 83 ms at the p99 against 42 ms alone, with none of theirs refused and
-// the boxes holding one slot of the two: within the twice its idle figure the
-// search for the run's weight is held to, at 4:2:1, the first it tries (8:4:1
-// and 16:8:1, which keep persons at twice the machines too, measured 86 and
-// 97 ms), so the box's 1 stands. A RATIO, never
+// against 1.46 s in arrival order (one count of twenty clones). THE RUN'S 1
+// IS A JUDGMENT TOO, NOT YET A MEASUREMENT: the search its weight is to be
+// decided by — the CI token's sixty-four and sixty-four boxes, half of them
+// reading at the slowest pace a transfer is waited on, and a person's clone
+// held to twice its idle p99 (BenchmarkTransferShare's runs arms) — has run
+// only on a lane of two slots, where the boxes' half is one slot and a
+// person waits behind at most one CI clone as long as their own, so twice
+// idle is that lane's floor under any weights: one count of five hundred
+// clones read 4:2:1 at 83.0 ms against 42.2 alone (1.97 times) and 8:4:1 at
+// 85.8 (2.03), an earlier count 4:2:1 at 2.04 and 8:4:1 at 1.96 — which
+// weight passes flips from count to count, inside the machine's noise. The
+// weight is pinned from a run of that search on a production-wide lane
+// (docs/concepts/code-host.md, "Fair share"). A RATIO, never
 // a cap, for persons and machines: the share is work-conserving for them, so a
 // machine alone takes the whole lane (its machine-alone arm runs as many
 // clones a second as arrival order's) — a flat per-credential cap would

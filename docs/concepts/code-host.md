@@ -6056,15 +6056,27 @@ waited on, thirty seconds a mebibyte — and once the boxes held what the lane
 let them, the person cloned, pushing once a second beside. A person's clone
 alone took 42 ms at the 99th percentile; with every class contending it took
 83 ms, none of 500 clones or 36 pushes was refused, and the boxes never held
-more than one slot of the two, three tenths of what the lane spent. On a lane
-of two the boxes' half is one slot and a person shares the other with the CI
-token, so their clone waits behind at most one CI clone as long as their own:
-twice the idle figure is that lane's floor, which the weights — 4 : 2 : 1, and
-8 : 4 : 1 and 16 : 8 : 1 tried beside them, each keeping people at twice the
-machines (85.8 and 97.4 ms) — only move inside. With the boxes' half lifted, the
-slow boxes came to hold both slots, and three of five clones and two of three
-pushes were refused after their ten seconds: the half is what keeps people
-served.
+more than one slot of the two, three tenths of what the lane spent. With the
+boxes' half lifted, the slow boxes came to hold both slots, and three of five
+clones and two of three pushes were refused after their ten seconds: **the
+half is what keeps people served**, and that is measured.
+
+**The boxes' weight of 1 is not.** It is a judgment, as the person's 4 and the
+machine's 2 are: the search it is to be decided by — the person's clone held
+to twice its idle 99th percentile, trying 4 : 2 : 1, then 8 : 4 : 1, then
+16 : 8 : 1 — cannot tell the candidates apart on a lane of two. There the
+boxes' half is one slot and a person shares the other with the CI token, so
+their clone waits behind at most one CI clone as long as their own, and twice
+the idle figure is the lane's floor whatever the weights: one count of five
+hundred clones read 4 : 2 : 1 at 1.97 times idle (83.0 against 42.2 ms) and
+8 : 4 : 1 at 2.03 (85.8 ms), 16 : 8 : 1 at 97.4 ms, and an earlier count of a
+hundred read 4 : 2 : 1 at 2.04 and 8 : 4 : 1 at 1.96, so which weight passes
+changes from one count to the next. A node's lane is four slots a core,
+where the weights decide who is granted a release and the width does not;
+the search has not been run on one. The benchmark takes the lane's width for
+these arms from `CREWLET_BENCH_SHARE_SLOTS`, so it can be run at such a width
+on a machine with the cores to back it, and the boxes' weight is pinned from
+that run.
 
 ---
 

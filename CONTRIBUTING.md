@@ -758,6 +758,12 @@ monorepo, whose fixture builds for hours and whose bitmap holds tens of
 gigabytes beside the in-memory store, skips unless `CREWLET_BENCH_BIGNODE=1`
 is set beside it, on a machine of at least 64 GB of memory; run it alone,
 under the day's `BENCH_TIMEOUT` that `CREWLET_BENCH_LARGE=1` gives a run.
+`internal/code/gitproc`'s `BenchmarkTransferShare` runs its coding-box arms
+(`mix=runs`) on a transfer lane as wide as the machine's cores unless
+`CREWLET_BENCH_SHARE_SLOTS` names a width, in slots, of at least two: the
+search for the coding boxes' share weight is to be run on a lane of a
+production node's width, four slots a core, which a lane of two cannot stand
+in for ([fair share](docs/concepts/code-host.md#fair-share)).
 
 A code host figure is the pool's git's as much as the engine's, so `make bench`
 runs the node pin — the git the engine image builds — first on `PATH`, as every

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,15 +69,23 @@ import (
 //     CONTROL, the share before ShareClass.Cap: slow boxes holding the whole
 //     lane for minutes, and the person answered busy.
 //
-// The runs arms' lane is as wide as the cores too, so ON A LANE OF TWO — this
-// pass rule's figures name the machine — the boxes' half is one slot and a
-// person's clone shares the other with the machine's: it waits behind at most
-// one machine clone, which takes as long as its own, so its p99 is about
-// twice its idle one whatever the weights, which keep persons at twice the
-// machines in every candidate.
+// The runs arms' lane is as wide as the cores too, unless shareSlotsEnv names
+// a width of its own (runsLaneWidth). ON A LANE OF TWO — the runner's, where
+// these arms were first measured — the boxes' half is one slot and a person's
+// clone shares the other with the machine's: it waits behind at most one
+// machine clone, which takes as long as its own, so its p99 is about twice
+// its idle one whatever the weights, which keep persons at twice the machines
+// in every candidate. That lane CANNOT TELL THE CANDIDATES APART: one count
+// of five hundred clones read 4:2:1 at 1.97 times idle (83.0 ms against
+// 42.2) and 8:4:1 at 2.03, an earlier count of a hundred 4:2:1 at 2.04 and
+// 8:4:1 at 1.96 — which weight passes flips from one count to the next — so
+// ShareClass.Weight's run 1 stays the judgment it was, and the search is to
+// be run on a lane wide enough for the weights to decide who is granted a
+// release, not the lane's width.
 //
-// THE LANE IS AS WIDE AS THE MACHINE'S CORES (git.max_transfers = cores), not
-// the production four a core: the stand-in client here reads as fast as the
+// THE LANE IS AS WIDE AS THE MACHINE'S CORES (git.max_transfers = cores) —
+// the runs arms' unless shareSlotsEnv sets theirs — not the production four
+// a core: the stand-in client here reads as fast as the
 // pipe allows, so every upload-pack is bound by its CPU, and at four a core
 // every running clone would be slowed fourfold by the others whichever was
 // granted first — a cost no grant order changes, while the lane four a core
@@ -87,8 +97,8 @@ import (
 // Reported per arm: the person's clone p50 and p99 and the wait for its slot
 // p99, in milliseconds (clone-p50-ms, clone-p99-ms, wait-p99-ms); busy, the
 // person's clones refused for a slot that stayed held past SlotWait; on the
-// machine-alone arms, clones/s; and on the runs arms run-held-max,
-// run-share, pushes and push-busy.
+// machine-alone arms, clones/s; and on the runs arms slots, the lane's width,
+// run-held-max, run-share, pushes and push-busy.
 func BenchmarkTransferShare(b *testing.B) {
 	quiet(b)
 	h := sharedHistory(b)
@@ -183,16 +193,18 @@ func BenchmarkTransferShare(b *testing.B) {
 		{"mix=runs-uncapped", [3]int{4, 2, 1}, true},
 	} {
 		b.Run(arm.name, func(b *testing.B) {
-			p := newLanePool(b, false)
+			lane := runsLaneWidth(b, width)
+			p := realPool(b, gitproc.Options{MaxProcesses: lane, MaxTransfers: lane})
+			b.ReportMetric(float64(lane), "slots")
 			var offset atomic.Int64
 			gitproc.SetShareClock(p, func() time.Time { return time.Now().Add(time.Duration(offset.Load())) })
 			gitproc.SetWeights(p, map[gitproc.ShareClass]int{
 				gitproc.SharePerson: arm.weights[0], gitproc.ShareMachine: arm.weights[1], gitproc.ShareRun: arm.weights[2],
 			})
-			held := gitproc.ShareRun.Cap(width)
+			held := gitproc.ShareRun.Cap(lane)
 			if arm.uncapped {
 				gitproc.SetRunUncapped(p)
-				held = width
+				held = lane
 			}
 			stopMachines := shareLoad(b, p, h, machine, 64, nil)
 			defer stopMachines()
@@ -221,6 +233,39 @@ func BenchmarkTransferShare(b *testing.B) {
 			b.ReportMetric(float64(pushes.busy.Load()), "push-busy")
 		})
 	}
+}
+
+// shareSlotsEnv names the runs arms' lane width, in transfer slots, where it
+// is set: how the run class's weight is searched on a lane as wide as a
+// production node's (four slots a core) or wider than the machine the
+// benchmark runs on.
+//
+// THE RUNS ARMS ALONE take it, since what fills their lane is mostly paced:
+// at the boxes' half held, the slow boxes hold their slots reading thirty
+// seconds a mebibyte and spend almost no CPU, so a lane of twice the cores
+// runs the other half — the machine's and the person's clones, which read as
+// fast as the pipe allows — at one a core, as every other arm runs its
+// whole lane. Wider than that, those clones share cores, a cost every grant
+// order pays alike; the clone-p99-ms the arm reports against mix=idle's,
+// which runs on the cores' own width, then carries it, and the comparison is
+// made against an idle clone on the same machine.
+const shareSlotsEnv = "CREWLET_BENCH_SHARE_SLOTS"
+
+// runsLaneWidth is the runs arms' lane width: shareSlotsEnv's, or cores where
+// it is unset. A width the transfer lane cannot be — under two slots, which
+// leaves the boxes' half no slot the person's could be granted beside — fails
+// b naming the variable.
+func runsLaneWidth(b *testing.B, cores int) int {
+	b.Helper()
+	raw, set := os.LookupEnv(shareSlotsEnv)
+	if !set {
+		return cores
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 2 {
+		b.Fatalf("%s=%q: want a whole number of transfer slots, at least 2", shareSlotsEnv, raw)
+	}
+	return n
 }
 
 // boxClones is how many coding boxes the runs arms start, each a principal of
