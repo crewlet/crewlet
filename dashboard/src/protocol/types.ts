@@ -4711,9 +4711,15 @@ export type ChatUnfurlKind = "task" | "page" | "artifact" | "pull_request";
  * absent from the answer and drawn by the link rules alone.
  */
 export interface ChatUnfurl {
-  /** The address exactly as the message carries it. */
+  /** The address exactly as the message carries it: the key to match the
+   *  preview to the link it is for. */
   url: string;
   kind: ChatUnfurlKind;
+  /** Where the preview opens, BUILT by the engine from the record and never
+   *  echoed from the message: the dashboard's own route for a task, a page or
+   *  an artifact, opened in place, or a pull request's canonical address on
+   *  the configured code host, opened in a new tab. */
+  href: string;
   /** The object's own code: a task's key, a pull request's `owner/repo#14`. */
   code?: string;
   title: string;
@@ -4721,7 +4727,9 @@ export interface ChatUnfurl {
   status?: string;
   /** The status's tone, for its dot. */
   tone?: "neutral" | "info" | "success" | "warning" | "danger";
-  /** Who owns it: an assignee's, an author's or an owner's handle or login. */
+  /** Who owns it, as a seat's HANDLE (an assignee, an author, an owner), which
+   *  the screen names and draws through the org chart. Absent when nobody, or
+   *  nobody the company holds a seat for (a pull request's outside author). */
   owner?: string;
   /** One quiet line of details ("+120 -14", "Updated 2 days ago"). */
   meta?: string;
