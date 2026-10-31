@@ -113,7 +113,8 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("%s rebased nothing: %s (%s). The same call is refused again; change what it asks for.",
 				tool, res.Detail, res.Refusal)), nil
 	case res.Outcome == statelog.OutcomeApplied, res.Outcome == statelog.OutcomePending:
-		out.Outcome, out.Commit, out.Position, out.Previous = res.Outcome, res.Commit, res.Position, head
+		out.Outcome, out.Commit, out.Position, out.Previous = res.Outcome, res.Commit, positionText(res.Position),
+			head
 	case res.Outcome == statelog.OutcomeUnknown:
 		return unknownWrite(cv.g.c.actor, tool, fmt.Sprintf("the rebase of %s landed", cv.g.ref()), op, false,
 			unknownNext(false, sameCall(cv.g.c.actor, tool), fmt.Sprintf("Read %s with %s", cv.g.ref(),
