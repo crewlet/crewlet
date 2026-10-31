@@ -146,7 +146,7 @@ test("Chatlet's columns follow the screen's width, where the transcript keeps it
     ),
   );
   expect(below(CHAT_PANE_FOLD)).toMatch(
-    /\.chat-app\.has-pane > \.chat-pane\s*\{[^}]*position:\s*absolute/,
+    /\.chat-app\.has-pane \.chat-pane\s*\{[^}]*position:\s*absolute/,
   );
 
   // THE NUMBERS: at and above each fold, what stands beside the transcript

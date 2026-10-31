@@ -24,6 +24,7 @@ import {
   SCROLLBAR_GUTTER,
   SECTION_COLUMN_MIN,
   assistantColumnMin,
+  assistantCoverEnd,
   assistantMaxWidth,
   assistantOccupied,
   assistantShape,
@@ -161,5 +162,25 @@ describe("what the assistant takes from the window's end edge, for the toast sta
     // The kit leaves a strip of the page (`spacing.10`) and both insets in view.
     const strip = Number.parseFloat(spacing["10"]);
     expect(assistantOccupied("overlay", 640, 700, scale)).toBe(700 - strip - 2 * inset + inset);
+  });
+});
+
+// A SCREEN'S END EDGE UNDER THE OVERLAY: what Chatlet's pane keeps clear of.
+// A column pushes the page narrower and a sheet is modal, so neither covers
+// any of it.
+describe("how much of the page's end the assistant stands over", () => {
+  const scale = densityScale("normal");
+
+  test("an overlay covers what it occupies from the window's edge; a column and a sheet none", () => {
+    expect(assistantCoverEnd("overlay", 420, 1100, scale)).toBe(420 + inset);
+    expect(assistantCoverEnd("column", 420, 1440, scale)).toBe(0);
+    expect(assistantCoverEnd("sheet", 420, 390, scale)).toBe(0);
+  });
+
+  test("an overlay drawn narrower on a narrow window covers only what it draws", () => {
+    // THE SAME PANEL THE TOAST STACK STANDS BESIDE, measured the same way.
+    expect(assistantCoverEnd("overlay", 640, 700, scale)).toBe(
+      assistantOccupied("overlay", 640, 700, scale),
+    );
   });
 });

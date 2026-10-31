@@ -11,6 +11,9 @@
  * screen does not say what would change that, nothing does.
  */
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act as flush, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -567,6 +570,49 @@ describe("the keys", () => {
     press("Escape");
     await new Promise((r) => setTimeout(r, 50));
     expect(presses.filter((p) => p.tool === "mark_chat_read")).toEqual([]);
+  });
+
+  // EVERY RULE THE FRAME WRITES FOR THE PANE REACHES THE PANE AS THIS SCREEN
+  // DRAWS IT. The pane is drawn inside a host that draws no box, so a rule
+  // written for it as the grid's child matched nothing, and under the fold a
+  // pane took a row of its own beneath the conversation. Each rule is checked
+  // with the grid in the state the rule names (`has-pane`, `is-narrow`).
+  // Mutation: write one of them as `.chat-app.has-pane > .chat-pane` and this
+  // goes red.
+  test("every frame rule for the pane matches the pane the screen draws", async () => {
+    mountScreen({
+      hash: `#/chatlet/${GENERAL}?pane=details:${GENERAL}:about`,
+      answer: chatAnswers([room(GENERAL, "general")]),
+    });
+    await screen.findByRole("button", { name: /#general/ });
+    const pane = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>(".chat-pane");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    const app = pane.closest<HTMLElement>(".chat-app")!;
+    const sheet = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "../../styles/chatlet-frame.css"),
+      "utf8",
+    ).replace(/\/\*[\s\S]*?\*\//g, "");
+    const selectors = [...sheet.matchAll(/([^{}@;]+)\{/g)]
+      .flatMap((m) => m[1]!.split(","))
+      .map((sel) => sel.trim())
+      .filter((sel) => /\.chat-pane(?![\w-])/.test(sel) && /\.chat-app\b/.test(sel));
+    expect(selectors.length, "the frame's rules for the pane").toBeGreaterThanOrEqual(2);
+    for (const selector of selectors) {
+      const states = [
+        ...(selector.match(/\.chat-app((?:\.[\w-]+)*)/)?.[1] ?? "").matchAll(/\.([\w-]+)/g),
+      ]
+        .map((m) => m[1]!)
+        .filter((name) => !app.classList.contains(name));
+      app.classList.add(...states);
+      try {
+        expect(pane.matches(selector), selector).toBe(true);
+      } finally {
+        app.classList.remove(...states);
+      }
+    }
   });
 
   test("the command key with F searches the open room", async () => {
