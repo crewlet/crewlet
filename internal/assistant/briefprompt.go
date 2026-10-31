@@ -14,7 +14,7 @@ import (
 // BriefPromptVersion names a brief turn's system prompt ([briefRules]),
 // stamped on its turn row and audit record in place of [PromptVersion]. A
 // reworded sentence is a new version.
-const BriefPromptVersion = "assistant.brief.v5"
+const BriefPromptVersion = "assistant.brief.v6"
 
 // promptVersion is the prompt this turn runs on.
 func (t *turn) promptVersion() string {
@@ -51,6 +51,11 @@ var briefRules = fmt.Sprintf("You are Ask Crewlet, the assistant inside the comp
 	"agent, a budget nearly spent, work blocked on them. A fact to know is never a need. An "+
 	"empty list is the right answer when nothing needs them: the engine then tells them "+
 	"nothing needs them, so never invent urgency.\n"+
+	"- points: only in a brief of a chat room, and then always: what was said there, at most "+
+	"%[9]d points, oldest first, each one or two sentences of at most %[10]d characters naming "+
+	"who said or decided it, and citing the id of the message it came from exactly as your read "+
+	"returned it. A point about a message you did not read is dropped by the engine. Leave "+
+	"points out of every other brief.\n"+
 	"- context: leave it out unless one fact from elsewhere changes what they should do; then "+
 	"one line of at most %[5]d characters.\n"+
 	"- follow_ups: up to %[6]d short questions they may want to ask next, each at most %[7]d "+
@@ -75,7 +80,7 @@ var briefRules = fmt.Sprintf("You are Ask Crewlet, the assistant inside the comp
 	"call it twice in all.",
 	wire.BriefAboutMaxRunes, wire.BriefMaxNeeds, wire.BriefTextMaxRunes,
 	wire.BriefDetailMaxRunes, wire.BriefContextMaxRunes, wire.BriefMaxFollowUps,
-	wire.BriefQuestionMaxRunes, briefCitable())
+	wire.BriefQuestionMaxRunes, briefCitable(), wire.BriefMaxPoints, wire.BriefPointMaxRunes)
 
 // briefCiteWords are the records a brief's row may cite as its rules name
 // them, by kind.
@@ -138,7 +143,17 @@ func briefPersonBlock(in promptInput) string {
 func briefQuestion(in promptInput) string {
 	var b strings.Builder
 	page := in.Page
-	if record := page.Selection; record != nil {
+	if record := page.Selection; record != nil && record.Kind == wire.ResourceRoom {
+		// A ROOM'S BRIEF IS ITS CATCH UP: what was said since the person last
+		// read, or the latest when nothing is unread, and what waits on them.
+		fmt.Fprintf(&b, "Catch the person up on the chat room they have open (%s %s) and "+
+			"nothing else on the screen: read how many of its messages they have not read "+
+			"(the room's unread count, from list_chat_rooms), then read the room with "+
+			"read_chat_messages, and a thread with get_chat_thread where a reply matters. "+
+			"Summarise the messages they have not read as points, or the latest messages "+
+			"when nothing is unread, then say what, if anything, waits on them.",
+			record.Kind, record.ID)
+	} else if record != nil {
 		noun := string(record.Noun)
 		if noun == "" {
 			noun = string(record.Kind)
@@ -184,6 +199,10 @@ func briefSummary(b *wire.BriefCard) string {
 			fmt.Fprintf(&s, ", %s", oneLine(n.Detail))
 		}
 		s.WriteString(".")
+	}
+	for i, p := range b.Points {
+		fmt.Fprintf(&s, " Point %d (message %s): %s.", i+1, oneLine(p.Source.MessageID),
+			oneLine(p.Text))
 	}
 	if b.Context != "" {
 		fmt.Fprintf(&s, " Context: %s.", oneLine(b.Context))

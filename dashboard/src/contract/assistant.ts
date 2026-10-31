@@ -943,6 +943,9 @@ export interface AssistantBriefCard {
   scope: AssistantBriefScope;
   about: string;
   needs: AssistantBriefNeed[];
+  /** A chat room's brief alone (its catch up): what was said, each point
+   *  citing its message. */
+  points?: AssistantBriefPoint[];
   context?: string;
   follow_ups: string[];
   as_of: string;
@@ -962,6 +965,20 @@ interface AssistantBriefNeed {
   detail?: string;
   tone: AssistantBriefTone;
   action: AssistantBriefAction;
+}
+
+/** One point of a room's summary, and the message it came from. */
+export interface AssistantBriefPoint {
+  text: string;
+  source: AssistantBriefSource;
+}
+
+/** The message a point came from, as the engine read it for the person: a reply
+ *  names its thread, which a screen opens in place of the room. */
+export interface AssistantBriefSource {
+  channel_id: string;
+  message_id: string;
+  thread_root?: string;
 }
 
 /** The one press a brief row offers: an engine-built link to open, or a question to ask. */

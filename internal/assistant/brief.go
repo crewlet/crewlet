@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -278,10 +280,100 @@ func (s *surface) resolveBrief(ctx context.Context, d catalog.BriefDraft) (*wire
 		}
 		card.Needs = append(card.Needs, need)
 	}
+	points, err := s.resolvePoints(ctx, d.Points)
+	if err != nil {
+		return nil, err
+	}
+	card.Points = points
 	if err := card.Validate(); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBriefInvalid, err)
 	}
 	return card, nil
+}
+
+// resolvePoints keeps each point of a chat room's brief whose message this
+// turn's reads named and whose own read, sent again as the person, answers it,
+// and builds its source from that read: the room, the message and the thread
+// it is in. A brief of anything but a room draws no point, and a point the
+// engine cannot vouch for is dropped, counted and logged, as a row is.
+func (s *surface) resolvePoints(ctx context.Context,
+	drafts []catalog.BriefDraftPoint) ([]wire.BriefPoint, error) {
+
+	if len(drafts) == 0 {
+		return nil, nil
+	}
+	page := s.t.page
+	if page == nil || page.Selection == nil || page.Selection.Kind != wire.ResourceRoom {
+		for range drafts {
+			s.pointDropped(ctx, &rowDropped{reason: "not_a_room"})
+		}
+		return nil, nil
+	}
+	room := page.Selection.ID
+	out := make([]wire.BriefPoint, 0, len(drafts))
+	for _, p := range drafts {
+		source, err := s.resolvePoint(ctx, room, p.MessageID)
+		var dropped *rowDropped
+		switch {
+		case errors.As(err, &dropped):
+			s.pointDropped(ctx, dropped)
+			continue
+		case err != nil:
+			return nil, err
+		}
+		out = append(out, wire.BriefPoint{Text: p.Text, Source: source})
+	}
+	return out, nil
+}
+
+// resolvePoint reads one cited message again as the person: a [rowDropped] for
+// one no read of this turn named or one the person may not read now; any other
+// error is the turn's own.
+func (s *surface) resolvePoint(ctx context.Context, room, messageID string) (
+	wire.BriefSource, error) {
+
+	if !s.t.cited(messageID) {
+		return wire.BriefSource{}, drop("not_read", nil)
+	}
+	probe := exec.Request{Method: http.MethodGet, Path: "/chatlet/channels/" +
+		url.PathEscape(room) + "/messages/" + url.PathEscape(messageID)}
+	resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, probe)
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return wire.BriefSource{}, context.Cause(ctx)
+	case err != nil:
+		return wire.BriefSource{}, drop("not_sent", err)
+	case resp.Status == http.StatusUnauthorized:
+		return wire.BriefSource{}, errGrantEnded
+	case !cards.Permitted(resp.Status):
+		return wire.BriefSource{}, drop("not_permitted", nil)
+	}
+	var read struct {
+		View struct {
+			Message struct {
+				ID         string `json:"id"`
+				ChannelID  string `json:"channel_id"`
+				ThreadRoot string `json:"thread_root"`
+			} `json:"message"`
+		} `json:"view"`
+	}
+	if err := json.Unmarshal(resp.Body, &read); err != nil || read.View.Message.ID == "" {
+		return wire.BriefSource{}, drop("unreadable", err)
+	}
+	m := read.View.Message
+	return wire.BriefSource{ChannelID: m.ChannelID, MessageID: m.ID,
+		ThreadRoot: m.ThreadRoot}, nil
+}
+
+// pointDropped counts and logs a point the brief may not draw, with its
+// reason, as [surface.resolved] does a row.
+func (s *surface) pointDropped(ctx context.Context, dropped *rowDropped) {
+	attrs := []any{"turn", s.t.id, "kind", "point", "reason", dropped.reason}
+	if dropped.cause != nil {
+		attrs = append(attrs, "error", redact.Secrets(dropped.cause.Error()))
+	}
+	s.t.svc.log.InfoContext(ctx, "assistant_brief_row_dropped", attrs...)
+	s.t.svc.metrics.Add(metrics.AssistantBriefRowsDropped, 1, nil)
 }
 
 // briefRecord is a row's record as the engine resolved it for the person.

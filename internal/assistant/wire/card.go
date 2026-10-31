@@ -494,6 +494,11 @@ type BriefCard struct {
 	// Needs are what the person has to do, most pressing first, at most
 	// [BriefMaxNeeds]; none is "Nothing needs you".
 	Needs []BriefNeed `json:"needs"`
+	// Points summarise what was said, each citing the message it came
+	// from, at most [BriefMaxPoints]: a brief of a CHAT ROOM's alone (its
+	// catch up), absent on every other. The messages the person has not
+	// read, or the latest when nothing is unread.
+	Points []BriefPoint `json:"points,omitempty"`
 	// Context is one fact from elsewhere that bears on what to do, absent
 	// where none does.
 	Context string `json:"context,omitempty"`
@@ -539,6 +544,26 @@ type BriefNeed struct {
 	Action *BriefAction `json:"action"`
 }
 
+// BriefPoint is one point of a room's summary, citing its message.
+//
+// THE MODEL WRITES THE WORDS AND NAMES THE MESSAGE; THE ENGINE KEEPS THE
+// POINT only when the message appears in what this turn's own reads answered
+// and its own read, sent again as the person, answers it, and builds the
+// source from that read: the room, the message and the thread it is in.
+type BriefPoint struct {
+	Text   string      `json:"text"`
+	Source BriefSource `json:"source"`
+}
+
+// BriefSource is the message a point came from, as the engine read it.
+type BriefSource struct {
+	ChannelID string `json:"channel_id"`
+	MessageID string `json:"message_id"`
+	// ThreadRoot is the thread the message is in, absent on a room post:
+	// what lets a screen open the thread rather than the room.
+	ThreadRoot string `json:"thread_root,omitempty"`
+}
+
 // BriefAction is the one press a row offers: open a record's screen at the
 // address the engine built, or ask a question.
 type BriefAction struct {
@@ -566,15 +591,24 @@ const (
 	BriefContextMaxRunes  = 100
 	BriefQuestionMaxRunes = 80
 	briefLabelMaxRunes    = 40
+
+	// BriefMaxPoints and BriefPointMaxRunes bound a room's summary: four or
+	// five points is what a catch up of an afternoon's unread holds, and a
+	// point is one or two sentences, about two lines of the pane (a
+	// decision and who leans which way, a result and what follows it).
+	BriefMaxPoints     = 5
+	BriefPointMaxRunes = 140
 )
 
 // BriefBudgetRunes is the most characters of the model's words a brief
 // draws, every cap at once: the about line, three rows of an instruction and
 // a reason, the context line and two follow-ups (90 + 3 × (80 + 60) + 100 +
-// 2 × 80). An ask's question is not counted: it is asked, never drawn. A cap
-// raised past this budget is a brief made longer, and a test refuses it until
-// the budget is raised on purpose.
-const BriefBudgetRunes = 770
+// 2 × 80), and a room's five summary points (5 × 140). An ask's question is
+// not counted: it is asked, never drawn. A cap raised past this budget is a
+// brief made longer, and a test refuses it until the budget is raised on
+// purpose: it was, by the points, for a room's catch up, which is read in the
+// room's own pane rather than in the drawer.
+const BriefBudgetRunes = 1470
 
 // Validate reports what is wrong with a brief: its bounds, every closed set,
 // and that each row carries the one action its kind needs.
@@ -631,6 +665,23 @@ func (b *BriefCard) Validate() error {
 			return fmt.Errorf("%w (brief need %d)", err, i)
 		}
 		cited[n.Ref] = true
+	}
+	if len(b.Points) > 0 && (b.Scope.Record == nil || b.Scope.Record.Kind != ResourceRoom) {
+		return fmt.Errorf("%w: a brief carries points, and only a chat room's brief "+
+			"summarises what was said", ErrInvalid)
+	}
+	if len(b.Points) > BriefMaxPoints {
+		return fmt.Errorf("%w: a brief carries %d points, over %d", ErrInvalid,
+			len(b.Points), BriefMaxPoints)
+	}
+	for i, p := range b.Points {
+		switch {
+		case p.Text == "" || !briefText(p.Text, BriefPointMaxRunes):
+			return fmt.Errorf("%w: brief point %d is not one line of 1 to %d characters",
+				ErrInvalid, i, BriefPointMaxRunes)
+		case p.Source.ChannelID == "" || p.Source.MessageID == "":
+			return fmt.Errorf("%w: brief point %d names no message", ErrInvalid, i)
+		}
 	}
 	for i, q := range b.FollowUps {
 		if q == "" || !briefText(q, BriefQuestionMaxRunes) {

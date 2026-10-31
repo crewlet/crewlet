@@ -458,6 +458,8 @@ var contract = []Entry{
 	{"AssistantBriefScope", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantBriefNeed", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantBriefAction", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
+	{"AssistantBriefPoint", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
+	{"AssistantBriefSource", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantFileStored", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	// assistant.ts (page actions)
 	{"ASSISTANT_PAGE_ACTIONS", ReadLiteral, "internal/assistant/catalog.TestEveryPageActionIsTheDashboardsToo"},
