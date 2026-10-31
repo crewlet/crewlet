@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -9,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -159,6 +161,88 @@ func TestAnExternalServerThatAuthenticatesNobodyIsRefused(t *testing.T) {
 			})
 		}
 	})
+}
+
+// AN INFO LINE IS KEPT WHOLE, AND NOTHING AFTER IT OR PAST ITS BOUND.
+//
+// A large cluster's INFO behind a small first TCP segment arrives in several
+// reads, its CRLF among them split; the line is assembled across them, and
+// what follows it — a TLS upgrade's ciphertext — is never kept. A line that
+// runs past infoLineMax, its CRLF arrived in the same read or not at all, is
+// kept as none, so the dial refuses it as unread rather than judging a
+// prefix; one at the bound exactly is kept.
+//
+// Mutations: keep only the latest read and the line split across reads is
+// never assembled; keep what follows the CRLF and the tail is held; drop the
+// bound and a line past it is kept; keep the bound's prefix and that prefix
+// is judged.
+func TestAnINFOLineIsKeptWholeAndNothingAfterItOrPastItsBound(t *testing.T) {
+	t.Parallel()
+	// fed reads every chunk through an infoConn, one write a read, and
+	// answers the connection.
+	fed := func(t *testing.T, chunks ...[]byte) *infoConn {
+		t.Helper()
+		client, server := net.Pipe()
+		t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+		c := &infoConn{Conn: client}
+		buf := make([]byte, 2*infoLineMax)
+		for _, chunk := range chunks {
+			go func() { _, _ = server.Write(chunk) }()
+			if n, err := io.ReadFull(c, buf[:len(chunk)]); err != nil || n != len(chunk) {
+				t.Fatalf("read %d of a %d-byte chunk: %v", n, len(chunk), err)
+			}
+		}
+		return c
+	}
+	held := func(c *infoConn) int {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return len(c.read)
+	}
+	const info = `INFO {"server_id":"A","auth_required":true,"max_payload":8388608}`
+	ciphertext := []byte{0x16, 0x03, 0x01, 0x02, 0x00, 0x01, 0x00, 0x01, 0xfc, 0x03, 0x03}
+
+	t.Run("split across reads, its CRLF among them", func(t *testing.T) {
+		t.Parallel()
+		c := fed(t, []byte(info[:7]))
+		if c.line() != nil {
+			t.Fatalf("a line was kept before its CRLF: %q", c.line())
+		}
+		tail := append([]byte("\n"), ciphertext...)
+		c = fed(t, []byte(info[:7]), []byte(info[7:30]), []byte(info[30:]+"\r"), tail, ciphertext)
+		if got := string(c.line()); got != info {
+			t.Errorf("the line = %q, want %q", got, info)
+		}
+		if n := held(c); n != 0 {
+			t.Errorf("%d bytes after the CRLF are still held", n)
+		}
+	})
+	past := bytes.Repeat([]byte("x"), infoLineMax-len("INFO ")+1)
+	at := past[:len(past)-1]
+	for _, tc := range []struct {
+		name   string
+		chunks [][]byte
+		kept   bool
+	}{
+		{"past the bound in one read", [][]byte{append(append([]byte("INFO "), past...), "\r\n"...)}, false},
+		{"past the bound across reads", [][]byte{[]byte("INFO "), past[:infoLineMax/2], past[infoLineMax/2:], []byte("\r\n")}, false},
+		{"at the bound exactly", [][]byte{append(append([]byte("INFO "), at...), "\r\n"...)}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := fed(t, tc.chunks...)
+			if got := c.line(); tc.kept != (got != nil) {
+				t.Fatalf("kept a %d-byte line: %t, want %t (the bound is %d)",
+					len(got), got != nil, tc.kept, infoLineMax)
+			}
+			if tc.kept && len(c.line()) != infoLineMax {
+				t.Errorf("kept %d bytes of a %d-byte line", len(c.line()), infoLineMax)
+			}
+			if n := held(c); n != 0 {
+				t.Errorf("%d bytes are still held once the line was judged", n)
+			}
+		})
+	}
 }
 
 // refusedOpening opens a queue on cfg and answers the refusal, failing the

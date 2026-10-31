@@ -109,11 +109,19 @@ func heldToAuthentication(nc *nats.Conn, info []byte) (*nats.Conn, error) {
 
 // infoLineMax bounds the INFO line a recorded connection keeps.
 //
-// 64 KiB: the INFO a server sends a client is its fixed fields — well under a
-// kilobyte — plus one connect_urls entry per member it advertises, a few
-// dozen bytes each, so this holds a cluster advertising over a thousand
-// members. A line past it is not kept, and its connection is refused as one
-// whose INFO was not read rather than judged on a prefix.
+// 64 KiB, against what a server sends: an INFO is its fixed fields plus one
+// connect_urls entry — and, with websocket enabled, one ws_connect_urls entry
+// — per member it advertises. The fixed fields measured 419 bytes on a
+// standalone nats-server v2.15.1 with JetStream and a token (externaltest's
+// server, 2026-10-31), and stay under a kilobyte with a cluster's name, a
+// domain, a nonce, a git commit and the TLS flags beside them; an entry is
+// `"host:port",`, about twenty bytes for the pod IP a member advertises by
+// default and at most 262 for the longest DNS name (253 bytes) a
+// client_advertise can give, so 64 KiB holds a cluster of more than a hundred
+// members advertising both lists by their longest names, and of thousands by
+// IP. nats.go reads the line with no bound of its own. A line past this is not
+// kept, and its connection is refused as one whose INFO was not read rather
+// than judged on a prefix.
 const infoLineMax = 64 << 10
 
 // infoDialer is the external dial's TCP dialer, keeping the first line every
@@ -181,11 +189,14 @@ func (c *infoConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// keep adds b to the line read so far. The line is complete at its CRLF, and
+// what follows that in the same read is never kept; a line that runs past
+// [infoLineMax], whether its CRLF has arrived or not, is kept as none.
 func (c *infoConn) keep(b []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.read = append(c.read, b...)
-	if i := bytes.Index(c.read, []byte("\r\n")); i >= 0 {
+	if i := bytes.Index(c.read, []byte("\r\n")); i >= 0 && i <= infoLineMax {
 		c.first = bytes.Clone(c.read[:i])
 		c.read = nil
 		c.done.Store(true)
@@ -197,7 +208,8 @@ func (c *infoConn) keep(b []byte) {
 	}
 }
 
-// line is the first complete line read, nil before one is.
+// line is the first complete line read, nil before one is or where it ran
+// past [infoLineMax].
 func (c *infoConn) line() []byte {
 	c.mu.Lock()
 	defer c.mu.Unlock()
