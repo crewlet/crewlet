@@ -820,7 +820,7 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// AND THE CODE HOST'S PURGE, where the half hosts code: without it a
 	// repository removed from code.repos is deleted and never purged, and
 	// its name and its packs are held for ever.
-	e.startCodeRetention(ctx, n)
+	e.startCodeRetention(ctx, c.nodeID, n)
 	// AND THE COMPACTOR, where the half serves git ([Engine.buildCodeHost]
 	// built it unstarted): its three loops, the compaction's, the publication's
 	// and the expunge's, started HERE for the two reasons both callers reach

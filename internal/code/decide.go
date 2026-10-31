@@ -37,6 +37,10 @@ import (
 //     ([SeatRules]), a person's and a token's from rules that need none;
 //  3. the ref already at the new value is a noop;
 //  4. the ref not at the old value is stale;
+//     4b. a command of an EXPIRY entry ([ViaExpiry]) whose ref is no longer
+//     its seat's idle branch ([ExpiryRule]) is stale — pushed since it was
+//     listed, held by a live turn since, the repository's default branch, a
+//     live change's source or target, or last set by somebody else;
 //  5. a protection ([ProtectionRefusal]), every matching rule consulted —
 //     and a rule that takes a person's push alone refuses everybody else's;
 //  6. a create beside a live ref above it or with a live ref below it
@@ -916,6 +920,13 @@ type working struct {
 	// counted in: what the pack bound judges a push carrying one by
 	// ([working.behind]).
 	packs int64
+	// expiry is, for a batch holding an expiry entry and for no other, the
+	// row of every ref those entries name as rule 4b judges it
+	// ([ExpiryRow], read by expiryRefsSQL in the round's snapshot); touched,
+	// every ref an earlier entry of the batch set ok, whose snapshot row
+	// predates that push.
+	expiry  map[string]ExpiryRow
+	touched map[string]bool
 }
 
 // newWorking reads the refs every open proposal's commands name, in ONE
@@ -946,12 +957,73 @@ func newWorking(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, b
 		return nil, fmt.Errorf("code: read the refs a batch names: %w", err)
 	}
 	w := &working{name: repo.name, now: now, targets: targets, live: repo.refs, bytes: repo.liveBytes,
-		packs: repo.livePacks, occupied: map[string]string{}}
+		packs: repo.livePacks, occupied: map[string]string{}, touched: map[string]bool{}}
 	if err := w.readAround(ctx, tx, repoID, batch, open, seen, deleted); err != nil {
 		return nil, err
 	}
+	if w.expiry, err = expiryRowsIn(ctx, tx, repoID, repo, batch, open); err != nil {
+		return nil, fmt.Errorf("code: read the refs an expiry names: %w", err)
+	}
 	return w, nil
 }
+
+// expiryRowsIn reads, ONLY for a batch whose open proposals hold an expiry
+// entry, the row rule 4b judges of every ref those entries name — in ONE
+// statement over code_refs' key, driven from the list (planner.go), with a
+// seek of each live-change index — so a batch of persons' and seats' pushes
+// pays nothing for it; whether a ref is the default branch is the round's own
+// repository row's. nil for every other batch.
+func expiryRowsIn(ctx context.Context, tx *sql.Tx, repoID string, repo pushRepo, batch []Proposal,
+	open []int) (map[string]ExpiryRow, error) {
+
+	var refs []string
+	for _, i := range open {
+		if batch[i].Via != ViaExpiry {
+			continue
+		}
+		for _, c := range batch[i].Commands {
+			refs = append(refs, c.Ref)
+		}
+	}
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	list, err := jsonList(refs)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, expiryRefsSQL, repoID, list)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]ExpiryRow{}
+	for rows.Next() {
+		var ref string
+		var at int64
+		var row ExpiryRow
+		if err := rows.Scan(&ref, &row.Target, &row.Seat, &at, &row.Held, &row.Change); err != nil {
+			return nil, err
+		}
+		row.At, row.Default = store.DecodeTime(at), ref == branchPrefix+repo.defaultBranch
+		out[ref] = row
+	}
+	return out, rows.Err()
+}
+
+// expiryRefsSQL is rule 4b's row of each ref of a list (?2) in the repository
+// ?1: code_refs' key, driven from the list, and an EXISTS seek of the live
+// changes by source (code_changes_open_idx) and by target
+// (code_changes_target_idx, its leading two columns), the live states spelled
+// as both indexes are partial on them, unqualified (no other table here has
+// a state). Registered in plan_test.go.
+const expiryRefsSQL = `SELECT r.ref, r.target, r.seat, r.at, r.held_position,
+		EXISTS (SELECT 1 FROM code_changes AS s INDEXED BY code_changes_open_idx
+			WHERE s.repo_id = ?1 AND s.source_ref = r.ref AND ` + liveChanges + `)
+		OR EXISTS (SELECT 1 FROM code_changes AS t INDEXED BY code_changes_target_idx
+			WHERE t.repo_id = ?1 AND t.target_ref = r.ref AND ` + liveChanges + `)
+	FROM json_each(?2) AS j CROSS JOIN code_refs AS r
+	WHERE r.repo_id = ?1 AND r.ref = CAST(j.value AS TEXT)`
 
 // readAround reads what is around every ref the batch may create, so
 // [working.beside] can judge each create against it: the rows of the
@@ -1417,6 +1489,16 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits, g Gra
 			refuse(c, RefusalStale, fmt.Sprintf("%s is at %s; fetch first", c.Ref, short(current)))
 			continue
 		}
+		// 4b AN EXPIRY'S BRANCH THAT IS NO LONGER IDLE, after rule 4 so a
+		// branch moved since its listing is told it moved. Its row is in
+		// the snapshot, since the branch is live in it; one missing there is
+		// read as a branch no seat set, kept.
+		if p.Via == ViaExpiry {
+			if r, why := ExpiryRule(w.expiry[c.Ref], w.touched[c.Ref], p.ReceivedAt, p.Seen.Packed()); r != "" {
+				refuse(c, r, why)
+				continue
+			}
+		}
 		if r, detail := v.verdict(push, i, *c, p.Principal.Kind); r != "" {
 			refuse(c, r, detail)
 			continue
@@ -1559,6 +1641,7 @@ func (w *working) apply(p Proposal, cmds []Command) {
 		} else {
 			w.targets[c.Ref] = c.New
 		}
+		w.touched[c.Ref] = true
 	}
 	if p.Pack != nil {
 		w.bytes += p.Pack.Size

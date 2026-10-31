@@ -432,7 +432,14 @@ const (
 	// pushed across a person's holiday is not idle yet. A live turn's hold on
 	// a seat's branch is RECORDED once the branch has gone unset nearly this
 	// long ([RefHoldRecordAfter], defined from it), and held in the turn's
-	// memory or on its run row alone before then.
+	// memory or on its run row alone before then. The REF LIFECYCLE deletes a
+	// branch idle this long that no live turn holds (retention_expiry.go):
+	// short enough that a seat running dozens of coding runs a week does not
+	// hold hundreds of dead branches against MaxRefsPerRepo. A deletion is
+	// restorable from its push row's Old while the push history keeps the row
+	// ([PushHistory], 181 days) and the repository still holds the commit —
+	// which its deletion's code_ref_drops row keeps for PruneGrace at least,
+	// as for every deletion.
 	RefExpiry = 14 * 24 * time.Hour
 
 	// MaxDescriptionBytes is config.CodeMaxDescriptionBytes: a repository

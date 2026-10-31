@@ -487,18 +487,38 @@ const (
 	// BASE FORMAT, under the condition merge.go's head states: no build that
 	// carries the code domain has run without it.
 	ViaMerge PushVia = "merge"
+	// ViaExpiry is the ref lifecycle's deletion of seats' idle branches
+	// (retention_expiry.go): a push by the engine's own account
+	// ([PrincipalSystem]) — the one kind it pairs with, both ways — that only
+	// deletes refs in seats' namespaces, carrying no pack
+	// ([Proposal.Validate]), each command's Old the commit its push row keeps
+	// to restore the branch at. Its decide keeps whatever is no longer idle
+	// (rule 4b, [ExpiryRule]); its apply moves no activity clock
+	// (apply_push.go).
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without it — none of the domain is on main, so no image
+	// and no release holds it. Once a build without it has run, an entry
+	// carrying it takes {Name: "PushEntry.Via expiry", Since: 2, Op: "push",
+	// Path: []string{"mutation", "pushes", "via"}, Equals: string(ViaExpiry)}
+	// in versionedFields, with RecordVersion at 2, its line under "What each
+	// version added" and a Carrying record in the statelogtest candidate:
+	// such a build would apply the deletion as a push that moved the
+	// repository's idle clock, and refuse its row's via as a way it does not
+	// know (scanPush).
+	ViaExpiry PushVia = "expiry"
 )
 
 // PushVias is the closed set, in its documented order.
-func PushVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaMerge} }
+func PushVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaMerge, ViaExpiry} }
 
 // Valid reports a way this build knows.
 func (v PushVia) Valid() bool { return slices.Contains(PushVias(), v) }
 
-// proposedVias is the ways a push PROPOSAL may name — git's and the engine's
-// — in [PushVias]' order: a merge's push is written by its record alone
-// ([ViaMerge]).
-func proposedVias() []PushVia { return []PushVia{ViaGit, ViaEngine} }
+// proposedVias is the ways a push PROPOSAL may name — git's, the engine's and
+// the ref expiry's — in [PushVias]' order: a merge's push is written by its
+// record alone ([ViaMerge]).
+func proposedVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaExpiry} }
 
 // proposed reports a way a push proposal may name ([proposedVias]).
 func (v PushVia) proposed() bool { return slices.Contains(proposedVias(), v) }

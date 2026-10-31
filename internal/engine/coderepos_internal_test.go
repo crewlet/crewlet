@@ -323,7 +323,7 @@ func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 	// THE DUTY'S PASS, built as the node builds it but with a retention no
 	// company can express — the subject here is what a purge hands on, not
 	// the clock.
-	d := e.newCodeRetentionDuty(e.writeSide().code, e.native.Load().codeReader)
+	d := e.newCodeRetentionDuty(e.writeSide().code, e.native.Load().codeReader, e.core.Load().nodeID)
 	d.pass.Retention = func() time.Duration { return time.Nanosecond }
 	report, err := d.pass.Pass(t.Context())
 	if err != nil || !slices.Equal(report.Purged, []string{"web"}) {
@@ -377,7 +377,7 @@ func TestTheCodeRetentionDutyRunsWhereAPurgeMayBeWritten(t *testing.T) {
 		reconciled(t, e)
 		r := fleetReconciler(t, e)
 		tickApplies(t, e, r, activateRevision(t, e, codeReposDoc("", "")))
-		d := e.newCodeRetentionDuty(e.writeSide().code, e.native.Load().codeReader)
+		d := e.newCodeRetentionDuty(e.writeSide().code, e.native.Load().codeReader, e.core.Load().nodeID)
 		d.pass.Retention = func() time.Duration { return time.Nanosecond }
 		report, ran := d.turn(t.Context())
 		if !ran || !slices.Equal(report.Purged, []string{"web"}) {

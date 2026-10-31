@@ -120,7 +120,7 @@ type purgeProbe struct {
 
 func newPurgeProbe(e *Engine) *purgeProbe {
 	e.stopCodeRetention()
-	p := &purgeProbe{duty: e.newCodeRetentionDuty(e.writeSide().code, e.native.Load().codeReader)}
+	p := &purgeProbe{duty: e.newCodeRetentionDuty(e.writeSide().code, e.native.Load().codeReader, e.core.Load().nodeID)}
 	claim := p.duty.claim
 	p.duty.claim = func(ctx context.Context) (bool, error) {
 		p.claims.Add(1)

@@ -360,7 +360,7 @@ func registeredStatements() map[string]statement {
 		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"refs named":          {refsNamedSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
-		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, false, 1, false, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"tombstones held":     {tombstonesHeldSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"expired pushes":      {expiredPushesSQL, []any{"repo-1", HorizonDeletesPerRecord}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)"}},
 		"delete pushes":       {deletePushesSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
@@ -467,6 +467,17 @@ func registeredStatements() map[string]statement {
 		"ref hold":         {refHoldSQL, []any{"repo-1", "refs/heads/seats/dev/x"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
 		"ref held":         {refHeldSQL, []any{1, "repo-1", "refs/heads/seats/dev/x"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
 		"ref hold version": {refHoldVersionSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		// THE REF LIFECYCLE: rule 4b's rows of an expiry's refs, driven from
+		// the list, with a seek of each live-change index; the step's keyset
+		// page over its partial index, oldest first; and the page's
+		// repositories by their key.
+		"expiry refs": {expiryRefsSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j",
+			refsKey + " (repo_id=? AND ref=?)", "code_changes_open_idx (repo_id=? AND source_ref=?)",
+			"code_changes_target_idx (repo_id=? AND target_ref=?)"}},
+		"expiry listing": {expiryListingSQL, []any{100, -1, "", "", MaxCommandsPerPush},
+			[]string{"code_refs_expiry_idx (at>=? AND at<=?)"}},
+		"expiry repos": {expiryReposSQL, []any{`["repo-1","repo-2"]`}, []string{"SCAN json_each AS j",
+			repoKey + " (id=?)"}},
 		// THE RETENTION'S TWO NEW LISTINGS, keyset pages over their partial
 		// indexes in the index's order: the redirects whose window ended,
 		// and the active scratch repositories idle past the cutoff.

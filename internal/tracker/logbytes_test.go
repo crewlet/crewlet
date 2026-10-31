@@ -468,6 +468,12 @@ var codeLogPushVias = map[code.PushVia]string{
 		"alone in its record against a box's 1 555), and none of the reference company's 3 000 " +
 		"is one; and an import's batches (crewlet code import), up to code.MaxCommandsPerPush refs " +
 		"a record, once a repository when a person imports it",
+	code.ViaExpiry: "the ref lifecycle's deletion of seats' branches idle past code.RefExpiry, on the " +
+		"engine's own account: at most ONE deletion of each seat branch some priced push created, never " +
+		"more, and up to code.MaxCommandsPerPush of them a record with no pack, no run and no day — a " +
+		"deletion command takes its record under a tenth of a seat's push (a ref and two ids against " +
+		"1 555 bytes alone in its record) — so the day's expiries cost the log less than the creations a " +
+		"fortnight earlier did, which the push term already prices",
 	code.ViaMerge: "the push a merge record lands, written by the merge's own apply and never a push " +
 		"record: its bytes are the merge record's (code.OpMerge), which no node appends while " +
 		"nothing asks for one (codeLogUnwritten)",

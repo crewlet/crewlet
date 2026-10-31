@@ -469,6 +469,8 @@ func (g Grant) who() string {
 		return fmt.Sprintf("credential %q", g.Principal.OperatorID)
 	case PrincipalAgent:
 		return fmt.Sprintf("seat %q", g.Principal.Seat)
+	case PrincipalSystem:
+		return "the engine's ref expiry"
 	}
 	return fmt.Sprintf("a principal of kind %q", g.Principal.Kind)
 }
@@ -539,12 +541,24 @@ const UnboundDetail = "this token is not bound to a person: a person pushes with
 // given the repository to read, and every row outside the seat's own
 // namespace held to what the run was given.
 //
+// THE ENGINE'S OWN ACCOUNT ([PrincipalSystem]) is granted nothing ([GrantOf])
+// but the one thing its expiry does: deleting a branch in a seat's namespace,
+// which [Proposal.Validate] already holds its every command to — so this row
+// keeps the decide's word on it should a command of any other shape ever
+// reach it.
+//
 // THE SENTENCE NAMES NO REF: git prints the ref beside the reason, and a
 // receiver carries the sentence into a proposal, whose every Detail is bounded.
 func (g Grant) RefRule(c Command) (Refusal, string) {
 	if reservedRef(c.Ref) {
 		return RefusalNotPermitted, "no principal pushes a ref the engine reserves: " +
 			RefusalReservedRef.Sentence()
+	}
+	if g.Principal.Kind == PrincipalSystem {
+		if _, ok := seatNamespaceRef(c.Ref); ok && c.New == ZeroOID {
+			return "", ""
+		}
+		return RefusalNotPermitted, "the engine's ref expiry deletes a seat's branch and does nothing else"
 	}
 	switch {
 	case g.none != "":

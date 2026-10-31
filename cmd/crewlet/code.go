@@ -652,6 +652,10 @@ func pushLine(p codePushView) codePushLine {
 		if len(made) > 0 {
 			by += " (" + strings.Join(made, ", ") + ")"
 		}
+	case p.ActorKind == string(code.PrincipalSystem):
+		// THE ENGINE ON ITS OWN ACCOUNT names no actor: its one push is the
+		// ref lifecycle's deletion of seats' idle branches.
+		by = "engine (ref expiry)"
 	case p.ActorSeat != "":
 		by += " (" + p.ActorSeat + ")"
 	}

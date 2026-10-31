@@ -123,6 +123,8 @@ func cases() []suiteCase {
 		{"F46_ABoxPushesOnTopOfWhatAnotherNodeShowedIt", aBoxPushesOnTopOfWhatAnotherNodeShowedIt},
 		{"F47_ABoxNeverSeesABranchGoBack", aBoxNeverSeesABranchGoBack},
 		{"F51_ABoxPushIsRecordedByItsRunWhateverItsTrailersSay", aBoxPushIsRecordedByItsRunWhateverItsTrailersSay},
+		{"F52_AnExpiredBranchIsRestoredFromItsPushRow", anExpiredBranchIsRestoredFromItsPushRow},
+		{"F53_AnExpiryKeepsWhatWasPushedMeanwhile", anExpiryKeepsWhatWasPushedMeanwhile},
 		{"R4_ARestartSweepsScratch", aRestartSweepsScratch},
 		{"R6_APurgedRepositoryLeavesNothing", aPurgedRepositoryLeavesNothing},
 		{"R7_AnEvictedNodesPushesAreRefused", anEvictedNodesPushesAreRefused},

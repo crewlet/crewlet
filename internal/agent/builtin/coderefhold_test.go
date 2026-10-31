@@ -506,6 +506,12 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 			if c.class == tools.RefusalNotFound && !strings.Contains(got.Output, seatBranchOID) {
 				t.Errorf("the deletion's answer %q names no commit to restore the branch at", got.Output)
 			}
+			// AND WHO MAY HAVE DELETED IT: the ref lifecycle deletes a seat's
+			// idle branch, so a model told only "deleted" would look for a
+			// person who did it.
+			if c.class == tools.RefusalNotFound && !strings.Contains(got.Output, "ref lifecycle") {
+				t.Errorf("the deletion's answer %q does not say the ref lifecycle may have deleted it", got.Output)
+			}
 		})
 	}
 

@@ -59,7 +59,9 @@ func (p *purged) got() []string {
 
 // passOver is a retention pass at the harness's clock over a store and a
 // reader, handing every purged name to p — under the default scratch policy,
-// with no live turn holding anything.
+// with no live turn holding anything, and no committer to propose an expiry
+// to: the cases built on it make no seat branch, and one that does hands the
+// pass a committer of its own (expiryPassOn).
 func passOver(s *code.Store, r *code.Reader, p *purged) *code.Retention {
 	return &code.Retention{
 		Store: s, Reader: r,
@@ -67,12 +69,20 @@ func passOver(s *code.Store, r *code.Reader, p *purged) *code.Retention {
 		OnPurged:  p.add,
 		Policy:    func() code.LifecyclePolicy { return code.ScratchOf(config.Code{}) },
 		Holds:     holdsNone,
+		Propose:   proposeNone,
+		Node:      "node-a",
 		Now:       func() time.Time { return harnessAt },
 	}
 }
 
 // holdsNone is a fleet where no live turn holds anything.
 func holdsNone(context.Context, []string) (map[string]bool, error) { return map[string]bool{}, nil }
+
+// proposeNone is a committer no expiry reaches: a case whose pass proposes one
+// meets its error in the report's ExpiryFailed.
+func proposeNone(context.Context, code.Proposal) (code.ProposeResult, error) {
+	return code.ProposeResult{}, errors.New("this case's pass proposes no expiry")
+}
 
 // A PASS PURGES WHAT IS PAST RETENTION, AND ONLY THAT: a repository deleted
 // longer ago than the retention is purged step by step to its marker and
@@ -382,6 +392,10 @@ func TestAPassRefusesWhatItCannotWorkWithout(t *testing.T) {
 		// NEVER AN EXPIRY THAT COULD NOT ASK: one would delete a scratch
 		// repository a parked run is waiting to come back to.
 		{"no holds", func(r *code.Retention) { r.Holds = nil }, "holds"},
+		// THE REF EXPIRY DELETES THROUGH A COMMITTER, naming its node, or not
+		// at all.
+		{"no committer", func(r *code.Retention) { r.Propose = nil }, "committer"},
+		{"no node", func(r *code.Retention) { r.Node = " " }, "node's id"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var p purged

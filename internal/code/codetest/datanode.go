@@ -442,7 +442,7 @@ func (d *DataNode) Purge(t testing.TB) {
 	}
 	r := &code.Retention{Store: p.lifecycle, Reader: p.reader,
 		Retention: func() time.Duration { return time.Nanosecond },
-		Policy:    scratchPolicy, Holds: holdsNone}
+		Policy:    scratchPolicy, Holds: holdsNone, Propose: p.committer.Propose, Node: d.o.ID}
 	for range 64 {
 		report, err := r.Pass(t.Context())
 		if err != nil {
@@ -476,7 +476,7 @@ func (d *DataNode) Retain(t testing.TB, now time.Time) code.RetentionReport {
 	}
 	r := &code.Retention{Store: p.lifecycle, Reader: p.reader,
 		Retention: func() time.Duration { return deletedRetention }, Now: func() time.Time { return now },
-		Policy: scratchPolicy, Holds: holdsNone}
+		Policy: scratchPolicy, Holds: holdsNone, Propose: p.committer.Propose, Node: d.o.ID}
 	report, err := r.Pass(t.Context())
 	if err != nil {
 		t.Fatalf("codetest: a retention pass through %s: %v", d.o.ID, err)

@@ -96,7 +96,13 @@ func TestARecordNamesThePackRowsItsApplyWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := records(push)
-	entries := suitePush("repo-a").Pushes
+	// THE PUSHES THAT CARRY A PACK: the ref expiry's deletes and brings none.
+	var entries []code.PushEntry
+	for _, e := range suitePush("repo-a").Pushes {
+		if e.Pack != nil {
+			entries = append(entries, e)
+		}
+	}
 	if err != nil || len(got) != len(entries) {
 		t.Fatalf("a push record's references = %+v, %v; want one for each of its %d pushes' packs", got, err,
 			len(entries))

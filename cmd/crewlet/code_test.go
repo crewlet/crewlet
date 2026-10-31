@@ -957,7 +957,8 @@ func TestARepositorysDetailSaysWhoChangesIt(t *testing.T) {
 // with the seat they hold beside it; a seat by its handle — the actor and the
 // seat at once, so never twice — with the turn that made the push and the work
 // item it was charged to, where the row names them, and first, for its coding
-// box's push, the box's coding agent and run; and nothing for what a row does
+// box's push, the box's coding agent and run; the engine for the ref
+// lifecycle's own push, which names no actor; and nothing for what a row does
 // not say.
 //
 // Mutations: print a seat's push as a person's (`<actor> (<seat>)`) — the
@@ -981,6 +982,8 @@ func TestAPushLineNamesWhoMadeIt(t *testing.T) {
 			`"run":{"turn_id":"t-2","work_backend":"native","work_key":"ENG-42","model":"claude-sonnet-4-5",` +
 			`"run_id":"3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b","coding_agent":"claude-code"}}`,
 			"swe (claude-code run 3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b, turn t-2, native ENG-42)"},
+		{"the ref expiry's", `{"actor":"","actor_kind":"system","actor_seat":"","via":"expiry"}`,
+			"engine (ref expiry)"},
 	} {
 		var p codePushView
 		if err := json.Unmarshal([]byte(tc.row), &p); err != nil {

@@ -218,25 +218,50 @@ const (
 	// PrincipalAgent is a seat of the chart, by its handle, whose standing on
 	// a repository the chart decides ([GrantOf]).
 	PrincipalAgent PrincipalKind = "agent"
+	// PrincipalSystem is the ENGINE ON ITS OWN ACCOUNT — no credential, no
+	// seat, no run — and it acts in one way only: the ref lifecycle's push
+	// deleting seats' idle branches ([ViaExpiry], retention_expiry.go). A
+	// proposal pairs the two both ways ([Proposal.Validate]), and nothing
+	// asks, reads or writes anything else as it: [Principal.Validate] refuses
+	// it, so every read's asker, every lifecycle request's actor and every
+	// change's, conversation's and merge's asker refuses it before any decide
+	// is asked, and [GrantOf] grants it nothing but that one deletion
+	// ([Grant.RefRule]). Spelled as iam's own account of the engine
+	// (iam.ActorSystem), which is what its push row's actor_kind says.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this kind — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a push record reads it. Once a build without it has run, an
+	// entry carrying it takes {Name: "Principal.Kind system", Since: 2, Op:
+	// "push", Path: []string{"mutation", "pushes", "principal", "kind"},
+	// Equals: string(PrincipalSystem)} in versionedFields, with RecordVersion
+	// at 2, its line under "What each version added" and a Carrying record
+	// in the statelogtest candidate: a new VALUE of a field every push entry
+	// carries, which such a build would meet as a principal it cannot judge.
+	PrincipalSystem PrincipalKind = "system"
 )
 
-// PrincipalKinds is the closed set.
-func PrincipalKinds() []PrincipalKind { return []PrincipalKind{PrincipalOperator, PrincipalAgent} }
+// PrincipalKinds is the closed set: every kind a record's principal may name.
+func PrincipalKinds() []PrincipalKind {
+	return []PrincipalKind{PrincipalOperator, PrincipalAgent, PrincipalSystem}
+}
 
 // Valid reports a value this build knows.
 func (p PrincipalKind) Valid() bool { return slices.Contains(PrincipalKinds(), p) }
 
-// readsChart reports a principal whose push is judged from the CHART: every
-// kind but an operator's. A person maintains every repository and a token
-// bound to nobody reads every one — rules that need no chart (ADR-0055), so
-// [GrantOf] never consults one for them — while a seat's standing is its
-// relation on the chart, and so is everything the push decide holds a seat's
-// push to beside it: its grant, the protections that take a person's push
-// alone, its share of a repository outside its unit, its day's quota. A node
-// that holds no chart, or one confirmed behind the company's configuration,
-// decides none of such a push ([CommitterOptions.SeatRules],
+// readsChart reports a principal whose push is judged from the CHART: a
+// seat's alone. A person maintains every repository and a token bound to
+// nobody reads every one — rules that need no chart (ADR-0055), so [GrantOf]
+// never consults one for them — and the engine's own expiry deletes a seat's
+// idle branch by a rule of its own ([Grant.RefRule]), while a seat's standing
+// is its relation on the chart, and so is everything the push decide holds a
+// seat's push to beside it: its grant, the protections that take a person's
+// push alone, its share of a repository outside its unit, its day's quota. A
+// node that holds no chart, or one confirmed behind the company's
+// configuration, decides none of such a push ([CommitterOptions.SeatRules],
 // [CommitterOptions.Current]).
-func (p PrincipalKind) readsChart() bool { return p != PrincipalOperator }
+func (p PrincipalKind) readsChart() bool { return p == PrincipalAgent }
 
 // CommandResult is what became of one ref update.
 type CommandResult string
@@ -957,7 +982,9 @@ type Principal struct {
 // bound to by their handle or nobody, and no run; a seat names its handle and
 // no credential, and a run only as [RunProvenance.Validate] admits one. A kind
 // this build does not know is refused, since nothing here could judge what
-// one may do.
+// one may do — and so is the engine's own account ([PrincipalSystem]), which
+// asks, reads and writes nothing: only its expiry's push carries it, and
+// [Proposal.Validate] judges that one ([Principal.systemInvalid]).
 func (p Principal) Validate() error {
 	if why := p.invalid(); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
@@ -965,8 +992,27 @@ func (p Principal) Validate() error {
 	return nil
 }
 
+// systemInvalid is why p is not the engine's own account as an expiry's push
+// carries it, or "": the kind, and NOTHING beside it — no credential, no seat
+// and no run, since the engine acts for nobody when it deletes an idle branch.
+func (p Principal) systemInvalid() string {
+	switch {
+	case p.Kind != PrincipalSystem:
+		return fmt.Sprintf("principal.kind: %q — the ref lifecycle's expiry is the engine's own push, kind %q",
+			p.Kind, PrincipalSystem)
+	case p.OperatorID != "":
+		return "principal.operator_id: the engine acts on its own account, with no credential"
+	case p.Seat != "":
+		return "principal.seat: the engine acts on its own account, for no seat"
+	case !p.Run.IsZero():
+		return "principal.run: the engine's own push is no turn's and no coding run's"
+	}
+	return ""
+}
+
 // invalid is why p is no principal, or "" — the one rule [Principal.Validate]
-// and a proposal's validation both state.
+// and a proposal's validation both state. The engine's own account is none
+// here ([Principal.Validate]).
 func (p Principal) invalid() string {
 	switch p.Kind {
 	case PrincipalOperator:
@@ -990,6 +1036,9 @@ func (p Principal) invalid() string {
 				return "principal.run." + why
 			}
 		}
+	case PrincipalSystem:
+		return fmt.Sprintf("principal.kind: %q is the engine's own account, which only the ref lifecycle's "+
+			"expiry push carries — nobody asks, reads or writes as it", p.Kind)
 	default:
 		return fmt.Sprintf("principal.kind: %q is not one of %v", p.Kind, PrincipalKinds())
 	}
@@ -999,7 +1048,8 @@ func (p Principal) invalid() string {
 // Actor is who a record names as p's actor: the credential an operator acted
 // with — the person's attribution, as every record a write leaves names it
 // (iam.ActorFor), the seat they hold beside it — and a seat's own handle,
-// since a seat acts as itself with no credential. THE ONE RULE for every
+// since a seat acts as itself with no credential — and nobody for the
+// engine's own expiry, which acts for nobody. THE ONE RULE for every
 // record of a principal: a push row's actor, and the reader every read of a
 // `visibility: unit` repository is recorded as, which the usage domain
 // refuses empty.

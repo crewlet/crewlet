@@ -362,10 +362,18 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	}
 	// AND THE IDLE CLOCK MOVES WITH THE LAST PUSH — a refused entry's too,
 	// which is still somebody working in the repository: what a scratch
-	// repository expires by (Retention), at the record's own instant.
+	// repository expires by (Retention), at the record's own instant. BUT
+	// NOT FOR A RECORD OF EXPIRIES ALONE (M3-decisions M3-O54): the engine
+	// deleting a seat's idle branches is housekeeping, not anybody working
+	// there, so a record whose every entry is one keeps the repository's last
+	// push and idle clock where they were — and one that carries an expiry
+	// beside anybody's push moves both, since the committer batches an
+	// expiry with whatever else is queued. The pushes ever and the version
+	// move for every record.
+	keep := onlyExpiry(pushRows)
 	if _, err = tx.ExecContext(ctx, pushCountersSQL, moved.live, moved.branches, moved.tags,
-		moved.tombstones, len(packRows), packBytes, packObjects, len(pushRows), at.at(), at.at(), at.packed,
-		mark, p.RepoID); err != nil {
+		moved.tombstones, len(packRows), packBytes, packObjects, len(pushRows), keep, at.at(), keep, at.at(),
+		at.packed, mark, p.RepoID); err != nil {
 		return 0, fmt.Errorf("code: count the pushes at %s: %w", at.position, err)
 	}
 
@@ -1215,6 +1223,18 @@ func pushesWithin(ctx context.Context, tx *sql.Tx, bytes int64, stop func(int64)
 	return ids, weighed, false, rows.Err()
 }
 
+// onlyExpiry reports a record whose every entry it applies is the ref
+// lifecycle's expiry ([ViaExpiry]) — the one record whose apply keeps the
+// repository's activity clocks: false as soon as any other way is among them.
+func onlyExpiry(entries []PushEntry) bool {
+	for _, e := range entries {
+		if e.Via != ViaExpiry {
+			return false
+		}
+	}
+	return len(entries) > 0
+}
+
 // seatOf is the seat a ref's row names (code_refs.seat) once p's push set it
 // to target: the pushing seat where an AGENT principal — its coding box, or an
 // engine write in its turn — set the ref INSIDE ITS OWN NAMESPACE
@@ -1273,7 +1293,9 @@ const (
 	pushCountersSQL = `UPDATE code_repos SET refs = refs + ?, branches = branches + ?,
 		tags = tags + ?, tombstones = tombstones + ?, live_packs = live_packs + ?,
 		live_bytes = live_bytes + ?, live_objects = live_objects + ?, pushes = pushes + ?,
-		last_push_at = ?, last_activity_at = ?, version = ?, tombstones_through = MAX(tombstones_through, ?)
+		last_push_at = CASE WHEN ? THEN last_push_at ELSE ? END,
+		last_activity_at = CASE WHEN ? THEN last_activity_at ELSE ? END,
+		version = ?, tombstones_through = MAX(tombstones_through, ?)
 		WHERE id = ?`
 	tombstonesHeldSQL = `SELECT tombstones FROM code_repos WHERE id = ?`
 	// forgetSeatDaysSQL forgets, for each seat of its list, the seat's day

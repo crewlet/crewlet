@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Quiet is quiet, for this package's external benchmarks.
@@ -67,6 +69,39 @@ func IdleScratchView(ctx context.Context, r *Reader, cutoff time.Time, limit int
 		ids = append(ids, repo.id)
 	}
 	return ids, ScratchExpiry{Cutoff: cutoff, Through: page.through, KeyedTo: page.keyedTo}, nil
+}
+
+// ExpiryPage is the first page of the ref expiry's listing over r at cutoff,
+// as a pass reads it: each ref it lists, as "<repository id> <ref>", oldest
+// first, and the position it was read at — the Seen every proposal formed from
+// it carries.
+func ExpiryPage(ctx context.Context, r *Reader, cutoff time.Time) ([]string, statelog.Position, error) {
+	page, err := r.idleSeatRefs(ctx, idleRefsQuery{cutoff: cutoff, limit: MaxCommandsPerPush})
+	if err != nil {
+		return nil, statelog.Position{}, err
+	}
+	refs := make([]string, 0, len(page.refs))
+	for _, ref := range page.refs {
+		refs = append(refs, ref.repoID+" "+ref.ref)
+	}
+	return refs, page.through, nil
+}
+
+// ExpiryListing reads every page of the ref expiry's listing over r at
+// cutoff, as a pass reads them, and answers how many pages and refs it read.
+func ExpiryListing(ctx context.Context, r *Reader, cutoff time.Time) (pages, refs int, err error) {
+	q := idleRefsQuery{cutoff: cutoff, limit: MaxCommandsPerPush}
+	for {
+		page, err := r.idleSeatRefs(ctx, q)
+		if err != nil {
+			return pages, refs, err
+		}
+		pages, refs = pages+1, refs+len(page.refs)
+		if len(page.refs) < q.limit {
+			return pages, refs, nil
+		}
+		q.after = &page.refs[len(page.refs)-1]
+	}
 }
 
 // SetCommitterIdle has c's repository goroutines exit after d with nothing

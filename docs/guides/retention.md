@@ -1891,6 +1891,11 @@ rename, settings change or restore — for `code.scratch.idle_days` (unset,
 any deletion. A renamed repository's **old name** keeps redirecting for a
 month and is released by the same duty after it, one small record a name
 ([Repositories made by tools](../concepts/code-host.md#repositories-made-by-tools)).
+And a branch a seat set in its own namespace (`refs/heads/seats/<handle>/`)
+that nobody has set for **14 days** is deleted by the same duty, through a
+push of the engine's own whose row keeps the commit to restore it at — unless
+a live turn holds it, it is its repository's default branch, or a live change
+proposes from or into it ([The ref lifecycle](../concepts/code-host.md#the-ref-lifecycle)).
 
 Inside a repository that is not deleted, three horizons are kept by the
 records that apply to it, never by a sweep: a push row expires **181 days**

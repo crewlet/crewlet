@@ -147,11 +147,13 @@ func suitePack(id string) *code.PackRef {
 	}
 }
 
-// suitePush is three pushes of id: a person's of its main branch with its
+// suitePush is four pushes of id: a person's of its main branch with its
 // pack, received by git; a seat's of a branch in its namespace, built by the
-// engine, whose run carries every field at its bound; and the seat's coding
+// engine, whose run carries every field at its bound; the seat's coding
 // box's of another, received by git, whose run names as well the coding run
-// that pushed — its launch's UUID — and its coding agent at its bound. Its
+// that pushed — its launch's UUID — and its coding agent at its bound; and the
+// ref lifecycle's expiry of the first seat branch, on the engine's own
+// account, whose row keeps the commit it deleted (its Old). Its
 // committer counted both of the seat's on the company day of the suite's
 // instant — so every column a push row has, and the seat's count of its day
 // (code_seat_days), are ones the suite's replays and identity claims compare.
@@ -196,6 +198,16 @@ func suitePush(id string) code.PushBatch {
 		Pack:       suitePack("box-" + id),
 		ReceivedAt: suiteAt,
 		Day:        suiteAt.Format(time.DateOnly),
+	}, {
+		PushID:    "push-expiry-" + id,
+		Principal: code.Principal{Kind: code.PrincipalSystem},
+		Via:       code.ViaExpiry,
+		Node:      "suite-node",
+		Commands: []code.Command{{
+			Ref: "refs/heads/seats/suite-seat/work", Old: oidOf("seat" + id), New: code.ZeroOID,
+			Result: code.ResultOK,
+		}},
+		ReceivedAt: suiteAt,
 	}}}
 }
 

@@ -848,8 +848,8 @@ type codeRetentionDuty struct {
 }
 
 // newCodeRetentionDuty is the duty over this node's lifecycle store and code
-// reader.
-func (e *Engine) newCodeRetentionDuty(store *code.Store, reader *code.Reader) *codeRetentionDuty {
+// reader, its ref expiry's pushes naming nodeID (the core's resolved id).
+func (e *Engine) newCodeRetentionDuty(store *code.Store, reader *code.Reader, nodeID string) *codeRetentionDuty {
 	d := &codeRetentionDuty{
 		pass: &code.Retention{
 			Store: store, Reader: reader,
@@ -864,7 +864,13 @@ func (e *Engine) newCodeRetentionDuty(store *code.Store, reader *code.Reader) *c
 			// due repositories ([Engine.codeHolds]).
 			Policy: e.codeLifecyclePolicy,
 			Holds:  e.codeHolds,
-			Logger: logging.Get("code"),
+			// AND ITS REF EXPIRY, last, which deletes seats' idle branches
+			// through each repository's committer — the estate router's,
+			// which asks the one rendezvous ranks first and fails over —
+			// keeping every branch the same holds name.
+			Propose: e.router.Code().Propose,
+			Node:    nodeID,
+			Logger:  logging.Get("code"),
 		},
 		claim:    e.workerDuty(codeRetentionDutyName, codeRetentionDutyTTL),
 		giveBack: e.workerGiveBack(codeRetentionDutyName),
@@ -878,12 +884,12 @@ func (e *Engine) newCodeRetentionDuty(store *code.Store, reader *code.Reader) *c
 // startCodeRetention arms the code-retention duty on a node whose runtime hosts
 // code and that publishes — the only nodes whose lifecycle store may write
 // ([Engine.writeSide]). One loop a node, claiming the duty each turn.
-func (e *Engine) startCodeRetention(ctx context.Context, n *native) {
+func (e *Engine) startCodeRetention(ctx context.Context, nodeID string, n *native) {
 	store := e.writeSide().code
 	if n == nil || n.codeReader == nil || store == nil {
 		return
 	}
-	d := e.newCodeRetentionDuty(store, n.codeReader)
+	d := e.newCodeRetentionDuty(store, n.codeReader, nodeID)
 	d.loop = startLoop(ctx, sleep, d.tick)
 	e.codeRetention = d
 }
@@ -1004,8 +1010,9 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, boo
 
 // logCodeRetention says what one pass did: at info where it swept, purged,
 // released an old name, expired a scratch repository or kept one a live turn
-// holds, failed, held a name, could not read the live turns' holds or stopped
-// at its budget, at debug where it found nothing due. A pass ENDED — the
+// holds, expired, kept or held a seat's idle branch, failed (an expiry's too),
+// held a name, could not read the live turns' holds or stopped at its budget,
+// at debug where it found nothing due. A pass ENDED — the
 // engine stopping, the duty lost or declined mid-pass, which the renewal has
 // said — is no failure; any other error is a warning. There is no /fleet view
 // of a pass: this line, and the scratch expiry's own
@@ -1015,7 +1022,8 @@ func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.Rete
 	attrs := []any{"sweeps", report.Sweeps, "swept_rows", report.SweptRows,
 		"checks_sweeps", report.ChecksSweeps, "checks_swept_rows", report.ChecksSweptRows, "purged", report.Purged,
 		"steps", report.Steps, "remain", report.Remain, "released", report.Released, "expired", report.Expired,
-		"scratch_held", report.ScratchHeld}
+		"scratch_held", report.ScratchHeld, "refs_expired", report.RefsExpired, "refs_kept", report.RefsKept,
+		"refs_held", report.RefsHeld}
 	if len(report.Failed) > 0 {
 		attrs = append(attrs, "failed", report.Failed)
 	}
@@ -1025,13 +1033,20 @@ func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.Rete
 	if report.ScratchExpiryUnread != "" {
 		attrs = append(attrs, "scratch_expiry_unread", report.ScratchExpiryUnread)
 	}
+	if len(report.ExpiryFailed) > 0 {
+		attrs = append(attrs, "expiry_failed", report.ExpiryFailed)
+	}
+	if report.ExpiryUnread != "" {
+		attrs = append(attrs, "expiry_unread", report.ExpiryUnread)
+	}
 	switch {
 	case err != nil && !ended:
 		logger.WarnContext(ctx, "code_retention_pass_failed", append(attrs, "error", err.Error(),
 			"detail", "the next pass, a tick later, lists what is due again")...)
 	case report.Sweeps > 0 || report.ChecksSweeps > 0 || len(report.Purged) > 0 || len(report.Failed) > 0 ||
 		len(report.Unhanded) > 0 || report.Remain || report.Released > 0 || report.Expired > 0 ||
-		report.ScratchHeld > 0 || report.ScratchExpiryUnread != "":
+		report.ScratchHeld > 0 || report.ScratchExpiryUnread != "" || report.RefsExpired > 0 ||
+		report.RefsKept > 0 || report.RefsHeld > 0 || len(report.ExpiryFailed) > 0 || report.ExpiryUnread != "":
 		logger.InfoContext(ctx, "code_retention_pass", attrs...)
 	default:
 		logger.DebugContext(ctx, "code_retention_pass", attrs...)

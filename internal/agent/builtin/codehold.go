@@ -402,9 +402,10 @@ func refHoldFailure(ctx context.Context, tool string, repo code.RepoRef, ref str
 	switch {
 	case errors.As(err, &deleted):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s did not run: %s of repository %s was "+
-			"deleted after this turn read it at %s, so nothing was sent about it. Restore it with %s at %s if "+
-			"the work on it is still needed.", tool, ref, repo.Name, deleted.oid, CodeCreateBranchTool,
-			deleted.oid))
+			"deleted after this turn read it at %s — by a push, or by the code host's ref lifecycle, which "+
+			"deletes a seat's branch nobody has set for %d days — so nothing was sent about it. Restore it "+
+			"with %s at %s if the work on it is still needed.", tool, ref, repo.Name, deleted.oid,
+			int(code.RefExpiry/(24*time.Hour)), CodeCreateBranchTool, deleted.oid))
 	case errors.Is(err, turnctx.ErrHoldsFull), errors.Is(err, sandbox.ErrCodeHoldsFull):
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s did not run: this turn already holds "+
 			"the most repositories and branches one turn may (%d), and it reaches a seat's branch only while it "+

@@ -381,10 +381,22 @@ func (p Proposal) validFields() error {
 	// git receives and names that run and its coding agent beside the turn.
 	// The decide holds a seat's push to its grant on the chart (rule 2b,
 	// decide.go) before any protection, so a seat's push is a proposal like a
-	// person's; a token bound to nobody fetches only.
-	switch why := p.Principal.invalid(); {
+	// person's; a token bound to nobody fetches only. And the engine, on its
+	// own account, deletes seats' idle branches — its expiry and no other
+	// push, the two paired both ways.
+	why := p.Principal.invalid()
+	if p.Principal.Kind == PrincipalSystem {
+		why = p.Principal.systemInvalid()
+	}
+	switch {
 	case why != "":
 		return fmt.Errorf("%w: %s", ErrInvalidProposal, why)
+	case p.Principal.Kind == PrincipalSystem && p.Via != ViaExpiry:
+		return fmt.Errorf("%w: via: %q — the engine's own account pushes only the ref lifecycle's expiry (%q)",
+			ErrInvalidProposal, p.Via, ViaExpiry)
+	case p.Via == ViaExpiry && p.Principal.Kind != PrincipalSystem:
+		return fmt.Errorf("%w: principal.kind: %q — the ref lifecycle's expiry is the engine's own push, "+
+			"kind %q", ErrInvalidProposal, p.Principal.Kind, PrincipalSystem)
 	case p.Principal.Kind == PrincipalOperator && p.Principal.Seat == "":
 		return fmt.Errorf("%w: principal.seat: a push names the person its token is bound to — a "+
 			"token bound to nobody fetches only", ErrInvalidProposal)
@@ -439,6 +451,11 @@ func (p Proposal) validFields() error {
 	if err := validCommands(p.Commands); err != nil {
 		return err
 	}
+	if p.Via == ViaExpiry {
+		if err := p.validExpiry(); err != nil {
+			return err
+		}
+	}
 	// AN ENGINE-BUILT PUSH IS ONE COMMIT ON ONE REF: the engine builds a
 	// write as one ref update, so a proposal of it moving more, or held
 	// together by --atomic — which one command has nothing to hold together
@@ -485,6 +502,47 @@ func (p Proposal) validFields() error {
 		if !gitref.ValidOID(oid) {
 			return fmt.Errorf("%w: introduced[%d]: %q is not an object id", ErrInvalidProposal, i, oid)
 		}
+	}
+	return nil
+}
+
+// validExpiry holds the ref lifecycle's push ([ViaExpiry]) to what its step
+// forms (retention_expiry.go): only DELETIONS, each of a branch in some seat's
+// namespace ([Holdable]; whose namespace it is is the decide's question) off
+// the commit its listing read, none decided yet — the receivers' refusals are
+// a client's, and the expiry has none — and nothing else of a push: no pack, no
+// introduced commit, no --atomic, no change. And it names the position of the
+// page it was listed from ([Proposal.Seen]), which its decide keeps every
+// branch held since by (rule 4b, [ExpiryRule]): an expiry naming none would
+// order no hold recorded after its listing.
+func (p Proposal) validExpiry() error {
+	for i, c := range p.Commands {
+		switch {
+		case c.New != ZeroOID:
+			return fmt.Errorf("%w: commands[%d].new: %s — the ref lifecycle's expiry only deletes a branch",
+				ErrInvalidProposal, i, c.New)
+		case !ValidRef(c.Ref) || !Holdable(c.Ref):
+			return fmt.Errorf("%w: commands[%d].ref: %q is no seat's branch (%s<handle>/…), and the expiry "+
+				"deletes only those", ErrInvalidProposal, i, c.Ref, SeatNamespaceRoot)
+		case c.Result != "":
+			return fmt.Errorf("%w: commands[%d].result: %q — the expiry's commands are decided by its "+
+				"committer alone", ErrInvalidProposal, i, c.Result)
+		}
+	}
+	switch {
+	case p.Pack != nil:
+		return fmt.Errorf("%w: pack: the ref lifecycle's expiry only deletes, and carries no objects",
+			ErrInvalidProposal)
+	case len(p.Introduced) > 0 || p.IntroducedCount != 0:
+		return fmt.Errorf("%w: introduced: the ref lifecycle's expiry introduces no commit", ErrInvalidProposal)
+	case p.Atomic:
+		return fmt.Errorf("%w: atomic: each branch the expiry deletes is judged on its own, and one kept never "+
+			"keeps another", ErrInvalidProposal)
+	case p.Change != nil:
+		return fmt.Errorf("%w: change: the ref lifecycle's expiry asks for no change", ErrInvalidProposal)
+	case p.Seen.IsZero():
+		return fmt.Errorf("%w: seen: the ref lifecycle's expiry names the position of the page it was listed "+
+			"from, which every hold recorded since keeps a branch past", ErrInvalidProposal)
 	}
 	return nil
 }

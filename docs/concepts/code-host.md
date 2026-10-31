@@ -2146,9 +2146,12 @@ repository, never by a node's own sweep:
 - **Push history** — a push row is kept **181 days**, the same horizon as the
   company's [usage history](../guides/retention.md), so "what happened over
   the last half year" has one answer across the engine. A row names who
-  pushed — a person's credential and the seat they hold, or a seat by its
-  handle — how the push's pack was built (`git`, sent by a client's git, or
-  `engine`, built by the engine itself), and for a seat's push the turn that
+  pushed — a person's credential and the seat they hold, a seat by its
+  handle, or the engine on its own account (`system`, for [the ref
+  lifecycle](#the-ref-lifecycle)'s deletions) — how the push's pack was built
+  (`git`, sent by a client's git, `engine`, built by the engine itself,
+  `merge`, landed by a merge, or `expiry`, the ref lifecycle's deletion of
+  idle seat branches), and for a seat's push the turn that
   made it, the work item that turn was charged to and the model it ran on —
   and for a push the seat's coding box made, the coding run that pushed and
   the coding agent it ran, which is how the engine reads back what a run
@@ -2291,6 +2294,67 @@ later. The code log itself is trimmed like every other log (see
 [Retention](../guides/retention.md)), and a node whose copy of it is out of
 service declines the duty rather than purge from rows the fleet may not agree
 with.
+
+### The ref lifecycle
+
+A seat that runs coding work leaves a branch in its own namespace,
+`refs/heads/seats/<handle>/`, for every piece of work it does, and nobody else
+deletes them. So a branch **a seat set in its own namespace and nobody has set
+for 14 days** is **deleted** by the `code-retention` duty — its last step, after
+the purges, the released names and the scratch expiry. Fourteen days is past a
+working fortnight and a person's holiday, and short enough that a seat running
+dozens of coding runs a week does not fill its repositories with hundreds of
+dead branches against the [limit](#limits) on refs.
+
+Only such a branch is ever deleted: a branch a person pushed last, even in a
+seat's namespace and even to the same commit, a tag, `main`, a release branch
+and a seat's push outside its own namespace are never touched. Neither is a
+branch of an archived repository, which is read-only; a deleted repository's
+are its purge's.
+
+A branch is **kept** while anything still depends on it:
+
+- **a live turn holds it** — one that read or wrote it through a code tool,
+  one a coding run's launch resolved, or one the run's box pushed — held as
+  a [scratch repository](#a-scratch-repositorys-idle-expiry) is, in the
+  running turn's memory and on a parked run's row, by the same reader and in
+  the same order: the pass fixes its cutoff and reads its page first, and only
+  then the holds. A turn that holds a branch idle 334 hours or more (14 days
+  less two hours, two nodes' clocks disagreeing by an hour each) also records
+  the hold on the repository, so a deletion listed before the turn's read is
+  ordered against it: recorded first, the deletion keeps the branch; deleted
+  first, the turn is told the branch was deleted, by a push or by this
+  lifecycle, and at which commit to restore it. **A hold that cannot be read
+  expires nothing**: the pass says so (`expiry_unread`) and logs
+  `code_ref_expiry_skipped` at warn;
+- it is its repository's **default branch**: deleted, the repository's HEAD
+  would name nothing and every clone would check nothing out;
+- it is the **source or the target of a live change**: deleting a source
+  closes its change, and a review may take longer than a fortnight;
+- a [protection rule](#protection-rules) matches it — every rule takes a
+  person's direct push alone (`persons`, unset reads it) or nobody's (`none`),
+  and the lifecycle is no person.
+
+The deletion is a **push**, on the engine's own account — no credential, no
+seat, no run — decided by the repository's [committer](#the-committer) like any
+other, so a push or a hold that lands first wins and the branch is kept
+(`stale`, with the reason). It moves no activity clock: a scratch repository's
+idle time and a repository's last push stay where its last real push left
+them. Its row in the push history — `via` `expiry`, `actor_kind` `system` —
+keeps every branch it deleted beside the commit it was at, so a branch is
+**restored** with `code_create_branch` at that commit for as long as the push
+history keeps the row (181 days) and the repository still holds the commit,
+which a deletion keeps for its [prune grace](#retention-and-history) at least.
+
+Each push deletes up to 1 000 branches, fewer where their names are long
+enough to fill a push's record, and a repository with more idle branches is
+several pushes. A committer that answers `busy` — persons' and seats' pushes
+queued — ends the step: the lifecycle yields, and the next pass resumes.
+
+A pass's `code_retention_pass` line counts `refs_expired`, `refs_kept` (proposed
+and found no longer idle by the committer), `refs_held` (kept for a live
+turn's hold) and names `expiry_failed` and `expiry_unread`; each push that
+deleted something logs `code_refs_expired`.
 
 ---
 
@@ -3697,6 +3761,8 @@ about writing with them.
 `refs/heads/seats/<its handle>/` on every repository it may read, and may do
 anything there — create, update, force, delete — whatever its relation: that is
 where a seat that only reads a repository pushes its work, in place of a fork.
+A branch there that nobody has set for 14 days is deleted by [the ref
+lifecycle](#the-ref-lifecycle) unless something still depends on it.
 The namespace sits under `seats/` and never at the handle alone, because a
 handle is a role name's slug (`docs`, `release`, `qa`) and people name their own
 branches under exactly those prefixes. `refs/heads/seats` itself and
@@ -6106,7 +6172,9 @@ line says and push the branch's next commit with `-o change`.
 | `code_repos_interrupted` | `INFO` | The node stopped before its reconcile finished; the next boot reconciles. |
 | `code_repo_not_applied`, `code_repos_not_applied`, `code_repos_not_listed` | `ERROR`, `ERROR`, `WARN` | A reconcile could not apply one repository, any, or delete what the document no longer declares; the node runs the reconcile again (`code_repos_retrying`). Two of a repository's are not run again for, and say what to change instead: its name is held by a repository the configuration does not manage — rename the declaration — or the code log refuses its declaration as written. |
 | `code_repos_retrying` | `INFO` | The reconcile of `activation` left something undone — said in the lines before — and runs again in `retry_in`: five seconds after the first such run, doubling with each run in a row (`attempt`) to five minutes, until one applies or a newer activation replaces it. |
-| `code_retention_pass` | `INFO` | A pass that swept retired packs or an idle repository's checks, purged, failed a repository, held a purged name, released a renamed repository's old name, expired a scratch repository or kept one a live turn holds, could not read the live turns' holds, or stopped at its budget (`sweeps`, `swept_rows`, `checks_sweeps`, `checks_swept_rows`, `purged`, `steps`, `remain`, `failed`, `unhanded`, `released`, `expired`, `scratch_held`, `scratch_expiry_unread`); `DEBUG` when nothing was due. |
+| `code_retention_pass` | `INFO` | A pass that swept retired packs or an idle repository's checks, purged, failed a repository, held a purged name, released a renamed repository's old name, expired a scratch repository or kept one a live turn holds, expired, kept or held a seat's idle branch or failed to, could not read the live turns' holds, or stopped at its budget (`sweeps`, `swept_rows`, `checks_sweeps`, `checks_swept_rows`, `purged`, `steps`, `remain`, `failed`, `unhanded`, `released`, `expired`, `scratch_held`, `scratch_expiry_unread`, `refs_expired`, `refs_kept`, `refs_held`, `expiry_failed`, `expiry_unread`); `DEBUG` when nothing was due. |
+| `code_refs_expired` | `INFO` | One push of [the ref lifecycle](#the-ref-lifecycle) applied on a repository (`repo`, `push_id`, `position`): how many idle seat branches it deleted (`expired`) and how many its committer kept (`kept`). |
+| `code_ref_expiry_skipped` | `WARN` | The live turns' holds on a page of idle seat branches could not be read (`error`, naming which; `repo` and `first`, the page's first branch), so this pass deleted none; the next pass asks again ([The ref lifecycle](#the-ref-lifecycle)). |
 | `code_retention_pass_failed` | `WARN` | A pass ended on an error; the next pass lists what is due again. |
 | `code_scratch_expired` | `INFO` | A scratch repository idle past `code.scratch.idle_days` (`idle_since`) and held by no live turn was deleted, restorable for `code.deleted_retention_days`. |
 | `code_scratch_expiry_skipped` | `WARN` | The live turns' holds on a page of idle scratch repositories could not be read — the run store, the seat leases, or a seat holder that did not answer within two seconds (`error`, naming which) — so this pass expired none; the next pass asks again ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry)). |

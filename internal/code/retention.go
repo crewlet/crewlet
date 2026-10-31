@@ -10,6 +10,7 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,6 +78,13 @@ import (
 // its cutoff and each page's position, which is what keeps a hold taken while
 // the pass decides from being lost ([Retention.expireScratch] states the
 // argument); a hold that cannot be read expires nothing.
+//
+// LAST, the REF LIFECYCLE: every branch a seat set in its own namespace and
+// nobody has set for [RefExpiry] is deleted by a push on the engine's own
+// account to its repository's committer ([ViaExpiry]) — unless a live turn
+// holds it, by the same reader and in the same order as the scratch expiry
+// (retention_expiry.go), and unless its committer's decide finds it no longer
+// idle ([ExpiryRule]).
 //
 // # How much of the write lane
 //
@@ -162,6 +170,15 @@ type Retention struct {
 	// Required: an expiry that could not ask would delete a repository a
 	// parked run is waiting to come back to.
 	Holds func(ctx context.Context, keys []string) (map[string]bool, error)
+	// Propose hands an expiry push to its repository's committer — the
+	// engine's estate router (estate.CodeSeam.Propose), which asks the
+	// committer rendezvous ranks first and fails over as every keyed
+	// operation does. Required: the ref lifecycle deletes through the
+	// committer or not at all.
+	Propose func(ctx context.Context, p Proposal) (ProposeResult, error)
+	// Node is this node's id: an expiry proposal's Node, as every push names
+	// the node that formed it. Required.
+	Node string
 	// Now is the clock the pass judges a retired pack's grace and a
 	// deletion's age by; nil is the wall clock.
 	Now func() time.Time
@@ -249,6 +266,25 @@ type RetentionReport struct {
 	// more expired: which live turns' holds could not be read. Never on a
 	// guess: a hold the pass cannot read is one it does not expire under.
 	ScratchExpiryUnread string `json:"scratch_expiry_unread,omitempty"`
+	// RefsExpired counts the seat branches the ref lifecycle deleted, idle
+	// past RefExpiry and held by no live turn — each restorable from its push
+	// row's Old for as long as the push history keeps it.
+	RefsExpired int `json:"refs_expired"`
+	// RefsKept counts the idle seat branches an expiry proposed and its
+	// decide kept ([ExpiryRule], or a protection): set, held, made the
+	// default or put under review since the page listed it, or set last by
+	// somebody else.
+	RefsKept int `json:"refs_kept,omitempty"`
+	// RefsHeld counts the idle seat branches the pass did not propose because
+	// a live turn holds them: one it read or wrote, one a launch resolved, or
+	// one a parked run's box pushed.
+	RefsHeld int `json:"refs_held,omitempty"`
+	// ExpiryFailed maps a repository's name to why an expiry of its branches
+	// failed this pass; what is still there is listed again by the next.
+	ExpiryFailed map[string]string `json:"expiry_failed,omitempty"`
+	// ExpiryUnread says why the ref expiry stopped with nothing more
+	// expired: which live turns' holds could not be read.
+	ExpiryUnread string `json:"expiry_unread,omitempty"`
 }
 
 // Pass hands on what an earlier pass purged and could not, sweeps every
@@ -292,6 +328,12 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 		return report, errors.New("code: a retention pass needs the live turns' holds — its scratch " +
 			"expiry never deletes a repository a live turn has named, and one that could not ask " +
 			"would delete it under a parked run")
+	case r.Propose == nil:
+		return report, errors.New("code: a retention pass needs the committer seam its ref expiry " +
+			"proposes its deletions to")
+	case strings.TrimSpace(r.Node) == "":
+		return report, errors.New("code: a retention pass needs this node's id, which its ref expiry's " +
+			"pushes name")
 	}
 	retention := r.Retention()
 	if retention <= 0 {
@@ -314,14 +356,17 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 	}
 	// THE STEPS IN ORDER, on one pacer and one budget: the retired packs'
 	// sweeps, the checks' sweeps, the purges, the old names' releases, the
-	// idle scratch repositories' expiry. Each stops the pass at the budget
-	// (Remain), and the next pass resumes every step from the rows.
+	// idle scratch repositories' expiry, and the idle seat branches' expiry
+	// LAST — a purge and a release free names, an expiry only room. Each
+	// stops the pass at the budget (Remain), and the next pass resumes every
+	// step from the rows.
 	for _, step := range []func() (bool, error){
 		func() (bool, error) { return r.sweep(ctx, now, pace, &report) },
 		func() (bool, error) { return r.sweepChecks(ctx, now, pace, &report) },
 		func() (bool, error) { return r.purges(ctx, now, retention, pace, &report, log) },
 		func() (bool, error) { return r.release(ctx, now, pace, &report) },
 		func() (bool, error) { return r.expireScratch(ctx, now, pace, &report, log) },
+		func() (bool, error) { return r.expire(ctx, now, pace, &report, log) },
 	} {
 		if stop, err := step(); err != nil || stop {
 			report.Remain = stop

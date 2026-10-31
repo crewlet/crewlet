@@ -867,6 +867,9 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana/x"}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", OperatorID: "tok"}, false},
 		{code.Principal{Kind: "robot", Seat: "ana"}, false},
+		// THE ENGINE'S OWN ACCOUNT asks, reads and writes nothing: only its
+		// expiry's proposal carries it, which Proposal.Validate judges.
+		{code.Principal{Kind: code.PrincipalSystem}, false},
 	} {
 		err := tc.p.Validate()
 		if (err == nil) != tc.valid || (err != nil && !errors.Is(err, code.ErrInvalid)) {
@@ -890,7 +893,8 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 			t.Errorf("a proposal by %+v: %v, want refused", p, err)
 		}
 	}
-	if !slices.Equal(code.PrincipalKinds(), []code.PrincipalKind{code.PrincipalOperator, code.PrincipalAgent}) {
+	if !slices.Equal(code.PrincipalKinds(), []code.PrincipalKind{code.PrincipalOperator, code.PrincipalAgent,
+		code.PrincipalSystem}) {
 		t.Errorf("PrincipalKinds = %v", code.PrincipalKinds())
 	}
 }

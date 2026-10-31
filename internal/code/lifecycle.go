@@ -1450,8 +1450,8 @@ func decideHold(ctx context.Context, tx *sql.Tx, req LifecycleRequest, v RepoRef
 	err := tx.QueryRowContext(ctx, refHoldSQL, v.ID, req.Ref).Scan(&target, &seat)
 	switch {
 	case errors.Is(err, sql.ErrNoRows) || (err == nil && target == ""):
-		d.refuse(LifecycleRefDeleted, "%s is no live ref of %s: it was deleted after this turn read it", req.Ref,
-			v.Name)
+		d.refuse(LifecycleRefDeleted, "%s is no live ref of %s: it was deleted after this turn read it — by a "+
+			"push, or by the ref lifecycle once nobody had set it for %s", req.Ref, v.Name, expiryWindow)
 		return nil, "", nil
 	case err != nil:
 		return nil, "", fmt.Errorf("code: read %s of %s for a hold: %w", req.Ref, v.Name, err)

@@ -118,8 +118,10 @@ const (
 // TestEveryPushPrincipalAndWayHasARunCode holds every value of code's closed
 // sets to one.
 var (
-	runViaCodes  = map[code.PushVia]uint8{code.ViaGit: 1, code.ViaEngine: 2, code.ViaMerge: 3}
-	runKindCodes = map[code.PrincipalKind]uint8{code.PrincipalOperator: 1, code.PrincipalAgent: 2}
+	runViaCodes = map[code.PushVia]uint8{code.ViaGit: 1, code.ViaEngine: 2, code.ViaMerge: 3,
+		code.ViaExpiry: 4}
+	runKindCodes = map[code.PrincipalKind]uint8{code.PrincipalOperator: 1, code.PrincipalAgent: 2,
+		code.PrincipalSystem: 3}
 )
 
 // errRunMalformed is a run whose bytes are not the format's: a file this
