@@ -4402,6 +4402,23 @@ export interface ChatReadState {
   muted?: string[];
   /** When do-not-disturb ends. Absent is not in it. */
   dnd_until?: string;
+  /** Thread root id to the PACKED log position read through in that thread,
+   *  flushed by the thread pane. A reply is new to the reader when it is
+   *  above both this and the room's own cursor. */
+  thread_cursors?: Record<string, number>;
+  /** The rooms this reader set to every message (`notify: "all"`), sorted.
+   *  A room is in at most one of this and `muted`; in neither, it notifies
+   *  the reader of mentions only, the default. */
+  every?: string[];
+  /** The rooms this reader starred, sorted. A star is the reader's own and
+   *  changes nothing for anybody else. */
+  starred?: string[];
+  /** The messages this reader saved for later, the newest save first. */
+  saved?: ChatSavedMark[];
+  /** The threads this reader followed or unfollowed by hand, the newest mark
+   *  first. A thread they started, replied in or were named in is followed
+   *  without one. */
+  threads?: ChatThreadMark[];
   updated_at?: string;
   /** The record's own revision, which ORDERS two states of one seat: its
    *  flushes are taken in one order and their pushes can arrive in another,
@@ -4457,6 +4474,225 @@ export interface ChatReadReceipt {
    * state, whichever arrives first.
    */
   read: ChatReadState;
+}
+
+// ---------------------------------------------------------------------------
+// Chat: the reader's own marks and views. What waits for them (Activity), the
+// threads they follow, what they saved, what they sent, a room's shared links,
+// and the marks behind them, kept in the reader's read state
+// (`internal/coord`'s chat read record) and written through `mark_chat_read`.
+// Held to what `internal/api/queries` sends by
+// `TestTheChatReaderScreensReadWhatTheAnswersSend`.
+// ---------------------------------------------------------------------------
+
+/** How a room reaches this reader: every message, mentions only (the
+ *  default), or nothing. A reader's own choice; it wakes nobody and changes
+ *  nothing for anybody else. */
+export type ChatNotifyLevel = "all" | "mentions" | "muted";
+
+/** One message the reader saved for later. */
+export interface ChatSavedMark {
+  channel_id: string;
+  message_id: string;
+  /** When it was saved. */
+  at: string;
+}
+
+/**
+ * One thread the reader followed or unfollowed BY HAND.
+ *
+ * A thread the reader started, replied in or was named in is followed
+ * without a mark. A mark DECIDES: `following: false` keeps a thread they
+ * spoke in out of Threads and Activity, and `following: true` follows one they
+ * never spoke in. Replying again does not undo an unfollow by itself: a screen
+ * that replies in a thread the reader unfollowed sends `follow` with the reply.
+ */
+export interface ChatThreadMark {
+  channel_id: string;
+  root_id: string;
+  following: boolean;
+  /** When the mark was made, which is what the cap drops by. */
+  at: string;
+}
+
+/** A message, as `save` and `unsave` name one. */
+export interface ChatMessageRef {
+  channel_id: string;
+  message_id: string;
+}
+
+/** A thread, as `follow` and `unfollow` name one: its root message. */
+export interface ChatThreadRef {
+  channel_id: string;
+  root_id: string;
+}
+
+/**
+ * Why an Activity row is there. `mention`: a message named the reader, or the
+ * whole room. `reply`: a reply in a thread the reader follows that did not
+ * name them. `reaction`: somebody else reacted to the reader's message.
+ */
+export type ChatActivityKind = "mention" | "reply" | "reaction";
+
+/** One row of the reader's Activity, newest first. */
+export interface ChatActivityItem {
+  /** Unique in the feed and stable across reads: the list's key. */
+  key: string;
+  kind: ChatActivityKind;
+  /** The message the row is about: the one that named the reader, the reply,
+   *  or the reader's own message somebody reacted to. */
+  message_id: string;
+  channel_id: string;
+  /** Absent for a direct conversation, which is titled by its people. */
+  channel_name?: string;
+  channel_kind: ChatKind;
+  /** The thread the message is in, absent on a room post. */
+  thread_root?: string;
+  /** Who did it: the author of a mention or a reply, the reactor of a
+   *  reaction. */
+  actor: string;
+  actor_kind: ChatAuthorKind;
+  /** What the message says NOW, cut at `chatlet.MaxExcerpt` bytes as a
+   *  mention's excerpt is: the message's own words, which a screen draws as
+   *  plain text with the transcript's own helper. */
+  excerpt?: string;
+  /** A reaction's emoji. */
+  emoji?: string;
+  /** When the reader was named, the reply was said, or the reaction made. */
+  at: string;
+  /** A mention or a reply above the reader's cursor for the room (which
+   *  counts thread replies, as the rail does). ABSENT on a reaction, which
+   *  asks nothing of anybody, and on every row when `read_state` is false. */
+  unread?: boolean;
+  /** The PACKED log position that, sent as the room's cursor through
+   *  `mark_chat_read`, marks this row read. A cursor only moves forward, so
+   *  it also marks what was said before it in that room read, which is what
+   *  the room's own badge means. Absent on a reaction. */
+  read_through?: number;
+}
+
+/** What waits in Activity, for the badges: unread mentions and unread
+ *  replies, each counted over its newest `chatlet.UnreadLimit` (100) rows. */
+export interface ChatActivityCounts {
+  mention: number;
+  reply: number;
+  /** A count stopped at the limit: the "99+" case. */
+  capped?: boolean;
+}
+
+/**
+ * The reader's Activity, newest first: `chat_activity`, asked with
+ * `{ kind?: ChatActivityKind, unread?: true, cursor?, limit? }`. It reads only
+ * rooms the reader may read. `unread` counts are the answer's whatever
+ * `kind`, `unread` and `cursor` asked, so the Rooms panel's badge asks
+ * `{ limit: 1 }`.
+ */
+export interface ChatActivityAnswer extends ChatServed {
+  items: ChatActivityItem[];
+  /** Pass back unchanged for the next older page; absent at the end. */
+  next_cursor?: string;
+  unread: ChatActivityCounts;
+  /** False when the read state could not be read: no row says `unread`,
+   *  the counts are zero and `unread: true` is refused, which is "nobody could
+   *  look", never "all read". */
+  read_state: boolean;
+}
+
+/** Why the reader follows a thread, the strongest reason first. */
+export type ChatFollowReason = "marked" | "started" | "replied" | "named";
+
+/** One thread the reader follows. */
+export interface ChatFollowedThread {
+  channel_id: string;
+  channel_name?: string;
+  channel_kind: ChatKind;
+  reason: ChatFollowReason;
+  /** The root, which carries the thread line (`thread`). */
+  root: ChatMessageView;
+  /** The newest replies, at most two, oldest first. */
+  latest: ChatMessageView[];
+}
+
+/**
+ * The threads the reader follows, newest reply first: `chat_threads`, asked
+ * with `{ cursor?, limit? }` (20 by default, 50 at most).
+ */
+export interface ChatThreadsAnswer extends ChatServed {
+  threads: ChatFollowedThread[];
+  next_cursor?: string;
+  /** False when the read state could not be read: the threads marked by
+   *  hand are then unknown, so one the reader unfollowed may be listed and one
+   *  they followed by hand may not. */
+  read_state: boolean;
+}
+
+/** One saved message as the Saved view lists it. */
+export interface ChatSavedEntry {
+  mark: ChatSavedMark;
+  channel_name?: string;
+  channel_kind?: ChatKind;
+  /** The message, absent when it is gone. */
+  view?: ChatMessageView;
+  /** The message is not there to show: taken back, erased, pruned by the
+   *  room's horizon, or in a room the reader may no longer read (answered
+   *  exactly as one that is gone). The mark stays until `unsave`. */
+  gone?: boolean;
+}
+
+/**
+ * The reader's saved messages, the newest save first: `chat_saved`, asked with
+ * `{ cursor?, limit? }`.
+ */
+export interface ChatSavedAnswer extends ChatServed {
+  saved: ChatSavedEntry[];
+  next_cursor?: string;
+  /** False when the read state could not be read: nothing can be listed. */
+  read_state: boolean;
+}
+
+/** One of the reader's own messages, where it was said. */
+export interface ChatSentMessage {
+  channel_name?: string;
+  channel_kind: ChatKind;
+  view: ChatMessageView;
+}
+
+/**
+ * What the reader said in every room, newest first: `chat_sent`, asked with
+ * `{ cursor?, limit? }`. Taken-back messages are left out.
+ */
+export interface ChatSentAnswer extends ChatServed {
+  messages: ChatSentMessage[];
+  next_cursor?: string;
+}
+
+/**
+ * One link a room shared: each link of each message that carried one, a
+ * taken-back message's left out. The address exactly as it was sent; what it
+ * points at (a task, a page, an artifact, a pull request) is the screen's to
+ * resolve, by the link rules and the reads it already uses for a message's
+ * links.
+ */
+export interface ChatSharedLink {
+  url: string;
+  message_id: string;
+  thread_root?: string;
+  author: string;
+  author_kind: ChatAuthorKind;
+  at: string;
+  /** The message's own number in the room, which a jump opens it at. */
+  channel_seq: number;
+}
+
+/**
+ * The links one room shared, newest first: `chat_links`, asked with
+ * `{ channel_id, cursor?, limit? }`. A room the reader may not read is not
+ * found.
+ */
+export interface ChatLinksAnswer extends ChatServed {
+  channel_id: string;
+  links: ChatSharedLink[];
+  next_cursor?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -7548,6 +7784,14 @@ export interface QueryMap {
      conversation is read forwards. */
   chat_thread: ChatThreadAnswer;
   chat_mentions: ChatMentionsAnswer;
+  /* THE READER'S OWN VIEWS, each answered for the seat the caller acts as:
+     what waits for them, the threads they follow, what they saved, what they
+     sent, and a room's shared links. */
+  chat_activity: ChatActivityAnswer;
+  chat_threads: ChatThreadsAnswer;
+  chat_saved: ChatSavedAnswer;
+  chat_sent: ChatSentAnswer;
+  chat_links: ChatLinksAnswer;
   /* EVERY ROOM THE CALLER MAY READ, BY NAME, joined or not: what a room
      written in prose is told from a colour or an issue's number by. */
   chat_room_names: ChatRoomNamesAnswer;

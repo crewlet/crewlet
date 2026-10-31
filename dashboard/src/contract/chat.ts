@@ -132,3 +132,17 @@ export const PENDING_REASK_MS = 2_000;
  * `TestTheDashboardAsksForTheChatSearchPageTheEngineServes`.
  */
 export const CHAT_SEARCH_PAGE = 40;
+
+/**
+ * How many rooms one reader may star or set to every message, messages they
+ * may save, and threads they may mark followed or unfollowed, each set
+ * separately: `coord.MaxReaderMarks`, held EQUAL by `internal/coord`'s
+ * `TestTheDashboardsReaderMarkCapIsTheEngines`.
+ *
+ * A star, a level or a save past it is REFUSED rather than dropping an older
+ * one, because each is one deliberate gesture and a silent drop is a saved
+ * message gone with no way to find out. A thread mark past it drops the mark
+ * made longest ago instead: every unfollow leaves one, and a cap that refused
+ * an unfollow would keep somebody in a thread they asked to leave.
+ */
+export const MAX_READER_MARKS = 256;

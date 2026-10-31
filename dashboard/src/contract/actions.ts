@@ -428,7 +428,28 @@ export const ACTIONS = {
     // moves, whichever of the two arrives first. A `refreshes` here asked a
     // second time whenever the push won the race, and the second ask
     // discarded the first after the engine had counted every room's unread.
-    args: ["cursors", "mute", "unmute"],
+    //
+    // A THREAD'S OWN PLACE rides it too (`thread_cursors`), and "Mark unread"
+    // is `rewind`: the one way a room's place moves back, set exactly.
+    //
+    // AND THE READER'S OTHER MARKS, on the same record and the same push: how
+    // a room reaches them (`notify`), a room starred or unstarred, a message
+    // saved or unsaved, a thread followed or unfollowed, each named alone, so
+    // two tabs marking two things at once both land.
+    args: [
+      "cursors",
+      "thread_cursors",
+      "rewind",
+      "mute",
+      "unmute",
+      "notify",
+      "star",
+      "unstar",
+      "save",
+      "unsave",
+      "follow",
+      "unfollow",
+    ],
     domain: null,
     apps: ["chatlet"],
     refreshes: [],

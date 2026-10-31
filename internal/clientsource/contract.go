@@ -128,6 +128,7 @@ var contract = []Entry{
 	{"TYPING_THROTTLE_MS", ReadScalar, "internal/presence.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
 	{"PENDING_REASK_MS", ReadScalar, "internal/chatlet.TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait"},
 	{"CHAT_SEARCH_PAGE", ReadScalar, "internal/search.TestTheDashboardAsksForTheChatSearchPageTheEngineServes"},
+	{"MAX_READER_MARKS", ReadScalar, "internal/coord.TestTheDashboardsReaderMarkCapIsTheEngines"},
 
 	// presence.ts
 	{"PRESENCE_ROOMS", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
