@@ -87,6 +87,15 @@ func benchObjects(b *testing.B, objects string) objstore.Backend {
 // figure is of a repository the budget evicted between iterations.
 const benchCacheBytes = 4 << 30
 
+// benchLogBytes is every benchmark fleet's code log ceiling: 128 MiB admits
+// about 74 MB of records beside its gate reserve (statelog.Reservation's
+// fleet term, some 57 MiB), where a solo node's own 64 MiB admits about
+// 7 MB — which the gigabyte arm of BenchmarkPushSmall filled at 31 000 of
+// the hundred thousand refs its refs arms build (7.26 MB with its history's
+// pushes, on the node pin), refused log_full. Its hundred thousand refs and
+// everything before them take some 25 MB at that rate, a third of the room.
+const benchLogBytes = 128 << 20
+
 // coldCloners is how many people clone a cold node at once in
 // BenchmarkCloneCold's widest arm, each with a token of their own.
 const coldCloners = 8
@@ -96,8 +105,9 @@ func cloner(i int) string { return fmt.Sprintf("cloner%d", i) }
 
 // benchFleet is a solo fleet of gitNodes over objects, its pools running the
 // git on PATH and its broker fsyncing every write as a deployment's does
-// (stream.sync's default), with RepoName declared, and the person who pushes
-// to it; the coldCloners people beside them have a token each.
+// (stream.sync's default), its code log benchLogBytes, with RepoName
+// declared, and the person who pushes to it; the coldCloners people beside
+// them have a token each.
 func benchFleet(b *testing.B, objects objstore.Backend, gitNodes int) (*codetest.SoloFleet, *codetest.Person) {
 	b.Helper()
 	people := []string{"ceo"}
@@ -105,7 +115,7 @@ func benchFleet(b *testing.B, objects objstore.Backend, gitNodes int) (*codetest
 		people = append(people, cloner(i))
 	}
 	f := codetest.SoloNode(b, codetest.SoloOptions{Shape: codetest.Shape{GitNodes: gitNodes}, Objects: objects,
-		CacheMaxBytes: benchCacheBytes, People: people, SyncAlways: true})
+		CacheMaxBytes: benchCacheBytes, LogBytes: benchLogBytes, People: people, SyncAlways: true})
 	f.Declare(b, code.Declared{Name: codetest.RepoName, Settings: codetest.Settings()})
 	b.Logf("the pools run git %s", f.Nodes()[0].Pool().Version())
 	return f, codetest.NewPerson(b, f, "ceo")
@@ -132,6 +142,12 @@ func pushSessions(b *testing.B, p *codetest.Person, src, url string, commits []s
 	}
 }
 
+// addRefsBusyTries is how many times addRefs proposes one push answered busy:
+// a committer busy that often with nothing else queued is a fixture that
+// cannot be built, which fails the arm with the committer's reason rather
+// than waiting on it for ever.
+const addRefsBusyTries = 5
+
 // addRefs creates the live refs numbered from to to (excluded) beside main in
 // repo, all at tip, in pushes of code.MaxCommandsPerPush proposed to the data
 // node's committer — records like any push's, with no pack, since every ref
@@ -140,6 +156,9 @@ func pushSessions(b *testing.B, p *codetest.Person, src, url string, commits []s
 // advertised, so a push of a thousand against 46 000 refs spent twenty
 // seconds in the client alone, and the hundred-thousand-ref fixture an hour
 // of every count.
+//
+// A proposal answered busy is proposed again, at most addRefsBusyTries times
+// in all, each try logged with the committer's reason.
 func addRefs(b *testing.B, f *codetest.SoloFleet, repo, tip string, from, to int) {
 	b.Helper()
 	for lo := from; lo < to; lo += code.MaxCommandsPerPush {
@@ -153,11 +172,21 @@ func addRefs(b *testing.B, f *codetest.SoloFleet, repo, tip string, from, to int
 			Via:       code.ViaGit, Node: "bench", ReceivedAt: time.Now().UTC(), Commands: cmds,
 		}
 		res, err := f.Data().Served().Propose(b.Context(), p)
+		for try := 1; err == nil && res.Answer.Refused == code.RefusalBusy && try < addRefsBusyTries; try++ {
+			// BUSY IS THE COMMITTER'S "AGAIN", answered with nothing decided,
+			// which a person's git meets as a push to run again: the fixture
+			// does what that person does, and says so, since a committer
+			// busy with nothing else queued is a figure in itself.
+			b.Logf("a push of %d refs at %d live refs answered busy (%s); proposing it again", len(cmds), lo,
+				res.Answer.Detail)
+			res, err = f.Data().Served().Propose(b.Context(), p)
+		}
 		if err != nil {
 			b.Fatalf("a push of %d refs: %v", len(cmds), err)
 		}
 		if res.Outcome != statelog.OutcomeApplied || len(res.Answer.Commands) != len(cmds) {
-			b.Fatalf("a push of %d refs was answered %s with %d commands", len(cmds), res.Outcome, len(res.Answer.Commands))
+			b.Fatalf("a push of %d refs at %d live refs was answered %q with %d commands, refused %s: %s", len(cmds),
+				lo, res.Outcome, len(res.Answer.Commands), res.Answer.Refused, res.Answer.Detail)
 		}
 		for _, c := range res.Answer.Commands {
 			if c.Result != code.ResultOK {
