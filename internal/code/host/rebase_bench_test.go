@@ -60,8 +60,8 @@ func BenchmarkEngineRebase(b *testing.B) {
 					builds = append(builds, r.fig.stage("build")...)
 					b.StartTimer()
 				}
-				b.ReportMetric(medianOf(builds), "ms/build")
-				b.ReportMetric(medianOf(writes), "ms/write")
+				b.ReportMetric(medianMillis(builds), "ms/build")
+				b.ReportMetric(medianMillis(writes), "ms/write")
 			})
 		}
 	}
@@ -150,9 +150,9 @@ func (r *rebaseRig) moveMain(b *testing.B) {
 	mustPush(b, r.p, r.work, repoURL(r.f.Nodes()[0]), "main")
 }
 
-// medianOf is the median of samples in milliseconds — one sample at the
+// medianMillis is the median of samples in milliseconds — one sample at the
 // bound this machine runs an arm at.
-func medianOf(samples []time.Duration) float64 {
+func medianMillis(samples []time.Duration) float64 {
 	sorted := slices.Clone(samples)
 	slices.Sort(sorted)
 	return quantile(sorted, 0.50)
