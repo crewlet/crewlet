@@ -5,7 +5,7 @@
  * The task page draws three — its comments (`work_comments`), the agent turns
  * charged to it (`work_item_turns`) and what changed on it (`work_activity`) —
  * a seat's profile draws its turns (`turns {seat}`), and chat draws a person's
- * mentions (`chat_mentions`) and a thread (`chat_thread`). Each is answered a
+ * Activity (`chat_activity`) and a thread (`chat_thread`). Each is answered a
  * page at a time with a cursor to the page after: newest first, every one of
  * them but the thread, which reads forwards from its root. Each used to be
  * read as its first page and nothing more, so a task past twenty comments or

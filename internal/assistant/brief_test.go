@@ -419,18 +419,20 @@ func TestABriefRowMayCiteAChatRoom(t *testing.T) {
 			"kind": "public", "name": name}})
 		return exec.Response{Status: http.StatusOK, Body: body}
 	}
-	mentions, _ := json.Marshal(map[string]any{"mentions": []any{
-		map[string]any{"channel_id": launch, "channel_name": "launch", "channel_kind": "public",
-			"author": "ada", "excerpt": "@grace can you approve the launch copy?",
-			"message_id": "m1", "at": "2026-10-26T09:00:00Z"},
-		map[string]any{"channel_id": release, "channel_name": "release",
-			"channel_kind": "public", "author": "ada", "excerpt": "@grace ship Friday or hold?",
-			"message_id": "m2", "at": "2026-10-26T09:05:00Z"},
-		map[string]any{"channel_id": secret, "channel_name": "secret", "channel_kind": "private",
-			"author": "ada", "excerpt": "@grace a word?", "message_id": "m3",
-			"at": "2026-10-26T09:10:00Z"}}})
+	mentions, _ := json.Marshal(map[string]any{"items": []any{
+		map[string]any{"key": "mention:m1", "kind": "mention", "channel_id": launch,
+			"channel_name": "launch", "channel_kind": "public", "actor": "ada",
+			"excerpt": "@grace can you approve the launch copy?", "message_id": "m1",
+			"at": "2026-10-26T09:00:00Z"},
+		map[string]any{"key": "mention:m2", "kind": "mention", "channel_id": release,
+			"channel_name": "release", "channel_kind": "public", "actor": "ada",
+			"excerpt": "@grace ship Friday or hold?", "message_id": "m2",
+			"at": "2026-10-26T09:05:00Z"},
+		map[string]any{"key": "mention:m3", "kind": "mention", "channel_id": secret,
+			"channel_name": "secret", "channel_kind": "private", "actor": "ada",
+			"excerpt": "@grace a word?", "message_id": "m3", "at": "2026-10-26T09:10:00Z"}}})
 	handler := assistanttest.Routes(map[string]exec.Response{
-		"GET /chatlet/mentions":            {Status: http.StatusOK, Body: mentions},
+		"GET /chatlet/activity":            {Status: http.StatusOK, Body: mentions},
 		"GET /chatlet/channels/" + launch:  room(launch, "launch"),
 		"GET /chatlet/channels/%23release": room(release, "release"),
 		"GET /chatlet/channels/" + release: room(release, "release"),

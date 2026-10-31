@@ -509,15 +509,6 @@ func (l liveChat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQue
 	return r.Thread(ctx, viewer, q, fresh)
 }
 
-func (l liveChat) Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
-	fresh statelog.Freshness) (chatlet.MentionFeed, error) {
-	r, err := l.reader()
-	if err != nil {
-		return chatlet.MentionFeed{}, err
-	}
-	return r.Mentions(ctx, viewer, q, fresh)
-}
-
 func (l liveChat) RoomNames(ctx context.Context, viewer string,
 	fresh statelog.Freshness) (chatlet.RoomNames, error) {
 	r, err := l.reader()

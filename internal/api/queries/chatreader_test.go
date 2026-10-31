@@ -66,8 +66,12 @@ func (s *stubChat) Activity(_ context.Context, viewer string, q chatlet.Activity
 		return chatlet.Activity{}, err
 	}
 	s.activity = q
-	return chatlet.Activity{Served: chatServed, Items: []chatlet.ActivityItem{},
-		ReadState: q.Marks.Known}, nil
+	out := s.feed
+	if out.Items == nil {
+		out.Items = []chatlet.ActivityItem{}
+	}
+	out.Served, out.ReadState = chatServed, q.Marks.Known
+	return out, nil
 }
 
 func (s *stubChat) Threads(_ context.Context, viewer string, q chatlet.ThreadsQuery,

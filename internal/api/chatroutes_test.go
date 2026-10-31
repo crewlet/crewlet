@@ -24,7 +24,6 @@ var chatReadRoutes = map[string]string{
 	"/chatlet/channels/room-1":              "chat_channel",
 	"/chatlet/channels/room-1/messages":     "chat_messages",
 	"/chatlet/channels/room-1/threads/m-1":  "chat_thread",
-	"/chatlet/mentions":                     "chat_mentions",
 	"/chatlet/search":                       "chat_search",
 	"/chatlet/room-names":                   "chat_room_names",
 	"/chatlet/activity":                     "chat_activity",
@@ -87,7 +86,6 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 		"/chatlet/channels/room-1/threads/m-1?cursor=17": "chat_thread",
 		"/chatlet/channels/room-1":                       "chat_channel",
 		"/chatlet/channels":                              "chat_channels",
-		"/chatlet/mentions?cursor=c":                     "chat_mentions",
 		"/chatlet/search":                                "chat_search",
 		"/chatlet/room-names":                            "chat_room_names",
 		"/chatlet/activity?cursor=c":                     "chat_activity",
@@ -162,11 +160,6 @@ func (quietChat) Messages(context.Context, string, chatlet.TranscriptQuery,
 func (quietChat) Thread(context.Context, string, chatlet.ThreadQuery,
 	statelog.Freshness) (chatlet.Thread, error) {
 	return chatlet.Thread{}, nil
-}
-
-func (quietChat) Mentions(context.Context, string, chatlet.MentionQuery,
-	statelog.Freshness) (chatlet.MentionFeed, error) {
-	return chatlet.MentionFeed{}, nil
 }
 
 func (quietChat) RoomNames(context.Context, string,

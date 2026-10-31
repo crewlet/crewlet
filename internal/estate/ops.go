@@ -223,8 +223,6 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.Transcript, error)
 	Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 		fresh statelog.Freshness) (chatlet.Thread, error)
-	Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
-		fresh statelog.Freshness) (chatlet.MentionFeed, error)
 	RoomNames(ctx context.Context, viewer string,
 		fresh statelog.Freshness) (chatlet.RoomNames, error)
 	Directory(ctx context.Context, viewer string,
@@ -1780,20 +1778,6 @@ var opChatThread = define("chat.thread", opRead, chatDomain, false,
 			return chatlet.Thread{}, errNoHalf
 		}
 		return b.Chat.Thread(ctx, a.Viewer, a.Query, a.Fresh)
-	})
-
-type chatMentionsArgs struct {
-	Viewer string
-	Query  chatlet.MentionQuery
-	Fresh  statelog.Freshness
-}
-
-var opChatMentions = define("chat.mentions", opRead, chatDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a chatMentionsArgs) (chatlet.MentionFeed, error) {
-		if b.Chat == nil {
-			return chatlet.MentionFeed{}, errNoHalf
-		}
-		return b.Chat.Mentions(ctx, a.Viewer, a.Query, a.Fresh)
 	})
 
 type chatRoomNamesArgs struct {

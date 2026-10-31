@@ -283,15 +283,18 @@ func chatReads() []Tool {
 			schema: object(nil, map[string]*schema{
 				"limit": positive("How many, at most.", 50),
 			}),
-			Routes: []string{"GET /chatlet/mentions"}, Apps: chatApp, Fence: true,
+			// ACTIVITY'S MENTIONS, the away story the dashboard reads: one
+			// feed of where a person was named, read as the Activity view
+			// reads it rather than through a second question beside it.
+			Routes: []string{"GET /chatlet/activity"}, Apps: chatApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /chatlet/mentions", nil,
-					query(a).num("limit", "limit", 20).values())
+				return get("GET /chatlet/activity", nil,
+					query(a).fixed("kind", "mention").num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Where you were named",
-				Rows: "mentions", Brief: []string{"room", "by", "said", "at"},
+				Rows: "items", Brief: []string{"room", "by", "said", "at"},
 				Columns: []cards.Column{roomColumn("room", "channel_name"),
-					seat("by", "By", "author"), prose("said", "Message", "excerpt"),
+					seat("by", "By", "actor"), prose("said", "Message", "excerpt"),
 					col("at", "When", "at", tDatetime),
 					col("kind", "Room kind", "channel_kind", tLabel),
 					col("room_id", "Room ID", "channel_id", tText),

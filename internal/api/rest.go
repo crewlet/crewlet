@@ -199,7 +199,6 @@ var namedRoutes = []struct {
 	// the room it belongs to are read together or not at all. The WRITE
 	// half is the `mark_chat_read` tool, which the dashboard calls through
 	// /operator/act like every other write.
-	{method: "GET", pattern: "/chatlet/mentions", what: "chat_mentions"},
 	// THE READER'S OWN VIEWS, each about the caller rather than a room
 	// (Activity, the threads they follow, what they saved and what they
 	// sent), and a room's shared links and one of its messages, which are

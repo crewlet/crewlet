@@ -201,12 +201,6 @@ func (emptyChat) Thread(context.Context, string, chatlet.ThreadQuery,
 	return chatlet.Thread{}, nil
 }
 
-func (emptyChat) Mentions(context.Context, string, chatlet.MentionQuery,
-	statelog.Freshness) (chatlet.MentionFeed, error) {
-
-	return chatlet.MentionFeed{}, nil
-}
-
 func (emptyChat) RoomNames(context.Context, string,
 	statelog.Freshness) (chatlet.RoomNames, error) {
 

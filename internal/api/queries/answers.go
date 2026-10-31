@@ -920,7 +920,6 @@ func Register(r *Registry, s Sources) {
 		// opened beside the transcript and paged the other way, because a
 		// conversation is read forwards.
 		r.Register("chat_thread", Requires(iam.GrantChatlet), s.chatThread)
-		r.Register("chat_mentions", Requires(iam.GrantChatlet), s.chatMentions)
 		// THE READER'S OWN VIEWS, each across the rooms they may read and
 		// each read with their own record (chatreader.go): what waits for
 		// them, the threads they follow, what they saved and sent, a

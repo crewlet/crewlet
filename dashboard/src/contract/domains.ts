@@ -46,7 +46,6 @@ export const SESSION_QUERIES = {
     "chat_channel",
     "chat_messages",
     "chat_thread",
-    "chat_mentions",
     "chat_activity",
     "chat_threads",
     "chat_saved",

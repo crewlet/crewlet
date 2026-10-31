@@ -616,12 +616,6 @@ func (c Chat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 	return call(ctx, c.r, opChatThread, nil, chatThreadArgs{Viewer: viewer, Query: q, Fresh: fresh})
 }
 
-// Mentions answers a page of the messages that named a viewer.
-func (c Chat) Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
-	fresh statelog.Freshness) (chatlet.MentionFeed, error) {
-	return call(ctx, c.r, opChatMentions, nil, chatMentionsArgs{Viewer: viewer, Query: q, Fresh: fresh})
-}
-
 // RoomNames answers the names of every room a viewer may read.
 func (c Chat) RoomNames(ctx context.Context, viewer string,
 	fresh statelog.Freshness) (chatlet.RoomNames, error) {

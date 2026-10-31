@@ -120,12 +120,6 @@ func (d *chatDesk) Thread(_ context.Context, viewer string, q chatlet.ThreadQuer
 		Root: chatlet.MessageView{Message: chatlet.Message{ID: q.RootID}}}, nil
 }
 
-func (d *chatDesk) Mentions(_ context.Context, viewer string, q chatlet.MentionQuery,
-	fresh statelog.Freshness) (chatlet.MentionFeed, error) {
-	served := d.read("mentions", viewer, fresh)
-	return chatlet.MentionFeed{Served: served, Handle: viewer, NextCursor: q.Cursor}, nil
-}
-
 func (d *chatDesk) Activity(_ context.Context, viewer string, q chatlet.ActivityQuery,
 	fresh statelog.Freshness) (chatlet.Activity, error) {
 	served := d.read("activity", viewer, fresh)
@@ -390,10 +384,6 @@ func TestEveryChatReadIsAnsweredForItsViewerAtItsLevel(t *testing.T) {
 		{"thread", func() (chatlet.Served, bool, error) {
 			out, err := c.Thread(ctx, "jane", chatlet.ThreadQuery{ChannelID: "room-1", RootID: "m-1"}, linear)
 			return out.Served, out.Root.Message.ID == "m-1", err
-		}},
-		{"mentions", func() (chatlet.Served, bool, error) {
-			out, err := c.Mentions(ctx, "jane", chatlet.MentionQuery{Cursor: "c3"}, linear)
-			return out.Served, out.Handle == "jane" && out.NextCursor == "c3", err
 		}},
 		{"room_names", func() (chatlet.Served, bool, error) {
 			out, err := c.RoomNames(ctx, "jane", linear)

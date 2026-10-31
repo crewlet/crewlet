@@ -79,8 +79,6 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.Transcript, error)
 	Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 		fresh statelog.Freshness) (chatlet.Thread, error)
-	Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
-		fresh statelog.Freshness) (chatlet.MentionFeed, error)
 	RoomNames(ctx context.Context, viewer string,
 		fresh statelog.Freshness) (chatlet.RoomNames, error)
 	Directory(ctx context.Context, viewer string,
@@ -539,27 +537,6 @@ func (s Sources) chatThread(ctx context.Context, p Params) (any, error) {
 		return nil, chatFailure(err)
 	}
 	return thread, nil
-}
-
-// chatMentions answers the viewer's own @-mention feed. ITS CURSOR IS A LOG
-// POSITION where a transcript's is a room's own message number; both arrive as
-// opaque strings from the answer that produced them.
-func (s Sources) chatMentions(ctx context.Context, p Params) (any, error) {
-	who, err := s.chatViewer(ctx, authz.ActionChatRead)
-	if err != nil {
-		return nil, err
-	}
-	fresh, err := freshness(p)
-	if err != nil {
-		return nil, err
-	}
-	feed, err := s.Chat.Mentions(ctx, who, chatlet.MentionQuery{
-		Cursor: strings.TrimSpace(p.String("cursor")), Limit: chatPage(p),
-	}, fresh)
-	if err != nil {
-		return nil, chatFailure(err)
-	}
-	return feed, nil
 }
 
 // ---- search ------------------------------------------------------------ //

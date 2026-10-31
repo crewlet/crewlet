@@ -551,13 +551,16 @@ func (parityChat) Thread(_ context.Context, viewer string, q chatlet.ThreadQuery
 	return chatlet.Thread{ChannelID: q.ChannelID, Root: parityAsked(viewer)}, nil
 }
 
-func (parityChat) Mentions(_ context.Context, viewer string, _ chatlet.MentionQuery,
-	_ statelog.Freshness) (chatlet.MentionFeed, error) {
+// Activity answers the one message as the place the viewer was named, which
+// is how the assistant reads where a person was named.
+func (parityChat) Activity(_ context.Context, viewer string, _ chatlet.ActivityQuery,
+	_ statelog.Freshness) (chatlet.Activity, error) {
 	asked := parityAsked(viewer)
-	return chatlet.MentionFeed{Handle: viewer, Mentions: []chatlet.Mention{{
+	return chatlet.Activity{Items: []chatlet.ActivityItem{{
+		Key: "mention:" + asked.Message.ID, Kind: chatlet.ActivityMention,
 		MessageID: asked.Message.ID, ChannelID: asked.Message.ChannelID,
-		ChannelKind: chatlet.KindDM, Author: asked.Message.Author,
-		AuthorKind: asked.Message.AuthorKind, Excerpt: asked.Message.Body,
+		ChannelKind: chatlet.KindDM, Actor: asked.Message.Author,
+		ActorKind: asked.Message.AuthorKind, Excerpt: asked.Message.Body,
 		At: asked.Message.CreatedAt}}}, nil
 }
 

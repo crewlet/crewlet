@@ -305,7 +305,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"page_reads": "doclet",
 
 		"chat_channels": "chatlet", "chat_channel": "chatlet", "chat_messages": "chatlet",
-		"chat_thread": "chatlet", "chat_mentions": "chatlet", "chat_search": "chatlet",
+		"chat_thread": "chatlet", "chat_search": "chatlet",
 		// The reader's own views, and a message's link previews, each of
 		// whose records is then decided by its own question.
 		"chat_activity": "chatlet", "chat_threads": "chatlet", "chat_saved": "chatlet",

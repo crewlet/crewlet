@@ -370,11 +370,11 @@ what a person gets is an unread count, a mention feed and a live screen. A
 mention is not a notice in Worklet's inbox either: the inbox is
 Worklet's, and Chatlet keeps its own.
 
-**The mention feed lists the moments you were named**, newest first, each
-once. An edit that still names you leaves the mention where it was — with the
-new words, marked edited — because fixing a typo is not naming you again, and a
-feed that lifted it to the top would show you as news something you had already
-read. An edit that names you where the words before it did not *is* naming you:
+**Activity's mentions list the moments you were named** (`chat_activity` with
+`kind: mention`), newest first, each once. An edit that still names you leaves
+the mention where it was, with the new words, because fixing a typo is not
+naming you again, and a feed that lifted it to the top would show you as news
+something you had already read. An edit that names you where the words before it did not *is* naming you:
 it arrives at the top, dated by the edit, and wakes a seat it names the same
 way. A delete takes the mention away, as an erase and a prune do: the room keeps
 a tombstone because a thread hangs off it, but a message taken back asks you

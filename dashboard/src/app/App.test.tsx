@@ -781,8 +781,13 @@ describe("chat, for a person", () => {
           };
         case "chat_channels":
           return { ...served, read_state: true, channels: [] };
-        case "chat_mentions":
-          return { ...served, handle: "ada", mentions: [] };
+        case "chat_activity":
+          return {
+            ...served,
+            items: [],
+            unread: { mention: 0, reply: 0 },
+            read_state: true,
+          };
         default:
           // EVERYTHING ELSE IS A QUESTION THIS NODE DOES NOT SERVE: the frame
           // reads what it is asking for, and an empty object is no answer.

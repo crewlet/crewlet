@@ -4146,41 +4146,6 @@ export interface ChatThreadAnswer extends ChatServed {
   unreadable?: number;
 }
 
-/** One message that named the viewer. */
-export interface ChatMention {
-  message_id: string;
-  channel_id: string;
-  channel_name?: string;
-  channel_kind: ChatKind;
-  thread_root?: string;
-  author?: string;
-  author_kind?: ChatAuthorKind;
-  /** What the message says NOW, after any edit. A delete takes the mention
-   *  away rather than leaving a tombstone here: a message somebody took back
-   *  no longer names you. */
-  excerpt?: string;
-  /** WHEN YOU WERE NAMED — the instant of `position`'s record: the message's
-   *  own for a post, the edit's for an edit that named you where the words
-   *  before it did not. A row's time never contradicts its place. */
-  at: string;
-  /** The message's last edit, absent where it was never edited: the excerpt
-   *  may not be the words that named you. */
-  edited_at?: string;
-  /** The position of the record that named this handle, and the feed's
-   *  cursor. It never moves: an edit keeps the mention of every handle it
-   *  still names where it was. */
-  position: LogPosition;
-}
-
-/** A page of the viewer's own @-mention feed — `chat_mentions`. */
-export interface ChatMentionsAnswer extends ChatServed {
-  handle: string;
-  mentions: ChatMention[];
-  /** A LOG POSITION where a transcript's cursor is a room's message number.
-   *  The two are not interchangeable; both are opaque here. */
-  next_cursor?: string;
-}
-
 /** One room the viewer may read, as prose names it. */
 export interface ChatRoomName {
   id: string;
@@ -7842,7 +7807,6 @@ export interface QueryMap {
      beside the transcript and paged in the opposite direction, because a
      conversation is read forwards. */
   chat_thread: ChatThreadAnswer;
-  chat_mentions: ChatMentionsAnswer;
   /* THE READER'S OWN VIEWS, each answered for the seat the caller acts as:
      what waits for them, the threads they follow, what they saved, what they
      sent, and a room's shared links. */

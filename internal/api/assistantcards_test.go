@@ -404,14 +404,16 @@ func (filledChat) Thread(context.Context, string, chatlet.ThreadQuery, statelog.
 	return filled[chatlet.Thread](), nil
 }
 
-func (filledChat) Mentions(context.Context, string, chatlet.MentionQuery, statelog.Freshness) (
-	chatlet.MentionFeed, error) {
-	return filled[chatlet.MentionFeed](), nil
-}
-
 func (filledChat) RoomNames(context.Context, string, statelog.Freshness) (
 	chatlet.RoomNames, error) {
 	return filled[chatlet.RoomNames](), nil
+}
+
+// Activity answers filled, which is what the assistant reads where a person
+// was named.
+func (filledChat) Activity(context.Context, string, chatlet.ActivityQuery, statelog.Freshness) (
+	chatlet.Activity, error) {
+	return filled[chatlet.Activity](), nil
 }
 
 func (filledChat) Directory(context.Context, string, statelog.Freshness) (

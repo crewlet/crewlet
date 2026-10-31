@@ -58,11 +58,6 @@ func (*threadAnswerer) Messages(context.Context, string, chatlet.TranscriptQuery
 	return chatlet.Transcript{}, errors.New("only the thread is read here")
 }
 
-func (*threadAnswerer) Mentions(context.Context, string, chatlet.MentionQuery,
-	statelog.Freshness) (chatlet.MentionFeed, error) {
-	return chatlet.MentionFeed{}, errors.New("only the thread is read here")
-}
-
 func (*threadAnswerer) RoomNames(context.Context, string,
 	statelog.Freshness) (chatlet.RoomNames, error) {
 	return chatlet.RoomNames{}, errors.New("only the thread is read here")
