@@ -204,11 +204,6 @@ func fill(paths []string) {
 func TestTheCloneRecipesAreTheirShapes(t *testing.T) {
 	t.Parallel()
 	hook := sandbox.ShellQuote(sandbox.TrailerHook)
-	monitor := `  { git version | awk -v want=2.55.0 ` + sandbox.ShellQuote(`function n(s,  a) { split(s, a, "."); return a[1] * 1000000 + a[2] * 1000 + a[3] }
-/^git version / { seen = 1; v = $3; sub(/[^0-9.].*$/, "", v); ok = n(v) >= n(want); exit }
-END { exit !(seen && ok) }`) + ` &&
-    [ "$(find 'web' -type d | wc -l)" -le "$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)" ] &&
-    git -C 'web' config core.fsmonitor true || :; }`
 	coding := `if [ ! -e 'web'/.git ]; then
   git clone --quiet --single-branch --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
   git -C 'web' sparse-checkout set --cone --skip-checks -- 'src' 'docs' &&
@@ -216,16 +211,14 @@ END { exit !(seen && ok) }`) + ` &&
   git -C 'web' checkout --quiet -B 'seats/swe/ENG-7' '` + cloneBase + `' &&
   { [ -e 'web'/.git/hooks/prepare-commit-msg ] || [ -L 'web'/.git/hooks/prepare-commit-msg ] ||
     { mkdir -p 'web'/.git/hooks && printf '%s' ` + hook + ` > 'web'/.git/hooks/prepare-commit-msg &&
-      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; } &&
-` + monitor + `
+      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; }
 fi`
 	empty := `if [ ! -e 'web'/.git ]; then
   git clone --quiet --single-branch --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
   git -C 'web' symbolic-ref HEAD 'refs/heads/seats/swe/ENG-7' &&
   { [ -e 'web'/.git/hooks/prepare-commit-msg ] || [ -L 'web'/.git/hooks/prepare-commit-msg ] ||
     { mkdir -p 'web'/.git/hooks && printf '%s' ` + hook + ` > 'web'/.git/hooks/prepare-commit-msg &&
-      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; } &&
-` + monitor + `
+      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; }
 fi`
 	single := `if [ ! -e 'web'/.git ]; then
   git init --quiet 'web' && git -C 'web' remote add origin "$CREWLET_GIT_URL"/'web.git' &&
@@ -267,6 +260,7 @@ fi`
 		syntax(t, tc.name, step.Commands[0])
 	}
 	syntax(t, "the version step", sandbox.GitVersionStep().Commands[0])
+	syntax(t, "the monitor step", sandbox.MonitorStep([]sandbox.RunRepo{cloned(), noCone}).Commands[0])
 }
 
 // syntax fails t unless a POSIX shell parses command.
@@ -308,7 +302,6 @@ clone|init)
   esac ;;
 esac
 exit 0`)
-	watches(t, filepath.Dir(stub))
 	r := cloned()
 	r.Branch = `seats/swe/a$(touch${IFS}x)'b`
 	r.Paths = []string{"src", "dir with 'quote'", "[odd]", "!bang"}
@@ -320,8 +313,7 @@ exit 0`)
 		cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", step.Commands[0])
 		cmd.Dir = box
 		cmd.Env = []string{"PATH=" + filepath.Dir(stub) + string(os.PathListSeparator) + os.Getenv("PATH"),
-			"CREWLET_GIT_URL=" + url, "STUB_CALLS=" + calls, "STUB_HOOK=" + hook, "HOME=" + t.TempDir(),
-			"STUB_WATCHES=1000000"}
+			"CREWLET_GIT_URL=" + url, "STUB_CALLS=" + calls, "STUB_HOOK=" + hook, "HOME=" + t.TempDir()}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v\n%s", step.Name, err, out)
 		}
@@ -352,7 +344,6 @@ exit 0`)
 			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
 			{"-C", "web", "fetch", "--quiet", "--no-tags", "--filter=blob:none", "origin", cloneBase},
 			{"-C", "web", "checkout", "--quiet", "-B", r.Branch, cloneBase},
-			{"-C", "web", "config", "core.fsmonitor", "true"},
 		}
 		sameCalls(t, calls, want)
 		if _, err := os.Stat(filepath.Join(box, "x")); !errors.Is(err, os.ErrNotExist) {
@@ -383,7 +374,6 @@ exit 0`)
 			{"clone", "--quiet", "--single-branch", "--filter=blob:none", "--no-checkout", "--", url + "/web.git", "web"},
 			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
 			{"-C", "web", "symbolic-ref", "HEAD", "refs/heads/" + r.Branch},
-			{"-C", "web", "config", "core.fsmonitor", "true"},
 		})
 		if body, err := os.ReadFile(filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")); err != nil ||
 			string(body) != sandbox.TrailerHook {
@@ -471,74 +461,174 @@ func sameCalls(t *testing.T, got, want [][]string) {
 	}
 }
 
-// watches puts a stand-in cat in dir, a directory a case puts first on PATH:
-// asked for how many directories the box's user may watch, it answers
-// $STUB_WATCHES, so a case decides what the kernel says whatever kernel runs
-// it; anything else it reads as cat does. It is written settled
-// ([sandbox.WriteRuntime]), since the recipe execs it at once.
-func watches(t *testing.T, dir string) {
+// budgets puts a stand-in cat in dir, a directory a case puts first on PATH:
+// asked for one of the kernel's per-user inotify budgets, it answers the
+// case's — $STUB_WATCHES and $STUB_INSTANCES (128, Linux's default, unless
+// set) for the host's, $STUB_NS_WATCHES and $STUB_NS_INSTANCES for the box's
+// user namespace's, failing where one is unset as a kernel without the file
+// does — so a case decides what the kernel says whatever kernel runs it;
+// anything else it reads as cat does. It is written settled
+// ([sandbox.WriteRuntime]), since the step execs it at once.
+func budgets(t *testing.T, dir string) {
 	t.Helper()
-	sandbox.WriteRuntime(t, filepath.Join(dir, "cat"),
-		"if [ \"$1\" = /proc/sys/fs/inotify/max_user_watches ]; then\n"+
-			"  printf '%s\\n' \"$STUB_WATCHES\"; exit 0\nfi\nexec /bin/cat \"$@\"\n")
+	sandbox.WriteRuntime(t, filepath.Join(dir, "cat"), `case "$1" in
+/proc/sys/fs/inotify/max_user_watches) v=${STUB_WATCHES-} ;;
+/proc/sys/user/max_inotify_watches) v=${STUB_NS_WATCHES-} ;;
+/proc/sys/fs/inotify/max_user_instances) v=${STUB_INSTANCES-128} ;;
+/proc/sys/user/max_inotify_instances) v=${STUB_NS_INSTANCES-} ;;
+*) exec /bin/cat "$@" ;;
+esac
+[ -n "$v" ] || exit 1
+printf '%s\n' "$v"
+`)
 }
 
-// A CODING CLONE TURNS GIT'S MONITOR ON WHERE THE BOX CAN KEEP IT, and only
-// there: in the checkout's own configuration where the box's git is 2.55.0
-// or newer and the box's user may watch every directory the checkout holds;
-// never with an older git or too few watches, and never a failure of the
-// step either way — the monitor is speed, the checkout is the step. Run under
-// a shell against stand-ins: a git of each version, and a cat answering the
-// kernel's watch limit.
+// GIT'S MONITOR IS ON WHERE THE BOX CAN KEEP IT, AND ONLY THERE: in the
+// checkouts the step names, each in its own configuration, where the box's
+// git is 2.55.0 or newer and EVERY checkout at the top of the box — an
+// earlier job's too — takes at most half of each budget its daemons spend:
+// their directories together half the watches, the least of the host's and
+// the box's namespace's, and their count half the instances. Anywhere else it
+// is turned off in the step's checkouts, a daemon an earlier launch started
+// stopped, and a checkout the step does not name is never touched. Never a
+// failure of the step, whatever a budget reads as — the monitor is speed.
+// Run under a shell against stand-ins: a git of each version, and a cat
+// answering the kernel's budgets.
+//
+// The box holds web (four directories: itself, .git, src, src/lib) and api
+// (two), which the step names, and old (three), an earlier job's: nine
+// directories in three checkouts.
 //
 // Mutations: drop the version check — 2.54.0 turns it on, red; compare with
-// `>` — 2.55.0 leaves it off, red; drop the watch check — two watches turn it
-// on, red; drop the `|| :` — the step fails where it stays off, red.
-func TestACodingCloneTurnsTheMonitorOnWhereTheBoxCanKeepIt(t *testing.T) {
+// `>` — 2.55.0 leaves it off, red; count only the step's checkouts — 14
+// watches turn it on, red; drop the half — 17 watches turn it on, red; read
+// the host's watches alone — the namespace's 17 turns it on, red; drop the
+// instance check — 5 instances turn it on, red; drop the guard on a budget's
+// digits — "lots" fails the step, red; leave a step's checkout as it was when
+// off — no unset and no stop, red.
+func TestTheMonitorIsOnWhereTheBoxCanKeepIt(t *testing.T) {
 	t.Parallel()
-	r := cloned()
-	r.Paths = nil
-	step, err := sandbox.CloneRecipe(r, sandbox.CloneCoding)
-	if err != nil {
-		t.Fatal(err)
-	}
+	web, api := cloned(), cloned()
+	api.Repo = "api"
+	step := sandbox.MonitorStep([]sandbox.RunRepo{web, api})
 	for _, tc := range []struct {
-		name, version, watches string
-		on                     bool
+		name, version string
+		env           []string
+		on            bool
 	}{
-		{"the node pin's git with watches to spare", "git version 2.56.0", "1000000", true},
-		{"the floor's own release", "git version 2.55.0", "1000000", true},
-		{"a vendor's build of the floor", "git version 2.55.0 (Apple Git-160)", "1000000", true},
-		{"a git below the floor", "git version 2.54.0", "1000000", false},
-		{"fewer watches than the checkout's directories", "git version 2.56.0", "2", false},
-		{"no watch limit to read", "git version 2.56.0", "", false},
+		{"the node pin's git with budgets to spare", "git version 2.56.0", []string{"STUB_WATCHES=1000000"}, true},
+		{"the floor's own release", "git version 2.55.0", []string{"STUB_WATCHES=1000000"}, true},
+		{"a vendor's build of the floor", "git version 2.55.0 (Apple Git-160)", []string{"STUB_WATCHES=1000000"},
+			true},
+		{"a git below the floor", "git version 2.54.0", []string{"STUB_WATCHES=1000000"}, false},
+		{"watches twice every checkout's directories", "git version 2.56.0", []string{"STUB_WATCHES=18"}, true},
+		{"one watch fewer", "git version 2.56.0", []string{"STUB_WATCHES=17"}, false},
+		{"twice the named checkouts' alone", "git version 2.56.0", []string{"STUB_WATCHES=14"}, false},
+		{"the box's namespace allows fewer", "git version 2.56.0",
+			[]string{"STUB_WATCHES=1000000", "STUB_NS_WATCHES=17"}, false},
+		{"the box's namespace says nothing usable", "git version 2.56.0",
+			[]string{"STUB_WATCHES=1000000", "STUB_NS_WATCHES=many"}, true},
+		{"instances twice the checkouts", "git version 2.56.0",
+			[]string{"STUB_WATCHES=1000000", "STUB_INSTANCES=6"}, true},
+		{"one instance fewer", "git version 2.56.0", []string{"STUB_WATCHES=1000000", "STUB_INSTANCES=5"}, false},
+		{"the namespace's instances fewer", "git version 2.56.0",
+			[]string{"STUB_WATCHES=1000000", "STUB_NS_INSTANCES=5"}, false},
+		{"no watch limit to read", "git version 2.56.0", nil, false},
+		{"a watch limit that is no number", "git version 2.56.0", []string{"STUB_WATCHES=lots"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			stub := gittest.Fake(t, tc.version, `{ for arg in "$@"; do printf '%s\037' "$arg"; done; printf '\n'; } >> "$STUB_CALLS"
-case "$1" in
-clone) for dir in "$@"; do :; done; mkdir -p "$dir/.git/hooks" "$dir/src/lib" ;;
-esac
 exit 0`)
-			watches(t, filepath.Dir(stub))
+			budgets(t, filepath.Dir(stub))
+			box := t.TempDir()
+			for _, dir := range []string{"web/.git", "web/src/lib", "api/.git", "old/.git", "old/x"} {
+				if err := os.MkdirAll(filepath.Join(box, filepath.FromSlash(dir)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
 			calls := filepath.Join(t.TempDir(), "calls")
 			cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", step.Commands[0])
-			cmd.Dir = t.TempDir()
-			cmd.Env = []string{"PATH=" + filepath.Dir(stub) + string(os.PathListSeparator) + os.Getenv("PATH"),
-				"CREWLET_GIT_URL=https://git.example.com/box/git", "STUB_CALLS=" + calls, "HOME=" + t.TempDir(),
-				"STUB_WATCHES=" + tc.watches}
+			cmd.Dir = box
+			cmd.Env = append([]string{"PATH=" + filepath.Dir(stub) + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"STUB_CALLS=" + calls, "HOME=" + t.TempDir()}, tc.env...)
 			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("the coding clone failed: %v\n%s", err, out)
+				t.Fatalf("the monitor's step failed: %v\n%s", err, out)
 			}
 			body, err := os.ReadFile(calls)
 			if err != nil {
 				t.Fatal(err)
 			}
-			on := strings.Contains(string(body), "config\x1fcore.fsmonitor\x1ftrue\x1f")
-			if on != tc.on {
-				t.Errorf("the monitor turned on = %v, want %v; git saw\n%q", on, tc.on, body)
+			var got [][]string
+			for _, line := range strings.Split(strings.TrimSuffix(string(body), "\n"), "\n") {
+				got = append(got, strings.Split(strings.TrimSuffix(line, "\x1f"), "\x1f"))
 			}
+			want := [][]string{
+				{"-C", "web", "config", "core.fsmonitor", "true"},
+				{"-C", "api", "config", "core.fsmonitor", "true"},
+			}
+			if !tc.on {
+				want = [][]string{
+					{"-C", "web", "config", "--unset", "core.fsmonitor"},
+					{"-C", "web", "fsmonitor--daemon", "stop"},
+					{"-C", "api", "config", "--unset", "core.fsmonitor"},
+					{"-C", "api", "fsmonitor--daemon", "stop"},
+				}
+			}
+			sameCalls(t, got, want)
 		})
+	}
+}
+
+// THE CELL DECIDES WHETHER A BOX IS GIVEN GIT'S MONITOR: every cell's coding
+// steps are the version check and each repository's coding clone, in order,
+// and only a cell whose boxes own their kernel — the remote one — runs the
+// monitor's step after them, over every repository; a direct or container box
+// spends the engine user's inotify budget, which no box can see the rest of.
+// A repository the coding recipe refuses is refused, named.
+//
+// Mutation: append the monitor's step in every cell — the direct and container
+// rows, red.
+func TestOnlyACellOwningItsKernelRunsTheMonitor(t *testing.T) {
+	t.Parallel()
+	web, api := cloned(), cloned()
+	api.Repo = "api"
+	repos := []sandbox.RunRepo{web, api}
+	for _, tc := range []struct {
+		placement sandbox.Placement
+		monitor   bool
+	}{
+		{sandbox.E2B, true},
+		{sandbox.Direct, false},
+		{sandbox.Container, false},
+	} {
+		steps, err := sandbox.CodingSteps(tc.placement, repos)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.placement, err)
+		}
+		var names []string
+		for _, s := range steps {
+			names = append(names, s.Name)
+		}
+		want := []string{"git-version", "clone web", "clone api"}
+		if tc.monitor {
+			want = append(want, "git monitor")
+			if got := steps[len(steps)-1].Commands; !slices.Equal(got, sandbox.MonitorStep(repos).Commands) {
+				t.Errorf("%s: the monitor's step is %q, want MonitorStep of every repository", tc.placement, got)
+			}
+		}
+		if !slices.Equal(names, want) {
+			t.Errorf("%s: the coding steps are %q, want %q", tc.placement, names, want)
+		}
+		if tc.placement.OwnsKernel() != tc.monitor {
+			t.Errorf("%s owns its kernel = %v, want %v", tc.placement, tc.placement.OwnsKernel(), tc.monitor)
+		}
+	}
+	bad := api
+	bad.Branch = ""
+	if _, err := sandbox.CodingSteps(sandbox.E2B, []sandbox.RunRepo{web, bad}); err == nil ||
+		!strings.Contains(err.Error(), "api") {
+		t.Errorf("CodingSteps of a repository on no branch answered %v, want a refusal naming api", err)
 	}
 }
 

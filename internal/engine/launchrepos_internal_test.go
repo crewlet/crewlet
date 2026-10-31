@@ -226,15 +226,23 @@ type reposRig struct {
 }
 
 // newReposRig is a rig over doc, its code host at base (CREWLET_BOX_GIT_URL
-// as the boot read it, "" for unset).
+// as the boot read it, "" for unset), its boxes in the remote cell.
 func newReposRig(t *testing.T, doc, base string) *reposRig {
+	t.Helper()
+	return newReposRigIn(t, doc, base, sandbox.E2B)
+}
+
+// newReposRigIn is newReposRig with its catalogue's one cell, where every
+// seat's box runs, at placement.
+func newReposRigIn(t *testing.T, doc, base string, placement sandbox.Placement) *reposRig {
 	t.Helper()
 	c := specCompany(t, doc)
 	c.roster = rosterOf(c)
 	jobs := map[string]*sandbox.FakeRunner{codingagent.ClaudeCodeName: sandbox.NewFakeRunner(codingagent.ClaudeCodeName)}
 	provider := sandbox.NewFakeProvider()
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Providers:          map[sandbox.Placement]sandbox.Provider{sandbox.E2B: provider},
+		Providers:          map[sandbox.Placement]sandbox.Provider{placement: provider},
+		DefaultPlacement:   placement,
 		Runners:            map[string]sandbox.Runner{codingagent.ClaudeCodeName: jobs[codingagent.ClaudeCodeName]},
 		DefaultCodingAgent: codingagent.ClaudeCodeName,
 	})
@@ -768,6 +776,67 @@ func TestARunWithoutReposGetsNoGitConfig(t *testing.T) {
 		if strings.Contains(exec.Command, "git clone") || strings.Contains(exec.Command, "git version") {
 			t.Errorf("a run given no repository ran %q", exec.Command)
 		}
+	}
+}
+
+// THE CELL DECIDES GIT'S MONITOR: a launch given two repositories runs, after
+// their clones, the step that turns git's file-system monitor on across both
+// (sandbox.MonitorStep) in a remote box, which owns its kernel's per-user
+// inotify budget — and never in a direct or container box on the engine
+// host, whose every box spends the engine user's, beside the other seats'
+// coding CLIs.
+//
+// Mutation: CodingSteps appending the step in every cell → the direct and
+// container rows, red; appending it in none → the remote row, red.
+func TestOnlyABoxWithAKernelOfItsOwnIsGivenGitsMonitor(t *testing.T) {
+	t.Parallel()
+	const base = "https://git.example.com/box/git"
+	for _, tc := range []struct {
+		placement sandbox.Placement
+		monitor   bool
+	}{
+		{sandbox.E2B, true},
+		{sandbox.Direct, false},
+		{sandbox.Container, false},
+	} {
+		t.Run(string(tc.placement), func(t *testing.T) {
+			t.Parallel()
+			rig := newReposRigIn(t, launchReposDoc, base, tc.placement)
+			rig.host.add(project("web", "Engineering", code.VisibilityCompany),
+				map[string]string{"refs/heads/main": mainHead})
+			rig.host.add(project("api", "Engineering", code.VisibilityCompany),
+				map[string]string{"refs/heads/main": mainHead})
+			turn := rig.turn(t, "swe", nil)
+			row, err := rig.launch(t, turn, builtin.RepoRequest{Repo: "web"}, builtin.RepoRequest{Repo: "api"})
+			if err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+			if sandbox.Placement(row.Placement) != tc.placement {
+				t.Fatalf("the run ran in %q, want %q", row.Placement, tc.placement)
+			}
+			monitor := sandbox.MonitorStep(row.Repos).Commands[0]
+			var ran []string
+			for _, exec := range rig.provider.Box(row.SandboxID).Execs() {
+				ran = append(ran, exec.Command)
+			}
+			at := slices.Index(ran, monitor)
+			if (at >= 0) != tc.monitor {
+				t.Fatalf("the %s box ran the monitor's step: %v, want %v; it ran\n%q", tc.placement, at >= 0,
+					tc.monitor, ran)
+			}
+			if !tc.monitor {
+				return
+			}
+			for _, r := range row.Repos {
+				clone, err := sandbox.CloneRecipe(r, sandbox.CloneCoding)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if i := slices.Index(ran, clone.Commands[0]); i < 0 || i > at {
+					t.Errorf("the clone of %s ran at %d, want it before the monitor's step at %d", r.Repo, i, at)
+				}
+			}
+		})
 	}
 }
 

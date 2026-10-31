@@ -664,9 +664,13 @@
 // on git's own index settings, 99 ms on the engine's — index version 4 and the
 // untracked cache, entries 6 and 7 of sandbox.BoxGit, which that cut adopted
 // with the checkout 15.6 s against 15.4 — and 62 and 17 ms with git's
-// monitor on, which the coding recipe therefore turns on where the box can
-// keep it (its daemon's start, the first status, 417 ms); a one-file commit
-// 172, 161 and 88 ms. At 10 000 files the status took 18, 15, 8.4 and 4.0 ms.
+// monitor on (its daemon's start, the first status, 417 ms); a one-file
+// commit 172, 161 and 88 ms. At 10 000 files the status took 18, 15, 8.4 and
+// 4.0 ms. A monitor whose kernel refuses it half the tree's watches (the
+// fsmonitor=starved arm) took 247 ms at 100 000 files and 31 ms at 10 000,
+// every status starting its daemon again — worse than none — so only a box
+// with a kernel of its own is given one (sandbox.CodingSteps), and only while
+// its checkouts take half of what that kernel lets it watch.
 // A session of an agent's commands in a blobless clone — 200 rounds, its
 // lazy fetches leaving 602 packs — never ran git's automatic maintenance on
 // them (2.55.0 and newer behave as maintenance.strategy=geometric, whose

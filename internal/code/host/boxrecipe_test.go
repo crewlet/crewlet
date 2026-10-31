@@ -177,15 +177,22 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 		t.Errorf("the coding clone's hook is not mode 0755: %v %v", info, err)
 	}
 
-	// GIT'S MONITOR is on in the checkout's own configuration exactly where
-	// the box can keep it — a git of 2.55.0 or newer, and a kernel letting the
-	// box watch every directory the checkout holds: the node pin's here, never
-	// the client floor's 2.40.4 — and its daemon, which the box's first commit
-	// below starts, is stopped before the case's directories go.
-	monitored := monitorable(t, box, clone)
+	// GIT'S MONITOR is no clone's: the coding clone leaves it unset, and the
+	// monitor's own step — which the engine runs only in a cell whose boxes
+	// own their kernel (sandbox.CodingSteps) — turns it on in the checkout's
+	// own configuration exactly where the box can keep it: a git of 2.55.0 or
+	// newer, the node pin's here and never the client floor's 2.40.4, with
+	// every checkout in the box taking at most half of the kernel's watches
+	// and instances. Its daemon, which the box's first commit below starts,
+	// is stopped before the case's directories go.
+	if out, _, _ := client.Try(t, clone, nil, "config", "--get", "core.fsmonitor"); strings.TrimSpace(out) != "" {
+		t.Errorf("the coding clone set core.fsmonitor to %q: the monitor is the cell's to decide", out)
+	}
+	runStep(t, dir, box, sandbox.MonitorStep([]sandbox.RunRepo{repo}))
+	monitored := monitorable(t, box, dir)
 	if out, _, _ := client.Try(t, clone, nil, "config", "--get", "core.fsmonitor"); (strings.TrimSpace(out) ==
 		"true") != monitored {
-		t.Errorf("the coding clone's core.fsmonitor is %q, want it set exactly where the box can keep a monitor (%v)",
+		t.Errorf("the checkout's core.fsmonitor is %q, want it set exactly where the box can keep a monitor (%v)",
 			strings.TrimSpace(out), monitored)
 	}
 	if monitored {
@@ -381,34 +388,50 @@ func runGit(t *testing.T, dir string, env []string, args ...string) string {
 	return out.String()
 }
 
-// monitorable reports whether a box under env could keep git's monitor for
-// the checkout at dir: its git at gitproc.NodeMinVersion or newer, and the
-// kernel's watch limit at least the checkout's directories — what the coding
-// recipe asks before it turns the monitor on.
+// monitorable reports whether a box under env, working in dir, could keep
+// git's monitor for its checkouts: its git at gitproc.NodeMinVersion or
+// newer, and the checkouts at dir's top together at most half of the
+// kernel's watches (their directories) and of its instances (their count),
+// each the least of the host's and the namespace's — what sandbox.MonitorStep
+// asks before it turns the monitor on.
 func monitorable(t *testing.T, env []string, dir string) bool {
 	t.Helper()
 	v, err := gitproc.ParseVersion(runGit(t, dir, env, "version"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile("/proc/sys/fs/inotify/max_user_watches")
-	if err != nil {
-		return false
-	}
-	limit, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil {
-		return false
-	}
-	dirs := 0
-	if err := filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() {
-			dirs++
+	least := func(paths ...string) int {
+		n := -1
+		for _, p := range paths {
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			if v, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && (n < 0 || v < n) {
+				n = v
+			}
 		}
-		return err
-	}); err != nil {
+		return max(n, 0)
+	}
+	watches := least("/proc/sys/fs/inotify/max_user_watches", "/proc/sys/user/max_inotify_watches")
+	instances := least("/proc/sys/fs/inotify/max_user_instances", "/proc/sys/user/max_inotify_instances")
+	checkouts, dirs := 0, 0
+	tops, err := filepath.Glob(filepath.Join(dir, "*", ".git"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	return v.AtLeast(gitproc.NodeMinVersion) && dirs <= limit
+	for _, top := range tops {
+		checkouts++
+		if err := filepath.WalkDir(filepath.Dir(top), func(_ string, d fs.DirEntry, err error) error {
+			if err == nil && d.IsDir() {
+				dirs++
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return v.AtLeast(gitproc.NodeMinVersion) && dirs <= watches/2 && checkouts <= instances/2
 }
 
 // pushRowsOf is every push row of the fleet's repository, read linearizable.

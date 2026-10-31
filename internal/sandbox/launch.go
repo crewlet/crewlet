@@ -198,8 +198,10 @@ type LaunchRequest struct {
 	CodeHolds []string
 
 	// Clone are the engine's own steps giving the box the repositories it is
-	// granted on the engine's code host ([Spec.Repos]): [GitVersionStep],
-	// then a [CloneRecipe] for each. Applied after Setup on a fresh box, and
+	// granted on the engine's code host ([Spec.Repos]): what [CodingSteps]
+	// gives the box's cell — [GitVersionStep], a [CloneRecipe] for each, and
+	// in a cell whose boxes own their kernel the monitor's [MonitorStep],
+	// which decides every launch again. Applied after Setup on a fresh box, and
 	// ALONE on a reused one — where each step's own guard skips a repository
 	// already checked out — so a second run_sandbox call in one turn is given
 	// a repository the first did not name, and keeps the first's checkout and

@@ -16,7 +16,9 @@ import (
 // launchRepos is a run_sandbox launch's repositories on the company's own code
 // host (ADR-0063): their grants on the run, its first code floor, and the
 // engine's steps giving the box each one — the client-floor check, then one
-// clone each, in the order the call named them. Empty for a call naming none.
+// clone each, in the order the call named them, then, in a cell whose boxes
+// own their kernel, git's file-system monitor ([sandbox.CodingSteps]). Empty
+// for a call naming none.
 type launchRepos struct {
 	repos []sandbox.RunRepo
 	floor statelog.Position
@@ -49,9 +51,10 @@ type launchRepos struct {
 // the resolution reads at the seat's level and takes the turn's holds, which
 // a launch a local check refused would have taken for nothing — and before
 // the turn's holds are sealed for the row, since a hold the resolution takes
-// must be in the set the row is opened with.
-func (l *launcher) resolveRunRepos(ctx context.Context, t *turnctx.Turn,
-	reqs []builtin.RepoRequest) (launchRepos, error) {
+// must be in the set the row is opened with. placement is the cell the box
+// runs in, as the launch's spec resolved it.
+func (l *launcher) resolveRunRepos(ctx context.Context, t *turnctx.Turn, reqs []builtin.RepoRequest,
+	placement sandbox.Placement) (launchRepos, error) {
 
 	if len(reqs) == 0 {
 		return launchRepos{}, nil
@@ -90,14 +93,11 @@ func (l *launcher) resolveRunRepos(ctx context.Context, t *turnctx.Turn,
 		return launchRepos{}, fmt.Errorf("engine: the code host answered this launch's reads at %s, no position "+
 			"of the code log", resolved.Floor)
 	}
-	out := launchRepos{repos: resolved.Repos, floor: resolved.Floor, ceiling: resolved.Ceiling,
-		clone: []sandbox.SetupStep{sandbox.GitVersionStep()}}
-	for _, r := range resolved.Repos {
-		step, err := sandbox.CloneRecipe(r, sandbox.CloneCoding)
-		if err != nil {
-			return launchRepos{}, fmt.Errorf("engine: the clone of repository %s: %w", r.Repo, err)
-		}
-		out.clone = append(out.clone, step)
+	// THE STEPS ARE THE CELL'S: whether the box may run git's file-system
+	// monitor is decided by where it runs (sandbox.CodingSteps).
+	clone, err := sandbox.CodingSteps(placement, resolved.Repos)
+	if err != nil {
+		return launchRepos{}, fmt.Errorf("engine: %w", err)
 	}
-	return out, nil
+	return launchRepos{repos: resolved.Repos, floor: resolved.Floor, ceiling: resolved.Ceiling, clone: clone}, nil
 }

@@ -78,6 +78,22 @@ func (p Placement) Valid() bool {
 // what an operator has to think about before enabling it on a shared host.
 func (p Placement) OnEngineHost() bool { return p == Direct || p == Container }
 
+// OwnsKernel reports whether a box in this cell runs on a kernel of its own —
+// a remote machine, made for the run — so the budgets a Linux kernel keeps
+// per user, inotify's watches and instances among them, are the box's alone.
+//
+// NO CELL ON THE ENGINE HOST HAS ONE, whatever user its boxes run as: a direct
+// box is a process tree of the engine's own user, a rootful container runs as
+// that user's uid (or as whoever `run_args` names, on the host's kernel all
+// the same), and a rootless one in a user namespace the engine's user made,
+// which gives it no budget of its own either — the kernel charges what a
+// namespace's processes take to the user that created the namespace as well,
+// at every level up to the host's, so a box's watches are the engine user's,
+// spent beside the other seats' coding CLIs and their own file watchers.
+// What a box may take of such a budget is decided by this, never by the box
+// ([CodingSteps]).
+func (p Placement) OwnsKernel() bool { return p.Valid() && !p.OnEngineHost() }
+
 // TakesMounts reports whether a box in this cell can be given a directory of
 // the engine host ([Mount]): a container alone, whose runtime binds one beside
 // its home. A direct box is the host itself, and a remote one another machine

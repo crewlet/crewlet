@@ -387,9 +387,13 @@ func boxClones(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, box *ben
 //     read twice before the timer;
 //   - fsmonitor=on, at cone=none, is op=status and op=commit with git's
 //     monitor on in the clone's own configuration, its daemon started by the
-//     first status, which first-status-ms reports. The coding recipe turns
-//     it on where the box can keep it (sandbox.CloneRecipe), so every other
-//     status and commit arm turns it off in its checkout first.
+//     first status, which first-status-ms reports — what sandbox.MonitorStep
+//     turns on in a box that can keep it;
+//   - fsmonitor=starved, at cone=none, is op=status with the monitor on and
+//     the box's git allowed half as many watches as the checkout has
+//     directories (starveWatches): a tree that has outgrown the kernel's
+//     budget, which every status then meets — daemon-starts is how many
+//     times each started the daemon again.
 //
 // Every op reports its median and its p10 and p90 in milliseconds: the rule
 // a setting is adopted by is judged on medians, the gain larger than the
@@ -432,9 +436,6 @@ func BenchmarkBoxWorktree(b *testing.B) {
 						boxCheckouts(b, box, repo)
 					})
 					checkout := boxCheckout(b, box, repo)
-					// The monitor the coding recipe turned on stays off until
-					// the arm that measures it.
-					boxRun(b, checkout, box.env, "git config core.fsmonitor false")
 					b.Run(arm+"/op=status", func(b *testing.B) {
 						boxStatuses(b, box, checkout, 0)
 					})
@@ -455,6 +456,11 @@ func BenchmarkBoxWorktree(b *testing.B) {
 						b.Run("op=commit", func(b *testing.B) {
 							boxCommits(b, box, checkout, files)
 						})
+					})
+					// The same checkout again, its tree past what the kernel
+					// lets the box's git watch.
+					b.Run(arm+"/fsmonitor=starved/op=status", func(b *testing.B) {
+						boxStarved(b, box, checkout, files)
 					})
 				}
 			}
@@ -528,6 +534,133 @@ var sessionSizes = []struct {
 }{
 	{"20MB", 20_000_000, []bool{false, true}},
 	{"100MB", 100 << 20, []bool{false}},
+}
+
+// starveWatches is how many inotify watches the fsmonitor=starved arm lets
+// the box's git take, against the checkout's directories: half of them, so
+// the daemon dies half-way through its first walk of the tree — a tree that
+// has grown to twice what the kernel lets the box watch, as a build's output
+// grows one.
+const starveWatches = 0.5
+
+// boxStarved is the fsmonitor=starved arm: checkout's monitor on, every
+// git command run with a stand-in for the kernel's watch budget that refuses
+// the process its starveWatches share of the checkout's directories and on
+// (watchBudget), and a warm status an operation, reporting with its spread
+// how many times each started the monitor's daemon again (daemon-starts).
+// The daemon is stopped and the setting dropped when the arm ends.
+func boxStarved(b *testing.B, box *benchBox, checkout string, files int) {
+	b.Helper()
+	if out, err := boxTry(b, checkout, box.env, "git fsmonitor--daemon status"); err != nil &&
+		strings.Contains(out, "not supported") {
+		b.Skipf("the box's git has no file-system monitor here: %s", strings.TrimSpace(out))
+	}
+	dirs := files/48 + 2 // a directory each, the top level and .git
+	budget := int(float64(dirs) * starveWatches)
+	env := append(slices.Clone(box.env), "LD_PRELOAD="+watchBudget(b), watchBudgetEnv+"="+strconv.Itoa(budget))
+	boxRun(b, checkout, env, "git config core.fsmonitor true")
+	b.Cleanup(func() {
+		off := exec.Command("/bin/sh", "-c", "git fsmonitor--daemon stop; git config --unset core.fsmonitor")
+		off.Dir, off.Env = checkout, box.env
+		_ = off.Run()
+	})
+	pastRacy(b, checkout)
+	for range 2 {
+		boxRun(b, checkout, env, "git status")
+	}
+	trace := filepath.Join(b.TempDir(), "trace")
+	traced := append(slices.Clone(env), "GIT_TRACE2_EVENT="+trace)
+	var took []time.Duration
+	starts := 0
+	for b.Loop() {
+		b.StopTimer()
+		if err := os.Remove(trace); err != nil && !errors.Is(err, os.ErrNotExist) {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		wall, _ := boxRun(b, checkout, traced, "git status")
+		took = append(took, wall)
+		b.StopTimer()
+		starts += daemonStarts(b, trace)
+		b.StartTimer()
+	}
+	if out, err := boxTry(b, checkout, env, "git fsmonitor--daemon status"); err == nil {
+		b.Fatalf("a daemon kept watching a tree its kernel refused it half of:\n%s", out)
+	}
+	reportSpread(b, took)
+	b.ReportMetric(float64(starts)/float64(len(took)), "daemon-starts")
+	b.ReportMetric(float64(budget), "inotify-watches")
+}
+
+// daemonStarts is how many times the git commands whose trace2 events are in
+// the file at path started the monitor's daemon.
+func daemonStarts(b *testing.B, path string) int {
+	b.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	n := 0
+	for line := range strings.Lines(string(body)) {
+		if strings.Contains(line, `"event":"child_start"`) && strings.Contains(line, `"fsmonitor--daemon"`) &&
+			strings.Contains(line, `"start"`) {
+			n++
+		}
+	}
+	return n
+}
+
+// watchBudgetEnv is the variable watchBudget's library reads its budget from.
+const watchBudgetEnv = "CREWLET_BENCH_WATCHES"
+
+// watchBudgetSource is a library that stands in for the KERNEL'S PER-USER
+// WATCH BUDGET in one process: preloaded, it lets the process add as many
+// inotify watches as watchBudgetEnv says and refuses every one past them
+// with ENOSPC, as Linux refuses a user at fs.inotify.max_user_watches. A
+// stand-in rather than the kernel's own limit because that limit is the
+// whole user's — lowering it, or spending it down, starves every other
+// watcher of the user running the benchmark — and a user namespace's own
+// lower limit needs a namespace a container's runtime may not let a process
+// make. Each process counts its own: the daemon a git command starts begins
+// its walk with the whole budget, as one would with the user's watches all
+// free.
+const watchBudgetSource = `#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+static long budget = -1, used = 0;
+
+int inotify_add_watch(int fd, const char *path, uint32_t mask) {
+	static int (*real)(int, const char *, uint32_t);
+	if (!real) real = (int (*)(int, const char *, uint32_t))dlsym(RTLD_NEXT, "inotify_add_watch");
+	if (budget < 0) { const char *s = getenv("` + watchBudgetEnv + `"); budget = s ? atol(s) : 0; }
+	if (used >= budget) { errno = ENOSPC; return -1; }
+	int r = real(fd, path, mask);
+	if (r >= 0) used++;
+	return r;
+}
+`
+
+// watchBudget builds watchBudgetSource with the machine's C compiler and
+// answers the library's path, SKIPPING b, naming what is missing, where
+// there is none — the one arm that needs one.
+func watchBudget(b *testing.B) string {
+	b.Helper()
+	cc, err := exec.LookPath("cc")
+	if err != nil {
+		b.Skipf("no C compiler (cc) to build the watch budget's stand-in: %v", err)
+	}
+	dir := b.TempDir()
+	src, lib := filepath.Join(dir, "budget.c"), filepath.Join(dir, "budget.so")
+	if err := os.WriteFile(src, []byte(watchBudgetSource), 0o600); err != nil {
+		b.Fatal(err)
+	}
+	if out, err := exec.CommandContext(b.Context(), cc, "-shared", "-fPIC", "-o", lib, src, "-ldl").CombinedOutput(); err != nil {
+		b.Fatalf("building the watch budget's stand-in: %v\n%s", err, out)
+	}
+	return lib
 }
 
 // boxCheckouts is an op=checkout arm: a fresh box's coding recipe of repo an
@@ -683,10 +816,10 @@ func boxFsmonitor(b *testing.B, box *benchBox, checkout string, files int) (time
 }
 
 // stopMonitor stops the monitor's daemon of the checkout at dir, if any runs,
-// when b ends — before b's directories go: the coding recipe turns the
-// monitor on (sandbox.CloneRecipe), and the first git command that asks it
-// starts a daemon that would outlive the benchmark. Not under b's context,
-// which is cancelled before a cleanup runs.
+// when b ends — before b's directories go: an arm that turns the monitor on
+// has the first git command that asks it start a daemon that would outlive
+// the benchmark. Not under b's context, which is cancelled before a cleanup
+// runs.
 func stopMonitor(b *testing.B, box *benchBox, dir string) {
 	b.Helper()
 	b.Cleanup(func() {
@@ -779,7 +912,6 @@ func boxSession(b *testing.B, box *benchBox, repo sandbox.RunRepo, foreground bo
 		dir := b.TempDir()
 		boxStep(b, dir, box.env, step)
 		clone := filepath.Join(dir, repo.Repo)
-		stopMonitor(b, box, clone)
 		files := trackedFiles(b, clone)
 		pid := filepath.Join(clone, ".git", "gc.pid")
 		cpu := make([][]time.Duration, sessionRounds)

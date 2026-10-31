@@ -1500,7 +1500,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, req builtin.Sand
 	// reads at the seat's level and takes the turn's holds, which a launch
 	// refused here would have taken for nothing — and before the holds are
 	// sealed below, so a hold it takes is in the set the row opens with.
-	repos, err := l.resolveRunRepos(ctx, t, req.Repos)
+	repos, err := l.resolveRunRepos(ctx, t, req.Repos, spec.Placement)
 	if err != nil {
 		return sandbox.LaunchResult{}, err
 	}

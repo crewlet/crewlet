@@ -112,25 +112,81 @@ END { if (!seen) { print "the git in this box did not say its version, so it can
 // 2.40.9.
 const versionNumber = `function n(s,  a) { split(s, a, "."); return a[1] * 1000000 + a[2] * 1000 + a[3] }`
 
-// monitorGitFloor is the oldest git whose file-system monitor a coding clone
-// turns on ([CloneRecipe]): 2.55.0, the oldest git the code host runs on its
-// own nodes (internal/code/gitproc's NodeMinVersion), whose monitor watches a
-// Linux checkout through inotify as the node pin's does — the git the
-// engine's measurements read it on (2.56.0, internal/code/host's
+// CodingSteps is every step the engine runs to give a coding run's box its
+// repositories on the engine's own code host, in order: [GitVersionStep],
+// each repository's [CloneRecipe] for [CloneCoding] in the order given, and,
+// in a cell whose boxes have a kernel of their own ([Placement.OwnsKernel]),
+// the step that turns git's file-system monitor on in them where the box can
+// keep it ([MonitorStep]). Refused for a repository the coding recipe
+// refuses, naming it.
+//
+// THE CELL DECIDES THE MONITOR, never the box alone: a monitor's daemon takes
+// a watch of the kernel's for every directory of its checkout, and on the
+// engine host every box spends the engine user's ([Placement.OwnsKernel]),
+// beside the other seats' coding CLIs and their own file watchers — a budget
+// no box can see the rest of, so no box may decide to spend it.
+func CodingSteps(p Placement, repos []RunRepo) ([]SetupStep, error) {
+	steps := []SetupStep{GitVersionStep()}
+	for _, r := range repos {
+		step, err := CloneRecipe(r, CloneCoding)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox: the clone of repository %s: %w", r.Repo, err)
+		}
+		steps = append(steps, step)
+	}
+	if p.OwnsKernel() && len(repos) > 0 {
+		steps = append(steps, MonitorStep(repos))
+	}
+	return steps, nil
+}
+
+// monitorGitFloor is the oldest git whose file-system monitor [MonitorStep]
+// turns on: 2.55.0, the oldest git the code host runs on its own nodes
+// (internal/code/gitproc's NodeMinVersion), whose monitor watches a Linux
+// checkout through inotify as the node pin's does — the git the engine's
+// measurements read it on (2.56.0, internal/code/host's
 // BenchmarkBoxWorktree). A box's git below it keeps git's default.
 const monitorGitFloor = "2.55.0"
 
-// inotifyWatches is where Linux says how many directories one user may watch,
-// which a monitor needs one of for every directory of a checkout.
-const inotifyWatches = "/proc/sys/fs/inotify/max_user_watches"
+// The kernel's per-user inotify budgets a monitor spends, read where Linux
+// says them: the host's, and the box's own user namespace's, which may only
+// be lower — what a box's process may take is the least of every level's.
+// A daemon takes one INSTANCE and one WATCH for every directory of its work
+// tree.
+const (
+	inotifyWatches    = "/proc/sys/fs/inotify/max_user_watches"
+	nsInotifyWatches  = "/proc/sys/user/max_inotify_watches"
+	inotifyInstances  = "/proc/sys/fs/inotify/max_user_instances"
+	nsInotifyInstance = "/proc/sys/user/max_inotify_instances"
+)
 
-// monitor is the command that turns git's FILE-SYSTEM MONITOR on in the
-// checkout at dir's own configuration — where the box's git is
-// [monitorGitFloor] or newer, and the box's user may watch at least as many
-// directories as the checkout holds (.git's own counted, every one a watch
-// the monitor may take) — and leaves it off otherwise: a box whose git or
-// kernel cannot keep it is no worse off than git's default. Never a failure
-// of the step: the monitor is speed, never a part of the checkout.
+// MonitorStep is the step that turns git's FILE-SYSTEM MONITOR on in the
+// checkouts of repos, each in its own configuration, where the box's git is
+// [monitorGitFloor] or newer and every checkout at the top of the box's
+// working directory takes at most HALF of each budget the monitors spend
+// from: their directories together half the watches the box's user may hold,
+// and their count half its instances. Otherwise it turns the monitor off in
+// each, stopping a daemon an earlier launch of the run started. Never a
+// failure of the step: the monitor is speed, never a part of the checkout.
+// Run AFTER the clones, every launch — a reused box's included — since the
+// decision is the box's whole: [CodingSteps] runs it only in a cell whose
+// boxes own their kernel.
+//
+// EVERY CHECKOUT AT THE TOP, NOT ONLY THIS CALL'S: a reused box keeps an
+// earlier job's checkouts, and their daemons, beside the ones this launch
+// names, so they are counted, watched or not.
+//
+// HALF, BECAUSE THE COUNT IS TAKEN ONCE AND THE TREE GROWS: the daemon
+// watches every directory the work tree comes to hold — a build's output,
+// `node_modules`, a `.venv`, ignored or not — and a daemon whose kernel
+// refuses it a watch DIES, after which every git command starts it again,
+// walks the tree adding watches until the kernel refuses one, and falls back
+// to reading the tree: worse than no monitor at every command, and taking
+// the user's whole remaining budget each time (internal/code/host's
+// BenchmarkBoxWorktree, its fsmonitor=starved arm, measured in
+// docs/concepts/code-sandbox.md's "What a clone costs"). The other half is
+// what the tree may grow by, and what the box's other watchers — its coding
+// CLI's — are left.
 //
 // ADOPTED ON ITS MEASUREMENT, by the rule a box-side setting is
 // (docs/concepts/code-sandbox.md, "What a clone costs"): at 100 000 files a
@@ -142,13 +198,42 @@ const inotifyWatches = "/proc/sys/fs/inotify/max_user_watches"
 // is a daemon a repository runs, and the environment would start one for
 // every repository the box's git touches, every clone its agent makes of
 // another host's included.
-func (w cloneWords) monitor() string {
+//
+// Every number it reads is held to digits before the shell's arithmetic
+// sees it, since dash ends the whole step at an arithmetic error: a budget
+// it cannot read is none, and the monitor stays off.
+func MonitorStep(repos []RunRepo) SetupStep {
+	dirs := make([]string, len(repos))
+	for i, r := range repos {
+		dirs[i] = ShellQuote(r.Repo)
+	}
 	program := versionNumber + `
 /^git version / { seen = 1; v = $3; sub(/[^0-9.].*$/, "", v); ok = n(v) >= n(want); exit }
 END { exit !(seen && ok) }`
-	return "  { git version | awk -v want=" + monitorGitFloor + " " + ShellQuote(program) + " &&\n" +
-		"    [ \"$(find " + w.dir + " -type d | wc -l)\" -le \"$(cat " + inotifyWatches + " 2>/dev/null || echo 0)\" ] &&\n" +
-		"    git -C " + w.dir + " config core.fsmonitor true || :; }"
+	command := strings.Join([]string{
+		"least() {",
+		"  a=$(cat \"$1\" 2>/dev/null); case $a in ''|*[!0-9]*) a=0 ;; esac",
+		"  b=$(cat \"$2\" 2>/dev/null); case $b in ''|*[!0-9]*) b=$a ;; esac",
+		"  [ \"$b\" -lt \"$a\" ] && a=$b; echo \"$a\"",
+		"}",
+		"watches=$(least " + inotifyWatches + " " + nsInotifyWatches + ")",
+		"instances=$(least " + inotifyInstances + " " + nsInotifyInstance + ")",
+		"checkouts=0; held=0",
+		"for g in */.git; do",
+		"  [ -e \"$g\" ] || continue",
+		"  n=$(find \"${g%/.git}\" -type d | wc -l | tr -d ' '); case $n in ''|*[!0-9]*) n=$watches ;; esac",
+		"  checkouts=$((checkouts + 1)); held=$((held + n))",
+		"done",
+		"on=false",
+		"if git version | awk -v want=" + monitorGitFloor + " " + ShellQuote(program) + " &&",
+		"  [ \"$held\" -le $((watches / 2)) ] && [ \"$checkouts\" -le $((instances / 2)) ]; then on=true; fi",
+		"for d in " + strings.Join(dirs, " ") + "; do",
+		"  if $on; then git -C \"$d\" config core.fsmonitor true",
+		"  else git -C \"$d\" config --unset core.fsmonitor; git -C \"$d\" fsmonitor--daemon stop; fi >/dev/null 2>&1",
+		"done",
+		"exit 0",
+	}, "\n")
+	return SetupStep{Name: "git monitor", Commands: []string{command}}
 }
 
 // CloneRecipe is the ONE way a box is given a repository: the setup step that
@@ -272,10 +357,11 @@ func wordsOf(r RunRepo) cloneWords {
 // codingClone is [CloneCoding]'s command: a blobless clone of the default
 // branch alone with no checkout, the cone, the base fetched by id
 // ([cloneWords.fetchBase]), the branch made at the base and checked out —
-// only the cone's files, fetched as the checkout needs them — the
-// commit-trailer hook written, and git's file-system monitor turned on where
-// the box can keep it ([cloneWords.monitor]). An EMPTY repository (no base)
-// has its branch named as the unborn HEAD instead.
+// only the cone's files, fetched as the checkout needs them — and the
+// commit-trailer hook written. An EMPTY repository (no base) has its branch
+// named as the unborn HEAD instead. git's file-system monitor is no clone's:
+// whether a box may keep one is its cell's and every checkout's together
+// ([CodingSteps], [MonitorStep]).
 //
 // ONE BRANCH (--single-branch), BECAUSE A REPOSITORY'S BRANCHES ARE MOSTLY
 // OTHER SEATS' WORK. Every full_access seat that reads a repository pushes
@@ -334,8 +420,7 @@ func codingClone(r RunRepo) string {
 	lines = append(lines,
 		"  { [ -e "+hook+" ] || [ -L "+hook+" ] ||",
 		"    { mkdir -p "+w.dir+"/.git/hooks && printf '%s' "+ShellQuote(TrailerHook)+" > "+hook+" &&",
-		"      chmod 755 "+hook+"; }; } &&",
-		w.monitor(),
+		"      chmod 755 "+hook+"; }; }",
 		"fi")
 	return strings.Join(lines, "\n")
 }

@@ -30,20 +30,17 @@ func granted(name, id string) RunRepo {
 }
 
 // withRepos is req given repos the way the engine gives a run them: on the
-// spec, with the steps that clone them — the version check, then a coding
-// recipe for each — and the floor their resolution read.
+// spec, with the steps that clone them in its cell (CodingSteps) and the
+// floor their resolution read.
 func withRepos(t *testing.T, req LaunchRequest, repos ...RunRepo) LaunchRequest {
 	t.Helper()
 	req.Spec.Repos = repos
 	req.CodeFloor = "code@1:40"
-	req.Clone = []SetupStep{GitVersionStep()}
-	for _, r := range repos {
-		step, err := CloneRecipe(r, CloneCoding)
-		if err != nil {
-			t.Fatalf("CloneRecipe(%s): %v", r.Repo, err)
-		}
-		req.Clone = append(req.Clone, step)
+	steps, err := CodingSteps(req.Spec.Placement, repos)
+	if err != nil {
+		t.Fatalf("CodingSteps: %v", err)
 	}
+	req.Clone = steps
 	return req
 }
 
