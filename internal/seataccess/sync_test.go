@@ -669,3 +669,35 @@ func TestASeatTheVendorCouldNotReadFaultsAlone(t *testing.T) {
 		t.Errorf("findings = %+v, want the one unreadable seat", report.Findings)
 	}
 }
+
+// A FINDING NAMES ITS LANE ONLY WHERE THE KIND HAS SEVERAL: Datadog's one
+// lane is the integration the list already names, and Jira is one of the two
+// products an Atlassian account is granted.
+func TestSyncNamesTheLaneOnlyWhereTheKindHasSeveral(t *testing.T) {
+	t.Parallel()
+	refusal := func() *seataccess.Refusal {
+		return &seataccess.Refusal{Said: "the key may not manage users", Actor: seataccess.ByYou}
+	}
+	h := newHarness()
+	h.v.Refuse[seataccess.OpCreate] = refusal()
+	report := h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "a"}), nil)
+	if len(report.Findings) != 1 || report.Findings[0].Detail != "the key may not manage users" {
+		t.Fatalf("findings = %+v, want the vendor's sentence alone", report.Findings)
+	}
+
+	v := seataccesstest.NewVendor(integration.KindAtlassian, "TOKEN", "EMAIL")
+	v.Refuse[seataccess.OpCreate] = refusal()
+	c := &config.Company{Name: "Acme", Roles: []config.Role{{
+		Name: "SRE", Handle: "sre", Integrations: config.RoleIntegrations{Jira: &config.RoleJira{Enabled: yes(), ProjectRole: "a"}},
+	}}}
+	report, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+		Vendor: v, Open: seataccess.OpenInput{Config: c}, Ledger: seataccesstest.NewLedger(),
+		Sink: seataccesstest.NewSink(), Pass: "pass-1", By: "reconcile loop", Now: func() time.Time { return at },
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Detail != "Jira: the key may not manage users" {
+		t.Fatalf("findings = %+v, want the sentence led by its lane", report.Findings)
+	}
+}

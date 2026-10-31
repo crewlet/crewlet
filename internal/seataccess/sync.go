@@ -797,9 +797,16 @@ func (s *syncer) faultAll(rec *Record, lanes []Lane, verb StepVerb, err error) {
 }
 
 // finding adds one seat's finding to the report.
+//
+// THE LANE IS NAMED ONLY WHERE THE KIND HAS SEVERAL. Every kind but Atlassian
+// grants one lane named after itself, and every list that draws a finding
+// already names its integration, so a lead of "GitHub: " on a GitHub finding
+// read as "GitHub: GitHub: ..." on the Integrations landing. Jira and
+// Confluence are two lanes over one Atlassian account, and there the lane is
+// what tells a reader which product refused.
 func (s *syncer) finding(kind integration.FindingKind, h string, lane Lane, f *Failure) {
 	detail := f.Said
-	if lane != "" {
+	if lane != "" && len(LanesOf(s.kind)) > 1 {
 		detail = LaneName(lane) + ": " + f.Said
 	}
 	// SEAT, because the seat's own record carries the same failure, which

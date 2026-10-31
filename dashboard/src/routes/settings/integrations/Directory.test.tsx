@@ -304,11 +304,14 @@ test("an address selects its line, Atlassian and its relay on Jira's", async () 
 });
 
 // WITH NOTHING CHOSEN, WHAT NEEDS A LOOK: each issue under its app's name,
-// sending the reader to the app's page rather than fixing it out of context.
+// sending the reader to the app's page rather than fixing it out of context,
+// on a button that says the fix it opens there.
 test("the summary lists what needs a look and links to each app", async () => {
   mount(ADMIN);
   expect(await screen.findByText(expiring)).toBeTruthy();
-  const open = screen.getByRole("link", { name: "Open GitLab" });
+  const tile = screen.getByText(expiring).closest(".int-issue") as HTMLElement;
+  const open = within(tile).getByRole("link", { name: "Replace key GitLab" });
+  expect(open.textContent).toBe("Replace key");
   expect(open.getAttribute("href")).toBe("#/company/integrations/gitlab?open=rotate");
 });
 
@@ -496,7 +499,7 @@ test("an agent's own wait is left to its row, not listed above the agents", asyn
                 {
                   kind: "approval_required",
                   subject: "sre",
-                  detail: "Datadog: Ask an administrator to approve SRE's role",
+                  detail: "Ask an administrator to approve SRE's role",
                   phase: "awaiting_admin",
                   seat: true,
                 },

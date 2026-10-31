@@ -1446,7 +1446,13 @@ const (
 	// answered, read-only until the engine lists it, the move guarded as it
 	// is written, the last answer opening Answered, an arrival washed once)
 	// took it to 5251.2 KiB (+0.3 KiB, the Inbox chunk). 5252 KiB.
-	treeBudget = 5<<20 + 132<<10
+	// The Home polish on uilet 0.84.1 (one row a decision under a band per
+	// asker, the integration issue tile with its agents' chips, and the
+	// smaller status badge) took it from 5251.2 KiB to 5253.0 KiB (+1.9 KiB):
+	// the settings chunk +0.7 KiB and its sheet +0.4 KiB, the decision rows
+	// +0.3 KiB, the writes chunk +0.2 KiB, the integrations model +0.2 KiB
+	// and Home +0.2 KiB, less 0.2 KiB in the one sheet. 5254 KiB.
+	treeBudget = 5<<20 + 134<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -698,10 +698,12 @@ describe("the decisions", () => {
       ],
     });
     await settle();
-    expect(screen.getByText("DevRel stopped: daily token budget exhausted")).toBeTruthy();
+    expect(screen.getByText("Stopped: daily token budget exhausted")).toBeTruthy();
     const row = screen
-      .getByText("DevRel stopped: daily token budget exhausted")
-      .closest(".decision-row") as HTMLElement;
+      .getByText("Stopped: daily token budget exhausted")
+      .closest(".decision-group") as HTMLElement;
+    // WHO IT IS, ONCE: the seat's name on the block's head, not in its title.
+    expect(row.querySelector(".decision-group-who")?.textContent).toBe("DevRel");
     expect(row.querySelector(".crewlet-avatar__status--stopped")).not.toBeNull();
     expect(row.querySelector(".decision-state")?.textContent).toBe("Stopped");
     expect(tile("Waiting on your decision").textContent).toContain("1");
@@ -840,7 +842,7 @@ describe("the decisions", () => {
       },
     });
     await settle();
-    const subs = [...document.querySelectorAll(".decision-row .decision-sub")].map(
+    const subs = [...document.querySelectorAll(".decision-item .decision-sub")].map(
       (el) => el.textContent ?? "",
     );
     expect(subs.some((s) => s.includes("“May I delete the fixtures directory?”"))).toBe(true);
@@ -850,7 +852,7 @@ describe("the decisions", () => {
     expect(cut?.textContent).toBe(legacy.question.trim());
     const row = screen
       .getByText("“May I delete the fixtures directory?”", { exact: false })
-      .closest(".decision-row") as HTMLElement;
+      .closest(".decision-group") as HTMLElement;
     await act(async () => {
       fireEvent.click(within(row).getByRole("button", { name: "Answer" }));
     });
