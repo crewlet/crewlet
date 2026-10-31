@@ -107,14 +107,23 @@ func TestARetentionSourceIsAnsweredWhereATrimRuns(t *testing.T) {
 // nodeEngine boots a real engine — a data node on an embedded stream in a
 // directory of its own, running a two-seat company on the native tracker and
 // knowledge base — in mode, as `crewlet run -mode <mode>` does, or in service
-// where mode is empty.
+// where mode is empty ([bootNode]).
+func nodeEngine(t *testing.T, mode statelog.MaintenanceMode) *engine.Engine {
+	t.Helper()
+	e, _ := bootNode(t, mode)
+	return e
+}
+
+// bootNode is [nodeEngine] with the Tier A it booted on, for a case that signs
+// what the node's fleet signs — a box's token, over its keyring. Its roles are
+// undeclared, so every role, git among them; its company hosts no code.
 //
 // ITS STORE IS SEEDED from the binary's migrated image ([storetest.Seed]), as
 // the engine's own SeedStore rule has it: no case here is about migrating.
 // And its keyring is drawn through the minter `crewlet secrets keygen` uses,
 // because every state-log record is signed under one and a node without one
 // refuses to start.
-func nodeEngine(t *testing.T, mode statelog.MaintenanceMode) *engine.Engine {
+func bootNode(t *testing.T, mode statelog.MaintenanceMode) (*engine.Engine, *config.Bootstrap) {
 	t.Helper()
 	dir := t.TempDir()
 	boot := config.DefaultBootstrap()
@@ -163,5 +172,5 @@ roles:
 		t.Fatalf("engine.New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	return e
+	return e, &boot
 }
