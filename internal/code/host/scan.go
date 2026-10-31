@@ -30,8 +30,9 @@ import (
 // of what a push introduces and where a blob is are asked for in
 // TOPOLOGICAL ORDER (--topo-order), which is what makes rev-list walk by
 // generation — without it rev-list read every commit of the graph for a
-// skewed tip, 110–150 ms over 200 000 commits against 5 ms with it
-// (git 2.47.3 and 2.48.0 alike). The fourth is receive-pack's
+// skewed tip, 50 ms over 120 000 commits against 2.4 ms with it on the node
+// pin, git 2.56.0 (TestAPushsWalksGoByGeneration's fixture; git 2.47.3 and
+// 2.48.0 walked it alike). The fourth is receive-pack's
 // own connectivity check, which is git's and takes no flag of ours
 // (gitproc.ReceivePackDeadline). Where there is no commit-graph yet, every
 // walk is by date whatever its flags, and each is bounded by what the

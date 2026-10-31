@@ -5433,12 +5433,13 @@ generation once the node has written the repository's commit-graph, which it
 does first for every copy it reads whole, so they cost a few milliseconds
 whatever the commit's date; git's own connectivity check in receive-pack
 still walks by date, reading the graph. Measured over a gigabyte of source
-history (455 680 commits), such a push is 0.37 s of the node's time with the
-graph against 0.07 s for any other push, and 6.9 s in the seconds after a
-node has read the repository whole and before its graph is written. No walk
+history (455 680 commits) on the node pin, git 2.56.0, such a push is 0.30 s
+of the node's time with the graph against about 0.09 s for any other push,
+and 6.7 s in the seconds after a node has read the repository whole and
+before its graph is written. No walk
 is refused for what it takes — each is given 11 µs for every object the
 repository holds besides what the push itself is given. The person's own git
-pays too: a clone with no commit-graph of its own spends about 4.8 s over the
+pays too: a clone with no commit-graph of its own spends about 1.6 s over the
 same gigabyte checking that such a push is a fast-forward, and
 `git commit-graph write --reachable` in the clone spares it.
 

@@ -393,7 +393,9 @@
 // MEASURED against the build before it, a warm fetch's four processes take
 // 1.5 ms more of the node's git CPU — 10.5 → 12.0 ms, +15%, about 0.3–0.4 ms
 // a process — and eight clients at once fetch 5% fewer a second
-// (internal/code/host's measured section, git 2.47.3), while a clone's
+// (internal/code/host's measured section, its one figure of git 2.47.3: the
+// build without the stream is not this code, and every figure there of the
+// node pin includes the stream), while a clone's
 // share is lost in its own spread; the planning pass, timing single
 // processes on 2.43, 2.47 and 2.56, had put it at 0.16–0.30 ms a process. The
 // reader here costs 1.4 µs for a healthy fetch's stream, 5.2 µs for one

@@ -20,8 +20,10 @@ import (
 
 // walkCommits is the history TestAPushsWalksGoByGeneration walks: long enough
 // that a walk of all of it is tens of milliseconds of git's CPU even read
-// from a commit-graph (0.55–0.8 µs a commit, measured over 200 000), against the
-// few milliseconds a process costs to start — a gap no load closes, since a
+// from a commit-graph (0.42 µs a commit on the node pin, git 2.56.0: the
+// listing in date order 50 ms over these 120 000, against 1.1–2.4 ms for each
+// of the host's walks by generation), against the few milliseconds a process
+// costs to start — a gap no load closes, since a
 // process's CPU is its own whatever else the machine runs.
 const walkCommits = 120_000
 
@@ -168,11 +170,12 @@ func TestAPushsWalksGoByGeneration(t *testing.T) {
 }
 
 // measuredWalkPerCommit is the dearest a walk by date costs a commit of the
-// history with no commit-graph: git 2.47.3 on four vCPUs, the listing of what
-// a push introduces over the gigabyte history BenchmarkPushSmall pushes (its
-// step= arms: the force check 5.1 µs, the path search 5.0, receive-pack's
-// connectivity check 5.2; gitproc.WalkPerObject says where it comes from).
-const measuredWalkPerCommit = 5500 * time.Nanosecond
+// history with no commit-graph: the node pin, git 2.56.0, on two E-cores, the
+// force check's merge-base over the gigabyte history BenchmarkPushSmall
+// pushes (its step= arms: 4.96 µs, the listing of what a push introduces
+// 4.5, the path search 4.6, receive-pack's connectivity check 4.6;
+// gitproc.WalkPerObject says where it comes from), rounded up.
+const measuredWalkPerCommit = 5000 * time.Nanosecond
 
 // NO WALK OF A PUSH'S IS BOUNDED BY THE PUSH ALONE: each is given what a walk
 // of the whole history may cost beside what the push sends, at the bound the

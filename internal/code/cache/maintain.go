@@ -73,10 +73,11 @@ import (
 // included. Without a graph every walk git makes over the repository goes by
 // date, and a push of a commit dated before its parent — a person's skewed
 // clock — walks every commit in each of its walks (internal/code/host's scans,
-// receive-pack's connectivity check): 5.0–5.5 µs a commit, 2.3–2.5 s a walk
-// over a gigabyte's history (internal/code/host's BenchmarkPushSmall step=
-// arms). That window was the maintainer's queue, which on a node that just
-// joined is every other repository's bitmap — hours. It is now the graph's own
+// receive-pack's connectivity check): 4.5–5.0 µs a commit, 2.1–2.3 s a walk
+// over a gigabyte's history on the node pin (internal/code/host's
+// BenchmarkPushSmall step= arms). That window was the maintainer's queue,
+// which on a node that just joined is every other repository's bitmap —
+// hours. It is now the graph's own
 // write, one walk of the commits: 3.4 s over a gigabyte of source history
 // (BenchmarkMidx's step=graph, 2.97 million objects). ON A BUSY LANE it is no
 // longer: the maintainer keeps to every slot but one, and a graph alone may

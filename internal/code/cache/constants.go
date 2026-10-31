@@ -285,9 +285,9 @@ const MidxPacks = 64
 // (BenchmarkPeel: 0.5 ms over 256 tags in as many packs and 12 ms over a
 // thousand, against writes of 11 and 35 ms). And against the round it rides
 // in, the index is a small share: over 2 000 pushes of a 100 000-file tree
-// (a 334 MB pack) it is 0.14 s of a 13.4–13.8 s cold sync from S3 at a 100 ms
-// first byte, the GETs the rest (internal/code/host's BenchmarkCloneCold,
-// op=round-index).
+// (a 334 MB pack) it is 0.15 s of a 13.5–17.6 s cold sync from the S3 fake
+// at a 100 ms first byte on the node pin, the GETs the rest
+// (internal/code/host's BenchmarkCloneCold, op=round-index).
 //
 // That window is not "a debounce later": the maintainer indexes a repository
 // once its packs have stood still for MidxDebounce and the runs ahead of it

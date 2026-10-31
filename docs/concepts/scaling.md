@@ -139,8 +139,9 @@ flowchart LR
     C -- "6 · upload-pack" --> fetcher
 ```
 
-The figures below were measured on one machine of four vCPUs (a 2.1 GHz Xeon),
-and each paragraph names the git and the object store it was measured with;
+The figures below were measured on one machine at a time — four vCPUs of a
+2.1 GHz Xeon unless a paragraph names another — and each paragraph names the
+git and the object store it was measured with;
 the measured sections of the `internal/code`, `internal/code/host`,
 `internal/code/cache` and `internal/code/codecluster` package docs carry every
 arm.
@@ -205,13 +206,14 @@ answer every such read with a download
 **What a request on a cold node costs.** A request on a node that holds no copy
 of its repository — one that just joined, or whose budget evicted it — waits for
 a cold sync before its first byte, since git's protocol has nothing to send
-earlier: measured end to end, the git nodes on git 2.47.3 (Debian trixie's,
-which the engine image installed then) against an S3-shaped fake answering every request
-100 ms after it arrives, the first clone of a repository of two hundred
-pushes begins with a 1.4 s sync and of two thousand with a 13.4–13.8 s one, and
-a balancer's idle timeout sees all of it. A cold sync is network work, not CPU:
-each push's object carries the index its receiving node's git wrote, so the
-node downloads, verifies and renames, and runs no `index-pack`.
+earlier: measured end to end, the git nodes on the node pin, git 2.56.0, on
+two E-cores of a Core Ultra 7 265U, against an S3-shaped fake answering every
+request 100 ms after it arrives, the first clone of a repository of two
+hundred pushes begins with a 1.4–2.4 s sync and of two thousand with a
+13.5–17.6 s one, and a balancer's idle timeout sees all of it. A cold sync is
+network work, not CPU: each push's object carries the index its receiving
+node's git wrote, so the node downloads, verifies and renames, and runs no
+`index-pack`.
 
 **A node coming up with many repositories** asked of it — joining, or
 restarted — reads at most eight of them whole at once from the data nodes
@@ -333,19 +335,22 @@ its own order. A maintainer also holds every repository it maintains in its
 cache: give it the cache budget to keep them, or each of its publications
 begins with a whole download.
 
-**And by the bytes and CPU it serves, not by its requests.** Measured on git
-2.47.3 over a tree of 10 000 files in two hundred pushes, a 31.5 MB pack: from a
-node holding the repository's bitmap, a full clone costs 0.91–0.98 s of the
-node's git CPU, and a shallow clone of one commit, blobless, of the directories
-a sparse checkout's cone names 0.37–0.38 s; on a node that has not yet indexed
-the repository a full clone walks and delta-searches the whole history,
-3.7–3.9 s of CPU, against 0.38–0.40 s for the narrow clone, which moves 3.4 MB
-rather than the whole pack. Measured again at ten times the tree — 100 000
-files in two thousand pushes, a 334 MB pack — on a node that has not indexed
-it, the two cold clones cost eight to ten times as much: 35–38 s of CPU for the
-full one and 3.3–3.8 s for the narrow one.
+**And by the bytes and CPU it serves, not by its requests.** Measured on the
+node pin, git 2.56.0, on two E-cores of a Core Ultra 7 265U, over a tree of
+10 000 files in two hundred pushes, a 31.5 MB pack: from a node holding the
+repository's own bitmap, a full clone costs 0.64 s of the node's git CPU, and a
+shallow clone of one commit, blobless, of the directories a sparse checkout's
+cone names 0.27–0.29 s; from the repository's published layers, written over
+the maintainer's repack of the same pushes, the full clone costs 0.07 s and
+is sent a fifth fewer bytes, and the narrow one 0.06 s. On a node that has not
+yet indexed the repository a full clone walks and delta-searches the whole
+history, 2.8 s of CPU, against 0.29–0.30 s for the narrow clone, which moves
+3.4 MB rather than the whole pack. Measured again at ten times the tree —
+100 000 files in two thousand pushes, a 334 MB pack — on a node that has not
+indexed it, the two cold clones cost about ten times as much: 27 s of CPU for
+the full one and 2.6 s for the narrow one.
 Identical clones share nothing: thirty-two at once cost the node thirty-two
-clones of CPU. A warm fetch of one new commit is 10–12 ms of it. So size a git
+clones of CPU. A warm fetch of one new commit is 6–8 ms of it. So size a git
 node's cores by the clones and fetches it serves, and point CI at a blobless
 clone with a cone wherever a tree is large — shallow too, where the job reads
 no history:

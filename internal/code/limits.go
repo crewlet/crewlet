@@ -302,11 +302,11 @@ const (
 	// advertisement costs about 100 bytes a ref, so this is about 10 MB on
 	// every v0 fetch and a 10 MB packed-refs rewrite on every cache sync;
 	// past it a repository is a namespace problem, refused (repo_refs)
-	// rather than slowly degraded. At the bound a push is still about two
+	// rather than slowly degraded. At the bound a push is still about three
 	// seconds as a person waits for it — measured over a gigabyte of
-	// history, its request 303 ms against 59–63 at one ref, another node's
-	// delta sync 42 ms, the advertisement 136 ms (internal/code/host's
-	// measured section). A
+	// history on the node pin, one push on two loaded cores, 2.75 s: its
+	// request 216 ms against 37 at one ref, another node's delta sync 88 ms,
+	// the advertisement 518 ms (internal/code/host's measured section). A
 	// deleted ref never counts against it: its tombstone is bounded apart, by
 	// MaxTombstonesPerRepo, and refuses nobody.
 	MaxRefsPerRepo = 100_000
@@ -847,7 +847,7 @@ const (
 	//     rewritten from the whole history at 67 bytes an object of memory
 	//     (the cache's GraphBytesPerObject), and until then a walk that would
 	//     stop on its generation numbers walks by date (a push dated before
-	//     its parent: 6.9 s over a gigabyte, against 0.37 s with the graph,
+	//     its parent: 6.7 s over a gigabyte, against 0.30 s with the graph,
 	//     docs/concepts/code-host.md) — and a graph of some 36 000 objects, a
 	//     repository of about twelve megabytes, already holds the page's
 	//     memory;

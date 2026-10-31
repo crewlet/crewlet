@@ -1950,7 +1950,7 @@ cache on its own disk. What such a node needs from its host:
   repository's commit-graph, in each of the engine's listings and each branch
   update's force check too, and each such walk is given 11 µs an object of the
   repository: 33 s at three million objects, a gigabyte of source history,
-  which such a walk takes about two and a half seconds to finish.
+  which such a walk takes about two seconds to finish.
 - **A token for each CI runner.** A fetch large enough to spool — a blobless
   checkout's lazy fetch, past a mebibyte of wants — holds its room from its
   first spooled byte until git has read it and started answering, its sync

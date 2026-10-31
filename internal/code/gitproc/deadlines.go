@@ -160,10 +160,11 @@ func UploadPackDeadline(liveBytes int64) time.Duration {
 // THE CONNECTIVITY CHECK IS GIT'S, and it walks by date whatever the
 // repository holds: `rev-list --objects --stdin --not --all`, with no flag
 // the engine can add, so a tip dated before its parent walks the whole
-// history with a commit-graph (which it reads in place of the commits, an
-// eighth of the cost: 0.65 µs a commit against 5.2) and without one. That is the one step of a push whose
-// cost follows the repository however its node is maintained, and this term
-// is what lets it be slow rather than refused.
+// history with a commit-graph (which it reads in place of the commits, about
+// a seventh of the cost on the node pin: 0.62 µs a commit against 4.6) and
+// without one. That is the one step of a push whose cost follows the
+// repository however its node is maintained, and this term is what lets it
+// be slow rather than refused.
 func ReceivePackDeadline(maxPushBytes, liveObjects int64, hook time.Duration) time.Duration {
 	return transferDeadline(maxPushBytes) + HistoryWalk(liveObjects) + hook
 }
@@ -205,16 +206,18 @@ func RemoteDeadline(bytes, objects int64) time.Duration {
 // to stop on — every walk where the repository has no commit-graph, and a
 // walk that is not asked for in topological order everywhere — so a commit
 // dated before its parent (a person's skewed clock, a GIT_COMMITTER_DATE) is
-// a reason to walk every commit of the history. MEASURED with git 2.47.3,
-// Debian trixie's release, on four vCPUs, over the gigabyte history
-// BenchmarkPushSmall pushes (455 680 commits, 3.27 million objects; its
-// step= arms, a tip dated before the history began): with no commit-graph,
-// 5.0–5.5 µs a commit — the force check's merge-base 5.1, the listing of
-// what a push introduces 5.5, the search for a blob's path 5.0 and
-// receive-pack's connectivity check 5.2, 0.70–0.77 µs an object of that
-// history, 2.3–2.5 s a walk — and with one, the connectivity check 0.65 µs a
-// commit, while the walks the engine asks for by generation take a few
-// milliseconds whatever the tip's date.
+// a reason to walk every commit of the history. MEASURED on the node pin,
+// git 2.56.0, on two E-cores of an Intel Core Ultra 7 265U, over the
+// gigabyte history internal/code/host's BenchmarkPushSmall pushes (455 680
+// commits, 3.27 million objects; its step= arms, a tip dated before the
+// history began, one bounded run): with no commit-graph, 4.5–5.0 µs a
+// commit — the force check's merge-base 5.0, the listing of what a push
+// introduces 4.5, the search for a blob's path 4.6 and receive-pack's
+// connectivity check 4.6, 0.63–0.69 µs an object of that history, 2.1–2.3 s
+// a walk — and with one, the connectivity check 0.62 µs a commit, while the
+// walks the engine asks for by generation take 3–7 ms whatever the tip's
+// date. (git 2.47.3 on four vCPUs of a 2.1 GHz Xeon had put a walk by date at
+// 5.0–5.5 µs a commit.)
 //
 // ELEVEN MICROSECONDS AN OBJECT: the term multiplies the repository's LIVE
 // OBJECTS, which the rows count and which bound its commits from above, so
@@ -222,9 +225,14 @@ func RemoteDeadline(bytes, objects int64) time.Duration {
 // at least itself, a tree and a blob, so commits are at most a third of a
 // history's objects and nearly all of them only in a history of commits that
 // change nothing, and a bound read off the gigabyte's seventh would refuse a
-// skewed push into a history of small commits. Twice the dearest measured
-// per-commit cost (the listing's 5.5 µs), for a node whose cores are shared
-// with the store and the broker; the largest repository the defaults admit
+// skewed push into a history of small commits. At least twice the dearest
+// measured per-commit cost, for a node whose cores are shared with the store
+// and the broker: twice the pin's dearest (the force check's 5.0 µs) is
+// 10 µs, and eleven — twice git 2.47.3's 5.5 — is kept, a tenth over it,
+// since one run's spread is that wide, and a clone pays 11.0 µs an object of
+// a published chain's tail on the pin (internal/code/cache's BenchmarkMidx
+// tail= arms), which compact.PublishTailObjects, a second's walk at this
+// figure, is set from; the largest repository the defaults admit
 // (some 60 million objects, code.DefaultRepoMaxBytes) is given eleven minutes
 // a walk, against the hours a pack of that size is given (PackWorkDeadline).
 const WalkPerObject = 11 * time.Microsecond
