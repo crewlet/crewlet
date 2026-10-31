@@ -373,16 +373,21 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 	// person present rather than deleted-and-reusable. It is keyed on the
 	// person and carries the record's OP ID rather than its position,
 	// because the apply that writes it is the one that must be able to run
-	// twice and a position changes under a republish.
+	// twice and a position changes under a republish. The seat it released
+	// is a column beside the claims as well (replicated migration 0094), the
+	// claims' own value, because one seat's standing is a seek on it
+	// ([Reader.SeatHolder], [reboundRemovals]) where the claims are a decode
+	// of every tombstone; [Applier.Rederive] recomputes it from the same
+	// claims whenever a checkpoint's rule set differs from this build's.
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_removed
 			(person_id, at, record_id, actor, actor_kind, reason,
-			 claims_json, bucket, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 claims_json, seat_id, bucket, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(person_id) DO NOTHING`,
 		id, at.unix(), at.record.OpID, at.record.Actor,
 		string(at.record.ActorKind), at.record.Reason, string(released),
-		at.bucket(), at.packed)
+		removal.Released.SeatID, at.bucket(), at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("iamdomain: record person %s's removal: %w", id, err)
 	}
@@ -436,8 +441,13 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 // ([leaversOf]) — because a tombstone is filed under the LEAVER's bucket, and a
 // bind whose scope named only its own person wrote where no node holding back
 // an earlier record about the leaver would wait for it.
+//
+// ONE SEEK, whatever the company has removed: `iam_removed_seat_idx` (0094)
+// is `(seat_id, seat_rebound_by, person_id)`, so the clause is its prefix and
+// [leaversOf]'s order its third column. It read the seat out of every
+// tombstone's claims before, a cost that grew with every removal ever made.
 const reboundRemovals = `seat_rebound_by = ''
-	AND json_extract(claims_json, '$.seat_id') = ?`
+	AND seat_id = ?`
 
 // leaversOf is the people whose removal tombstones a bind of seatID would
 // stamp ([reboundRemovals]), sorted.

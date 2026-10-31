@@ -230,11 +230,20 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 // invitations' partial index (0041's) and sorts what it finds: the
 // outstanding invitations only, never every one that ever named a seat.
 //
+// ONE SEAT'S HOLDER IS TWO SEEKS, whatever the company has hired or removed: a
+// turn composes the person it acts for from it on every tool call
+// (iamdomain.Reader.SeatHolder), so its binding seeks the seat's lookup index
+// and its removal no bind has stamped seeks the tombstones' seat index
+// (migration 0094), which a bind's stamp and its writer's scope seek too —
+// where a removal's seat read out of its claims was every tombstone ever
+// written.
+//
 // Mutation: make the login and address indexes partial over their non-empty
 // rows and those rows read `SCAN iam_people`; drop `iam_people_seat_claim_idx`
 // and the listing does; drop `iam_invites_seat_idx` and the seat hold scans
 // the invitations; drop `iam_invites_open_idx` and the invitation listing
-// does.
+// does; drop `iam_removed_seat_idx` and a seat's removals scan the
+// tombstones.
 func TestTheDirectoryLookupsSearchAnIndex(t *testing.T) {
 	t.Parallel()
 	db := migratedEstate(t)
@@ -256,6 +265,22 @@ func TestTheDirectoryLookupsSearchAnIndex(t *testing.T) {
 		{`SELECT id, kind, login, stage, seat_id FROM iam_people
 		   WHERE seat_id != '' ORDER BY seat_id, id`,
 			nil, "SCAN iam_people USING INDEX iam_people_seat_claim_idx"},
+		// SeatHolder's two seeks: the seat's binding, and its removal no
+		// bind has stamped — and the stamp's own clause (reboundRemovals),
+		// which a bind's apply and its writer's scope read.
+		// Every row on the seat, the lowest id kept in Go: ordered by id
+		// under a LIMIT, the driver walks the primary key over every
+		// person instead.
+		{`SELECT id, stage FROM iam_people WHERE seat_id = ?`,
+			[]any{"founder"}, "SEARCH iam_people USING INDEX iam_people_seat_lookup_idx"},
+		{`SELECT person_id FROM iam_removed
+		   WHERE seat_id = ? AND seat_rebound_by = ''
+		   ORDER BY person_id LIMIT 1`,
+			[]any{"founder"}, "SEARCH iam_removed USING COVERING INDEX iam_removed_seat_idx"},
+		{`SELECT person_id FROM iam_removed WHERE seat_rebound_by = ''
+			AND seat_id = ?
+		 ORDER BY person_id`,
+			[]any{"founder"}, "SEARCH iam_removed USING COVERING INDEX iam_removed_seat_idx"},
 		// heldByInvitation's two shapes: an open invitation on an address,
 		// and on a seat.
 		{`SELECT id FROM iam_invites

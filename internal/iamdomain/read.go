@@ -1331,6 +1331,91 @@ type SeatHolder struct {
 	Removed bool
 }
 
+// SeatHolder is who holds ONE seat — the [Reader.SeatHolders] answer for that
+// seat alone, read in one snapshot — and whether anybody does.
+//
+// THE SAME ANSWER, by the same rule: the person bound to the seat, the lowest
+// id first where the rows name more than one (the first [Reader.SeatHolders]
+// lists); else the removal that released it and that no bind has stamped
+// since, the lowest person id first, marked [SeatHolder.Removed]; else nobody
+// (false), a seat the chart alone speaks for.
+//
+// # What it costs
+//
+// Two seeks at most, whatever the size of the directory: the binding by
+// `iam_people_seat_lookup_idx`, and — only where no row binds the seat — the
+// removal by `iam_removed_seat_idx` (replicated migration 0094), whose order
+// is the person's id. It is what a
+// seat's turn composes the person it acts for from, on every call of a tool
+// that reads or writes for somebody — a cost that must not grow with the
+// people the company has hired or has ever removed.
+//
+// Three-valued, as [Reader.SeatHolders] is: an error is UNKNOWN, never
+// nobody. A seat named by no handle is refused: every unbound person's row
+// holds the empty seat, and none of them holds one.
+func (r *Reader) SeatHolder(ctx context.Context, seat string) (SeatHolder, bool, error) {
+	if seat == "" {
+		return SeatHolder{}, false, fmt.Errorf("%w: a seat holder is asked of no seat",
+			ErrInvalid)
+	}
+	var (
+		out  SeatHolder
+		held bool
+	)
+	err := r.withTx(ctx, func(tx *sql.Tx) error {
+		out, held = SeatHolder{}, false
+		// EVERY ROW ON THE SEAT, AND THE LOWEST ID KEPT HERE rather than by
+		// an ORDER BY id: asked to order by the primary key under a LIMIT,
+		// the driver walks the primary key's index over every person
+		// (measured: `SCAN iam_people USING INDEX sqlite_autoindex_…`), where
+		// the bare equality seeks the seat's lookup index. A seat is bound to
+		// one row; a second is a retained record's residue.
+		rows, err := tx.QueryContext(ctx, `
+			SELECT id, stage FROM iam_people WHERE seat_id = ?`, seat)
+		if err != nil {
+			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
+		}
+		for rows.Next() {
+			var person, stage string
+			if err = rows.Scan(&person, &stage); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
+			}
+			if !held || person < out.Person {
+				out, held = SeatHolder{Seat: seat, Person: person, Stage: iam.Stage(stage)}, true
+			}
+		}
+		if err = rows.Close(); err != nil {
+			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
+		}
+		if err = rows.Err(); err != nil {
+			return fmt.Errorf("iamdomain: read seat %s's binding: %w", seat, err)
+		}
+		if held {
+			return nil
+		}
+		// A REMOVAL'S SEAT, UNTIL IT IS BOUND AGAIN: [Reader.SeatHolders]'
+		// rule, read only where no current holder speaks for the seat.
+		var person string
+		err = tx.QueryRowContext(ctx, `
+			SELECT person_id FROM iam_removed
+			 WHERE seat_id = ? AND seat_rebound_by = ''
+			 ORDER BY person_id LIMIT 1`, seat).Scan(&person)
+		switch {
+		case err == nil:
+			out, held = SeatHolder{Seat: seat, Person: person, Removed: true}, true
+			return nil
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		}
+		return fmt.Errorf("iamdomain: read seat %s's removed holder: %w", seat, err)
+	})
+	if err != nil {
+		return SeatHolder{}, false, err
+	}
+	return out, held, nil
+}
+
 // SeatHolders is every seat binding this node's directory holds, read in ONE
 // snapshot so a bind and a removal landing between two reads cannot produce a
 // set that never existed.
@@ -1346,9 +1431,9 @@ type SeatHolder struct {
 //
 // The current bindings are an index range over the seat index; the removals
 // are one row per person the company has ever removed, because a tombstone is
-// permanent and records its seat inside the identifiers it released.
-// Both are read whole, because the one caller rebuilds a registry whole — see
-// [Applier]'s directory listener for why that is not a diff.
+// permanent. Both are read whole, because the one caller rebuilds a registry
+// whole — see [Applier]'s directory listener for why that is not a diff. A
+// question about ONE seat is [Reader.SeatHolder], which seeks it.
 func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 	var out []SeatHolder
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -1384,14 +1469,13 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 		// EXISTS keeps a current holder's standing the seat's word over a
 		// tombstone no bind has stamped yet.
 		removed, err := tx.QueryContext(ctx, `
-			SELECT json_extract(r.claims_json, '$.seat_id') AS seat, r.person_id
+			SELECT r.seat_id, r.person_id
 			  FROM iam_removed r
-			 WHERE COALESCE(json_extract(r.claims_json, '$.seat_id'), '') != ''
+			 WHERE r.seat_id != ''
 			   AND r.seat_rebound_by = ''
 			   AND NOT EXISTS (
-			       SELECT 1 FROM iam_people p
-			        WHERE p.seat_id = json_extract(r.claims_json, '$.seat_id'))
-			 ORDER BY seat, r.person_id`)
+			       SELECT 1 FROM iam_people p WHERE p.seat_id = r.seat_id)
+			 ORDER BY r.seat_id, r.person_id`)
 		if err != nil {
 			return fmt.Errorf("iamdomain: read the removed seat holders: %w", err)
 		}

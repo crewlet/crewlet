@@ -1,0 +1,33 @@
+-- A removal is found by the seat it released.
+--
+-- A removal's tombstone (iam_removed, 0041) withholds the seat its person held
+-- until the seat is bound again (`seat_rebound_by`), and it named that seat
+-- only inside `claims_json`, which no index reaches. So every question about
+-- ONE seat's standing read every tombstone the company ever wrote: the bind
+-- that stamps a seat's removals and its writer's scope (internal/iamdomain's
+-- reboundRemovals), and the point read a seat's turn composes its requester
+-- from on every call of a tool that reads or writes for somebody
+-- (iamdomain.Reader.SeatHolder, through the estate router's
+-- `identity.seat_holder`) — a cost that grows with every person the company
+-- has ever removed, since a tombstone is permanent.
+--
+-- `seat_id` is that seat as a column, the handle the removal released (empty
+-- where it released none), and the index answers a seat's removals no bind has
+-- stamped yet, in person order, as one seek: `seat_id = ? AND seat_rebound_by
+-- = ''` is its prefix and `person_id` its order, so the point read takes the
+-- first with no sort and the stamp updates exactly the rows it names.
+--
+-- A DERIVED COLUMN (statelog.Deriver), so this file adds it and nothing else:
+-- the removal's apply writes it from the identifiers its record released, and
+-- the identity applier's derivation version 2 recomputes it from each row's
+-- claims, in Go, on the first boot whose checkpoint was derived under another
+-- rule set. An UPDATE here would be a second implementation of what a
+-- removal's seat is. The default exists because SQLite requires one for a NOT
+-- NULL column added to a table.
+--
+-- Class: iam_removed stays REPRODUCIBLE (iamdomain.ReproducibleTables): the
+-- column is written only by the removal's apply, from the identifiers its own
+-- record released, and by the re-derivation from the same identifiers, so a
+-- replay rebuilds it on every node byte for byte.
+ALTER TABLE iam_removed ADD COLUMN seat_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX iam_removed_seat_idx ON iam_removed (seat_id, seat_rebound_by, person_id); -- a seat's unstamped removals, in person order

@@ -3,6 +3,7 @@ package iamdomain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -155,40 +156,56 @@ func (a *Applier) Retained(context.Context, int) {
 	a.moved.Everyone = true
 }
 
-// THE APPLIER MAINTAINS ONE DERIVED COLUMN: see [Applier.Rederive].
+// THE APPLIER MAINTAINS TWO DERIVED COLUMNS: see [Applier.Rederive].
 var _ statelog.Deriver = (*Applier)(nil)
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
-// 1 is an invitation's `seat_id` (replicated migration 0042): written by the
-// apply from the record, and recomputed by [Applier.Rederive] from the row's
-// own document whenever the checkpoint's rule set differs from this build's —
-// a checkpoint a reanchor created (derivation 0), or rows adopted from a build
-// whose rules differ ([statelog.Deriver]). On rows this build applied it
-// writes nothing. Bumped by any change to what a derived column holds, so a
-// node holding rows derived under another rule set converges on this one.
-const DerivationVersion = 1
+// 1 is an invitation's `seat_id` (replicated migration 0042); 2 adds a removal
+// tombstone's `seat_id` (0094), the seat its released identifiers name. Each is
+// written by the apply from the record, and recomputed by [Applier.Rederive]
+// from the row's own document or claims whenever the checkpoint's rule set
+// differs from this build's — a checkpoint a reanchor created (derivation 0),
+// or rows adopted from a build whose rules differ ([statelog.Deriver]), the
+// rows of a build before 0094 among them, whose tombstones hold the column's
+// default. On rows this build applied it writes nothing. Bumped by any change
+// to what a derived column holds, so a node holding rows derived under another
+// rule set converges on this one.
+const DerivationVersion = 2
 
 // DerivationVersion implements [statelog.Deriver].
 func (a *Applier) DerivationVersion() int { return DerivationVersion }
 
 // Rederive implements [statelog.Deriver]: every invitation's `seat_id`
-// recomputed from the document its row holds.
+// recomputed from the document its row holds, and every removal tombstone's
+// from the identifiers its claims hold.
 //
-// THE SAME DECODE THE APPLY WRITES IT FROM ([DecodeInvitation], in
-// [Applier.writeInvitation]'s arm), never a second reading of the document in
-// SQL: a `json_extract` backfill would be another implementation of what an
-// invitation's seat is, and the two would answer differently the day either is
-// edited. Only rows that differ are written, so a node whose rows this build
-// maintained repairs none, and a row re-derived here equals the row a node
-// replaying the log writes — the column, and nothing else; the version stays
-// the record's.
-//
-// READ WHOLE BEFORE ANY ROW IS WRITTEN, because an UPDATE of the table a
-// cursor is still walking is a write the cursor may or may not see again.
+// THE SAME DECODE THE APPLY WRITES EACH FROM ([DecodeInvitation], in
+// [Applier.writeInvitation]'s arm; the released [Identifiers] a removal's
+// claims are the encoding of, in [Applier.writeRemoval]'s), never a second
+// reading of either in SQL: a `json_extract` backfill would be another
+// implementation of what an invitation's or a removal's seat is, and the two
+// would answer differently the day either is edited. Only rows that differ are
+// written, so a node whose rows this build maintained repairs none, and a row
+// re-derived here equals the row a node replaying the log writes — the column,
+// and nothing else; the version stays the record's.
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
 	_ statelog.ApplyOptions) (int, error) {
 
+	invitations, err := rederiveInvitationSeats(ctx, tx)
+	if err != nil {
+		return invitations, err
+	}
+	removals, err := rederiveRemovalSeats(ctx, tx)
+	return invitations + removals, err
+}
+
+// rederiveInvitationSeats is [Applier.Rederive]'s invitations: each row's
+// `seat_id` recomputed from its document.
+//
+// READ WHOLE BEFORE ANY ROW IS WRITTEN, because an UPDATE of the table a
+// cursor is still walking is a write the cursor may or may not see again.
+func rederiveInvitationSeats(ctx context.Context, tx *sql.Tx) (int, error) {
 	type stale struct{ id, seat string }
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, seat_id, document FROM iam_invites ORDER BY id`)
@@ -231,6 +248,59 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
 			r.seat, r.id); err != nil {
 			return 0, fmt.Errorf("iamdomain: re-derive invitation %s's "+
 				"seat: %w", r.id, err)
+		}
+	}
+	return len(repair), nil
+}
+
+// rederiveRemovalSeats is [Applier.Rederive]'s removal tombstones: each row's
+// `seat_id` recomputed from the identifiers its claims hold — the seat the
+// removal released, or none.
+//
+// READ WHOLE BEFORE ANY ROW IS WRITTEN, for the invitations' reason. Every
+// tombstone the company ever wrote is read, once, at the boot whose rule set
+// differs from the checkpoint's: the cost the derived column exists to take off
+// every later read of one seat.
+func rederiveRemovalSeats(ctx context.Context, tx *sql.Tx) (int, error) {
+	type stale struct{ person, seat string }
+	rows, err := tx.QueryContext(ctx,
+		`SELECT person_id, seat_id, claims_json FROM iam_removed ORDER BY person_id`)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: read the removals to re-derive "+
+			"their seats: %w", err)
+	}
+	var repair []stale
+	for rows.Next() {
+		var person, held, claims string
+		if err = rows.Scan(&person, &held, &claims); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("iamdomain: read a removal to re-derive "+
+				"its seat: %w", err)
+		}
+		var released Identifiers
+		if decodeErr := json.Unmarshal([]byte(claims), &released); decodeErr != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("iamdomain: open person %s's released "+
+				"identifiers to re-derive their seat: %w", person, decodeErr)
+		}
+		if released.SeatID != held {
+			repair = append(repair, stale{person: person, seat: released.SeatID})
+		}
+	}
+	if err = rows.Close(); err != nil {
+		return 0, fmt.Errorf("iamdomain: read the removals to re-derive "+
+			"their seats: %w", err)
+	}
+	if err = rows.Err(); err != nil {
+		return 0, fmt.Errorf("iamdomain: read the removals to re-derive "+
+			"their seats: %w", err)
+	}
+	for _, r := range repair {
+		if _, err = tx.ExecContext(ctx,
+			`UPDATE iam_removed SET seat_id = ? WHERE person_id = ?`,
+			r.seat, r.person); err != nil {
+			return 0, fmt.Errorf("iamdomain: re-derive person %s's released "+
+				"seat: %w", r.person, err)
 		}
 	}
 	return len(repair), nil

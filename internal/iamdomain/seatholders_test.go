@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +90,196 @@ func TestSeatHoldersNamesWhoHoldsEachSeatAndAtWhatStage(t *testing.T) {
 	rig.drain()
 	want["ops-lead"] = iamdomain.SeatHolder{Seat: "ops-lead", Person: second, Removed: true}
 	assertHolders(t, holdersBySeat(t, reader), want)
+}
+
+// ONE SEAT'S HOLDER IS THE DIRECTORY'S ANSWER FOR THAT SEAT, read by itself.
+//
+// [iamdomain.Reader.SeatHolder] is what a seat's turn composes the person it
+// acts for from, on every tool call, so it must answer exactly what
+// [iamdomain.Reader.SeatHolders] answers for the seat — the holder at their
+// stage, a removal no bind has stamped, and nobody — through every step that
+// moves a seat's standing: a suspension, a removal, a successor's bind, the
+// successor moving off (which must not bring the leaver back), and a second
+// removal. Where two rows name one seat, the lowest id answers, the one the
+// whole listing names first. A seat named by no handle is refused, because
+// every unbound row holds the empty seat.
+//
+// Mutation: read the removals without the unstamped guard on
+// `seat_rebound_by` and the seat the successor left reads as the leaver's;
+// keep the highest id of the seat's rows and the planted second row answers;
+// read no removal at all and the removed seats read as nobody's.
+func TestOneSeatsHolderIsTheDirectorysAnswerForThatSeat(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	seats := []string{"sarah-chen", "platform-lead", "ops-lead", "support-lead", "unheld"}
+	assertEach := func(step string, want map[string]iamdomain.SeatHolder) {
+		t.Helper()
+		for _, seat := range seats {
+			got, held, err := reader.SeatHolder(t.Context(), seat)
+			w, wantHeld := want[seat]
+			if err != nil || held != wantHeld || got != w {
+				t.Errorf("%s: seat %s's holder = (%+v, %v, %v), want (%+v, %v)", step,
+					seat, got, held, err, w, wantHeld)
+			}
+		}
+	}
+
+	active := bindNew(t, rig, "sarah.chen", "sarah-chen")
+	suspended := bindNew(t, rig, "priya.shah", "platform-lead")
+	removed := bindNew(t, rig, "omar.haddad", "ops-lead")
+	if _, err := rig.writer.SetStage(t.Context(), suspended, iam.StageSuspended,
+		"op-suspend", "on leave"); err != nil {
+		t.Fatalf("suspend: %v", err)
+	}
+	rig.drain()
+	if _, err := rig.writer.Remove(t.Context(), removed, "op-remove",
+		"left the company"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	rig.drain()
+	want := map[string]iamdomain.SeatHolder{
+		"sarah-chen":    {Seat: "sarah-chen", Person: active, Stage: iam.StageActive},
+		"platform-lead": {Seat: "platform-lead", Person: suspended, Stage: iam.StageSuspended},
+		"ops-lead":      {Seat: "ops-lead", Person: removed, Removed: true},
+	}
+	assertEach("a suspension and a removal", want)
+
+	successor := bindNew(t, rig, "lena.fischer", "ops-lead")
+	want["ops-lead"] = iamdomain.SeatHolder{Seat: "ops-lead", Person: successor,
+		Stage: iam.StageActive}
+	assertEach("a successor's bind", want)
+
+	if _, err := rig.writer.SetIdentity(t.Context(), iamdomain.IdentityEdit{
+		PersonID: successor, Seat: seatRef(rig.vacantSeat("support-lead")),
+		OpID: "op-move", Reason: "moved teams"}); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	rig.drain()
+	delete(want, "ops-lead")
+	want["support-lead"] = iamdomain.SeatHolder{Seat: "support-lead", Person: successor,
+		Stage: iam.StageActive}
+	assertEach("the successor moving off", want)
+
+	second := bindNew(t, rig, "noor.aziz", "ops-lead")
+	if _, err := rig.writer.Remove(t.Context(), second, "op-remove-second",
+		"left the company"); err != nil {
+		t.Fatalf("remove the second holder: %v", err)
+	}
+	rig.drain()
+	want["ops-lead"] = iamdomain.SeatHolder{Seat: "ops-lead", Person: second, Removed: true}
+	assertEach("a second removal", want)
+
+	// TWO ROWS ON ONE SEAT, as a retained record's residue leaves them: the
+	// lowest id answers, as it is the first the whole listing names.
+	plant(t, rig, `UPDATE iam_people SET seat_id = 'sarah-chen' WHERE id = ?`, suspended)
+	delete(want, "platform-lead")
+	assertEach("two rows on one seat", want)
+	if all := holdersBySeatAll(t, reader)["sarah-chen"]; len(all) != 2 || all[0] != want["sarah-chen"] {
+		t.Errorf("the whole listing names sarah-chen's holders as %+v, want %+v first",
+			all, want["sarah-chen"])
+	}
+
+	if got, held, err := reader.SeatHolder(t.Context(), ""); !errors.Is(err,
+		iamdomain.ErrInvalid) || held {
+		t.Errorf("no seat's holder = (%+v, %v, %v), want %v", got, held, err,
+			iamdomain.ErrInvalid)
+	}
+}
+
+// holdersBySeatAll is the directory's whole answer grouped by seat, in the
+// order it lists them.
+func holdersBySeatAll(t *testing.T, reader *iamdomain.Reader) map[string][]iamdomain.SeatHolder {
+	t.Helper()
+	holders, err := reader.SeatHolders(t.Context())
+	if err != nil {
+		t.Fatalf("SeatHolders: %v", err)
+	}
+	out := map[string][]iamdomain.SeatHolder{}
+	for _, h := range holders {
+		out[h.Seat] = append(out[h.Seat], h)
+	}
+	return out
+}
+
+// THE APPLIER RE-DERIVES A REMOVAL'S SEAT whenever the checkpoint's rule set
+// differs from this build's.
+//
+// A removal tombstone's `seat_id` (replicated migration 0094) is a DERIVED
+// column ([statelog.Deriver]): the removal's apply writes it from the
+// identifiers its record released, and [iamdomain.Applier.Rederive] recomputes
+// it from the same identifiers in the row's claims when a node holds rows
+// derived under another rule set — a reanchor's checkpoint, or rows a build
+// before the column wrote, which hold its default. Unrepaired, such a node's
+// seat would read as nobody's where the leaver's tombstone should withhold it.
+// It writes only rows that differ, so a second run writes nothing.
+//
+// Mutation: leave the tombstones alone in Rederive and the planted rows keep
+// the default; derive every tombstone's seat as empty and both lose theirs.
+func TestTheApplierRederivesARemovalsSeat(t *testing.T) {
+	t.Parallel()
+	rig := newWriteRig(t)
+	reader := rig.reader(t)
+	if rig.applier.DerivationVersion() < 2 {
+		t.Fatalf("the identity applier derives at %d, below the rule set that "+
+			"derives a removal's seat", rig.applier.DerivationVersion())
+	}
+	omar := bindNew(t, rig, "omar.haddad", "ops-lead")
+	noor := bindNew(t, rig, "noor.aziz", "data-lead")
+	for _, person := range []string{omar, noor} {
+		if _, err := rig.writer.Remove(t.Context(), person, "op-remove-"+person,
+			"left the company"); err != nil {
+			t.Fatalf("remove %s: %v", person, err)
+		}
+		rig.drain()
+	}
+	removalSeats := func() string {
+		t.Helper()
+		return strings.Join(rig.column(
+			`SELECT person_id || ' ' || seat_id FROM iam_removed ORDER BY person_id`), ",")
+	}
+	maintained := removalSeats()
+
+	// AS ROWS DERIVED UNDER ANOTHER RULE SET MIGHT HOLD THEM: the column's
+	// default, and one value the rule here would never derive.
+	plant(t, rig, `UPDATE iam_removed SET seat_id = ''`)
+	plant(t, rig, `UPDATE iam_removed SET seat_id = 'stale' WHERE person_id = ?`, noor)
+	if _, held, err := reader.SeatHolder(t.Context(), "ops-lead"); err != nil || held {
+		t.Fatalf("the planted default still names omar's seat (%v, %v): the case "+
+			"proves nothing", held, err)
+	}
+	rederive := func() int {
+		t.Helper()
+		var rows int
+		if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
+			var err error
+			rows, err = rig.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{
+				Now: brokerAt, StoredAt: brokerAt})
+			return err
+		}); err != nil {
+			t.Fatalf("Rederive: %v", err)
+		}
+		return rows
+	}
+	if rows := rederive(); rows != 2 {
+		t.Errorf("the re-derivation wrote %d rows, want the two that differ", rows)
+	}
+	want := strings.Join([]string{omar + " ops-lead", noor + " data-lead"}, ",")
+	if omar > noor {
+		want = strings.Join([]string{noor + " data-lead", omar + " ops-lead"}, ",")
+	}
+	if derived := removalSeats(); derived != want || derived != maintained {
+		t.Errorf("the re-derived seats are %s, the applied ones %s, want %s",
+			derived, maintained, want)
+	}
+	if got, held, err := reader.SeatHolder(t.Context(), "ops-lead"); err != nil || !held ||
+		got != (iamdomain.SeatHolder{Seat: "ops-lead", Person: omar, Removed: true}) {
+		t.Errorf("after the re-derivation ops-lead's holder = (%+v, %v, %v), want "+
+			"omar's tombstone", got, held, err)
+	}
+	if rows := rederive(); rows != 0 {
+		t.Errorf("a second re-derivation wrote %d rows over rows it derived", rows)
+	}
 }
 
 // THE APPLIER TELLS THIS NODE ONLY WHEN A SEAT'S STANDING MAY HAVE MOVED.
