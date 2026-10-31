@@ -102,12 +102,11 @@ test("a company on another chat is offered nothing of Chatlet", () => {
   expect(rows).not.toContain("chatlet");
   expect(rows).toContain("worklet");
   const places = DESTINATIONS.filter((d) => !serviceShown(d, elsewhere)).map((d) => d.key);
-  // THE ROW AND EVERY VIEW IT DECLARES, each a place of its own.
+  // THE ROW AND EVERY VIEW IT DECLARES, each a place of its own, Activity
+  // being the row's own: Chatlet opens on it.
   expect(places.sort()).toEqual([
     "chatlet",
-    ...["activity", "browse", "drafts", "new", "saved", "search", "threads"].map(
-      (v) => `chatlet-${v}`,
-    ),
+    ...["browse", "drafts", "new", "saved", "search", "threads"].map((v) => `chatlet-${v}`),
   ]);
   expect(serviceOfPath(["chatlet", "0f0f0f0f-1111-4222-8333-444455556666"])).toBe("chat");
   expect(pathShown(["chatlet", "activity"], elsewhere)).toBe(false);

@@ -25,25 +25,23 @@
 /* The conversation takes the row; the pinned Rooms panel and a pane add a
    column either side of it. The widths are `app/layout.ts`'s, which holds
    the transcript to its floor at every step, and `screenwidth.test.ts`
-   holds these literals to them. */
+   holds these literals to them.
+
+   THE DOCK'S TRACK IS AS WIDE AS THE DOCK, which is none until the panel is
+   pinned: the kit's dock column eases its own width, so the conversation
+   beside it narrows and widens with it rather than jumping. */
 .chat-app {
   --chat-dock: 280px;
   --chat-pane: 400px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   flex: 1 1 auto;
   height: 100%;
   min-height: 0;
   overflow: hidden;
 }
 .chat-app.has-pane {
-  grid-template-columns: minmax(0, 1fr) var(--chat-pane);
-}
-.chat-app.is-docked {
-  grid-template-columns: var(--chat-dock) minmax(0, 1fr);
-}
-.chat-app.is-docked.has-pane {
-  grid-template-columns: var(--chat-dock) minmax(0, 1fr) var(--chat-pane);
+  grid-template-columns: auto minmax(0, 1fr) var(--chat-pane);
 }
 @container page (width < 1180px) {
   .chat-app {
@@ -58,10 +56,7 @@
 @container page (width < 980px) {
   .chat-app.has-pane {
     position: relative;
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .chat-app.is-docked.has-pane {
-    grid-template-columns: var(--chat-dock) minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
   }
   .chat-app.has-pane > .chat-pane {
     position: absolute;
@@ -72,8 +67,8 @@
   }
 }
 
-/* A NARROW CHAT AREA (`CHAT_NARROW`, measured by the frame) pins nothing and
-   gives a pane the whole of it. */
+/* A NARROW CHAT AREA (`CHAT_NARROW`, measured by the frame) pins nothing,
+   draws no dock, and gives a pane the whole of it. */
 .chat-app.is-narrow {
   position: relative;
   grid-template-columns: minmax(0, 1fr);
@@ -101,16 +96,6 @@
   min-height: 0;
   border-inline-start: 1px solid var(--color-border-default);
   background: var(--color-surface-background);
-}
-
-/* The bare `#/chatlet`, before a room is chosen. */
-.chat-landing {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  justify-content: center;
-  min-height: 0;
-  padding: var(--spacing-6);
 }
 
 /* ---- The top bar ----
@@ -302,14 +287,12 @@
   }
 }
 
-/* PINNED, the same panel is a column beside the conversation. */
+/* PINNED, the same panel is the kit's dock column beside the conversation
+   (`DockColumn`): it eases its own width, the conversation resizes beside
+   it, and its panel slides in and out at its own width. Here is only its
+   ground, the Rooms panel's subtle surface. */
 .chat-dock {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border-inline-end: 1px solid var(--color-border-default);
-  background: var(--color-surface-subtle);
+  --crewlet-dock-column-ground: var(--color-surface-subtle);
 }
 
 /* SLID IN, it is the kit's sheet from the start edge, a little wider than the

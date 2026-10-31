@@ -23,7 +23,7 @@
  * (Menu's carries the total).
  */
 
-import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState, type Ref, type RefObject } from "react";
 import {
   Button,
   Count,
@@ -307,7 +307,7 @@ function MessageSwitcher({ narrow, tight }: { narrow: boolean; tight: boolean })
   );
 }
 
-export function ChatTopBar() {
+export function ChatTopBar({ menu }: { menu?: Ref<HTMLButtonElement> | undefined } = {}) {
   const nav = useChatNav();
   const bar = useRef<HTMLDivElement | null>(null);
   const width = useBarWidth(bar);
@@ -333,6 +333,7 @@ export function ChatTopBar() {
     >
       <Tooltip content={nav.rooms.docked ? "Hide the panel" : "Rooms, direct messages and views"}>
         <Button
+          ref={menu}
           className="chat-topbar-menu"
           variant="secondary"
           size="medium"

@@ -47,6 +47,7 @@ import {
   type TileAction,
 } from "./catalogue.tsx";
 import { useRecheck } from "~/routes/settings/recheck.ts";
+import { workspaceRow, type Workspace } from "~/app/nav.ts";
 import { splitFields } from "../SetupForm.tsx";
 
 /**
@@ -499,7 +500,7 @@ export function builtIns(
       on: tracker === "worklet",
       sentence: tracker === undefined ? NO_COMPANY : "Projects, tasks, your inbox and My work.",
       ...(tracker === "jira" ? { replacedBy: { keys: ["jira"], name: "Jira" } } : {}),
-      ...(tracker === "worklet" ? { open: { label: "Open Worklet", path: ["worklet"] } } : {}),
+      ...(tracker === "worklet" ? { open: openService("worklet", "Open Worklet") } : {}),
     },
     {
       key: "doclet",
@@ -512,7 +513,7 @@ export function builtIns(
       ...(knowledge === "confluence"
         ? { replacedBy: { keys: ["confluence"], name: "Confluence" } }
         : {}),
-      ...(knowledge === "doclet" ? { open: { label: "Open Doclet", path: ["doclet"] } } : {}),
+      ...(knowledge === "doclet" ? { open: openService("doclet", "Open Doclet") } : {}),
     },
     {
       key: "chat",
@@ -525,9 +526,18 @@ export function builtIns(
       ...(chat === "vendor"
         ? { replacedBy: { keys: vendorLines, name: chatVendorName(chatVendors) } }
         : {}),
-      ...(chat === "chatlet" ? { open: { label: "Open Chatlet", path: ["chatlet"] } } : {}),
+      ...(chat === "chatlet" ? { open: openService("chatlet", "Open Chatlet") } : {}),
     },
   ];
+}
+
+/**
+ * The way into a service built into Crewlet: its workspace's own landing, as
+ * the sidebar's row opens it (`app/nav.ts`), so Open Chatlet lands on Activity
+ * as the row does.
+ */
+function openService(key: Workspace, label: string): { label: string; path: string[] } {
+  return { label, path: workspaceRow(key)?.path ?? [key] };
 }
 
 /** What a tool's derivation reads: the two answers, and the chart. */

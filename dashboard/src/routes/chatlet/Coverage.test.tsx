@@ -1,10 +1,11 @@
 /**
  * What each chat view tells the frame's state bar about its answer.
  *
- * THE RULE IS "THE ANSWER THIS SCREEN WAS DRAWN FROM" (`usePageCoverage`): the
- * rail on the bare screen, a room's transcript, each of the reader's views
- * (Activity, Threads, Saved, Drafts and sent), Browse rooms' directory, and
- * none for a search. The screen used to publish the RAIL's coverage on every
+ * THE RULE IS "THE ANSWER THIS SCREEN WAS DRAWN FROM" (`usePageCoverage`): a
+ * room's transcript, each of the reader's views (Activity, where the bare
+ * address opens, Threads, Saved, Drafts and sent), Browse rooms' directory,
+ * and none for a search. The rail is drawn in the Rooms panel beside every
+ * one of them, so it is never the answer the state bar describes. The screen used to publish the RAIL's coverage on every
  * one of them, so an incomplete transcript or feed (a deferred record met the
  * read, and rows may be missing) was never shown, and the state bar described
  * a list the reader was not looking at. The state bar draws nothing on a
@@ -151,15 +152,17 @@ test("a search publishes none, as the work search does, not even the rail's", as
   expect(published()).toEqual([]);
 });
 
-test("the bare chat screen publishes the rail's", async () => {
-  mountScreen({ answers: { chat_channels: rail } });
+test("the bare chat screen is Activity, and publishes the feed's, not the rail's", async () => {
+  const activity = VIEWS.find((c) => c.view === "Activity")!;
+  mountScreen({ answers: { chat_channels: rail, ...activity.answers } as never });
   await waitFor(() =>
     expect(published()).toContainEqual({
       read_level: "session",
-      complete: true,
-      applied_through: at(10),
+      complete: false,
+      applied_through: at(50),
     }),
   );
+  expect(published()).not.toContainEqual(expect.objectContaining({ applied_through: at(10) }));
 });
 
 test("a room on the screen publishes its transcript's, and never the rail's", async () => {

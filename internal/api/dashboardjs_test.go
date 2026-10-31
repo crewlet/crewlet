@@ -1159,10 +1159,16 @@ const (
 	// compact rail, the sidebar's one reading of the reader's rooms that
 	// badges Chatlet, and the toast stack's top edge. The kit's shared chunks
 	// and SeatAvatar add about 4.6 KiB. It moved to 374 KiB, which is 2.04
-	// seconds on that link, past the two seconds every move before it kept. A
-	// follow-up ships the conversation parts' rules as a lazy Chatlet sheet,
-	// which brings it back under.
-	initialBudget = 374 << 10
+	// seconds on that link, past the two seconds every move before it kept.
+	// The Chatlet follow-ups on uilet 0.83.0 took it to 375.6 KiB: the kit's
+	// shared chunks carry 1.4 KiB more (the rail's fold motion, which every
+	// page loads with the shell), the one sheet 0.4 KiB more (the fold's
+	// keyframes, the compact rail's status row and face, and the dock
+	// column's rules), and the entry's own files 0.2 KiB less. It moved to
+	// 376 KiB, which is 2.05 seconds on that link. A follow-up ships the
+	// conversation parts' rules as a lazy Chatlet sheet, which brings it back
+	// under.
+	initialBudget = 376 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1419,8 +1425,13 @@ const (
 	// bar, Rooms panel, room, panes, dialogs and views, and their lazy sheets)
 	// +136.6 KiB, the one sheet (the kit's conversation parts and the compact
 	// rail) +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script
-	// +13.0 KiB, less 3.8 KiB elsewhere. 5215 KiB.
-	treeBudget = 5<<20 + 95<<10
+	// +13.0 KiB, less 3.8 KiB elsewhere. 5215 KiB. The Chatlet follow-ups on
+	// uilet 0.83.0 (the rail's fold motion, its compact status row and face,
+	// the kit's dock column for the Rooms panel, stable trigger refs) took it
+	// from 5214.2 KiB to 5221.4 KiB (+7.2 KiB): the one sheet +3.8 KiB, the
+	// kit's shared chunks +3.7 KiB and the Chatlet chunk +0.2 KiB (its script
+	// +0.6 KiB, its sheet less 0.4 KiB), less 0.5 KiB elsewhere. 5222 KiB.
+	treeBudget = 5<<20 + 102<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

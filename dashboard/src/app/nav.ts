@@ -719,7 +719,12 @@ export const WORKSPACES: WorkspaceRow[] = [
     key: "chatlet",
     label: "Chatlet",
     icon: "message-square",
-    path: ["chatlet"],
+    // CHATLET OPENS ON ACTIVITY, what named the reader since they last
+    // looked, and owns all of `#/chatlet`: a room is under it, and the bare
+    // address is Activity said differently, which the screen replaces with
+    // this one (`routes/chatlet/nav.tsx`'s `placeOf`).
+    path: ["chatlet", "activity"],
+    owns: ["chatlet"],
     hint: "The company's own rooms, threads and direct messages",
     keywords: ["messages", "rooms", "channels", "direct message", "dm"],
     // THE LETTER OF CHATLET NO OTHER ROW HOLDS: `g c` is Company's Principles.
@@ -738,19 +743,14 @@ export const WORKSPACES: WorkspaceRow[] = [
     service: "chat",
     sections: [
       {
-        key: "rooms",
-        label: "Rooms",
-        icon: "hash",
-        path: ["chatlet"],
-        hint: "Your rooms and conversations, newest activity first",
-      },
-      {
         key: "activity",
         label: "Activity",
         icon: "bell",
         path: ["chatlet", "activity"],
         hint: "Every message that named you, every reply in a thread you follow, and reactions to what you said",
-        keywords: ["mentions"],
+        // ITS OWN NAME TOO: as Chatlet's landing it is found in the palette
+        // as Chatlet, by these words as well as the row's.
+        keywords: ["activity", "mentions"],
       },
       {
         key: "threads",
@@ -1449,6 +1449,17 @@ export function workspaceOpen(row: WorkspaceRow, held: readonly string[]): boole
   if (own.some((s) => s.personal)) return true;
   if (!sectionOpen({ grants: row.grants }, held)) return false;
   return own.length === 0 || own.some((s) => sectionOpen(s, held));
+}
+
+/**
+ * Whether the workspace's renderer lists its LANDING section as a row like
+ * any other, so the trail and the tab title name it rather than standing the
+ * workspace alone over it: Settings' column lists Models & keys, and
+ * Chatlet's Rooms panel lists Activity beside Threads, Drafts and sent and
+ * Saved.
+ */
+export function listsLanding(row: WorkspaceRow): boolean {
+  return row.renderer === "column" || row.renderer === "panel";
 }
 
 /**

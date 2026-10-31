@@ -6,7 +6,8 @@
  *
  * A PLACE is a path under `#/chatlet`: a room (`#/chatlet/{id}`), or one of the
  * views beside the rooms (`activity`, `threads`, `drafts`, `saved`, `search`,
- * `browse`, `new`). A PANE is ONE query parameter, `pane`, on whatever place
+ * `browse`, `new`). The bare `#/chatlet` is no place of its own: it is
+ * Activity, Chatlet's landing, said differently ([placeOf]). A PANE is ONE query parameter, `pane`, on whatever place
  * the reader is at: a thread, a room's details, a profile, or a catch up. One
  * parameter rather than one per kind, so two panes can never be open at once
  * by construction rather than by a precedence rule; and an address rather than
@@ -60,8 +61,6 @@ import type { ReaderCounts } from "./panelViews.ts";
 
 /** Where the conversation column is. */
 export type ChatPlace =
-  /** The bare `#/chatlet`, before a room is chosen. */
-  | { kind: "home" }
   /** A room. `message` is the one a link landed on, drawn flashed. */
   | { kind: "room"; id: string; message?: string | undefined }
   | { kind: "activity" }
@@ -159,6 +158,12 @@ export function paneRoom(pane: ChatPane): string {
 /**
  * The place an address names, from what the router parsed (`app/routes.ts`)
  * and the query beside it.
+ *
+ * THE BARE `#/chatlet` NAMES ACTIVITY, Chatlet's landing, or with `dm=` (a
+ * seat's page and peek ask for a direct message that way) New message with
+ * that seat chosen. Neither is a place of its own: the frame replaces the
+ * address with the place's own spelling ([placePath]), so Back never lands on
+ * a spelling the reader did not choose.
  */
 export function placeOf(
   where: { id?: string | undefined; view?: ChatView | undefined },
@@ -166,8 +171,10 @@ export function placeOf(
 ): ChatPlace {
   if (where.id) return { kind: "room", id: where.id, message: query.get("message") || undefined };
   switch (where.view) {
-    case undefined:
-      return { kind: "home" };
+    case undefined: {
+      const dm = query.get("dm");
+      return dm ? { kind: "new", to: [dm] } : { kind: "activity" };
+    }
     case "search":
       return {
         kind: "search",
@@ -185,14 +192,7 @@ export function placeOf(
 
 /** The path a place lives at. */
 export function placePath(place: ChatPlace): string[] {
-  switch (place.kind) {
-    case "home":
-      return ["chatlet"];
-    case "room":
-      return ["chatlet", place.id];
-    default:
-      return ["chatlet", place.kind];
-  }
+  return place.kind === "room" ? ["chatlet", place.id] : ["chatlet", place.kind];
 }
 
 /** The query a place and a pane carry, with no empty parameter in it. */

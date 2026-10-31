@@ -321,14 +321,17 @@ test("a link to a head no route owns is reported, and the live address is not", 
  *
  * Held for the screens whose every parameter is read in ONE module, which is
  * what makes "reads" exact rather than a guess over an import graph: the table
- * names the module, and the parameters are its own `useParam("…")` literals.
+ * names the module, and the parameters are its own `useParam("…")` literals,
+ * or its `query.get("…")` literals where the module reads an address it was
+ * handed (Chatlet's `placeOf`).
  */
 const READS_ITS_PARAMS: { path: string[]; module: string }[] = [
   { path: ["live"], module: "routes/live/LiveNow.tsx" },
   { path: ["live", "events"], module: "routes/live/Activity.tsx" },
-  // A SEAT'S DIRECT MESSAGE opens chat's landing with the seat chosen, and
-  // the landing's one parameter is read where the gesture is drawn.
-  { path: ["chatlet"], module: "routes/chatlet/Chat.tsx" },
+  // A SEAT'S DIRECT MESSAGE opens the bare `#/chatlet` with the seat chosen,
+  // and every Chatlet address, the bare one included, is read into its place
+  // in one function, `placeOf`.
+  { path: ["chatlet"], module: "routes/chatlet/nav.tsx" },
 ];
 
 /** Every link written as a literal path with a literal query, in one module. */
@@ -366,7 +369,9 @@ test("a link's query names only what the screen it opens reads", () => {
     READS_ITS_PARAMS.map((row) => {
       const mod = modules().find((m) => m.path === row.module);
       expect(mod, `${row.module} is not in the tree — this row is asserting nothing`).toBeDefined();
-      const read = [...(mod?.text ?? "").matchAll(/useParam\(\s*"([^"]+)"/g)].map((m) => m[1]!);
+      const read = [...(mod?.text ?? "").matchAll(/(?:useParam|query\.get)\(\s*"([^"]+)"/g)].map(
+        (m) => m[1]!,
+      );
       return [row.path.join("/"), new Set(read)] as const;
     }),
   );

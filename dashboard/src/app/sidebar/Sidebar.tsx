@@ -31,9 +31,10 @@
  *
  * The kit's `NavItem` takes a figure only with the words that name it, and
  * two kinds of figure are two props: a BADGE is how many things are waiting
- * on the reader (the Inbox's unread primary notices, the one accent fill in
- * the chrome), and a COUNT is how many of something a destination holds (the
- * turns Live is running, a pinned view's total). A
+ * on the reader (the Inbox's unread primary notices, the open work assigned
+ * to them on My work, the mentions and direct messages Chatlet holds for
+ * them), the accent's filled pill, and a COUNT is how many of something a
+ * destination holds (the turns Live is running, a pinned view's total). A
  * figure the engine did not answer is absent, never a zero.
  *
  * # A lock goes where the closed thing is, and a row is hidden only for a service
@@ -66,10 +67,10 @@
  * `CompactNav`: Search, then the places about you, each its glyph over its
  * name, then each named group folded into ONE tile (Company, Workspace) whose
  * flyout lists its places; Settings and the reader's face stand under the
- * foot's rule, and the engine's status at the top of the foot. Both shapes
- * are drawn from [placeOf], so they list the same places with the same
- * figures, links and locks, and a group's tile carries its places' badges and
- * says when the page on screen is one of them. The live shortcuts (Pinned,
+ * foot's rule, and the engine's status on a row of its own under the mark.
+ * Both shapes are drawn from [placeOf], so they list the same places with the
+ * same figures, links and locks, and a group's tile carries its places'
+ * badges and says when the page on screen is one of them. The live shortcuts (Pinned,
  * Starred, Running) are the full sidebar's: the folded rail is the places,
  * and one press unfolds the rest.
  *
@@ -135,6 +136,13 @@ import { UserBlock, type FootPlace } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import { useKeyHints } from "~/app/layout.ts";
 import { toggleRailShape } from "./railShape.ts";
+
+/**
+ * What the search control is called in either shape: the full sidebar's field
+ * and the compact rail's Search tile open the same palette, so they name it
+ * with the same words.
+ */
+const SEARCH_LABEL = "Search everything";
 
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
@@ -229,6 +237,8 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           },
         }
       : {},
+    // THE OPEN WORK ASSIGNED TO THE READER IS A BADGE, as the Inbox's is:
+    // it waits on them, so it is the same filled pill on the same end line.
     // NOTHING ON YOU IS NO FIGURE, as nothing waiting is no badge: a zero
     // beside the row is a mark a reader checks, and it would be there for
     // good on a quiet day.
@@ -238,7 +248,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           // `+` where the engine stopped counting: the row said "10000+"
           // beside a tab that said "10,000+".
           {
-            count: {
+            badge: {
               value: pageCount(queue.total, queue.capped === true),
               label: "open, assigned to you",
             },
@@ -345,20 +355,19 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       search={
         <SearchTrigger
           variant="rail"
-          label="Ask or jump to…"
-          title="Search everything"
+          label={SEARCH_LABEL}
           onClick={onSearch}
           keyshortcuts="Meta+K Control+K"
           // A KEYCAP ONLY FOR A READER WITH KEYS (`useKeyHints`): in the
           // phone's drawer "Ctrl + K" named a key nobody there has, and cut
-          // the trigger's own label to "Ask or jump t…".
+          // the trigger's own label short.
           shortcut={keyHints ? <Kbd keys={capsOf(palette)} subtle /> : undefined}
         />
       }
       // THE ENGINE'S STATE ON THE NAME'S LINE, compact: a dot and the
       // alarms, its words in its name and title, the panel below it. In the
-      // compact rail the kit stands it at the top of the foot, and the panel
-      // opens above it.
+      // compact rail the kit stands it on a row of its own under the mark,
+      // and the panel still opens below it.
       status={
         <RailBoundary label="Engine" resetKey={at} compact>
           <EnginePanel
@@ -372,7 +381,6 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
             })}
             readsReport={readsReport}
             onSignIn={goSignIn}
-            side={compact ? "top" : "bottom"}
           />
         </RailBoundary>
       }
@@ -398,7 +406,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           <CompactNavItem
             label="Search"
             icon={<SearchGlyph size="sm" />}
-            title={keyHints ? `Ask or jump to… (${pressText(palette)})` : "Ask or jump to…"}
+            title={keyHints ? `${SEARCH_LABEL} (${pressText(palette)})` : SEARCH_LABEL}
             keyshortcuts={ariaKeysOf(palette)}
             onClick={onSearch}
           />

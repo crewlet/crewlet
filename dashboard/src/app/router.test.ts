@@ -28,6 +28,7 @@ import {
   grantsMissing,
   isSidebarRow,
   landingPath,
+  listsLanding,
   ownedBy,
   personalPath,
   sectionOf,
@@ -955,14 +956,14 @@ describe("the breadcrumb", () => {
   });
 
   // A ROOM IS ADDRESSED BY AN ID, so it is an identifier until the room
-  // publishes its name — and the way back is Chatlet itself, whose landing IS
-  // the room list: a trail reading "Chatlet › Rooms › #general" would name a
-  // page that is the first crumb again.
+  // publishes its name, and the way back is Chatlet itself, which leads to
+  // its landing, Activity: the rooms are a list in the Rooms panel, not a page
+  // a "Chatlet › Rooms › #general" trail could name.
   test("a room's crumb is its name under Chatlet, and an unnamed id is an identifier", () => {
     const id = "0f0f0f0f-1111-4222-8333-444455556666";
     const raw = crumbsFor(["chatlet", id]);
     expect(raw.map((c) => c.label)).toEqual(["Chatlet", id]);
-    expect(raw[0]?.path).toEqual(["chatlet"]);
+    expect(raw[0]?.path).toEqual(["chatlet", "activity"]);
     expect(raw[1]?.mono, "an id drawn as prose reads as a room's name").toBe(true);
     const named = crumbsFor(["chatlet", id], { [id]: "#general" });
     expect(named.map((c) => c.label)).toEqual(["Chatlet", "#general"]);
@@ -1077,7 +1078,7 @@ test("every fixed destination names itself rather than reading as a key", () => 
       continue;
     }
     const landing =
-      row.renderer === "column" && samePath(dest.path, row.path)
+      listsLanding(row) && samePath(dest.path, row.path)
         ? row.sections.find((s) => samePath(s.path, row.path))
         : undefined;
     expect(last?.label, `#/${dest.path.join("/")}`).toBe(landing?.label ?? dest.label);

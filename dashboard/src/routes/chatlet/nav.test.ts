@@ -39,7 +39,6 @@ function readBack(hash: string): { place: ChatPlace; pane: ChatPane | null } {
 
 describe("a place and its pane round-trip through the address", () => {
   const places: ChatPlace[] = [
-    { kind: "home" },
     { kind: "room", id: ROOM },
     { kind: "room", id: ROOM, message: ROOT },
     { kind: "activity" },
@@ -69,6 +68,20 @@ describe("a place and its pane round-trip through the address", () => {
       });
     }
   }
+});
+
+// THE BARE `#/chatlet` IS NO PLACE OF ITS OWN: it is Activity, Chatlet's
+// landing, said differently, or New message to the seat a `dm=` names, and the
+// frame replaces it with that place's own spelling. Mutation: read the bare
+// address as any other place and these go red.
+describe("the bare address names the place it means", () => {
+  test("Activity, Chatlet's landing", () => {
+    expect(readBack("#/chatlet").place).toEqual({ kind: "activity" });
+    expect(placeHref(readBack("#/chatlet").place)).toBe("#/chatlet/activity");
+  });
+  test("New message to the seat a dm= names", () => {
+    expect(readBack("#/chatlet?dm=bo").place).toEqual({ kind: "new", to: ["bo"] });
+  });
 });
 
 test("every view is a reserved word no room id can be", () => {

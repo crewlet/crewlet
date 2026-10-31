@@ -243,7 +243,10 @@ export type FramedScreen =
   | { screen: "schedules"; scope: string[] }
   | { screen: "integrations"; kind?: string }
   | { screen: "budgets" }
-  /** A room by its id, or neither. */
+  /**
+   * A room by its id, or neither: the bare `#/chatlet`, which the screen
+   * replaces with the place it means (Activity, its landing).
+   */
   | { screen: "chatlet"; id?: string }
   /** One of the views beside the rooms. */
   | { screen: ChatViewScreen }
@@ -505,6 +508,8 @@ function org(rest: string[], screen: Make, under: Under): Route {
 
 function chatlet(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
+  // THE BARE ADDRESS RESOLVES, and the screen says it again as the place it
+  // means, by replace: Activity, or New message to the seat a `dm=` names.
   if (first === undefined) return screen({ screen: "chatlet" });
   // THE VIEWS THAT ARE NOT A ROOM are reserved words ([CHAT_VIEWS]), and a
   // tail under one is nothing: no view has an object of its own to address.

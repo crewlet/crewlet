@@ -79,13 +79,15 @@ const INCOMPLETE: CoverageFacts = {
   },
 };
 
-// THE NEW TASK SHEET'S CODE IS IN BEFORE A CASE STARTS. The sheet is the work
-// chunk's, loaded on first open, and what these cases assert is that the
-// frame opens it, not how long a cold `import()` of that chunk takes under a
-// test transformer, which a `waitFor` would otherwise be measuring (the same
-// reason `App.test.tsx` loads every chunk first).
+// THE NEW TASK SHEET'S CODE AND THE PALETTE'S ARE IN BEFORE A CASE STARTS.
+// Each is a chunk loaded on first open, and what these cases assert is that
+// the frame opens it, not how long a cold `import()` of that chunk takes
+// under a test transformer, which a `waitFor` would otherwise be measuring
+// (the same reason `App.test.tsx` loads every chunk first). Left to the first
+// case that opened it, the palette was in only for the cases after that one,
+// so a case run alone found no dialog.
 beforeAll(async () => {
-  await loadChunk("worklet");
+  await Promise.all([loadChunk("worklet"), loadChunk("palette")]);
 });
 
 beforeEach(() => {
@@ -694,6 +696,8 @@ describe("the sidebar's figures", () => {
     expect(asked.some((a) => a.what === "work_my_work")).toBe(false);
     const row = screen.getByRole("link", { name: /^My work/ });
     expect(row.textContent).toContain("3 open, assigned to you");
+    // THE INBOX'S PILL, not the quiet count: the work waits on the viewer.
+    expect(row.querySelector(".crewlet-nav-item__badge")?.textContent).toContain("3");
   });
 
   test("a count that stopped at the engine's ceiling is drawn as a floor", async () => {
@@ -1557,6 +1561,24 @@ describe("the compact sidebar", () => {
     try {
       act(() => screen.getByRole("button", { name: /^Search/ }).click());
       expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
+    } finally {
+      win.restore();
+    }
+  });
+
+  // THE ENGINE'S STATUS STANDS UNDER THE MARK, out of the foot, so its panel
+  // opens below it as it does in the full sidebar; and the reader's face is
+  // at the compact tiles' small step, on their line. Mutation: draw the face
+  // at the medium step, or put the status back in the foot, and this fails.
+  test("stands the engine's status under the mark and the face at the tiles' step", async () => {
+    const win = await folded();
+    try {
+      const status = document.querySelector(".crewlet-app-shell__rail-status");
+      expect(status, "the engine's status is drawn").not.toBeNull();
+      expect(status?.closest(".crewlet-app-shell__rail-foot")).toBeNull();
+      const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+      const face = foot.querySelector(".crewlet-account-row .crewlet-avatar");
+      expect(face?.classList.contains("crewlet-avatar--sm")).toBe(true);
     } finally {
       win.restore();
     }

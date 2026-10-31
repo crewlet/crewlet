@@ -63,14 +63,13 @@ import {
   type RefObject,
 } from "react";
 import { EmptyState, InlineCode, LayerHost, Skeleton } from "@crewlethq/ui";
-import { MessageSquareGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
+import { UserGlyph } from "@crewlethq/icons/glyphs";
 
-import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
+import { samePath, useNavigator, useRoute } from "~/app/router.tsx";
 import { useFillScreen } from "~/app/fill.tsx";
 import type { ChatView } from "~/app/routes.ts";
-import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
 import { CHAT_NARROW } from "~/app/layout.ts";
-import { QueryState } from "~/components/common.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
 import { badgesAreMeasured, isDirect, useChatRooms } from "~/lib/chatRooms.ts";
@@ -92,14 +91,14 @@ import {
   PANE_PARAM,
   paneOf,
   placeOf,
-  useChatFrame,
+  placePath,
+  placeQuery,
   useChatNav,
   useChatNavigation,
   type ChatFrame,
   type OpenRoom,
 } from "./nav.tsx";
 import { useOutbox } from "./outbox.ts";
-import { coverageOf } from "./page.ts";
 import { ChatPaneHost } from "./Pane.tsx";
 import { useChatPeople } from "./people.ts";
 import { Room } from "./Room.tsx";
@@ -240,14 +239,15 @@ export function ChatFrameRoot({
   const [drafts] = useState(() => new ChatDrafts());
   const people = useChatPeople();
 
-  // A DIRECT MESSAGE ASKED FOR BY ADDRESS (`#/chatlet?dm=<handle>`, from a
-  // seat's page and peek) is New message with that seat chosen, and the
-  // address is replaced so a reload or Back does not ask again.
-  const [dm] = useParam("dm", "", "filter");
+  // THE BARE `#/chatlet` IS A PLACE SAID DIFFERENTLY ([placeOf]): Activity,
+  // or New message with the seat a `dm=` names (a seat's page and peek). It
+  // is drawn as that place at once, and the address is replaced with the
+  // place's own spelling, keeping a pane, so a reload, a copied link and Back
+  // all name the view on screen, and a `dm=` is not asked again.
+  const bare = samePath(route.path, ["chatlet"]);
   useEffect(() => {
-    if (dm === "" || place.kind !== "home") return;
-    router.replace(["chatlet", "new"], { to: dm });
-  }, [dm, place.kind, router]);
+    if (bare) router.replace(placePath(place), placeQuery(place, pane));
+  }, [bare, place, pane, router]);
 
   // THE RAIL IS THE VIEWER'S OWN ROOMS, which is narrower than what they may
   // read: a public room they have not joined is searchable and openable and
@@ -396,6 +396,9 @@ function DialogHost() {
 function ChatLayout({ children }: { children: ReactNode }) {
   const nav = useChatNav();
   const area = useContext(ChatAreaContext);
+  // MENU BRINGS THE PANEL BACK, so it is where focus goes when the panel is
+  // unpinned from inside the dock.
+  const menu = useRef<HTMLButtonElement>(null);
   const className = [
     "chat-app",
     nav.rooms.docked && "is-docked",
@@ -414,9 +417,9 @@ function ChatLayout({ children }: { children: ReactNode }) {
     <LayerHost className="chat-layer">
       <RoomScopeProvider channelID={room}>
         <div ref={area} className={className}>
-          {nav.rooms.docked && <RoomsDock />}
+          {!nav.narrow && <RoomsDock docked={nav.rooms.docked} back={() => menu.current} />}
           <section className="chat-main" aria-label="Conversation">
-            <ChatTopBar />
+            <ChatTopBar menu={menu} />
             {children}
           </section>
           {nav.pane && <ChatPaneHost pane={nav.pane} onClose={nav.closePane} />}
@@ -431,8 +434,6 @@ function ChatLayout({ children }: { children: ReactNode }) {
 function PlaceView() {
   const { place } = useChatNav();
   switch (place.kind) {
-    case "home":
-      return <Landing />;
     case "room":
       // ONE ROOM PER MOUNT: what a room has paged in, its scroll and its
       // composer belong to it, and another room is another conversation.
@@ -455,50 +456,6 @@ function PlaceView() {
     case "new":
       return <NewMessageView />;
   }
-}
-
-/**
- * The bare `#/chatlet`, before a room is chosen.
- *
- * THE ONE VIEW DRAWN FROM THE RAIL'S ANSWER, so it is the one that publishes
- * the rail's coverage. Every other view publishes its own, because the state
- * bar describes the answer the reader is looking at, and a frame holds one.
- * Published from a child for the same reason: a parent's effect runs after
- * its child's, so the screen publishing the rail's would overwrite the room's.
- */
-function Landing() {
-  const { rail } = useChatFrame();
-  usePageCoverage(coverageOf(rail.data));
-  // WHY THERE ARE NO ROOMS TO PICK, when the engine said why: a refusal in its
-  // own words, or a read that failed, never "pick a room" over a list that
-  // could not be read.
-  if (!rail.data) {
-    return (
-      <div className="chat-landing">
-        <QueryState
-          error={rail.error}
-          refusal={rail.refusal}
-          detail={rail.detail}
-          loading={rail.loading}
-        />
-      </div>
-    );
-  }
-  const none = rail.data.channels.length === 0;
-  return (
-    <div className="chat-landing">
-      <EmptyState
-        size="compact"
-        icon={<MessageSquareGlyph size="xl" />}
-        title={none ? "You’re in no rooms yet" : "Pick a room"}
-        description={
-          none
-            ? "Give a team a channel in the org chart and its room appears here. Anyone can also message you directly, and Browse rooms lists every room you can join."
-            : "Menu lists your rooms, newest activity first, and the switchers above find one by name."
-        }
-      />
-    </div>
-  );
 }
 
 /**

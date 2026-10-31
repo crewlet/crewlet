@@ -118,6 +118,10 @@ function chatAnswers(channels: unknown[], read: Record<string, unknown> = {}) {
         });
       case "chat_messages":
         return { ...served, channel_id: id, messages: [] };
+      // ACTIVITY IS WHERE THE BARE ADDRESS OPENS, so every suite mounted there
+      // is asked for its feed: nothing has named the reader yet.
+      case "chat_activity":
+        return { ...served, items: [], unread: { mention: 0, reply: 0 }, read_state: true };
       default:
         // A QUESTION THIS SUITE DOES NOT ANSWER, as a node that serves no such
         // question answers it: never an empty object a view would read as an
@@ -176,11 +180,12 @@ describe("who the screen is for", () => {
   });
 
   // A REFUSAL THE ENGINE WROTE FOR THE READER IS DRAWN IN ITS OWN WORDS, where
-  // the reader would otherwise pick a room: never "pick a room" over a list
-  // that could not be read.
+  // the reader would otherwise see their rooms: never an empty list, and never
+  // "in no rooms yet" over a list that could not be read.
   test("a refused rail says the engine's own sentence, not the generic one", async () => {
+    const answers = chatAnswers([]);
     mountScreen({
-      answer: async (what) => {
+      answer: async (what, params) => {
         if (what === "chat_channels") {
           throw new QueryError(
             "bad_params",
@@ -188,12 +193,13 @@ describe("who the screen is for", () => {
             "chat is read as a human seat: bind this credential with crewlet iam bind",
           );
         }
-        return {};
+        return answers(what, params);
       },
     });
-    await waitFor(() => expect(screen.getByText(/crewlet iam bind/)).toBeTruthy());
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText(/crewlet iam bind/)).toBeTruthy());
     expect(screen.queryByText(/the screen.s bug to fix/)).toBeNull();
-    expect(screen.queryByText("Pick a room")).toBeNull();
+    expect(screen.queryByText(/in no rooms yet/i)).toBeNull();
   });
 
   // A VIEWER READ THAT FAILED IS NO ANSWER, and holding the screen on it held
@@ -213,6 +219,21 @@ describe("who the screen is for", () => {
   test("a reader in no rooms is told how a room comes to exist", async () => {
     mountScreen({ answer: chatAnswers([]) });
     await waitFor(() => expect(screen.getByText(/in no rooms yet/i)).toBeTruthy());
+    expect(screen.getByText(/channel in the org chart/)).toBeTruthy();
+  });
+
+  // CHATLET OPENS ON ACTIVITY. The bare address is Activity said differently,
+  // so it is drawn at once and the address is REPLACED: Back from Activity
+  // leaves Chatlet rather than landing on a spelling the reader never chose.
+  // Mutation: push instead of replace and the entry count goes red; draw
+  // anything but Activity and the heading does.
+  test("the bare address opens Activity, replacing the entry rather than pushing one", async () => {
+    location.hash = "#/chatlet";
+    const entries = history.length;
+    mountScreen({ hash: "#/chatlet", answer: chatAnswers([]) });
+    await waitFor(() => expect(location.hash).toBe("#/chatlet/activity"));
+    expect(history.length).toBe(entries);
+    expect(screen.getByRole("heading", { name: "Activity" })).toBeTruthy();
   });
 });
 
@@ -309,11 +330,12 @@ describe("the Rooms panel", () => {
     // The engine zeroes every count when the coordination record could not be
     // read and says so. Drawing that as a quiet panel is indistinguishable
     // from being caught up, so the panel says which one this is.
+    const answers = chatAnswers([]);
     mountScreen({
-      answer: async (what) =>
+      answer: async (what, params) =>
         what === "chat_channels"
           ? { ...served, read_state: false, channels: [room(GENERAL, "general", { mentions: 0 })] }
-          : {},
+          : answers(what, params),
     });
     const panel = await openPanel();
     await waitFor(() => expect(within(panel).getByText(/couldn’t be read/i)).toBeTruthy());
@@ -360,6 +382,72 @@ describe("the Rooms panel", () => {
     expect(await screen.findByRole("navigation", { name: "Rooms" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Unpin the panel" }));
     await waitFor(() => expect(localStorage.getItem(STORAGE_KEYS.chatletRoomsDocked)).toBe("0"));
+  });
+
+  // UNPINNING EASES THE COLUMN SHUT rather than dropping it: the kit's dock
+  // column keeps the panel drawn, inert, while its width eases to nothing
+  // beside the conversation, and takes it away when that motion ends. Focus
+  // that was in the panel goes to Menu, which brings the panel back, as the
+  // panel starts to leave. jsdom runs no transitions, so the motion is the
+  // column's own `getAnimations`, finished by the suite. Mutation: take the
+  // panel away on the press and the first expectation goes red; hand the dock
+  // no way back and the focus one does; ignore the motion and the last does.
+  test("unpinning keeps the panel, inert, until its column has eased shut", async () => {
+    // THE COLUMN'S OWN WIDTH TRANSITION, as a browser reports it (a
+    // `CSSTransition` on the column, running, with its end ahead): the kit
+    // waits on that motion and no other.
+    let close = () => {};
+    const finished = new Promise<void>((resolve) => (close = resolve));
+    const motion = { playState: "running" };
+    const had = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getAnimations");
+    Object.defineProperty(HTMLElement.prototype, "getAnimations", {
+      configurable: true,
+      value(this: HTMLElement) {
+        if (!this.classList.contains("chat-dock")) return [];
+        return [
+          {
+            get playState() {
+              return motion.playState;
+            },
+            transitionProperty: "width",
+            currentTime: 0,
+            effect: { target: this, getComputedTiming: () => ({ endTime: 300 }) },
+            finished,
+          } as unknown as Animation,
+        ];
+      },
+    });
+    try {
+      localStorage.setItem(STORAGE_KEYS.chatletRoomsDocked, "1");
+      mountScreen({ answer: chatAnswers([room(GENERAL, "general")]) });
+      await screen.findByRole("navigation", { name: "Rooms" });
+      const unpin = screen.getByRole("button", { name: "Unpin the panel" });
+      unpin.focus();
+      fireEvent.click(unpin);
+      const leaving = document.querySelector(".chat-dock .crewlet-dock-column__panel");
+      expect(leaving, "the panel is still drawn while its column eases shut").toBeTruthy();
+      expect(leaving?.hasAttribute("inert")).toBe(true);
+      expect(document.activeElement, "focus goes to Menu, which brings it back").toBe(
+        screen.getByRole("button", { name: /^Menu/ }),
+      );
+      await flush(async () => {
+        motion.playState = "finished";
+        close();
+      });
+      await waitFor(() =>
+        expect(
+          document.querySelector(".chat-dock .crewlet-dock-column__panel"),
+          "gone once it has closed",
+        ).toBeNull(),
+      );
+      expect(
+        document.querySelector(".chat-dock"),
+        "the column stays, as wide as nothing",
+      ).toBeTruthy();
+    } finally {
+      if (had) Object.defineProperty(HTMLElement.prototype, "getAnimations", had);
+      else delete (HTMLElement.prototype as { getAnimations?: unknown }).getAnimations;
+    }
   });
 });
 

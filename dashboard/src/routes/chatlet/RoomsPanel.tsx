@@ -20,6 +20,7 @@ import { useState } from "react";
 import {
   Button,
   Callout,
+  DockColumn,
   EmptyState,
   IconButton,
   Input,
@@ -494,14 +495,31 @@ export function RoomsSheet() {
 }
 
 /**
- * Pinned beside the conversation. A plain column, NOT a second landmark: the
- * panel's own navigation inside it is the one named Rooms, and two landmarks
- * of one name are two a screen reader offers with nothing to tell them apart.
+ * Pinned beside the conversation: the kit's `DockColumn`, as wide as the
+ * panel while it is pinned and as wide as nothing while it is not, easing
+ * between the two so the conversation resizes rather than jumps. The panel
+ * keeps its own width, slides in and out from the start edge, and stays drawn
+ * and inert until the column has closed over it.
+ *
+ * A PLAIN COLUMN, NOT A SECOND LANDMARK: the panel's own navigation inside it
+ * is the one named Rooms, and two landmarks of one name are two a screen
+ * reader offers with nothing to tell them apart.
+ *
+ * UNPINNED FROM INSIDE, focus goes to `back`: the top bar's Menu, which is
+ * how the reader brings the panel back, rather than staying in a panel that
+ * takes nothing.
  */
-export function RoomsDock() {
+export function RoomsDock({
+  docked,
+  back,
+}: {
+  docked: boolean;
+  /** The control that brings the panel back once it is unpinned. */
+  back: () => HTMLElement | null;
+}) {
   return (
-    <div className="chat-dock">
+    <DockColumn open={docked} width="var(--chat-dock)" className="chat-dock" focusOnClose={back}>
       <RoomsPanelBody />
-    </div>
+    </DockColumn>
   );
 }

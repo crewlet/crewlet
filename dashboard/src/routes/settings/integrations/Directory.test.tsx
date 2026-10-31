@@ -702,7 +702,9 @@ test("a node running no company says so and wears no state", async () => {
 test("Chatlet in use is In use, with its way in and nothing counted", async () => {
   const { asked } = mount({ ...MEMBER, grants: [...MEMBER.grants, "chatlet"] }, "chat");
   expect(await screen.findByRole("heading", { level: 2, name: "Chatlet" })).toBeTruthy();
-  expect(screen.getByRole("link", { name: "Open Chatlet" }).getAttribute("href")).toBe("#/chatlet");
+  expect(screen.getByRole("link", { name: "Open Chatlet" }).getAttribute("href")).toBe(
+    "#/chatlet/activity",
+  );
   expect(screen.getByText("Rooms, threads and direct messages with your agents.")).toBeTruthy();
   expect((await line(/Chatlet/)).textContent).toContain("In use");
   expect(asked.filter((q) => q !== "viewer" && q !== "integrations")).toEqual([]);
