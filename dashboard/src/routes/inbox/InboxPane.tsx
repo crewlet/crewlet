@@ -140,6 +140,13 @@ interface PaneProps {
   /** Back to the list, where the list and the pane are one column. */
   onBack?: (() => void) | undefined;
   /**
+   * The answer given here to the row, which has moved to Answered and which
+   * the engine does not list as answered yet. The pane draws it, read-only,
+   * where the controls that gave it were: drawn again, they would answer the
+   * question a second time. Undefined for every other row.
+   */
+  answered?: AskAnswer | undefined;
+  /**
    * The row was dealt with here. `label` says how ("Answered") for a row that
    * stays in the list as done, with the answer that was given; null for a
    * notice, which leaves its group.
@@ -217,6 +224,7 @@ function OpenPane({
   maxSnoozeAhead,
   title,
   onBack,
+  answered,
   onSettled,
 }: PaneProps & { row: InboxRow }) {
   const who = rowWho(row, index);
@@ -258,11 +266,20 @@ function OpenPane({
               frame={frame}
               index={index}
               now={now}
+              answered={answered}
               onSettled={onSettled}
             />
           );
         case "run":
-          return <RunPane run={row.subject.run} frame={frame} now={now} onSettled={onSettled} />;
+          return (
+            <RunPane
+              run={row.subject.run}
+              frame={frame}
+              now={now}
+              answered={answered}
+              onSettled={onSettled}
+            />
+          );
         case "seat":
           return <SeatPane seat={row.subject.seat} frame={frame} />;
       }
@@ -306,6 +323,7 @@ function AskPane({
   frame,
   index,
   now,
+  answered,
   onSettled,
 }: {
   ask: WorkAskRow;
@@ -313,15 +331,21 @@ function AskPane({
   frame: Frame;
   index: OrgIndex;
   now: number;
+  /** The answer given here before, drawn in place of the controls ([PaneProps.answered]). */
+  answered: AskAnswer | undefined;
   onSettled: (label: string | null, answer?: AskAnswer) => void;
 }) {
   const decision = ask.decision;
   const options = decision?.options ?? [];
   const [open, setOpen] = useState(false);
-  const [answer, setAnswer] = useState<AskAnswer | null>(null);
+  // THE ANSWER THE PANE OPENED ON, given before: the pane is drawn afresh
+  // for each row, so this is the row's as it was opened.
+  const [before] = useState<AskAnswer | null>(answered ?? null);
+  const [answer, setAnswer] = useState<AskAnswer | null>(before);
   const mark = useAct("mark_inbox");
-  // THE OUTCOME TAKES THE FOCUS from the option that sent it, which it replaces.
-  const landing = useFocusLanding(answer !== null);
+  // THE OUTCOME TAKES THE FOCUS from the option that sent it, which it
+  // replaces: an answer given here, never the one the pane opened on.
+  const landing = useFocusLanding(answer !== null && answer !== before);
   const recommended = options.find((o) => o.id === decision?.recommended);
   const context = askContext(ask);
   // THE ASK'S OWN TASK IS NOT EVIDENCE of anything: the byline names it.
@@ -339,7 +363,7 @@ function AskPane({
   // conversation carries no second box.
   const inWords = options.length === 0 || open;
 
-  const answered = (given: AskAnswer) => {
+  const onAnswered = (given: AskAnswer) => {
     setAnswer(given);
     const unread = notices.filter((n) => !n.read).map((n) => n.record_id);
     if (unread.length > 0) {
@@ -394,7 +418,7 @@ function AskPane({
             recommended={decision?.recommended}
             open={open}
             onOpenChange={setOpen}
-            onAnswered={answered}
+            onAnswered={onAnswered}
           />
         )}
         {decision?.inform && !answer && (
@@ -815,11 +839,17 @@ function RunPane({
   run,
   frame,
   now,
+  answered,
   onSettled,
 }: {
   run: SandboxRun;
   frame: Frame;
   now: number;
+  /**
+   * The answer given here before, which the run took ([PaneProps.answered]):
+   * drawn as taken, with no controls and nothing left to follow.
+   */
+  answered: AskAnswer | undefined;
   onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }) {
   const write = useAct("answer_run");
@@ -848,7 +878,14 @@ function RunPane({
   // WHETHER THIS ANSWER WAS SEEN ON THE RUN, so a record that then goes away
   // is read as the run finishing with it rather than as the run ending.
   const seenTaken = useRef(false);
-  const fate = given ? answerFate(given, record, runs.data !== undefined, seenTaken.current) : null;
+  // WHAT THE PANE SAYS WAS ANSWERED: the answer sent from it, or the one the
+  // run took before it opened, which has no fate left to follow.
+  const said = given?.answer ?? answered ?? null;
+  const fate = given
+    ? answerFate(given, record, runs.data !== undefined, seenTaken.current)
+    : answered
+      ? "taken"
+      : null;
   if (fate === "recorded" || fate === "taken") seenTaken.current = true;
   // THE OUTCOME TAKES THE FOCUS from the control that sent the answer, which
   // it replaces.
@@ -872,7 +909,7 @@ function RunPane({
   // THE REASONING SITS WITH WHAT IT RECOMMENDS, and goes once an answer is
   // sent: what is left to read then is the answer.
   const reasoning =
-    !given && recommended && decision?.rationale
+    !said && recommended && decision?.rationale
       ? { label: recommended.label, text: decision.rationale }
       : null;
   const inWords = options.length === 0 || open;
@@ -1025,21 +1062,21 @@ function RunPane({
         ) : (
           chips
         )}
-        {given !== null && decision && (
+        {said !== null && decision && (
           // THE OPTIONS STAY, THE ONE CHOSEN MARKED, as an answered run's
           // pane reads them once it has left Needs you.
           <AnsweredChoices
             options={options}
             recommended={decision.recommended}
-            chosen={given.answer.kind === "choice" ? given.answer.id : null}
+            chosen={said.kind === "choice" ? said.id : null}
           />
         )}
-        {given !== null ? (
+        {said !== null ? (
           // PENDING UNTIL THE RUN TOOK IT: sent, recorded or ended is never the
           // success check a used answer gets.
           <ReadingPaneOutcome {...landing} tone={fate === "taken" ? "done" : "pending"}>
             {fate === "taken" ? (
-              answeredWith(given.answer)
+              answeredWith(said)
             ) : fate === "recorded" ? (
               <>
                 Answer recorded.{" "}

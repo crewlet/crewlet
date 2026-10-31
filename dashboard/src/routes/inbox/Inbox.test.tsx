@@ -12,7 +12,7 @@
  * promised nothing.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Announcer, AppShell, LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -29,6 +29,49 @@ import { withDerived } from "~/test/org.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { fakeTransition } from "~/test/motion.ts";
+
+// THE PANE AND THE KIT AS THEY ARE, unless a case asks otherwise: a case
+// sets `seam.twice` to stand a pane in that tells the screen of one answer
+// twice in one tick, which no pane does today (a pressed control is busy
+// until its write returns) and the screen must hold to all the same; and
+// what the screen announces is kept in `seam.announced`.
+const seam = vi.hoisted(() => ({ twice: false, announced: [] as string[] }));
+vi.mock("./InboxPane.tsx", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./InboxPane.tsx")>();
+  return {
+    ...real,
+    InboxPane: (props: Parameters<typeof real.InboxPane>[0]) =>
+      seam.twice ? (
+        <button
+          type="button"
+          onClick={() => {
+            const said = {
+              kind: "choice",
+              id: "hold",
+              label: "Hold release",
+              recommended: true,
+            } as const;
+            props.onSettled("Answered", said);
+            props.onSettled("Answered", said);
+          }}
+        >
+          Answer twice
+        </button>
+      ) : (
+        <real.InboxPane {...props} />
+      ),
+  };
+});
+vi.mock("@crewlethq/ui", async (importOriginal) => {
+  const kit = await importOriginal<typeof import("@crewlethq/ui")>();
+  return {
+    ...kit,
+    announce: (text: string) => {
+      seam.announced.push(text);
+      kit.announce(text);
+    },
+  };
+});
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -908,10 +951,12 @@ describe("the pane", () => {
 
   // THE MOVE IS SEEN AND THE READER IS CARRIED ON: Answered's heading takes
   // the kit's arrival wash only when an answer lands in it (never on a first
-  // draw, where nothing arrived), the row itself washes when the group is
-  // open, and the pane plays the next item in with focus on its title, since
-  // the pressed button left with the answered one. Mutation: pass the token
-  // on a first draw, or drop the pane's content key, and this goes red.
+  // draw, where nothing arrived), and the pane plays the next item in with
+  // focus on its title, since the pressed button left with the answered one.
+  // THE ARRIVAL IS WASHED ONCE: opened afterwards, the group draws the row
+  // without a wash of its own, since the heading's was its arrival. Mutation:
+  // pass the token on a first draw, drop the pane's content key, or keep the
+  // token after the group is opened, and this goes red.
   test("an answer lands in Answered with a wash, and focus moves to the next title", async () => {
     const next = askItem({ ...DECISION, question: "Freeze the API for the release?" });
     const second = {
@@ -932,11 +977,66 @@ describe("the pane", () => {
     expect(document.activeElement?.textContent).toContain("Freeze the API for the release?");
     expect(document.activeElement?.classList.contains("crewlet-reading-pane__title")).toBe(true);
     fireEvent.click(group);
-    expect(
-      within(screen.getByRole("region", { name: "Answered, 1" }))
-        .getByRole("button", { name: /Answered$/ })
-        .closest(".crewlet-inbox-row--arrived"),
-    ).toBeTruthy();
+    const answered = screen.getByRole("region", { name: "Answered, 1" });
+    expect(answered.querySelector(".crewlet-inbox-row--arrived")).toBeNull();
+    expect(document.querySelector(".crewlet-inbox-list__arrival")).toBeNull();
+  });
+
+  // A ROW THAT LANDS IN AN OPEN GROUP WASHES ITSELF, where it is seen to
+  // land, and only then: the group closed and opened again draws it plainly.
+  // Mutation: keep the token for good, and the row washes again on reopening.
+  test("a row landing in an open Answered washes once, not again on reopening", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem(), second),
+        answered_decisions: { handle: "jane", items: [answeredItem()] },
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    const landed = () =>
+      screen
+        .getByRole("region", { name: "Answered, 2" })
+        .querySelector(".crewlet-inbox-row--arrived");
+    expect(landed()?.textContent).toContain("You chose Hold release");
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 2" }));
+    expect(landed()).toBeNull();
+  });
+
+  // ONE PANE AT A TIME, the list is drawn afresh on the way back to it, and
+  // an answer that landed while it was away is in its count, not washed
+  // again on every return. Mutation: wash whatever token the list is drawn
+  // with, and the heading washes on the way back.
+  test("in one pane, the list drawn again on Back does not wash an earlier arrival", async () => {
+    const narrow = installScreen(443);
+    try {
+      const second = {
+        ...askItem(),
+        at: new Date(Date.now() - 60 * 60_000).toISOString(),
+        ask: { ...askItem().ask, comment: "c-13", question: undefined },
+      };
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ shell: true, answers: { decisions: decisionsOf(askItem(), second) } });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+      await settle();
+      expect(location.hash).toContain("row=ask%3Ac-13");
+      fireEvent.click(screen.getByRole("button", { name: "Back to the inbox" }));
+      await settle();
+      expect(screen.getByRole("button", { name: "Answered, 1" })).toBeTruthy();
+      expect(document.querySelector(".crewlet-inbox-list__arrival")).toBeNull();
+    } finally {
+      narrow.restore();
+    }
   });
 
   // A ROW CHOSEN IN THE LIST KEEPS THE READER IN THE LIST: the pane plays the
@@ -1008,6 +1108,72 @@ describe("the pane", () => {
     expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
   });
 
+  // NEVER LEFT OVER NOTHING, even where the row's motion never reports an end
+  // (a tab put away mid motion): the kit's wait is bounded by the motion's
+  // own length, and the row is told closed when it runs out. Mutation: hold
+  // the group until the row is heard closing by any other means, and the
+  // heading stays.
+  test("the last row's group goes even where its motion never reports an end", async () => {
+    const motion = fakeTransition(".crewlet-inbox-row", "grid-template-rows");
+    try {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ answers: { decisions: decisionsOf(askItem()) } });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+      await settle();
+      expect(screen.getByRole("region", { name: /^Needs you/ })).toBeTruthy();
+      await waitFor(() => expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull(), {
+        timeout: 2_000,
+      });
+      expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
+    } finally {
+      motion.restore();
+    }
+  });
+
+  // A LIST DRAWN AGAIN HOLDS NOTHING OPEN: in one pane, the row an answer
+  // moved left Needs you while the open row stood in the list's place, so
+  // the list drawn on the way back has no row closing and no heading over
+  // nothing. Mutation: count a row moved before the list was drawn as still
+  // closing, and the empty heading stays.
+  test("in one pane, the list drawn after the last answer has no Needs you heading", async () => {
+    const narrow = installScreen(443);
+    try {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ shell: true, answers: { decisions: decisionsOf(askItem()) } });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Back to the inbox" }));
+      await settle();
+      expect(screen.getByRole("navigation", { name: "Inbox" })).toBeTruthy();
+      expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
+      expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
+    } finally {
+      narrow.restore();
+    }
+  });
+
+  // THE LAST ANSWER STAYS IN SIGHT: with nothing left to open, the row stays
+  // open on its outcome, and the Answered group opens on it, so the open row
+  // is never one the list hides and j and k step from where it stands.
+  // Mutation: leave the group closed, and the open row is nowhere in the list.
+  test("answering the last item opens Answered on the row it left", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    expect(screen.getByRole("button", { name: "Answered, 1" }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    const answered = screen.getByRole("region", { name: "Answered, 1" });
+    expect(answered.querySelector(".crewlet-inbox-row--selected")).toBeTruthy();
+    expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toContain(
+      "Hold release",
+    );
+  });
+
   // ONE ANSWER PER ROW: a second word on a row already moved, a press
   // repeated before the list drew again, answers nothing and moves the reader
   // on no further. Mutation: drop the guard and the reader skips a row.
@@ -1031,6 +1197,32 @@ describe("the pane", () => {
     await settle();
     expect(location.hash).toContain("row=ask%3Ac-13");
     expect(posted.filter((p) => p.tool === "comment_on_work_item")).toHaveLength(1);
+  });
+
+  // ONE MOVE PER ANSWER, even told twice in one tick, before the screen has
+  // drawn again: the guard reads what has moved as each move is written,
+  // never what the last draw saw. Mutation: guard on the drawn state, and
+  // the move is said twice.
+  test("an answer told twice in one tick moves the reader on once", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    seam.twice = true;
+    try {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ answers: { decisions: decisionsOf(askItem(), second) } });
+      await settle();
+      seam.announced.length = 0;
+      fireEvent.click(screen.getByRole("button", { name: "Answer twice" }));
+      await settle();
+      expect(seam.announced).toHaveLength(1);
+      expect(seam.announced[0]).toMatch(/^Answered\. Next: /);
+      expect(location.hash).toContain("row=ask%3Ac-13");
+    } finally {
+      seam.twice = false;
+    }
   });
 
   test("a run answered in words stays in place with what was written under it", async () => {
@@ -2095,15 +2287,85 @@ describe("what was answered", () => {
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
     await settle();
     await settle();
-    // ONE ROW FOR THE QUESTION, the one answered here, though the engine
-    // now lists it as answered too.
-    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    // ONE ROW FOR THE QUESTION, though the engine now lists it as answered
+    // too, in the group the last answer opened.
     expect(
       within(screen.getByRole("region", { name: "Answered, 1" })).getAllByRole("button", {
         name: /Answered$/,
       }),
     ).toHaveLength(1);
     expect(screen.queryByRole("region", { name: /^Needs you, [1-9]/ })).toBeNull();
+  });
+
+  // A ROW ANSWERED HERE OPENS AS ANSWERED, never as the open question it was,
+  // whose controls would answer it a second time. Until the engine lists it
+  // as answered, the pane draws the answer given, read-only, where its
+  // controls were. Mutation: open the moved row as it stood in Needs you, and
+  // its options are back.
+  test("a row answered here reopens read-only, with the answer given", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem(), second) } });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    expect(location.hash).toContain("row=ask%3Ac-13");
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+        name: /Answered$/,
+      }),
+    );
+    await settle();
+    expect(location.hash).toContain("row=ask%3Ac-12");
+    const pane = within(document.querySelector<HTMLElement>(".inbox-pane")!);
+    expect(pane.queryByRole("button", { name: /Hold release/ })).toBeNull();
+    expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toContain(
+      "Hold release",
+    );
+  });
+
+  // ONCE THE ENGINE LISTS IT AS ANSWERED, its row stands in for the one
+  // answered here, and opens as an answered ask: what was asked, who
+  // answered and what became of it. Mutation: keep the row answered here in
+  // its place, and the pane is the open question's.
+  test("a row answered here opens as the engine's answered row once it is listed", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    const mine = answeredItem({
+      ask: { ...askItem().ask, open: false },
+      answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
+    });
+    let answeredYet = false;
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem(), second),
+        answered_decisions: () =>
+          Promise.resolve({ handle: "jane", items: answeredYet ? [mine] : [] }),
+      },
+    });
+    await settle();
+    answeredYet = true;
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+        name: /Answered$/,
+      }),
+    );
+    await settle();
+    expect(byline()).toContain("asked for your approval");
+    expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
   });
 
   // A CODING RUN'S QUESTION, ONCE ANSWERED, IS READ BACK AS AN ASK IS. The
@@ -2320,7 +2582,15 @@ describe("what was answered", () => {
       ).toHaveLength(1);
     });
 
-    test("answered here moves under Answered with its option marked, never in Needs you as well", async () => {
+    /**
+     * The run parked on its question, opened and answered with "Target main",
+     * which its run takes and the engine then lists as answered (unless
+     * `listed` is false), with what else waits on the reader beside it.
+     */
+    async function answerParkedRun({
+      also = [],
+      listed = true,
+    }: { also?: unknown[]; listed?: boolean } = {}) {
       const parked = {
         kind: "run",
         at: new Date(Date.now() - 5 * 60_000).toISOString(),
@@ -2339,9 +2609,10 @@ describe("what was answered", () => {
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
         answers: {
-          decisions: () => Promise.resolve(sent() ? decisionsOf() : decisionsOf(parked)),
+          decisions: () =>
+            Promise.resolve(sent() ? decisionsOf(...also) : decisionsOf(parked, ...also)),
           answered_decisions: () =>
-            Promise.resolve({ handle: "jane", items: sent() ? [answeredRun()] : [] }),
+            Promise.resolve({ handle: "jane", items: sent() && listed ? [answeredRun()] : [] }),
           sandbox_runs: () =>
             Promise.resolve({
               runs: [
@@ -2354,12 +2625,60 @@ describe("what was answered", () => {
       fireEvent.click(screen.getByRole("button", { name: /Target main/ }));
       await settle();
       await settle();
+    }
+
+    test("answered here moves under Answered with its option marked, never in Needs you as well", async () => {
+      await answerParkedRun();
       // THE OPTION PRESSED IS MARKED, as the answered pane marks it.
       const answers = within(screen.getByRole("group", { name: "Answers" }));
       expect(answers.getByRole("button", { pressed: true }).textContent).toContain("Target main");
       expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
       expect(screen.getByRole("button", { name: /^Answered, 1/ })).toBeTruthy();
       expect(screen.queryByRole("region", { name: /^Needs you, [1-9]/ })).toBeNull();
+    });
+
+    // THE OPEN ROW FOLLOWS ITS QUESTION to the engine's answered row, which
+    // a run keys by the launch that asked as well as its turn: the address
+    // still names the turn, and the pane reads the run's answer as the
+    // engine recorded it. An answer to a run is no tracker write, so the
+    // engine's row arrives with the next read of what was answered, a poll
+    // the case runs on by hand. Mutation: find the open row by its key alone,
+    // and the pane is the open question's.
+    test("answered here opens as the engine's answered row, found by its question", async () => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(new Date(PINNED_NOW));
+      await answerParkedRun();
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      await settle();
+      expect(location.hash).toBe("#/inbox?row=run%3Aturn-7");
+      expect(byline()).toBe("CTO’s coding run asked for your approval on LEAD-12");
+      const answered = screen.getByRole("region", { name: "Answered, 1" });
+      expect(answered.querySelector(".crewlet-inbox-row--selected")?.textContent).toContain(
+        "You chose Target main",
+      );
+    });
+
+    // REOPENED BEFORE THE ENGINE LISTS IT, the run's question reads as the
+    // run took it: its options as offered, the chosen one marked, and
+    // nothing to press. Mutation: open it with the controls it had, and
+    // "Something else" is back.
+    test("answered here and reopened before it is listed reads as taken, with nothing to press", async () => {
+      await answerParkedRun({ also: [askItem()], listed: false });
+      expect(location.hash).toContain("row=ask%3Ac-12");
+      fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+      fireEvent.click(
+        within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+          name: /Answered$/,
+        }),
+      );
+      await settle();
+      expect(location.hash).toBe("#/inbox?row=run%3Aturn-7");
+      const answers = within(screen.getByRole("group", { name: "Answers" }));
+      expect(answers.getByRole("button", { pressed: true }).textContent).toContain("Target main");
+      expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
+      expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toContain(
+        "Target main",
+      );
     });
 
     // ASKED ON EVERY COMPANY: a coding run's question is answered here
