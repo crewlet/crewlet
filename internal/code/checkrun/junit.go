@@ -46,31 +46,39 @@ func readJUnit(r io.Reader, fs *failures) error {
 		if err != nil {
 			return fmt.Errorf("the JUnit report is no XML a test runner writes: %w", err)
 		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			switch t.Name.Local {
-			case "testsuite":
-				suites++
-				tests += intAttr(t, "tests")
-				failed += intAttr(t, "failures") + intAttr(t, "errors")
-			case "testcase":
-				inCase = true
-				tc = testCase{class: attr(t, "classname"), name: attr(t, "name"), file: attr(t, "file"),
-					line: intAttr(t, "line")}
-			case "failure", "error":
-				if !inCase {
-					continue
-				}
-				body, err := text(d)
-				if err != nil {
-					return fmt.Errorf("the JUnit report's %s of %s: %w", t.Name.Local, tc.id(), err)
-				}
-				fs.add(tc.failure(attr(t, "message"), body))
-			}
-		case xml.EndElement:
-			if t.Name.Local == "testcase" {
+		// Each token is ASSERTED to the one type a branch reads, never bound
+		// by a type switch: internal/code/cache's writers gate types every
+		// value handed to a call under internal/code, and a type switch's
+		// variable is a value it cannot type (decltype's boundary), so it
+		// would stand as a possible gitproc.Cmd.
+		if end, ok := tok.(xml.EndElement); ok {
+			if end.Name.Local == "testcase" {
 				inCase = false
 			}
+			continue
+		}
+		el, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		switch el.Name.Local {
+		case "testsuite":
+			suites++
+			tests += intAttr(el, "tests")
+			failed += intAttr(el, "failures") + intAttr(el, "errors")
+		case "testcase":
+			inCase = true
+			tc = testCase{class: attr(el, "classname"), name: attr(el, "name"), file: attr(el, "file"),
+				line: intAttr(el, "line")}
+		case "failure", "error":
+			if !inCase {
+				continue
+			}
+			body, err := text(d)
+			if err != nil {
+				return fmt.Errorf("the JUnit report's %s of %s: %w", el.Name.Local, tc.id(), err)
+			}
+			fs.add(tc.failure(attr(el, "message"), body))
 		}
 	}
 	if suites == 0 {
@@ -122,14 +130,16 @@ func text(d *xml.Decoder) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		switch t := tok.(type) {
+		// Asserted, never a type switch's variable, as readJUnit says why.
+		switch tok.(type) {
 		case xml.StartElement:
 			depth++
 		case xml.EndElement:
 			depth--
-		case xml.CharData:
+		}
+		if data, ok := tok.(xml.CharData); ok {
 			if room := code.CheckFailureMessageBytes - b.Len(); room > 0 {
-				b.Write(t[:min(len(t), room)])
+				b.Write(data[:min(len(data), room)])
 			}
 		}
 	}
