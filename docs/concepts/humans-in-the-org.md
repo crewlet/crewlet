@@ -574,8 +574,11 @@ domains, and its `next_cursor` carries one position per domain — where that
 domain's notices on the page ended — so the next page resumes each exactly
 where it stopped. Each code notice carries what its change says at the read:
 its title and state, the work item it implements, the first kibibyte of its
-description and the findings seats raised that stand open on it, by
-severity.
+description, the findings seats raised that stand open on it, by severity,
+and — while it is open or a draft — where its merge stands: how many of its
+preconditions are met and the one sentence of the first that is not, judged
+for you at the read exactly as the change's own page judges it, so a notice
+never says "ready" past a review that has since asked for changes.
 
 **The queue is whoever signed in.** `#/inbox`, one click from the landing
 screen (Home), is the queue of the principal the request resolved to — a person

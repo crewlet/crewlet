@@ -4450,6 +4450,19 @@ export interface CodeNoticeChange {
   body_cut?: boolean;
   /** The findings seats raised that stand open, by severity. */
   agent_findings?: Record<string, number>;
+  /** Where a live change's merge stands, judged at the read for its reader;
+   *  absent for a merged or closed change, which merges nothing. */
+  readiness?: CodeNoticeReadiness;
+}
+
+/** What a code notice carries of its change's readiness
+ *  (`code.NoticeReadiness`): its counts and its first sentence — the first
+ *  unmet precondition's, else the first still computing, else that it is
+ *  ready. The change's own page reads every precondition. */
+export interface CodeNoticeReadiness {
+  met: number;
+  total: number;
+  first: string;
 }
 
 /** One notice the code host routed to a person (`code.InboxNotice`). */

@@ -51,10 +51,23 @@ import (
 // # What each notice carries of its change
 //
 // Its title, its state, the work item it implements, the first
-// [MaxNoticeBody] bytes of its description and the agent findings standing
-// open on it by severity — read for the page's changes in the same snapshot,
-// one statement each over the page's changes: what a person decides a notice
-// by without opening the change.
+// [MaxNoticeBody] bytes of its description, the agent findings standing open
+// on it by severity and, while it is live, where its merge stands — read for
+// the page's changes in the same snapshot, one statement each over the
+// page's changes: what a person decides a notice by without opening the
+// change. That is the inbox card's whole question (the dashboard asks
+// nothing more of a card), which is why the readiness rides here rather than
+// on a read of each change.
+//
+// The readiness is JUDGED HERE, as a listing of changes judges it
+// ([readinessIn]: [ReadinessOf] over this transaction and this read's one
+// chart), never the `ready` a change's last mergeability record stored: that
+// is a refresh's input, current only as of the home's last pass, and a card
+// that read it would say "ready" past a review that just asked for changes.
+// A notice carries the judgment's counts and its first sentence and not its
+// preconditions: fifty notices a page, each with up to
+// [MaxReadinessBlockers] blockers named, would be a page of what the
+// change's own page reads in full, one change at a time.
 
 // MaxNoticeBody is how much of a change's description a notice carries: ONE
 // KIBIBYTE, cut at a character — a card's worth of the intent behind the
@@ -141,6 +154,20 @@ type NoticeChange struct {
 	// AgentFindings counts the findings seats raised that stand open on the
 	// change, by severity; absent for none.
 	AgentFindings map[Severity]int `json:"agent_findings,omitempty"`
+	// Readiness is where the change's merge stands, judged at the read for
+	// its asker — this file's head; nil for a change no longer live, which
+	// merges nothing.
+	Readiness *NoticeReadiness `json:"readiness,omitempty"`
+}
+
+// NoticeReadiness is what a notice carries of its change's [Readiness]: how
+// many of its preconditions are met of how many, and its FIRST sentence —
+// the first unmet precondition's, else the first computing one's, else that
+// the change is ready.
+type NoticeReadiness struct {
+	Met   int    `json:"met"`
+	Total int    `json:"total"`
+	First string `json:"first"`
 }
 
 // InboxPage is a page of one person's code inbox.
@@ -270,7 +297,7 @@ func (r *Reader) inbox(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 			changes = append(changes, n.ChangeID)
 		}
 	}
-	said, err := noticeChangesIn(ctx, tx, changes)
+	said, err := noticeChangesIn(ctx, tx, changes, repos, chart, q.Asker, r.limits().MergeByFloor)
 	if err != nil {
 		return err
 	}
@@ -354,41 +381,67 @@ func inboxScanArgs(q ReadQuery, marks inbox.Classifier, now time.Time) ([]any, b
 }
 
 // noticeChangesIn is what each change of ids says now, by its id — its row,
-// its description cut at [MaxNoticeBody], and the agent findings standing open
-// on it by severity — one statement each over the page's changes.
-func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]*NoticeChange, error) {
+// its description cut at [MaxNoticeBody], the agent findings standing open on
+// it by severity, and a live one's readiness judged against chart for asker
+// under floor ([readinessIn]), every repository a change names in repos — one
+// statement each over the page's changes, the readiness's own a kind at a
+// time. A change no row holds any more says nothing.
+func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string, repos map[string]listedRepo, chart Roster,
+	asker Principal, floor MergeBy) (map[string]*NoticeChange, error) {
+
 	out := map[string]*NoticeChange{}
 	if len(ids) == 0 {
 		return out, nil
+	}
+	held, err := changesByIDIn(ctx, tx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("code: read the changes an inbox page names: %w", err)
+	}
+	// IN THE PAGE'S ORDER, never the map's: the readiness reads its rows a
+	// kind at a time over these, in one order whatever a map hands back.
+	named := make([]changeRow, 0, len(held))
+	for _, id := range ids {
+		row, found := held[id]
+		if !found {
+			continue
+		}
+		named = append(named, row)
+		c := &NoticeChange{Title: row.title, State: row.state}
+		if row.work.ID != "" {
+			work := row.work
+			c.WorkItem = &work
+		}
+		out[id] = c
+	}
+	judged, err := readinessIn(ctx, tx, named, repos, chart, asker, floor)
+	if err != nil {
+		return nil, fmt.Errorf("code: judge the readiness of the changes an inbox page names: %w", err)
+	}
+	for id, readiness := range judged {
+		out[id].Readiness = &NoticeReadiness{Met: readiness.Met, Total: readiness.Total, First: readiness.First}
 	}
 	list, err := jsonList(ids)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, noticeChangesSQL, list)
+	rows, err := tx.QueryContext(ctx, noticeBodiesSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the changes an inbox page names: %w", err)
+		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
 	}
 	for rows.Next() {
-		var (
-			id, state, backend, workID, key, project, body string
-			c                                              NoticeChange
-		)
-		if err := rows.Scan(&id, &c.Title, &state, &backend, &workID, &key, &project, &body); err != nil {
+		var id, body string
+		if err := rows.Scan(&id, &body); err != nil {
 			_ = rows.Close()
-			return nil, fmt.Errorf("code: read the changes an inbox page names: %w", err)
+			return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
 		}
-		c.State = ChangeState(state)
-		if workID != "" {
-			c.WorkItem = &types.WorkItem{Backend: types.WorkBackend(backend), ID: workID, Key: key, Project: project}
+		if c, found := out[id]; found {
+			c.Body = textcut.Within(body, MaxNoticeBody)
+			c.BodyCut = len(c.Body) < len(body)
 		}
-		c.Body = textcut.Within(body, MaxNoticeBody)
-		c.BodyCut = len(c.Body) < len(body)
-		out[id] = &c
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return nil, fmt.Errorf("code: read the changes an inbox page names: %w", err)
+		return nil, fmt.Errorf("code: read the descriptions of the changes an inbox page names: %w", err)
 	}
 	_ = rows.Close()
 	rows, err = tx.QueryContext(ctx, noticeFindingsSQL, list, string(FindingOpen), string(PartyAgent))
@@ -425,8 +478,9 @@ func noticeChangesIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]
 // nothing else. Each set is ONE JSON array parameter, the tracker's reason
 // (its idList): the lists are the person's own, each at most inbox.MaxEntries.
 //
-// noticeChangesSQL reads each change of the page by its key, its body by its
-// own; noticeFindingsSQL reads each change's open agent findings' severities
+// noticeBodiesSQL reads each change's description by its key: the change's
+// row is changesByIDSQL's, which the readiness judges too, so a page reads
+// code_changes once; noticeFindingsSQL reads each change's open agent findings' severities
 // from the raiser index's range of the change, counted here rather than
 // grouped by the statement — a GROUP BY on a column the index does not lead
 // with sorts what it found, and the rows are a page's changes' findings.
@@ -443,11 +497,9 @@ const (
 				WHEN 'only' THEN n.record_id IN (SELECT value FROM json_each(?)) ELSE 1 END
 		ORDER BY n.log_seq DESC
 		LIMIT ?`
-	noticeChangesSQL = `SELECT c.id, c.title, c.state, c.work_backend, c.work_id, c.work_key, c.work_project,
-			COALESCE(b.body, '')
-		FROM json_each(?) AS j CROSS JOIN code_changes AS c INDEXED BY sqlite_autoindex_code_changes_1
-			LEFT JOIN code_change_bodies AS b ON b.change_id = c.id
-		WHERE c.id = CAST(j.value AS TEXT)`
+	noticeBodiesSQL = `SELECT b.change_id, b.body
+		FROM json_each(?) AS j CROSS JOIN code_change_bodies AS b INDEXED BY sqlite_autoindex_code_change_bodies_1
+		WHERE b.change_id = CAST(j.value AS TEXT)`
 	noticeFindingsSQL = `SELECT f.change_id, f.severity
 		FROM json_each(?) AS j CROSS JOIN code_findings AS f INDEXED BY code_findings_raiser_idx
 		WHERE f.change_id = CAST(j.value AS TEXT) AND f.state = ? AND f.raiser_kind = ?`

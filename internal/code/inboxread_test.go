@@ -74,3 +74,52 @@ func TestCodeNoticesAreHeldToTheRepositoryGrant(t *testing.T) {
 			"repository", got)
 	}
 }
+
+// A CODE NOTICE CARRIES WHERE ITS CHANGE'S MERGE STANDS, judged at the read
+// as the change's own read judges it: founder heard about web!1 when dev
+// opened it, and the notice carries the readiness the change's read answers
+// ada — its counts and its first sentence — until the change is closed, when
+// a change that merges nothing carries none.
+//
+// Mutations: carry no readiness on a notice — red; judge every change the
+// page names, the closed one too — red.
+func TestACodeNoticeCarriesItsChangesReadinessLine(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	storedBefore(n, time.Hour)
+	c, _ := committerOn(t, n, n.pub)
+	repo := changeRepo(t, n, "web")
+	open := opening(repo, featureRef, mainRef, dev)
+	open.Open.Mentions = []string{"founder"}
+	opened, err := c.ProposeChange(t.Context(), open)
+	requireChanged(t, opened, err)
+	notice := func() *code.NoticeChange {
+		t.Helper()
+		answer, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadInbox, Asker: ada,
+			Inbox: &code.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude, Now: harnessAt}})
+		if err != nil || answer.Inbox == nil || len(answer.Inbox.Notices) == 0 {
+			t.Fatalf("read founder's code inbox: %+v, %v", answer.Inbox, err)
+		}
+		return answer.Inbox.Notices[0].Change
+	}
+	detail, err := readChange(t, n, ada, "", "web", opened.Number, 0, "")
+	if err != nil || detail.Change == nil || detail.Change.Readiness == nil {
+		t.Fatalf("read web!%d as ada: %+v, %v", opened.Number, detail.Change, err)
+	}
+	judged := detail.Change.Readiness
+	want := code.NoticeReadiness{Met: judged.Met, Total: judged.Total, First: judged.First}
+	if want.First == "" || want.Total == 0 {
+		t.Fatalf("the change's read judges %+v, want a first sentence over its preconditions", want)
+	}
+	if got := notice(); got == nil || got.Readiness == nil || *got.Readiness != want {
+		t.Fatalf("an open change's notice carries %+v, want the readiness its change's read judges, %+v", got,
+			want)
+	}
+	closed, err := c.ProposeChange(t.Context(), closing(repo, opened.ChangeID, dev, opened.Version))
+	requireChanged(t, closed, err)
+	if got := notice(); got == nil || got.State != code.ChangeStateClosed || got.Readiness != nil {
+		t.Fatalf("a closed change's notice carries %+v, want it closed and with no readiness — it merges "+
+			"nothing", got)
+	}
+}

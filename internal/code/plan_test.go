@@ -944,14 +944,15 @@ func registeredStatements() map[string]statement {
 			[]string{reviewsGivenKey + " (reviewer=? AND position<?)"}},
 		// ONE PERSON'S CODE INBOX (inboxread.go, marks.go): a range of their
 		// notices newest first, every filter bound; each change the page
-		// names by its key and its body by its own; each one's open agent
-		// findings, a range of the raiser index; the person's marks by their
-		// key; and where one notice of theirs sits, by the notice's key.
+		// names is changesByIDSQL's row (its readiness the listing's
+		// statements), its description by the body's key; each one's open
+		// agent findings, a range of the raiser index; the person's marks by
+		// their key; and where one notice of theirs sits, by the notice's key.
 		"an inbox page": {inboxScanSQL, []any{"founder", int64(1) << 62, 0, 0, "[]", 0, "[]", "[]", "", 0,
 			"exclude", "[]", "[]", 50},
 			[]string{"code_notifications_inbox_idx (recipient=? AND log_seq>? AND log_seq<?)"}},
-		"the changes an inbox page names": {noticeChangesSQL, []any{`["repo-1-change-000001"]`},
-			[]string{"SCAN json_each AS j", changeKey + " (id=?)", bodyKey + " (change_id=?)"}},
+		"the descriptions an inbox page names": {noticeBodiesSQL, []any{`["repo-1-change-000001"]`},
+			[]string{"SCAN json_each AS j", bodyKey + " (change_id=?)"}},
 		"the agent findings an inbox page names": {noticeFindingsSQL, []any{`["repo-1-change-000001"]`, "open",
 			"agent"}, []string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=?)"}},
 		"a person's code marks": {personMarksSQL, []any{"founder"},
