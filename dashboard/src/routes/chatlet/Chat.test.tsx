@@ -118,6 +118,10 @@ function chatAnswers(channels: unknown[], read: Record<string, unknown> = {}) {
         });
       case "chat_messages":
         return { ...served, channel_id: id, messages: [] };
+      // ACTIVITY IS WHERE THE BARE ADDRESS OPENS, so every suite mounted there
+      // is asked for its feed: nothing has named the reader yet.
+      case "chat_activity":
+        return { ...served, items: [], unread: { mention: 0, reply: 0 }, read_state: true };
       default:
         // A QUESTION THIS SUITE DOES NOT ANSWER, as a node that serves no such
         // question answers it: never an empty object a view would read as an
@@ -176,11 +180,12 @@ describe("who the screen is for", () => {
   });
 
   // A REFUSAL THE ENGINE WROTE FOR THE READER IS DRAWN IN ITS OWN WORDS, where
-  // the reader would otherwise pick a room: never "pick a room" over a list
-  // that could not be read.
+  // the reader would otherwise see their rooms: never an empty list, and never
+  // "in no rooms yet" over a list that could not be read.
   test("a refused rail says the engine's own sentence, not the generic one", async () => {
+    const answers = chatAnswers([]);
     mountScreen({
-      answer: async (what) => {
+      answer: async (what, params) => {
         if (what === "chat_channels") {
           throw new QueryError(
             "bad_params",
@@ -188,12 +193,13 @@ describe("who the screen is for", () => {
             "chat is read as a human seat: bind this credential with crewlet iam bind",
           );
         }
-        return {};
+        return answers(what, params);
       },
     });
-    await waitFor(() => expect(screen.getByText(/crewlet iam bind/)).toBeTruthy());
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText(/crewlet iam bind/)).toBeTruthy());
     expect(screen.queryByText(/the screen.s bug to fix/)).toBeNull();
-    expect(screen.queryByText("Pick a room")).toBeNull();
+    expect(screen.queryByText(/in no rooms yet/i)).toBeNull();
   });
 
   // A VIEWER READ THAT FAILED IS NO ANSWER, and holding the screen on it held
@@ -213,6 +219,21 @@ describe("who the screen is for", () => {
   test("a reader in no rooms is told how a room comes to exist", async () => {
     mountScreen({ answer: chatAnswers([]) });
     await waitFor(() => expect(screen.getByText(/in no rooms yet/i)).toBeTruthy());
+    expect(screen.getByText(/channel in the org chart/)).toBeTruthy();
+  });
+
+  // CHATLET OPENS ON ACTIVITY. The bare address is Activity said differently,
+  // so it is drawn at once and the address is REPLACED: Back from Activity
+  // leaves Chatlet rather than landing on a spelling the reader never chose.
+  // Mutation: push instead of replace and the entry count goes red; draw
+  // anything but Activity and the heading does.
+  test("the bare address opens Activity, replacing the entry rather than pushing one", async () => {
+    location.hash = "#/chatlet";
+    const entries = history.length;
+    mountScreen({ hash: "#/chatlet", answer: chatAnswers([]) });
+    await waitFor(() => expect(location.hash).toBe("#/chatlet/activity"));
+    expect(history.length).toBe(entries);
+    expect(screen.getByRole("heading", { name: "Activity" })).toBeTruthy();
   });
 });
 
@@ -309,11 +330,12 @@ describe("the Rooms panel", () => {
     // The engine zeroes every count when the coordination record could not be
     // read and says so. Drawing that as a quiet panel is indistinguishable
     // from being caught up, so the panel says which one this is.
+    const answers = chatAnswers([]);
     mountScreen({
-      answer: async (what) =>
+      answer: async (what, params) =>
         what === "chat_channels"
           ? { ...served, read_state: false, channels: [room(GENERAL, "general", { mentions: 0 })] }
-          : {},
+          : answers(what, params),
     });
     const panel = await openPanel();
     await waitFor(() => expect(within(panel).getByText(/couldn’t be read/i)).toBeTruthy());

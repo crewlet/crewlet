@@ -191,8 +191,8 @@ function UnreadRoomsRead({ viewer }: { viewer: string }) {
             })}
           </List>
           {rooms.length > ROWS ? (
-            <a className="home-card-more t-link" href={placeHref({ kind: "home" })}>
-              {`All ${plural(rooms.length, "unread room")}`}
+            <a className="home-card-more t-link" href={placeHref({ kind: "activity" })}>
+              {`${plural(rooms.length, "unread room")} in Chatlet`}
             </a>
           ) : null}
         </WidgetQuery>
@@ -263,7 +263,7 @@ function NewestMentions() {
     );
   }
   return (
-    <WidgetCard title="Mentions" from="chatlet-activity">
+    <WidgetCard title="Mentions" from="chatlet">
       {body}
     </WidgetCard>
   );
@@ -283,7 +283,7 @@ export const widgets = defineWidgets([
   },
   {
     key: "chatlet.mentions",
-    from: "chatlet-activity",
+    from: "chatlet",
     label: "Mentions",
     description: "The newest messages that named you",
     icon: BellGlyph,

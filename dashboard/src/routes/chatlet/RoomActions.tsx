@@ -128,7 +128,7 @@ export function RoomActions({ tight }: { tight: boolean }) {
     // would turn into "no such room" under them a moment later.
     if (answer.tone === "success") {
       toast.ok(`You left ${open.where}`);
-      nav.go({ kind: "home" });
+      nav.go({ kind: "activity" });
     } else {
       toast.show({ variant: calloutFor(answer.tone), message: answer.note });
     }

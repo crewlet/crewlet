@@ -274,6 +274,7 @@ const EMPTY_ACTIVITY: Record<ActivityFilter, string> = {
  */
 export function ActivityView() {
   const nav = useChatNav();
+  const { rail } = useChatFrame();
   const now = useNow();
   const people = useChatPeople();
   const words = useRoomWords();
@@ -340,16 +341,26 @@ export function ActivityView() {
     return `reacted ${item.emoji ?? ""} to your message in ${where}`;
   };
 
-  const empty = unreadOnly
+  // CHATLET OPENS HERE, so a reader in no rooms at all is told how a room
+  // comes to exist rather than that nothing has named them yet: every other
+  // empty answer is the filter's.
+  const roomless = rail.data?.channels.length === 0;
+  const empty = roomless
     ? {
-        title: "You’re all caught up",
-        description: "Nothing here is unread. Turn off Unread only to see everything again.",
-      }
-    : {
-        title: EMPTY_ACTIVITY[filter],
+        title: "You’re in no rooms yet",
         description:
-          "Mentions, replies in threads you follow and reactions to your messages show here.",
-      };
+          "Give a team a channel in the org chart and Menu lists its room. Anyone can also message you directly, and Browse rooms lists every room you can join.",
+      }
+    : unreadOnly
+      ? {
+          title: "You’re all caught up",
+          description: "Nothing here is unread. Turn off Unread only to see everything again.",
+        }
+      : {
+          title: EMPTY_ACTIVITY[filter],
+          description:
+            "Mentions, replies in threads you follow and reactions to your messages show here.",
+        };
 
   return (
     <section className="chat-view">

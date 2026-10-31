@@ -257,7 +257,7 @@ function LeaveRow({ answer }: { answer: ChatChannelDetail }) {
       // one they can no longer read, so staying would turn into "no such
       // room" under them a moment later.
       toast.show({ variant: "success", message: `You left #${channel.name}` });
-      nav.go({ kind: "home" });
+      nav.go({ kind: "activity" });
       return;
     }
     setReport(answered);

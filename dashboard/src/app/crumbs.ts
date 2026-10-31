@@ -35,7 +35,14 @@
 import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { unitRoute } from "~/lib/seats.ts";
-import { SIDEBAR_GROUPS, ownedBy, workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
+import {
+  SIDEBAR_GROUPS,
+  listsLanding,
+  ownedBy,
+  workspaceRow,
+  type Section,
+  type WorkspaceRow,
+} from "./nav.ts";
 import { ITEM_KEY_SHAPE, chatViewOf, resolve, type SignInScreen } from "./routes.ts";
 import { ALL_PROJECTS, LENS_LABELS, type ScopeAt } from "./scope.ts";
 
@@ -199,8 +206,9 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   // workspace's landing page (Org chart › Roster, but Org chart alone for the
   // chart). SETTINGS NAMES ITS LANDING TOO: the column beside it lists Models
   // & keys as a row like any other, and "Settings" alone over the models
-  // said nothing but the selected row did about which section it was.
-  const listed = row.renderer === "column";
+  // said nothing but the selected row did about which section it was. So
+  // does Chatlet, whose Rooms panel lists Activity ([listsLanding]).
+  const listed = listsLanding(row);
   const section = (key: string): Section | undefined => row.sections.find((s) => s.key === key);
   const landing = (s: Section) => !listed && s.path.length === row.path.length;
   const sectionPage = (key: string): Crumb[] => {
@@ -317,7 +325,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       // place, which the trail deliberately ignores the way it ignores every
       // other query, since a pane open beside a room is not a place the
       // reader has gone.
-      return where.id ? inside("rooms", named(labels, where.id)) : [root(row, false)];
+      //
+      // A ROOM HANGS FROM CHATLET ITSELF, whose crumb leads to its landing:
+      // the rooms are a list in the Rooms panel, not a page to go back to.
+      return where.id ? [root(row, true), named(labels, where.id)] : [root(row, false)];
     // A VIEW IS A SECTION OF THE ROW, named as the row names it (`nav.ts`).
     case "chatlet-activity":
     case "chatlet-threads":

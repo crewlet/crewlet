@@ -103,16 +103,6 @@
   background: var(--color-surface-background);
 }
 
-/* The bare `#/chatlet`, before a room is chosen. */
-.chat-landing {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  justify-content: center;
-  min-height: 0;
-  padding: var(--spacing-6);
-}
-
 /* ---- The top bar ----
 
    EVERY CONTROL ON THE BAR IS ONE HEIGHT (the medium control step), centred

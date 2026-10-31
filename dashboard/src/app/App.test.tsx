@@ -804,9 +804,16 @@ describe("chat, for a person", () => {
     return { asked, view };
   }
 
-  /** The links on the page to `path`, wherever they are drawn. */
+  /**
+   * The links on the page to `path`, wherever they are drawn, except the
+   * frame's ways to the workspace itself: the sidebar's row and the trail's
+   * first crumb both lead to Chatlet's landing, Activity, on every chat page.
+   */
   function linksTo(view: ReturnType<typeof render>, path: string[]): number {
-    return view.container.querySelectorAll(`a[href="${buildHash(path)}"]`).length;
+    return [...view.container.querySelectorAll(`a[href="${buildHash(path)}"]`)].filter(
+      (a) =>
+        !a.closest('nav[aria-label="Navigation"]') && !a.closest('nav[aria-label="Breadcrumb"]'),
+    ).length;
   }
 
   /** The chat row's views the Rooms panel draws, by the row's own table. */

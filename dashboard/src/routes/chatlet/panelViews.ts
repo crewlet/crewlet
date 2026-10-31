@@ -31,7 +31,7 @@ const CHATLET = workspaceRow("chatlet");
 
 /** The row's sections that are panel views, in the row's order. */
 export const PANEL_VIEWS: readonly PanelView[] = (CHATLET?.sections ?? []).flatMap((section) => {
-  if (!CHATLET || samePath(section.path, CHATLET.path) || section.tab === false) return [];
+  if (!CHATLET || section.tab === false) return [];
   const kind = CHAT_VIEWS.find((view) => samePath(section.path, ["chatlet", view]));
   return kind && (PANEL_KINDS as readonly string[]).includes(kind)
     ? [{ kind: kind as PanelView["kind"], label: section.label, icon: section.icon }]
