@@ -659,6 +659,34 @@ test("a service the company runs is in use, with its way in", async () => {
   expect(screen.getByRole("link", { name: "Open Worklet" }).getAttribute("href")).toBe("#/worklet");
 });
 
+// A SERVICE OPENS ON ITS AGENTS, with no Overview: what that tab listed (a
+// service's projects or spaces) is the service's own landing, so the header
+// counts them as a link to that list. Mutation: bring the Overview tab back
+// and the tab list goes red; drop the fact's path and the link does.
+test.each([
+  ["worklet", "Worklet", "#/worklet"],
+  ["doclet", "Doclet", "#/doclet"],
+])(
+  "%s opens on its agents, with what it holds counted as a way to its list",
+  async (kind, name, list) => {
+    mount(
+      { ...MEMBER, grants: [...MEMBER.grants, "worklet", "doclet"], worklet: true, doclet: true },
+      kind,
+    );
+    const tabs = await screen.findByRole("tablist", { name: `${name} sections` });
+    expect(within(tabs).queryByRole("tab", { name: /Overview/ })).toBeNull();
+    expect(
+      within(tabs)
+        .getByRole("tab", { name: /^Agents/ })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    const counted = [...document.querySelectorAll<HTMLAnchorElement>(`a[href="${list}"]`)].filter(
+      (a) => a.textContent !== `Open ${name}`,
+    );
+    expect(counted, "the header's count links to the service's own list").toHaveLength(1);
+  },
+);
+
 // WHAT RUNS INSTEAD, IN THE ENGINE'S WORD, with the way to it, and nothing
 // asked of a service the company does not run. Mutation: ask the counts
 // whatever runs, and the list names `work_projects`.

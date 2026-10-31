@@ -1,7 +1,7 @@
 /**
  * The detail of a service built into Crewlet, laid out as a third-party
- * app's is (a header with its state and one line, the counts, and Overview,
- * Agents, Activity and Settings) and filled only with what the engine answers.
+ * app's is (a header with its state and one line, the counts, and Agents,
+ * Activity and Settings) and filled only with what the engine answers.
  *
  * WHAT EACH PART READS, and why it is honest:
  *
@@ -13,8 +13,11 @@
  *    the derived chart).
  *  - THE COUNTS. Projects and their open tasks (`work_projects`), spaces and
  *    their pages (`containers`), and the newest change on each log
- *    (`work_activity`, `page_activity`). No delivery count, because a
- *    built-in service has no inbound edge to count.
+ *    (`work_activity`, `page_activity`), in the header. The projects and the
+ *    spaces counted there link to the service's own list of them, which
+ *    names each with its counts: an Overview tab that listed them again here
+ *    was a second copy of that page. No delivery count, because a built-in
+ *    service has no inbound edge to count.
  *  - THE SETTINGS. The company document's `tracker` and `knowledge` blocks,
  *    with the engine's own defaults where a key is unset, read only by an
  *    Admin, as the `config` question is.
@@ -247,10 +250,10 @@ function verb(kind: string): string {
   return VERBS[kind] ?? kind.replace(/_/g, " ");
 }
 
-type Tab = "overview" | "agents" | "activity" | "settings";
+type Tab = "agents" | "activity" | "settings";
 
 function useTab(): [Tab, (t: string) => void] {
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("agents");
   return [tab, (t) => setTab(t as Tab)];
 }
 
@@ -272,7 +275,6 @@ function ServiceTabs({
       value={tab}
       onValueChange={onTab}
       items={[
-        { value: "overview", label: "Overview" },
         { value: "agents", label: "Agents", count: agents },
         { value: "activity", label: "Activity" },
         { value: "settings", label: "Settings" },
@@ -378,6 +380,8 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
             ) : (
               <EmptyValue label="Reading" />
             ),
+            // WORKLET'S OWN LIST OF THEM, each with its open and done counts.
+            ...(service.open ? { path: service.open.path } : {}),
           },
           {
             label: "Open tasks",
@@ -394,26 +398,6 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
         ],
       )}
       <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
-      {tab === "overview" && (
-        <div className="int-tab">
-          <section aria-label="Projects">
-            <h3 className="t-label">Projects</h3>
-            <ul className="int-feed">
-              {rows.map((p) => (
-                <li key={p.key} className="int-feed-row">
-                  <a className="int-feed-what" href={href(["worklet", p.key])}>
-                    <strong>{p.name}</strong> <span className="mono">{p.key}</span>
-                  </a>
-                  <span className="t-caption int-feed-at">
-                    {p.task_counts.todo + p.task_counts.active} open · {p.task_counts.done} done
-                  </span>
-                </li>
-              ))}
-              {projects.data && rows.length === 0 && <li className="t-caption">No project yet.</li>}
-            </ul>
-          </section>
-        </div>
-      )}
       {tab === "agents" && (
         <div className="int-tab">
           <p className="t-caption">
@@ -555,6 +539,8 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
           {
             label: "Spaces",
             value: containers.data ? fmtCount(spaces.length) : <EmptyValue label="Reading" />,
+            // DOCLET'S OWN LIST OF THEM, each with its pages.
+            ...(service.open ? { path: service.open.path } : {}),
           },
           {
             label: "Pages",
@@ -567,23 +553,6 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
         ],
       )}
       <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
-      {tab === "overview" && (
-        <div className="int-tab">
-          <section aria-label="Spaces">
-            <h3 className="t-label">Spaces</h3>
-            <ul className="int-feed">
-              {spaces.map((c) => (
-                <li key={c.key} className="int-feed-row">
-                  <a className="int-feed-what" href={href(["doclet", c.key])}>
-                    <strong>{c.name || c.key}</strong> <span className="mono">{c.key}</span>
-                  </a>
-                  <span className="t-caption int-feed-at">{plural(c.pages, "page")}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </div>
-      )}
       {tab === "agents" && (
         <div className="int-tab">
           <p className="t-caption">
