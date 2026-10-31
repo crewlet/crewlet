@@ -438,6 +438,9 @@ test("Check now sits beside the tabs on every tab, and asks the loop to look", a
 test("the Agents tab counts the agents that are on", async () => {
   mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, { access: () => datadogAnswer() });
   const tab = await screen.findByRole("tab", { name: /Agents/ });
+  // THE TAB BAR AND ITS PANEL share one `.tab-detail` column, one shared
+  // step apart, rather than standing the pane's own gap from each other.
+  expect(tab.closest(".tab-detail")?.querySelector(".int-tab")).toBeTruthy();
   await waitFor(() => expect(within(tab).getByText("1")).toBeTruthy());
   expect(within(tab).queryByText("3")).toBeNull();
 });

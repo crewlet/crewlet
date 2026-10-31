@@ -2313,7 +2313,11 @@ show its ancestry beside the controls takes a line of its own.
   loading, the density preference). **An object's own tabs fold the same
   way** (a seat's Overview … Settings, a turn's sections): a scrolling row
   hides its scrollbar, and on a phone a seat's Settings began five pixels past
-  the strip's end with nothing to say it was there. **Both are the kit's
+  the strip's end with nothing to say it was there. **A detail's tab bar
+  stands one step (8px) above its panel**, one token for every tabbed detail
+  (an integration's page, a seat's profile, a turn, the org builder's node
+  editor, a room's details): the panel is the head's own, not a section a
+  section's gap below it. **Both are the kit's
   underline row with `overflow="menu"`**, so the fold, its arithmetic, "More"
   and the reading note are the kit's: the section strip is `Tabs` in router
   mode (a `nav` of links, the current one `aria-current="page"`, a folded link

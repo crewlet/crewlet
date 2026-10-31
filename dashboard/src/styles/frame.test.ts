@@ -1305,11 +1305,30 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".prof-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
   });
 
+  // A TAB BAR STANDS ONE STEP ABOVE ITS PANEL, on every tabbed detail, by one
+  // token: an integration's page and a turn (`.tab-detail`, the bar and its
+  // panel as siblings), a seat's profile and the org builder's node editor
+  // (the panel's own top padding) and a room's details (its first section).
+  // Each stood its host's own gap below the bar, 16 to 20px. Mutation: give
+  // any of them a step of its own and its line goes red.
+  test("a tab bar stands the one shared step above its panel", () => {
+    const tokens = sheet("tokens.css");
+    expect(tokens).toMatch(/--tab-panel-gap:\s*var\(--spacing-2\);/);
+    expect(block(sheet("components.css"), ".tab-detail")).toMatch(/gap:\s*var\(--tab-panel-gap\);/);
+    expect(block(css, ".node-editor-panel")).toMatch(/padding:\s*var\(--tab-panel-gap\) /);
+    expect(
+      block(sheet("chatlet-panes.css"), ".chat-pane-scroll > .chat-pane-section:first-child"),
+    ).toMatch(/padding-top:\s*var\(--tab-panel-gap\);/);
+  });
+
   // THE SEAT PAGE IS ON THE SHELL'S GUTTER, the one the page bar's trail
-  // starts at: at 28px its head and body stood 8px right of the crumb.
+  // starts at: at 28px its head and body stood 8px right of the crumb. The
+  // body's TOP is the shared step under a tab bar (`--tab-panel-gap`).
   test("a seat's head and body start where the page bar's trail does", () => {
     expect(block(css, ".prof-head")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\) 0/);
-    expect(block(css, ".prof-body")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\)/);
+    expect(block(css, ".prof-body")).toMatch(
+      /padding:\s*var\(--tab-panel-gap\) var\(--spacing-5\)/,
+    );
   });
 
   // THE COMPANY'S BUDGET ROW STANDS ON THE SEATS' COLUMNS: its cells take the

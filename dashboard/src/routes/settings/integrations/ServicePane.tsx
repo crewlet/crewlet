@@ -397,92 +397,97 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
           },
         ],
       )}
-      <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
-      {tab === "agents" && (
-        <div className="int-tab">
-          <p className="t-caption">
-            Every agent works in Worklet: it holds the Worklet app with its seat.
-          </p>
-          <div className="int-seats">
-            {agents.map((a) => {
-              const row = load.get(a.handle);
-              const home = homeOf(config.data, a.handle);
-              const detail = [
-                home.project ? `Files work in ${home.project}` : "",
-                row ? `${row.blocked} blocked · ${row.overdue} overdue` : "",
-              ]
-                .filter(Boolean)
-                .join(" · ");
-              return (
-                <AgentLine
-                  key={a.handle}
-                  seat={a}
-                  detail={detail || handleLabel(a.handle)}
-                  state={
-                    <Tag
-                      size="sm"
-                      variant={row && row.open > 0 ? "info" : "neutral"}
-                      appearance={row && row.open > 0 ? "soft" : "outline"}
-                    >
-                      {row && row.open > 0 ? `${row.open} open` : "Nothing open"}
-                    </Tag>
-                  }
-                />
-              );
-            })}
+      {/* THE TAB BAR AND ITS PANEL, one step apart (`.tab-detail`). */}
+      <div className="tab-detail">
+        <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
+        {tab === "agents" && (
+          <div className="int-tab">
+            <p className="t-caption">
+              Every agent works in Worklet: it holds the Worklet app with its seat.
+            </p>
+            <div className="int-seats">
+              {agents.map((a) => {
+                const row = load.get(a.handle);
+                const home = homeOf(config.data, a.handle);
+                const detail = [
+                  home.project ? `Files work in ${home.project}` : "",
+                  row ? `${row.blocked} blocked · ${row.overdue} overdue` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <AgentLine
+                    key={a.handle}
+                    seat={a}
+                    detail={detail || handleLabel(a.handle)}
+                    state={
+                      <Tag
+                        size="sm"
+                        variant={row && row.open > 0 ? "info" : "neutral"}
+                        appearance={row && row.open > 0 ? "soft" : "outline"}
+                      >
+                        {row && row.open > 0 ? `${row.open} open` : "Nothing open"}
+                      </Tag>
+                    }
+                  />
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
-      {tab === "activity" && (
-        <div className="int-tab">
-          <ul className="int-feed">
-            {records.map((r) => (
-              <FeedRow
-                key={r.id}
-                who={nameOf(r.actor)}
-                what={
-                  <>
-                    {verb(r.kind)}{" "}
-                    <span className="mono">{r.subject_key ?? keys[r.subject_id] ?? "a task"}</span>
-                    {r.excerpt ? <span className="t-caption"> · {r.excerpt}</span> : null}
-                  </>
-                }
-                at={r.at}
-                now={now}
-              />
-            ))}
-            {feed.data && records.length === 0 && (
-              <li className="t-caption">Nothing has changed yet.</li>
-            )}
-          </ul>
-        </div>
-      )}
-      {tab === "settings" && (
-        <div className="int-tab">
-          <DescriptionList
-            dense
-            items={[
-              ["Work tracker", "Worklet"],
-              [
-                "Inbox keeps a row for",
-                viewer.admin ? retention : <EmptyValue label="Admins see this" />,
-              ],
-              [
-                "Projects the chart declares",
-                viewer.admin ? (
-                  documentUnits(config.data)
-                    .map((u) => u.project)
-                    .filter(Boolean)
-                    .join(", ") || <EmptyValue label="None" />
-                ) : (
-                  <EmptyValue label="Admins see this" />
-                ),
-              ],
-            ]}
-          />
-          <p className="t-caption">These live in the company document, under tracker.</p>
-        </div>
-      )}
+        )}
+        {tab === "activity" && (
+          <div className="int-tab">
+            <ul className="int-feed">
+              {records.map((r) => (
+                <FeedRow
+                  key={r.id}
+                  who={nameOf(r.actor)}
+                  what={
+                    <>
+                      {verb(r.kind)}{" "}
+                      <span className="mono">
+                        {r.subject_key ?? keys[r.subject_id] ?? "a task"}
+                      </span>
+                      {r.excerpt ? <span className="t-caption"> · {r.excerpt}</span> : null}
+                    </>
+                  }
+                  at={r.at}
+                  now={now}
+                />
+              ))}
+              {feed.data && records.length === 0 && (
+                <li className="t-caption">Nothing has changed yet.</li>
+              )}
+            </ul>
+          </div>
+        )}
+        {tab === "settings" && (
+          <div className="int-tab">
+            <DescriptionList
+              dense
+              items={[
+                ["Work tracker", "Worklet"],
+                [
+                  "Inbox keeps a row for",
+                  viewer.admin ? retention : <EmptyValue label="Admins see this" />,
+                ],
+                [
+                  "Projects the chart declares",
+                  viewer.admin ? (
+                    documentUnits(config.data)
+                      .map((u) => u.project)
+                      .filter(Boolean)
+                      .join(", ") || <EmptyValue label="None" />
+                  ) : (
+                    <EmptyValue label="Admins see this" />
+                  ),
+                ],
+              ]}
+            />
+            <p className="t-caption">These live in the company document, under tracker.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -552,103 +557,106 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
           },
         ],
       )}
-      <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
-      {tab === "agents" && (
-        <div className="int-tab">
-          <p className="t-caption">
-            Every agent reads and writes in Doclet: it holds the Doclet app with its seat.
-          </p>
-          <div className="int-seats">
-            {agents.map((a) => {
-              const home = homeOf(config.data, a.handle);
-              const space = home.space ? spaces.find((c) => c.key === home.space) : undefined;
-              const chain = chains.get(a.handle) ?? [];
-              return (
-                <AgentLine
-                  key={a.handle}
-                  seat={a}
-                  detail={
-                    [
-                      home.space
-                        ? `Writes in ${home.space}${space ? ` (${plural(space.pages, "page")})` : ""}`
-                        : "",
-                      chain.length > 0
-                        ? `Reads ${plural(chain.length, "onboarding page")} first`
-                        : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || handleLabel(a.handle)
-                  }
-                  state={
-                    <StatusDot tone={home.space || !viewer.admin ? "success" : "neutral"}>
-                      {home.space
-                        ? "Has a space"
-                        : viewer.admin
-                          ? "No space of its own"
-                          : "Reads and writes"}
-                    </StatusDot>
-                  }
-                />
-              );
-            })}
+      {/* THE TAB BAR AND ITS PANEL, one step apart (`.tab-detail`). */}
+      <div className="tab-detail">
+        <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
+        {tab === "agents" && (
+          <div className="int-tab">
+            <p className="t-caption">
+              Every agent reads and writes in Doclet: it holds the Doclet app with its seat.
+            </p>
+            <div className="int-seats">
+              {agents.map((a) => {
+                const home = homeOf(config.data, a.handle);
+                const space = home.space ? spaces.find((c) => c.key === home.space) : undefined;
+                const chain = chains.get(a.handle) ?? [];
+                return (
+                  <AgentLine
+                    key={a.handle}
+                    seat={a}
+                    detail={
+                      [
+                        home.space
+                          ? `Writes in ${home.space}${space ? ` (${plural(space.pages, "page")})` : ""}`
+                          : "",
+                        chain.length > 0
+                          ? `Reads ${plural(chain.length, "onboarding page")} first`
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || handleLabel(a.handle)
+                    }
+                    state={
+                      <StatusDot tone={home.space || !viewer.admin ? "success" : "neutral"}>
+                        {home.space
+                          ? "Has a space"
+                          : viewer.admin
+                            ? "No space of its own"
+                            : "Reads and writes"}
+                      </StatusDot>
+                    }
+                  />
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
-      {tab === "activity" && (
-        <div className="int-tab">
-          <ul className="int-feed">
-            {changes.map((c) => (
-              <FeedRow
-                key={c.id}
-                who={nameOf(c.actor)}
-                what={
-                  <>
-                    {verb(c.kind)}{" "}
-                    <a className="prose-link" href={href(["doclet", "pages", c.page_id])}>
-                      {c.title || "a page"}
-                    </a>
-                    {c.container ? <span className="t-caption"> in {c.container}</span> : null}
-                  </>
-                }
-                at={c.at}
-                now={now}
-              />
-            ))}
-            {feed.data && changes.length === 0 && (
-              <li className="t-caption">No page has changed yet.</li>
-            )}
-          </ul>
-        </div>
-      )}
-      {tab === "settings" && (
-        <div className="int-tab">
-          <DescriptionList
-            dense
-            items={[
-              ["Knowledge base", "Doclet"],
-              ...(viewer.admin
-                ? ([
-                    [
-                      "Company pages",
-                      typeof knowledge.root_space === "string" ? knowledge.root_space : DEFAULT,
-                    ],
-                    ["Tool skills", skills === "" ? "Off" : (skills ?? DEFAULT)],
-                    ["Search reaches", scope.length > 0 ? scope.join(", ") : "Every space"],
-                    [
-                      "Search by meaning",
-                      knowledge.vectors === false
-                        ? "Off"
-                        : knowledge.vectors === true
-                          ? "On"
-                          : "When an embeddings provider is set",
-                    ],
-                  ] as [string, string][])
-                : ([["Everything else", "Admins see this"]] as [string, string][])),
-            ]}
-          />
-          <p className="t-caption">These live in the company document, under knowledge.</p>
-        </div>
-      )}
+        )}
+        {tab === "activity" && (
+          <div className="int-tab">
+            <ul className="int-feed">
+              {changes.map((c) => (
+                <FeedRow
+                  key={c.id}
+                  who={nameOf(c.actor)}
+                  what={
+                    <>
+                      {verb(c.kind)}{" "}
+                      <a className="prose-link" href={href(["doclet", "pages", c.page_id])}>
+                        {c.title || "a page"}
+                      </a>
+                      {c.container ? <span className="t-caption"> in {c.container}</span> : null}
+                    </>
+                  }
+                  at={c.at}
+                  now={now}
+                />
+              ))}
+              {feed.data && changes.length === 0 && (
+                <li className="t-caption">No page has changed yet.</li>
+              )}
+            </ul>
+          </div>
+        )}
+        {tab === "settings" && (
+          <div className="int-tab">
+            <DescriptionList
+              dense
+              items={[
+                ["Knowledge base", "Doclet"],
+                ...(viewer.admin
+                  ? ([
+                      [
+                        "Company pages",
+                        typeof knowledge.root_space === "string" ? knowledge.root_space : DEFAULT,
+                      ],
+                      ["Tool skills", skills === "" ? "Off" : (skills ?? DEFAULT)],
+                      ["Search reaches", scope.length > 0 ? scope.join(", ") : "Every space"],
+                      [
+                        "Search by meaning",
+                        knowledge.vectors === false
+                          ? "Off"
+                          : knowledge.vectors === true
+                            ? "On"
+                            : "When an embeddings provider is set",
+                      ],
+                    ] as [string, string][])
+                  : ([["Everything else", "Admins see this"]] as [string, string][])),
+              ]}
+            />
+            <p className="t-caption">These live in the company document, under knowledge.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

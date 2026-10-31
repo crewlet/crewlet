@@ -448,6 +448,16 @@ a.seat-chip:hover {
   min-width: 0;
 }
 
+/* A TAB BAR AND ITS PANEL, as siblings: one column spaced by the shared step
+   (`--tab-panel-gap`), so the bar stands one step above what it switches
+   whatever gap the column around it keeps between its own parts. */
+.tab-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tab-panel-gap);
+  min-width: 0;
+}
+
 /* A REFUSAL'S PROBLEMS, one per line.
  *
  * A validation refusal is several of them joined with newlines, and HTML

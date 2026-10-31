@@ -1414,7 +1414,8 @@ a.oc-key:hover {
   flex-direction: column;
   gap: var(--spacing-4);
   min-width: 0;
-  padding: var(--spacing-5) var(--spacing-5) var(--spacing-8);
+  /* THE TAB BAR'S PANEL starts the shared step under it (`--tab-panel-gap`). */
+  padding: var(--tab-panel-gap) var(--spacing-5) var(--spacing-8);
 }
 .prof-notices {
   display: flex;
@@ -1876,7 +1877,7 @@ a.prof-row:hover {
     gap: var(--spacing-3);
   }
   .prof-body {
-    padding: var(--spacing-4) var(--spacing-4) var(--spacing-6);
+    padding: var(--tab-panel-gap) var(--spacing-4) var(--spacing-6);
   }
   .prof-name {
     font-size: 20px;
@@ -2309,7 +2310,8 @@ a.prof-row:hover {
   display: grid;
   align-content: start;
   gap: var(--spacing-6);
-  padding: var(--spacing-5) var(--spacing-4) var(--spacing-7);
+  /* THE TAB BAR'S PANEL starts the shared step under it (`--tab-panel-gap`). */
+  padding: var(--tab-panel-gap) var(--spacing-4) var(--spacing-7);
   min-width: 0;
 }
 .node-editor .builder-section[data-depth="0"] {
@@ -8266,6 +8268,15 @@ a.live-row:focus-visible {
   margin-bottom: -1px;
 }
 .trace-panel {
+  min-width: 0;
+}
+/* WHAT FOLLOWS THE TABS keeps the page's own step between its parts (a
+   coverage note, the cut, what went wrong, the panel); the tabs themselves
+   stand the shared step above it (`.tab-detail`). */
+.trace-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
   min-width: 0;
 }
 
