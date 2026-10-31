@@ -3229,9 +3229,11 @@ open on that desk), and its panel is tall enough for six of them before it
 scrolls. Every row of a list is the same height whether or not somebody holds
 its task — the holder's cell keeps a badge's height with nobody in it.
 
-**Whose day it is decides the pronoun and the controls.** The band above the
-sections names whose day is on screen and carries the stamp when somebody else
-put the queue in order — by the person's name. On somebody ELSE's day every
+**Whose day it is decides the pronoun and the controls.** The page bar's
+"Whose day" picker names whose day is on screen, and a note above the
+sections carries the stamp when somebody else put the queue in order, by the
+person's name; no row repeats the seat's chip, handle or "yours" (a seat's
+page is reached from Company › Org chart). On somebody ELSE's day every
 row speaks about them ("Rui is the approver") and every change on the page is
 HELD (`HoldWrites`): drawn, disabled, and explained once in words above the
 rows, because the questions put to them are theirs to answer and their work is
