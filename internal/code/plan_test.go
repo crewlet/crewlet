@@ -478,6 +478,12 @@ func registeredStatements() map[string]statement {
 			[]string{"code_refs_expiry_idx (at>=? AND at<=?)"}},
 		"expiry repos": {expiryReposSQL, []any{`["repo-1","repo-2"]`}, []string{"SCAN json_each AS j",
 			repoKey + " (id=?)"}},
+		// code_refs_near_limit's reading: the candidates by a keyset walk of
+		// the name index, as the reconcile's own walk is, and each one's refs
+		// set within RefExpiry by its key's repo_id prefix.
+		"refs candidates": {refsCandidatesSQL, []any{"", MaxRefsPerRepo / 2, 1000},
+			[]string{"code_repos_name_idx (name>?)"}},
+		"refs set since": {refsSetSinceSQL, []any{"repo-1", 100}, []string{refsKey + " (repo_id=?)"}},
 		// THE RETENTION'S TWO NEW LISTINGS, keyset pages over their partial
 		// indexes in the index's order: the redirects whose window ended,
 		// and the active scratch repositories idle past the cutoff.

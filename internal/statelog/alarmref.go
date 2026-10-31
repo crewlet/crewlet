@@ -200,6 +200,17 @@ var alarmMeaning = map[Kind]string{
 		"where no git node runs checks at all; past a thousand it says there " +
 		"are more rather than how many. A deleted repository's queued attempts " +
 		"are not counted: no runner may claim them, and its purge removes them.",
+	KindCodeRefsNearLimit: "Active repositories set refs so fast that they reach " +
+		"the most live refs a repository may hold (100 000) within the ref " +
+		"lifecycle's window (14 days) unless refs are deleted: their live refs " +
+		"and the refs of those set within the window together pass the bound. " +
+		"The lifecycle deletes only a seat's branch nobody set for the whole " +
+		"window, so none of the refs that make the rate, and once the bound is " +
+		"reached every push creating a ref there is refused `repo_refs`. " +
+		"Measured from the code log's rows by every data node on the trim's " +
+		"quarter-hour tick, so every data node raises it for the same " +
+		"repositories; an archived repository, which takes no push, and a " +
+		"deleted ref are never counted.",
 }
 
 const alarmHeader = `# Alarms

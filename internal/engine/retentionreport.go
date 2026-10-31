@@ -488,6 +488,7 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	if r.code != nil {
 		r.code(ctx, now, &out)
 	}
+	r.refsReading(&out)
 	r.space(&out, now)
 	r.maintenance(ctx, now, &out)
 	r.observed(&out)

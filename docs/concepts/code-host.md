@@ -2366,6 +2366,26 @@ and found no longer idle by the committer), `refs_held` (kept for a live
 turn's hold) and names `expiry_failed` and `expiry_unread`; each push that
 deleted something logs `code_refs_expired`.
 
+**Before the bound refuses a create, an alarm says so.** The lifecycle makes
+room only from branches nobody set for 14 days, so a repository setting refs
+faster than they go idle — or holding persons' branches and tags, which never
+expire — can still reach the [limit](#limits) of 100 000 live refs, after which
+every push creating a ref there is refused `repo_refs`. A repository whose live
+refs and the refs it set in the last 14 days together pass 100 000 reaches the
+bound within 14 days at that rate, and none of those recent refs is the
+lifecycle's to delete, so every data node raises
+[`code_refs_near_limit`](../reference/alarms.md) while one is: it names how many
+repositories are past that point and the one with the most, with its live refs
+and how many it set in the window. An archived repository, which takes no push,
+and a deleted ref are never counted. It is measured from the data node's own
+rows on the trim's quarter-hour tick — a walk of the active repositories in
+name order, and a count of the refs set in the window for each one holding
+more than 50 000 live refs, the only ones that can pass the point — and a node
+that cannot read them logs `code_refs_near_limit_unread` and raises nothing
+until the next tick reads them. Delete the branches and tags the repository no
+longer needs; one that needs more than 100 000 live refs is past what the code
+host serves, and is split.
+
 ---
 
 ## The cache on a git node
@@ -6282,6 +6302,7 @@ line says and push the branch's next commit with `-o change`.
 | `code_retention_pass` | `INFO` | A pass that swept retired packs or an idle repository's checks, purged, failed a repository, held a purged name, released a renamed repository's old name, expired a scratch repository or kept one a live turn holds, expired, kept or held a seat's idle branch or failed to, could not read the live turns' holds, or stopped at its budget (`sweeps`, `swept_rows`, `checks_sweeps`, `checks_swept_rows`, `purged`, `steps`, `remain`, `failed`, `unhanded`, `released`, `expired`, `scratch_held`, `scratch_expiry_unread`, `refs_expired`, `refs_kept`, `refs_held`, `expiry_failed`, `expiry_unread`); `DEBUG` when nothing was due. |
 | `code_refs_expired` | `INFO` | One push of [the ref lifecycle](#the-ref-lifecycle) applied on a repository (`repo`, `push_id`, `position`): how many idle seat branches it deleted (`expired`) and how many its committer kept (`kept`). |
 | `code_ref_expiry_skipped` | `WARN` | The live turns' holds on a page of idle seat branches could not be read (`error`, naming which; `repo` and `first`, the page's first branch), so this pass deleted none; the next pass asks again ([The ref lifecycle](#the-ref-lifecycle)). |
+| `code_refs_near_limit_unread` | `WARN` | The trim's quarter-hour tick could not read which repositories are near the most live refs one may hold (`error`), so this node raises no [`code_refs_near_limit`](#the-ref-lifecycle) until the next tick reads the rows again; a create past the bound is still refused `repo_refs`. |
 | `code_retention_pass_failed` | `WARN` | A pass ended on an error; the next pass lists what is due again. |
 | `code_scratch_expired` | `INFO` | A scratch repository idle past `code.scratch.idle_days` (`idle_since`) and held by no live turn was deleted, restorable for `code.deleted_retention_days`. |
 | `code_scratch_expiry_skipped` | `WARN` | The live turns' holds on a page of idle scratch repositories could not be read — the run store, the seat leases, or a seat holder that did not answer within two seconds (`error`, naming which) — so this pass expired none; the next pass asks again ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry)). |

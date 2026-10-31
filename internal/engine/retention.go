@@ -180,6 +180,12 @@ type retention struct {
 	// committer nor a cache.
 	code func(ctx context.Context, now time.Time, out *statelog.Reading)
 
+	// refs reads code_refs_near_limit's figure from this node's code log
+	// rows at now, and false where it measures none ([Engine.refsNearLimit]).
+	// Measured on the trim's tick alone ([retention.measureRefs]) and read
+	// back by every report. Nil reads as nothing to report.
+	refs func(ctx context.Context, now time.Time) (code.RefsNear, bool, error)
+
 	// seats is the running company's agent-seat count, which the census a
 	// log's read rate is held against scales with
 	// ([statelog.Census]). READ AT EVERY EVALUATION, because a
@@ -199,8 +205,9 @@ type retention struct {
 	// ([clientBarriers]), is not a field: it is the log's, never this node's
 	// or the moment's, so there is nothing to read at an evaluation.
 
-	// mu guards the coverage cache and the log rates below. The tick and
-	// every API request assemble a report, on different goroutines.
+	// mu guards the coverage cache, the refs figure and the log rates below.
+	// The tick and every API request assemble a report, on different
+	// goroutines.
 	mu sync.Mutex
 
 	// coverFraction and coverKnown are the last tick's coverage
@@ -221,6 +228,13 @@ type retention struct {
 	// and [retention.heartbeat].
 	coverFraction float64
 	coverKnown    bool
+
+	// refsNear and refsNearKnown are the last tick's code_refs_near_limit
+	// figure, taken on the tick and read by the report for the coverage's
+	// reason: a walk of the repositories and a count over each one's refs
+	// near the bound, which no report may repeat. See [retention.measureRefs].
+	refsNear      code.RefsNear
+	refsNearKnown bool
 
 	// pooled is the last `sql.DBStats` wait counters seen per store file,
 	// so the histogram is fed the DELTA rather than the process's
@@ -289,6 +303,7 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		index:       e.indexReading,
 		objects:     e.objectsReading,
 		code:        e.codeReading,
+		refs:        e.refsNearLimit,
 		seats:       func() int { return seatCount(e.Company()) },
 		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},
@@ -512,6 +527,7 @@ func (r *retention) decidesFrom() []string {
 func (r *retention) evaluate(ctx context.Context) {
 	r.capacity(ctx)
 	r.measureCoverage(ctx)
+	r.measureRefs(ctx)
 	r.measureRates(ctx, r.clock())
 	r.beat(ctx)
 }

@@ -379,6 +379,7 @@ const (
 	KindCodeCompactionBehind   Kind = "code_compaction_behind"
 	KindCodeCommitBusy         Kind = "code_commit_busy"
 	KindCodeChecksBacklog      Kind = "code_checks_backlog"
+	KindCodeRefsNearLimit      Kind = "code_refs_near_limit"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -769,6 +770,35 @@ type Reading struct {
 	CodeChecksBacklogMore   bool
 	CodeChecksBacklogOldest time.Duration
 	CodeChecksBacklogCheck  string
+
+	// CodeRefsNearLimit is how many active repositories, as this node's rows
+	// hold them, set refs so fast that they reach the most live refs a
+	// repository may hold within the ref lifecycle's window unless refs are
+	// deleted: their live refs and the refs of those set within the window
+	// together pass the bound (internal/code's NearLimit and
+	// Reader.RefsNearLimit). CodeRefsNearLimitRepo is the one with the most
+	// of the two together, by name, CodeRefsNearLimitLive its live refs and
+	// CodeRefsNearLimitRecent those of them set within the window.
+	// CodeRefsLimit and CodeRefsWindow are the bound and the window
+	// themselves — code.MaxRefsPerRepo, at which the push decide refuses a
+	// create repo_refs, and code.RefExpiry, after which the lifecycle deletes
+	// a seat's idle branch — handed in by the node that measured against
+	// them, since this framework imports no code-host package and the detail
+	// names both.
+	//
+	// EACH REPOSITORY WAS ALREADY JUDGED AT THOSE TWO DECISIONS, so the alarm
+	// borrows them whole (ADR-0015) and fires at any count. Measured from the
+	// rows by every data node on the trim's quarter-hour tick, never by a git
+	// node: every data node holds the rows and reports the same repositories.
+	// All zero on a node holding no code log's rows — no data role, or a
+	// company that hosts no code — on one whose trim has not ticked or whose
+	// last measurement failed, and on one that found none.
+	CodeRefsNearLimit       int
+	CodeRefsNearLimitRepo   string
+	CodeRefsNearLimitLive   int
+	CodeRefsNearLimitRecent int
+	CodeRefsLimit           int
+	CodeRefsWindow          time.Duration
 }
 
 // Alarm is one condition currently true on this node.
@@ -1666,6 +1696,56 @@ var table = []rule{
 			"meanwhile — its head moved on — leaves the queue. See " +
 			"docs/concepts/code-host.md.",
 	},
+	{
+		// THE THRESHOLD IS TWO OTHER DECISIONS' (ADR-0015): the most live
+		// refs a repository may hold, past which the push decide refuses a
+		// create repo_refs, and the ref lifecycle's window, after which it
+		// deletes a seat's idle branch. A repository whose live refs and the
+		// refs it set within the window together pass the bound sets refs
+		// fast enough to reach it within the window, and nothing set within
+		// the window is the lifecycle's to delete, so the lifecycle is not
+		// what makes the room. This framework imports no code-host package,
+		// so every data node's reader judges each repository at both and the
+		// rule fires at any count — never at a number of its own. A node's
+		// condition, raised by every data node from its own rows, before the
+		// first create is refused rather than after.
+		kind: KindCodeRefsNearLimit,
+		fires: func(r Reading) (string, bool) {
+			window := spokenDays(r.CodeRefsWindow)
+			return fmt.Sprintf("%d repository(ies) set refs so fast that they reach the %d-ref bound within "+
+					"%s unless refs are deleted (the most: %s, %d live and %d set in the last %s); a create "+
+					"past the bound is refused repo_refs",
+					r.CodeRefsNearLimit, r.CodeRefsLimit, window, r.CodeRefsNearLimitRepo,
+					r.CodeRefsNearLimitLive, r.CodeRefsNearLimitRecent, window),
+				r.CodeRefsNearLimit > 0
+		},
+		remedy: "Delete what the repository no longer needs — branches (`git " +
+			"push origin --delete <branch>`, or a seat's `code_delete_branch`) " +
+			"and tags. A seat's idle branches are deleted by themselves 14 days " +
+			"after their last push (the ref lifecycle), so a repository past " +
+			"this point is one whose refs are set faster than they go idle, or " +
+			"whose refs are persons' branches and tags, which never expire. A " +
+			"seat outside the repository's owners is held to half the bound, " +
+			"and is refused repo_refs there whatever this alarm says. A " +
+			"repository that needs more than 100 000 live refs is past what the " +
+			"code host serves: split it. Evaluated from this node's copy every " +
+			"quarter hour; a node that cannot read it logs " +
+			"`code_refs_near_limit_unread`. See docs/concepts/code-host.md, " +
+			"\"The ref lifecycle\".",
+	},
+}
+
+// spokenDays is a window of whole days in days — the ref lifecycle's fourteen
+// rather than spoken's "336h" — and any other in spoken's form.
+func spokenDays(d time.Duration) string {
+	const day = 24 * time.Hour
+	if d <= 0 || d%day != 0 {
+		return spoken(d)
+	}
+	if d == day {
+		return "1 day"
+	}
+	return fmt.Sprintf("%d days", d/day)
 }
 
 // Evaluate reports every alarm currently true, in the table's own order.

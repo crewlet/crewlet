@@ -226,6 +226,14 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			"more than 1024 queued check attempt(s) have waited for a runner longer than their own timeout — " +
 				"the longest of those counted, web@111111111111 for main: lint (attempt 2), for 3h",
 		},
+		"repositories setting refs fast enough to reach the bound within the window": {
+			statelog.KindCodeRefsNearLimit,
+			statelog.Reading{CodeRefsNearLimit: 1, CodeRefsNearLimitRepo: "web", CodeRefsNearLimitLive: 60_000,
+				CodeRefsNearLimitRecent: 45_000, CodeRefsLimit: 100_000, CodeRefsWindow: 14 * 24 * time.Hour},
+			"1 repository(ies) set refs so fast that they reach the 100000-ref bound within 14 days unless refs " +
+				"are deleted (the most: web, 60000 live and 45000 set in the last 14 days); a create past the " +
+				"bound is refused repo_refs",
+		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,
 			statelog.Reading{ObjectiveBurns: burning(objectives.ArtifactReady, 90, 10)},
@@ -657,6 +665,52 @@ func TestCodeCommitBusyFiresAtTheCommittersBounds(t *testing.T) {
 		if !strings.Contains(alarm.Detail, waited) {
 			t.Errorf("%s: the detail %q does not say how many waited out their asker's attempt (%q)",
 				name, alarm.Detail, waited)
+		}
+	}
+}
+
+// THE REFS ALARM FIRES AT ANY REPOSITORY ITS READER COUNTED, and at none is
+// silent: the reader judged each one at the bound the push decide refuses a
+// create at and the ref lifecycle's window (internal/code's NearLimit), which
+// this framework does not import, so the rule borrows that judgement whole
+// (ADR-0015) and its detail names the figures and both decisions as the node
+// handed them in. The figures of a repository with nothing counted are no
+// alarm: the count is.
+//
+// Mutation: fire on the worst repository's figures rather than the count — the
+// named repository with none counted fires, red; name the window in spoken's
+// hours — "336h", red.
+func TestCodeRefsNearLimitFiresAtTheBound(t *testing.T) {
+	t.Parallel()
+	const window = 14 * 24 * time.Hour
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"none counted": {statelog.Reading{CodeRefsLimit: 100_000, CodeRefsWindow: window}, false},
+		"figures with none counted": {statelog.Reading{CodeRefsNearLimitRepo: "web", CodeRefsNearLimitLive: 99_000,
+			CodeRefsNearLimitRecent: 99_000, CodeRefsLimit: 100_000, CodeRefsWindow: window}, false},
+		"one counted": {statelog.Reading{CodeRefsNearLimit: 1, CodeRefsNearLimitRepo: "web",
+			CodeRefsNearLimitLive: 50_001, CodeRefsNearLimitRecent: 50_000, CodeRefsLimit: 100_000,
+			CodeRefsWindow: window}, true},
+		"three counted": {statelog.Reading{CodeRefsNearLimit: 3, CodeRefsNearLimitRepo: "api",
+			CodeRefsNearLimitLive: 90_000, CodeRefsNearLimitRecent: 80_000, CodeRefsLimit: 100_000,
+			CodeRefsWindow: window}, true},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeRefsNearLimit)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+		if !fired {
+			continue
+		}
+		r := c.reading
+		want := strconv.Itoa(r.CodeRefsNearLimit) + " repository(ies) set refs so fast that they reach the " +
+			strconv.Itoa(r.CodeRefsLimit) + "-ref bound within 14 days unless refs are deleted (the most: " +
+			r.CodeRefsNearLimitRepo + ", " + strconv.Itoa(r.CodeRefsNearLimitLive) + " live and " +
+			strconv.Itoa(r.CodeRefsNearLimitRecent) + " set in the last 14 days)"
+		if !strings.HasPrefix(alarm.Detail, want) {
+			t.Errorf("%s: the detail %q does not begin %q", name, alarm.Detail, want)
 		}
 	}
 }
