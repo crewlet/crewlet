@@ -153,7 +153,6 @@ const VIEW_BOUNDED: Record<string, string> = {
   "screens.css .tail-scroll.tailing": "a running phase's transcript",
   "screens.css .thread-split .thread-list": "a seat's thread list, beside the sticky detail",
   "screens.css .work-col-body": "a board lane's body",
-  "screens.css .chat-rail": "chat's rail, stacked above the room on a narrow screen",
 };
 
 /**
@@ -168,7 +167,7 @@ const VIEW_BOUNDED: Record<string, string> = {
  * does. jsdom computes no layout, which is why it is held in the sheets.
  */
 const FILLS_AND_SCROLLS: Record<string, string> = {
-  "screens.css .chat-rail": "chat's rail",
+  "chatlet-frame.css .chat-rooms-scroll": "chat's Rooms panel, slid in or pinned",
   "screens.css .chat-scroller": "a room's transcript",
   "screens.css .chat-thread-body": "an open thread",
   "screens.css .chat-list-body": "the mention feed and Search chat",

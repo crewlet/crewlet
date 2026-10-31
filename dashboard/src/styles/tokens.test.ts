@@ -94,6 +94,20 @@ function sheets(): { name: string; text: string }[] {
   return [...ours(), ...theirs];
 }
 
+/**
+ * The kit's own sheet, which `main.tsx` imports whole (the design system's
+ * single-sheet build, `vite.config.ts`'s DESIGN_SYSTEM_SHEET), read for what
+ * it DECLARES only: a scale the kit sets on the root for a family of its parts
+ * (the chat transcript's `--crewlet-chat-*`) is one our sheets line up with.
+ * What it reads is the kit's own business and its own suite's.
+ */
+function kitSheet(): { name: string; text: string } {
+  return {
+    name: "@crewlethq/ui/styles.css",
+    text: readFileSync(require_.resolve("@crewlethq/ui/styles.css"), "utf8"),
+  };
+}
+
 /** The names [SCRIPT_DECLARED] covers. */
 function scriptDeclared(): string[] {
   return SCRIPT_DECLARED.map((d) => d.name);
@@ -136,9 +150,10 @@ export function declaresPalette(all: { name: string; text: string }[]): string[]
 export function undeclared(
   all: { name: string; text: string }[],
   scripted: string[] = [],
+  declaresOnly: { name: string; text: string }[] = [],
 ): string[] {
   const declared = new Set<string>(scripted);
-  for (const { text } of all) {
+  for (const { text } of [...all, ...declaresOnly]) {
     for (const m of text.matchAll(/^\s*(--[a-zA-Z0-9_-]+)\s*:/gm)) declared.add(m[1]!);
   }
   const missing: string[] = [];
@@ -157,7 +172,7 @@ export function undeclared(
 
 describe("the token namespace", () => {
   test("every var() with no fallback names a property something declares", () => {
-    expect(undeclared(sheets(), scriptDeclared())).toEqual([]);
+    expect(undeclared(sheets(), scriptDeclared(), [kitSheet()])).toEqual([]);
   });
 
   // A SCRIPT'S DECLARATION IS A CLAIM ABOUT THE SCRIPT, so it is read there:

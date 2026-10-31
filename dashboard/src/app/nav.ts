@@ -106,7 +106,7 @@ export type ServicesRun = Readonly<Record<Service, boolean>>;
 
 /**
  * How a workspace draws its sections: `tabs` in the page header, a `column`
- * of them beside the screen (Settings), a `rail`, or `none`, where the
+ * of them beside the screen (Settings), a `panel`, or `none`, where the
  * workspace's own screens lead to its sections (Home, Inbox, and Doclet,
  * whose landing links
  * its two sections under "For the agents").
@@ -116,16 +116,17 @@ export type ServicesRun = Readonly<Record<Service, boolean>>;
  * draws its own lenses, so the bar reads one way in either scope and Worklet
  * keeps no row of tabs of its own.
  *
- * `rail` is Chatlet's, whose SCREEN draws its sections at the head of the list
- * of its objects, the rooms (`routes/chatlet/Chat.tsx`), from this table. The
- * frame draws nothing for a rail, neither a strip nor a column, because the
- * tabs are drawn on a section's own page and never on an object's, and a room
- * is the object page a chat reader spends their time on. It is not `none`
- * because the screen that draws it reads the renderer: Chatlet's rail is drawn
- * from the row that says `rail`, every section of it, and a `none` row says
- * no frame or screen owes it a strip.
+ * `panel` is Chatlet's, whose SCREEN draws its sections at the head of the
+ * list of its objects, the rooms, in its Rooms panel
+ * (`routes/chatlet/RoomsPanel.tsx`), from this table. The frame draws nothing
+ * for a panel, neither a strip nor a column, because the tabs are drawn on a
+ * section's own page and never on an object's, and a room is the object page a
+ * chat reader spends their time on. It is not `none` because the screen that
+ * draws it reads the renderer: Chatlet's panel is drawn from the row that says
+ * `panel`, every section of it marked as a tab, and a `none` row says no frame
+ * or screen owes it a strip.
  */
-export type SectionRenderer = "tabs" | "lenses" | "column" | "rail" | "none";
+export type SectionRenderer = "tabs" | "lenses" | "column" | "panel" | "none";
 
 /**
  * Where a workspace's row sits in the sidebar: the unlabelled run at the top
@@ -707,14 +708,14 @@ export const WORKSPACES: WorkspaceRow[] = [
     // work, then the talking, then what the talking produced (Doclet and
     // Artifacts).
     //
-    // A RAIL, and the screen draws it. Chatlet's rooms are its own object list,
-    // drawn beside the transcript because they carry unread counts, mute
-    // state and a preview that no tab can hold — and a room is an OBJECT
-    // page, where the header draws no section tabs, so tabs would leave the
-    // mention feed two presses from every room. The two lists that are not a
-    // room sit at the head of the rail instead, drawn from the sections
-    // below: the landing's label heads the rooms, and every other section is
-    // a link under the name it has here.
+    // A PANEL, and the screen draws it. Chatlet's rooms are its own object
+    // list, drawn in its Rooms panel because they carry unread counts, mute
+    // and star state that no tab can hold, and a room is an OBJECT page,
+    // where the header draws no section tabs. The views that are not a room
+    // head the panel, drawn from the sections below marked as tabs; the rest
+    // (search, browse, a new message) are reached from the top bar and the
+    // panel's foot, and every one is named here, once, for the trail, the
+    // tab title and the palette.
     key: "chatlet",
     label: "Chatlet",
     icon: "message-square",
@@ -724,7 +725,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     // THE LETTER OF CHATLET NO OTHER ROW HOLDS: `g c` is Company's Principles.
     chord: "t",
     place: "workspace",
-    renderer: "rail",
+    renderer: "panel",
     // THE CHATLET APP'S, every section and every room: each reads somebody's
     // rooms as the seat the session holds, so the frame draws its one refusal
     // in place of every chat page for a reader without it. What the screen
@@ -741,14 +742,36 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Rooms",
         icon: "hash",
         path: ["chatlet"],
-        hint: "Your rooms, newest activity first",
+        hint: "Your rooms and conversations, newest activity first",
       },
       {
-        key: "mentions",
-        label: "Mentions",
+        key: "activity",
+        label: "Activity",
         icon: "bell",
-        path: ["chatlet", "mentions"],
-        hint: "Every message that named you, kept here since nothing is sent to you",
+        path: ["chatlet", "activity"],
+        hint: "Every message that named you, every reply in a thread you follow, and reactions to what you said",
+        keywords: ["mentions"],
+      },
+      {
+        key: "threads",
+        label: "Threads",
+        icon: "messages-square",
+        path: ["chatlet", "threads"],
+        hint: "Every thread you follow, newest reply first",
+      },
+      {
+        key: "drafts",
+        label: "Drafts and sent",
+        icon: "send",
+        path: ["chatlet", "drafts"],
+        hint: "What you have not sent yet, and what you sent",
+      },
+      {
+        key: "saved",
+        label: "Saved",
+        icon: "bookmark",
+        path: ["chatlet", "saved"],
+        hint: "Messages you saved for later",
       },
       {
         key: "search",
@@ -756,6 +779,25 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "search",
         path: ["chatlet", "search"],
         hint: "Rank what has been said in every room you can read",
+        tab: false,
+      },
+      {
+        key: "browse",
+        label: "Browse rooms",
+        icon: "compass",
+        path: ["chatlet", "browse"],
+        hint: "Every room you can read, to join or open",
+        keywords: ["channels", "join"],
+        tab: false,
+      },
+      {
+        key: "new",
+        label: "New message",
+        icon: "square-pen",
+        path: ["chatlet", "new"],
+        hint: "Start a conversation with people or agents",
+        keywords: ["direct message", "dm"],
+        tab: false,
       },
     ],
   },
@@ -1196,7 +1238,13 @@ export const RESERVED_SEGMENTS: string[] = [
   "views",
   "history",
   "search",
-  "mentions",
+  // CHATLET'S VIEWS (`app/routes.ts`'s `CHAT_VIEWS`, "search" and "new"
+  // among the others' words).
+  "activity",
+  "threads",
+  "drafts",
+  "saved",
+  "browse",
   "asked-of-me",
   "asked-by-me",
   "unblocked",

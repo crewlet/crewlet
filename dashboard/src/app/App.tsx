@@ -53,6 +53,7 @@ import { AppAnnouncer } from "./announcer.tsx";
 import { parseHash, useNavigator, useRoute } from "./router.tsx";
 import {
   artifactSectionPath,
+  chatViewOf,
   newArtifactPath,
   resolve,
   type Resolved,
@@ -195,11 +196,18 @@ export function screenFor(route: Resolved): ReactNode {
     // writer that has forgotten what the last one wrote. The room itself is
     // keyed one level down, inside the screen.
     case "chatlet":
-      return <Chat channel={route.id ?? ""} />;
-    case "chatlet-mentions":
-      return <Chat view="mentions" />;
+      return <Chat id={route.id} />;
+    case "chatlet-activity":
+    case "chatlet-threads":
+    case "chatlet-drafts":
+    case "chatlet-saved":
     case "chatlet-search":
-      return <Chat view="search" />;
+    case "chatlet-browse":
+    case "chatlet-new":
+      // ONE SCREEN TOLD WHICH VIEW TO DRAW, never keyed on it: the frame
+      // above the views (the Rooms panel, the outbox, the cursor writer) is
+      // the tab's, as it is for a room.
+      return <Chat view={chatViewOf(route.screen) ?? undefined} />;
     case "live":
       return <LiveNow />;
     case "turns":

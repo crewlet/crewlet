@@ -37,8 +37,6 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { useMediaMatch } from "@crewlethq/ui";
-
 import { href, useNavigator } from "~/app/router.tsx";
 import { CHAT_VIEWS, type ChatView } from "~/app/routes.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
@@ -54,6 +52,7 @@ import type {
 
 import type { ReadCursors } from "./cursor.ts";
 import type { OutboxHandle } from "./outbox.ts";
+import type { ReaderCounts } from "./panelViews.ts";
 
 // ---------------------------------------------------------------------------
 // Places, panes and dialogs
@@ -240,14 +239,6 @@ export function paneAfter(pane: ChatPane | null, place: ChatPlace): ChatPane | n
 // The navigation every part of the screen moves through
 // ---------------------------------------------------------------------------
 
-/**
- * Under this window width Chatlet takes its narrow shape: the Rooms panel is
- * never docked, and a pane covers the conversation rather than sharing the
- * row. The pane's own step at 980px is a property of the chat area's width,
- * not the window's, and lives in the stylesheet as a container query.
- */
-export const NARROW_PX = 760;
-
 /** The Rooms panel: slid in over the conversation, or docked beside it. */
 export interface RoomsPanel {
   /** The sheet is slid in. Never true while docked. */
@@ -264,8 +255,13 @@ export interface RoomsPanel {
 export interface ChatNav {
   place: ChatPlace;
   pane: ChatPane | null;
-  /** A new place. Pushes, and keeps only the pane [paneAfter] keeps. */
-  go: (place: ChatPlace) => void;
+  /**
+   * A new place, keeping only the pane [paneAfter] keeps. Pushes; with
+   * `replace`, replaces the entry instead, for a place said differently
+   * rather than a place gone to (a search refined as it is typed, whose
+   * every prefix would otherwise be a step of Back).
+   */
+  go: (place: ChatPlace, opts?: { replace?: boolean | undefined }) => void;
   /** A room, optionally landing on one of its messages. */
   openRoom: (id: string, opts?: { message?: string | undefined }) => void;
   /**
@@ -285,7 +281,10 @@ export interface ChatNav {
   dialog: ChatDialog | null;
   openDialog: (dialog: ChatDialog) => void;
   closeDialog: () => void;
-  /** The window is narrower than [NARROW_PX]. */
+  /**
+   * The chat area is narrower than `app/layout.ts`'s `CHAT_NARROW`: the Rooms
+   * panel is never pinned, and a pane covers the conversation.
+   */
   narrow: boolean;
   rooms: RoomsPanel;
 }
@@ -352,22 +351,31 @@ export function resetDockForTest(): void {
  *
  * Held by the frame (`Chat.tsx`) and handed down through [ChatNavProvider]:
  * one value per render, so every control that reads it agrees on where the
- * reader is.
+ * reader is. `narrow` is the frame's measurement of the chat area's own
+ * width, never the window's: the app sidebar, a peek and the assistant's
+ * column take shares of the window no media query can see.
  */
-export function useChatNavigation(place: ChatPlace, pane: ChatPane | null): ChatNav {
+export function useChatNavigation(
+  place: ChatPlace,
+  pane: ChatPane | null,
+  narrow: boolean,
+): ChatNav {
   const router = useNavigator();
-  const narrow = useMediaMatch(`(width < ${NARROW_PX}px)`);
   const pinned = useSyncExternalStore(subscribeDocked, docked, () => false);
   const [sheet, setSheet] = useState(false);
   const [dialog, setDialog] = useState<ChatDialog | null>(null);
 
   const move = useCallback(
-    (next: ChatPlace, nextPane: ChatPane | null) =>
-      router.to(placePath(next), placeQuery(next, nextPane)),
+    (next: ChatPlace, nextPane: ChatPane | null, replace = false) =>
+      (replace ? router.replace : router.to)(placePath(next), placeQuery(next, nextPane)),
     [router],
   );
 
-  const go = useCallback((next: ChatPlace) => move(next, paneAfter(pane, next)), [move, pane]);
+  const go = useCallback(
+    (next: ChatPlace, opts?: { replace?: boolean | undefined }) =>
+      move(next, paneAfter(pane, next), opts?.replace === true),
+    [move, pane],
+  );
 
   const isDocked = pinned && !narrow;
   const rooms = useMemo<RoomsPanel>(
@@ -438,6 +446,12 @@ export interface ChatFrame {
    * press that did nothing.
    */
   markRead: (room: string, through?: LogPosition | null) => void;
+  /** The rooms the reader starred, from their own state. */
+  starred: ReadonlySet<string>;
+  /** Star a room, or take its star away. */
+  star: (room: string, on: boolean) => void;
+  /** What waits in the Rooms panel's views, or null before it is read. */
+  counts: ReaderCounts | null;
 }
 
 const ChatFrameContext = createContext<ChatFrame | null>(null);

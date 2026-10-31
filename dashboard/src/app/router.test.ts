@@ -49,7 +49,14 @@ import {
   turnHandleKey,
   turnSeatKey,
 } from "./crumbs.ts";
-import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from "./routes.ts";
+import {
+  CHAT_VIEWS,
+  CONTAINER_SHAPE,
+  ITEM_KEY_SHAPE,
+  KEY_SHAPE,
+  resolve,
+  resolves,
+} from "./routes.ts";
 import { ALL_PROJECTS, scopeAt } from "./scope.ts";
 import { segmentsOf } from "~/test/routes.ts";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
@@ -301,24 +308,27 @@ describe("the navigation grammar", () => {
     expect(sections).toBeGreaterThan(25);
   });
 
-  // A RAIL IS DRAWN FROM ITS ROW'S SECTIONS, every one of them, by the
-  // workspace's own screen (Chatlet's), so a row that says `rail` and declares
-  // none would draw an empty rail beside the screen's objects and nothing
-  // would say why.
-  test("a workspace drawn by a rail declares the sections it draws", () => {
-    const rails = WORKSPACES.filter((ws) => ws.renderer === "rail");
-    expect(rails.length).toBeGreaterThan(0);
-    for (const ws of rails) {
-      expect(ws.sections.length, `${ws.key} says rail and declares no section`).toBeGreaterThan(0);
+  // A PANEL IS DRAWN FROM ITS ROW'S SECTIONS, every one marked as a tab, by
+  // the workspace's own screen (Chatlet's), so a row that says `panel` and
+  // declares none would draw an empty panel beside the screen's objects and
+  // nothing would say why.
+  test("a workspace drawn by a panel declares the sections it draws", () => {
+    const panels = WORKSPACES.filter((ws) => ws.renderer === "panel");
+    expect(panels.length).toBeGreaterThan(0);
+    for (const ws of panels) {
+      expect(
+        ws.sections.filter((s) => s.tab !== false).length,
+        `${ws.key} says panel and declares no section it draws`,
+      ).toBeGreaterThan(1);
     }
   });
 
-  // CHATLET'S SECTIONS ARE DRAWN BY ITS SCREEN (`routes/chatlet/Chat.tsx`'s rail),
+  // CHATLET'S SECTIONS ARE DRAWN BY ITS SCREEN (`routes/chatlet/RoomsPanel.tsx`),
   // so the frame must draw neither a tab strip nor a column for them: either
-  // would be a second renderer of one section, two links to Mentions on one
+  // would be a second renderer of one section, two links to Activity on one
   // page. `App.test.tsx` holds the drawn page to one link each.
-  test("chat's sections are its rail's, and no frame renderer's", () => {
-    expect(workspaceRow("chatlet")?.renderer).toBe("rail");
+  test("chat's sections are its panel's, and no frame renderer's", () => {
+    expect(workspaceRow("chatlet")?.renderer).toBe("panel");
   });
 
   // A LOCK GOES WHERE THE CLOSED THING IS, by ONE rule: any one of a
@@ -393,8 +403,7 @@ describe("the navigation grammar", () => {
     // the session holds, and no other app — nor the overview — opens it.
     const CHAT_ONLY = [
       ["chatlet"],
-      ["chatlet", "mentions"],
-      ["chatlet", "search"],
+      ...CHAT_VIEWS.map((view) => ["chatlet", view]),
       ["chatlet", "88888888-8888-4888-8888-888888888888"],
     ];
     for (const path of CHAT_ONLY) {
@@ -710,13 +719,21 @@ describe("the resolver", () => {
   // name is the address a person guesses — read as a room, `#/chatlet/general`
   // would ask the engine for a room under an id nobody minted and draw its
   // refusal under a trail naming a room — so it is Not Found, and says how a
-  // room is reached. The two lists that are not a room keep their words.
+  // room is reached. The views that are not a room keep their words.
   test("a chat room is a uuid, and its name or a thread segment is Not Found", () => {
     expect(resolve(["chatlet"])).toMatchObject({ screen: "chatlet" });
     expect(resolve(["chatlet"])).not.toHaveProperty("id");
     expect(resolve(["chatlet", uuid])).toMatchObject({ screen: "chatlet", id: uuid });
-    expect(resolve(["chatlet", "mentions"])).toMatchObject({ screen: "chatlet-mentions" });
-    expect(resolve(["chatlet", "search"])).toMatchObject({ screen: "chatlet-search" });
+    for (const view of CHAT_VIEWS) {
+      expect(resolve(["chatlet", view]), view).toMatchObject({ screen: `chatlet-${view}` });
+      expect(resolve(["chatlet", view, uuid]).resolved, `${view}/{id}`).toBe(false);
+    }
+    // THE OLD MENTION FEED IS NO ADDRESS: it is Activity now, and a word that
+    // is not a view is read as a room's name.
+    expect(resolve(["chatlet", "mentions"]).resolved).toBe(false);
+    // AND EVERY VIEW'S WORD IS RESERVED, so the table that holds reserved
+    // words apart from minted keys holds these too.
+    expect(RESERVED_SEGMENTS).toEqual(expect.arrayContaining([...CHAT_VIEWS]));
     for (const path of [
       ["chatlet", "general"],
       ["chatlet", "#general"],
@@ -731,8 +748,6 @@ describe("the resolver", () => {
         /a room is opened from your rooms/,
       );
     }
-    expect(resolve(["chatlet", "mentions", uuid]).resolved).toBe(false);
-    expect(resolve(["chatlet", "search", "x"]).resolved).toBe(false);
   });
 
   test("a closed set refuses the obvious typo rather than drawing the list", () => {
@@ -758,7 +773,7 @@ describe("the breadcrumb", () => {
       ["company", "org", "teams", "Platform"],
       ["doclet", "pages", "0f0f0f0f-1111-4222-8333-444455556666"],
       ["chatlet"],
-      ["chatlet", "mentions"],
+      ["chatlet", "activity"],
       ["chatlet", "0f0f0f0f-1111-4222-8333-444455556666"],
       ["doclet", "new"],
       ["artifacts", "new", "sheet"],
@@ -953,7 +968,12 @@ describe("the breadcrumb", () => {
     expect(named.map((c) => c.label)).toEqual(["Chatlet", "#general"]);
     expect(named[1]?.mono, "a name is not an identifier").toBeFalsy();
     expect(crumbsFor(["chatlet"]).map((c) => c.label)).toEqual(["Chatlet"]);
-    expect(crumbsFor(["chatlet", "mentions"]).map((c) => c.label)).toEqual(["Chatlet", "Mentions"]);
+    // A VIEW IS THE ROW'S SECTION, under the row's own name for it.
+    expect(crumbsFor(["chatlet", "activity"]).map((c) => c.label)).toEqual(["Chatlet", "Activity"]);
+    expect(crumbsFor(["chatlet", "drafts"]).map((c) => c.label)).toEqual([
+      "Chatlet",
+      "Drafts and sent",
+    ]);
   });
 
   // A SEAT'S BADGE IN THE TRAIL IS THE ONE ITS PAGE DRAWS: an agent wears

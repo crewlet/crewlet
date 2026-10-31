@@ -155,6 +155,18 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "room's own refusal said once above the transcript, each control held by its own tool",
     suite: "routes/chatlet/Access.test.tsx",
   },
+  "routes/chatlet/Chat.tsx": {
+    why:
+      "the frame's one star for a room (mark_chat_read star and unstar), pressed from the " +
+      "room's More menu, held there with the browser's reason or the engine's cap",
+    suite: "routes/chatlet/TopBar.test.tsx",
+  },
+  "routes/chatlet/RoomActions.tsx": {
+    why:
+      "the room's More menu on the top bar: Leave (leave_channel), each held with its " +
+      "sentence beside Add people, the description, the topic and the star",
+    suite: "routes/chatlet/TopBar.test.tsx",
+  },
   "routes/chatlet/outbox.ts": {
     why:
       "a message said in a room or a thread, and its retry under the same operation key — " +

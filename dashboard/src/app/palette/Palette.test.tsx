@@ -380,14 +380,14 @@ describe("a destination's lock", () => {
   });
 
   // A SECTION IS LOCKED BY ITS WORKSPACE FIRST, as the frame refuses it: a
-  // reader who cannot open Chatlet cannot open its Mentions, and one who cannot
+  // reader who cannot open Chatlet cannot open its Activity, and one who cannot
   // open Doclet is told Doclet before Agent diaries' own Admin. Read
   // off a section's own list, every section of a workspace that names the
   // app — Worklet's, My work's, Chatlet's — was offered with no lock at all, and
   // the press opened onto the refusal. Mutation: lock by the section's own
-  // grants alone and the Mentions and Asked of me rows go red.
+  // grants alone and the Activity and Asked of me rows go red.
   test.each([
-    { term: "mentions", label: /^Mentions$/, viewer: WITHOUT_CHATLET, needs: "Chatlet" },
+    { term: "activity", label: /^Activity$/, viewer: WITHOUT_CHATLET, needs: "Chatlet" },
     { term: "search chat", label: /^Search chat$/, viewer: WITHOUT_CHATLET, needs: "Chatlet" },
     {
       term: "asked of me",
@@ -410,8 +410,8 @@ describe("a destination's lock", () => {
 
   test("a section whose workspace and own access the reader holds is not locked", async () => {
     const p = mount({ viewer: { ...WITHOUT_CHATLET, grants: ["chatlet"], chatlet: true } });
-    await p.type("mentions");
-    expect(p.row(/^Mentions$/).textContent).not.toMatch(/needs/);
+    await p.type("activity");
+    expect(p.row(/^Activity$/).textContent).not.toMatch(/needs/);
   });
 });
 

@@ -11,8 +11,8 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { isDirect } from "~/lib/chatRooms.ts";
-import type { ChatChannel, ChatKind } from "~/protocol/index.ts";
+import { isDirect, roomWaiting } from "~/lib/chatRooms.ts";
+import type { ChatChannel, ChatChannelSummary, ChatKind } from "~/protocol/index.ts";
 
 /**
  * Whether this build can classify the room at all.
@@ -50,7 +50,9 @@ export function roomMark(kind: ChatKind): GlyphName {
     case "public":
       return "hash";
     case "private":
-      return "shield";
+      // THE LOCK, which is what a private room is in every list a reader
+      // meets one in: closed to whoever was not added.
+      return "lock";
     case "unit":
       return "network";
     case "dm":
@@ -99,7 +101,10 @@ export interface TitleOptions {
  * title carrying it would put the sigil into a page title, a browser tab and
  * a search result where it reads as punctuation somebody typed.
  */
-export function roomTitle(channel: ChatChannel, opts: TitleOptions = {}): string {
+export function roomTitle(
+  channel: Pick<ChatChannel, "id" | "kind" | "name">,
+  opts: TitleOptions = {},
+): string {
   const { participants = [], viewer = "", nameOf } = opts;
   if (!isDirect(channel.kind)) {
     // A named room is its name. The name is IMMUTABLE in the value layer —
@@ -128,4 +133,46 @@ export function roomTitle(channel: ChatChannel, opts: TitleOptions = {}): string
 export function unreadLabel(unread: number, capped: boolean | undefined): string {
   if (unread <= 0) return "";
   return capped ? "99+" : String(unread);
+}
+
+/**
+ * The Rooms panel's sections, in the order it draws them: the rooms the
+ * reader starred, the named channels, the team rooms the org chart keeps,
+ * and the conversations named by who is in them.
+ */
+export type RoomSection = "starred" | "channels" | "teams" | "direct";
+
+export const ROOM_SECTIONS: readonly RoomSection[] = ["starred", "channels", "teams", "direct"];
+
+/**
+ * Which section a room is listed under.
+ *
+ * A STARRED ROOM IS LISTED ONCE, under Starred, whatever its kind: a room in
+ * two sections is two rows with one badge each, and the reader counts what
+ * waits for them twice. A kind this build cannot classify is a channel, the
+ * section that promises the least about who is in it.
+ */
+export function roomSection(kind: ChatKind, starred: boolean): RoomSection {
+  if (starred) return "starred";
+  if (isDirect(kind)) return "direct";
+  if (kind === "unit") return "teams";
+  return "channels";
+}
+
+/**
+ * What waits on the reader in a room, as the accent badge counts it
+ * (`lib/chatRooms.ts`'s `roomWaiting`, the sidebar's rule), or nothing where
+ * nothing was measured: a rail with no read state behind it zeroes every
+ * count, and a zero drawn from that is a claim that nothing waits.
+ */
+export function waitingIn(room: ChatChannelSummary, measured: boolean): number {
+  return measured ? roomWaiting(room) : 0;
+}
+
+/**
+ * Whether a room has unread messages the reader has not silenced, which is
+ * what sets its row in the primary ink and the medium weight.
+ */
+export function unreadIn(room: ChatChannelSummary, measured: boolean): boolean {
+  return measured && !room.muted && room.unread > 0;
 }

@@ -438,11 +438,12 @@ list a section of Settings.
   ([Worklet's scope](#worklets-scope-is-named-and-switched-in-the-trail)).
 - A **section** is a **path segment** inside a workspace, drawn by one
   renderer: `tabs` in the page header, `lenses` beside Worklet's scope in the
-  trail, `column` for Settings, or `rail` for Chatlet, whose screen draws them
-  beside its rooms. Chatlet draws no tabs because the header draws them on a
-  section's own page and never on an object's, and a room is the object page a
-  chat reader spends their time on, so Mentions and Search sit at the head of
-  the rail, drawn from the same table, and the frame draws nothing for them.
+  trail, `column` for Settings, or `panel` for Chatlet, whose screen draws them
+  at the head of its Rooms panel. Chatlet draws no tabs because the header
+  draws them on a section's own page and never on an object's, and a room is
+  the object page a chat reader spends their time on, so Activity, Threads,
+  Drafts and sent and Saved head the panel, drawn from the same table, and the
+  frame draws nothing for them.
 - An **object tab** is a `tab=` query on an object's own page (a seat's
   Overview, Work, Turns…), bound to 1–9.
 
@@ -1238,10 +1239,15 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
-| `#/chatlet` | **Chatlet**: the company's own rooms, with the rail of what you are in *(the whole of Chatlet needs Chatlet access)*. Every chat page is read as the seat your session holds: a credential acting as no seat (a deployment's own token, or a service account bound to nobody) reads nothing here, not even a public room | `dm=` (a seat's handle, from its page or peek: opens New direct message with that seat chosen, once, then leaves the address) |
-| `#/chatlet/mentions` | **Chatlet › Mentions**: every message that named you, across every room. The whole away story: the engine sends no email, no push and no SMS | |
-| `#/chatlet/search` | **Chatlet › Search chat**: ranked over every room you may READ, which is wider than your rail | `q=` · `in=` (narrowed to one room) |
-| `#/chatlet/{id}` | **Room**: the transcript, who is here, and the composer | `thread=` (which thread is open in it, one level deep) |
+| `#/chatlet` | **Chatlet**: the company's own rooms and conversations, under a top bar (Menu, the Rooms and Messages switchers, and the open room's actions), with the Rooms panel slid in from Menu or pinned beside the conversation *(the whole of Chatlet needs Chatlet access)*. Every chat page is read as the seat your session holds: a credential acting as no seat (a deployment's own token, or a service account bound to nobody) reads nothing here, not even a public room | `dm=` (a seat's handle, from its page or peek: replaced at once by `#/chatlet/new?to={handle}`) · `pane=` (on every Chatlet address: see the room) |
+| `#/chatlet/activity` | **Chatlet › Activity**: every message that named you, every reply in a thread you follow and every reaction to what you said, across every room. The whole away story: the engine sends no email, no push and no SMS | |
+| `#/chatlet/threads` | **Chatlet › Threads**: every thread you follow, newest reply first | |
+| `#/chatlet/drafts` | **Chatlet › Drafts and sent**: what you have not sent yet, in every room and thread, and what you sent | |
+| `#/chatlet/saved` | **Chatlet › Saved**: the messages you saved for later | |
+| `#/chatlet/search` | **Chatlet › Search chat**: ranked over every room you may READ, which is wider than your own rooms | `q=` · `in=` (narrowed to one room) |
+| `#/chatlet/browse` | **Chatlet › Browse rooms**: every room you can read, to join or open | |
+| `#/chatlet/new` | **Chatlet › New message**: a conversation with the people or agents you name, the one you already share with them if there is one | `to=` (handles, comma-separated) |
+| `#/chatlet/{id}` | **Room**: the transcript, who is here, and the composer | `message=` (the message a link landed on, flashed, then left) · `pane=thread:{room}:{root}` · `pane=details:{room}:about\|members\|shared\|notifications` · `pane=profile:{handle}` · `pane=catchup:{room}` · `pane=summarize:{room}` (ONE pane at a time, beside the conversation or over it; any place may carry one) |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
@@ -4762,7 +4768,7 @@ a tool arrives in it with the control that sends it. The controls
 | Edit, then Save | A chat message of your own | `edit_message{channel, message_id, body}` — the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
 | Delete (pressed twice) | A chat message of your own, and anybody's to an admin | `delete_message{channel, message_id}` — the author's, or an admin's moderation, and the tombstone records who. Reaches past membership and past an archive; held on a room this build cannot classify, and while another message's delete is out |
 | A reaction | A chat message's reaction chips | `react_to_message{channel, message_id, emoji, remove}` — quiet, no toast; a refusal is said above the transcript. Held outside a private room you are not in, as a post is; an archived room takes it |
-| Join · Leave | A chat room's header; Join in **Find a room** | `join_channel{channel}` / `leave_channel{channel}` — refused on a unit's room and a direct conversation, so neither offers it |
+| Join · Leave | Join on a room you are not in and in **Browse rooms**; Leave in the room's **More** | `join_channel{channel}` / `leave_channel{channel}`, refused on a unit's room and a direct conversation, so neither offers it |
 | Mute · Unmute | A chat room's header | `mark_chat_read{mute}` / `{unmute}` — this room alone, every other room's state kept |
 | New room | The chat rail | `create_channel{channel, kind, topic?, members?}` |
 | New direct message | The chat rail | `open_dm{to}` — a direct conversation's identity is who is in it, so opening one again reaches the same room |
@@ -7395,7 +7401,7 @@ table the socket's query errors use.
 
 ---
 
-## Chatlet: a rail, a room, and where you have read to
+## Chatlet: a top bar, a Rooms panel, a room, and where you have read to
 
 The company's own chat (`chat.backend: chatlet`), read AS A SEAT: the engine
 answers every chat question for the seat the session's principal holds, so the
@@ -7405,19 +7411,53 @@ is a vendor's or none there is no Chatlet: its row is hidden and its addresses
 say where the company talks, as every service the company does not run is
 (see [The sidebar](#the-sidebar)).
 
-- **The rail is the row's renderer** (`rail`, `app/nav.ts`). It starts with the
-  three gestures that start a conversation — **New room**, **Message** (a direct
-  conversation) and **Find a room**, the first two held as the change their
-  dialog makes is held (a reader the engine opens no room for is told so on the
-  button) — then the row's other sections as links (Mentions, Search chat), then
-  the seat's own **Rooms**, newest activity first: the room's name (`#` for a
-  room, the people for a direct conversation), the last thing said, how long
-  ago, `muted` and `following` where they hold, and the unread count. The count
-  is the ENGINE'S, against the seat's own read cursor, and it stops at `99+`
-  only where the answer says it stopped counting; when the cursors could not be
-  read the badges are absent and a callout says so, because a zero would claim
-  the reader is caught up. A rail past its bound says so too: it is sorted by
-  activity, which cannot be paged.
+Chatlet runs edge to edge under the page bar (the shell's flush fill), and
+every place in it is an address: a room by its id, or one of the views beside
+the rooms, with at most ONE pane named by the `pane=` parameter (see the
+address table above), so Back closes a pane, a reload keeps it and a thread is
+a link from any place (`routes/chatlet/nav.tsx`).
+
+- **The top bar** holds, on one line and at one height: **Menu**, which slides
+  the Rooms panel in from the start edge of the chat area (or hides it while it
+  is pinned), its badge the sidebar's own figure of what waits on you; the
+  **Rooms** switcher, named after the open room, listing your rooms (Starred,
+  Rooms, Team rooms) with Browse rooms and New room at its foot; the
+  **Messages** switcher, named after the open conversation or Direct messages,
+  listing your conversations and then the people and agents to start one with,
+  with New message at its foot; and the open room's actions: its members (three
+  faces and the count, which open the details' Members), Search this room, the
+  notification choice (Every message, Mentions, the default, or Muted), and
+  **More**, which leads with **Catch up with Ask Crewlet** (or **Summarize**,
+  with nothing unread) and then the details, what was shared, Add people, the
+  description and topic, the star, Mark as read, Copy link and Leave. Each is
+  offered only where the engine would take it, by the room's one reading of its
+  rules. Ask Crewlet itself is the page bar's button, so the bar has none.
+  While the panel is pinned it lists what the switchers do, so they are not
+  drawn; a narrow bar drops Menu's word, and under 480px the search and the
+  notification choice move into More.
+- **The Rooms panel is the row's renderer** (`panel`, `app/nav.ts`): a find row
+  (the filter, a menu for unread rooms only and the order, and the pin), the
+  row's views (Activity, with the accent badge of what waits there; Threads;
+  Drafts and sent; Saved), then the rooms in four collapsible sections
+  (Starred, Channels, Team rooms, Direct messages) in dense rows: a room with
+  unread messages in the primary ink and the medium weight, a muted one dimmed
+  with a bell, one holding a draft with a pencil, and the accent badge of what
+  waits on you in it (in a conversation, every unread message; elsewhere, the
+  unread messages that name you or the whole room). A collapsed section still
+  shows the open room and the unread ones. The counts are the ENGINE'S, and
+  when the cursors could not be read the badges are absent and the panel says
+  so, because a zero would claim the reader is caught up; a list past its bound
+  says so too. Browse rooms and New message stand at its foot. Pinned (a
+  per-browser choice), it is a column beside the conversation; on a chat area
+  under 760px it is never pinned.
+- **Panes** stand beside the conversation, and lie over it on a screen under
+  980px (a whole narrow chat area under 760px); the widths are
+  `app/layout.ts`'s, which keep the transcript to its floor at every step.
+- **Keys** (the legend's "In Chatlet"): `Alt+Up` and `Alt+Down` move between
+  rooms, with `Shift` between rooms with unread messages; `Mod+F` searches the
+  open room; `Escape` marks the open room read when nothing else is listening
+  for it (a pane, the slid-in panel, a peek, a menu); `Mod+/` lists Chatlet's
+  keys.
 - **A room** (`#/chatlet/{id}`) is the transcript, paged back on request, who is
   looking at it, typing in it or working on a reply in it, and the composer
   (`Mod+Enter` sends; `Enter` is a new line). A message's links are drawn under
@@ -7435,10 +7475,8 @@ say where the company talks, as every service the company does not run is
   you — archived, a private room you are outside, a kind this build cannot
   classify — closes the box and says why in it; a browser that cannot send
   (offline, a reader the engine posts nothing for) leaves the box open and holds
-  Send, with the sentence written beside it, as every composer does. Its header
-  holds Join or Leave, Mute and the settings dialog, whose opener is held where
-  the engine would refuse its Save — outside a private room, on a kind this
-  build cannot classify — and not on an archived room, which keeps its topic.
+  Send, with the sentence written beside it, as every composer does. Its
+  membership, notification and settings gestures are the top bar's (above).
   Each of a message's changes (Edit, Delete, a reaction) is held by its own
   tool, because the engine serves each to a person on its own — and by that
   tool's own rule in the room rather than the composer's: an archive closes a
@@ -7464,22 +7502,24 @@ say where the company talks, as every service the company does not run is
   until the answer is a decision: it landed, and the transcript brings it, or it
   was refused, and the row says why. It waits there while you look at another
   room, and is there when you come back.
-- **A thread** is `thread=` on its room, opened beside the transcript, or
-  under it on a screen too narrow for both (see [The frame](#the-frame)). It
-  is one level deep, so a reply offers no thread of its own.
-- **Mentions** (`#/chatlet/mentions`) is every message that named your seat, in
-  every room: the whole away story, because the engine sends no email, push or
-  SMS. Each row is the moment you were named and is dated by it. An edit that
-  still names you leaves the row where it was, with the new words and marked
-  edited; one that names you anew puts it at the top; a delete takes it away.
+- **A thread** is a pane (`pane=thread:{room}:{root}`), opened beside the
+  conversation or over it. It is one level deep, so a reply offers no thread
+  of its own.
+- **Activity** (`#/chatlet/activity`) is every message that named your seat, in
+  every room, every reply in a thread you follow and every reaction to what you
+  said: the whole away story, because the engine sends no email, push or SMS.
+  Each row is the moment it happened and is dated by it. An edit that still
+  names you leaves the row where it was, with the new words and marked edited;
+  one that names you anew puts it at the top; a delete takes it away.
 - **Search chat** (`#/chatlet/search`, `q=` and `in=`) ranks what was said in every
-  room your seat may READ — wider than your rail — by keyword alone: chat is not
+  room your seat may READ (wider than your own rooms) by keyword alone: chat is not
   in the vector corpus
   ([ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
   A phrase past the engine's bound is not sent, and the screen says why. It
   asks for the engine's own page — forty hits, `contract/chat.ts`'s
   `CHAT_SEARCH_PAGE`, the engine's `search.MaxChatSearchLimit` — and so does
-  **Find a room**, which offers the rooms those hits are in: the ranking has no
+  **Browse rooms** while it is narrowed by a search, offering the rooms those
+  hits are in: the ranking has no
   next page, so a full page says there may be more matches and how to narrow
   the search, rather than reading as everything that matched.
 - **On Home**, Chatlet offers two widgets for the reader's board

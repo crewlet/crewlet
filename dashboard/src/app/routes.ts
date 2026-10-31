@@ -74,6 +74,23 @@ export const CHAT_VIEWS = [
   "new",
 ] as const;
 export type ChatView = (typeof CHAT_VIEWS)[number];
+
+/**
+ * A view's screen: the chat row's section, named `chatlet-{view}` as every
+ * other section's screen is named after its row, so the assistant's page
+ * context and link table, the lazy chunks and the trail name it one way.
+ */
+export type ChatViewScreen = `chatlet-${ChatView}`;
+
+/** The screen a view is drawn as. */
+export function chatViewScreen(view: ChatView): ChatViewScreen {
+  return `chatlet-${view}`;
+}
+
+/** The view a screen draws, or null for a screen that is no Chatlet view. */
+export function chatViewOf(screen: string): ChatView | null {
+  return CHAT_VIEWS.find((view) => screen === `chatlet-${view}`) ?? null;
+}
 /**
  * A Doclet container key: whatever the engine keeps, which is UPPERCASED on
  * every path that writes one (`doclet.Store` uppercases the key a page is
@@ -226,9 +243,10 @@ export type FramedScreen =
   | { screen: "schedules"; scope: string[] }
   | { screen: "integrations"; kind?: string }
   | { screen: "budgets" }
+  /** A room by its id, or neither. */
   | { screen: "chatlet"; id?: string }
-  | { screen: "chatlet-mentions" }
-  | { screen: "chatlet-search" }
+  /** One of the views beside the rooms. */
+  | { screen: ChatViewScreen }
   | { screen: "live" }
   | { screen: "turns" }
   | { screen: "turn"; id: string }
@@ -488,11 +506,12 @@ function org(rest: string[], screen: Make, under: Under): Route {
 function chatlet(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   if (first === undefined) return screen({ screen: "chatlet" });
-  // THE TWO SECTIONS THAT ARE NOT A ROOM are reserved words, and a tail under
-  // either is nothing: neither list has an object of its own to address.
-  if (first === "mentions" || first === "search") {
+  // THE VIEWS THAT ARE NOT A ROOM are reserved words ([CHAT_VIEWS]), and a
+  // tail under one is nothing: no view has an object of its own to address.
+  const view = CHAT_VIEWS.find((name) => name === first);
+  if (view) {
     if (tail.length) return missing("chatlet", under("Chatlet"));
-    return screen({ screen: first === "mentions" ? "chatlet-mentions" : "chatlet-search" });
+    return screen({ screen: chatViewScreen(view) });
   }
   // THE ROOM IS THE ONLY THING UNDER `chatlet` WITH AN ID — the uuid the engine
   // minted for it, a direct conversation's derived from who is in it — and

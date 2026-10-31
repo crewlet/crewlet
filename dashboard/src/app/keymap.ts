@@ -53,6 +53,7 @@ export type KeyScope =
   | "canvas"
   | "draft"
   | "compose"
+  | "chat"
   | "create"
   | "charter"
   | "search"
@@ -70,6 +71,7 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "canvas", title: "On a chart" },
   { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
   { scope: "compose", title: "Writing a reply or a message" },
+  { scope: "chat", title: "In Chatlet" },
   { scope: "create", title: "Making a new artifact" },
   { scope: "charter", title: "Writing the company's principles" },
   { scope: "search", title: "In search" },
@@ -406,6 +408,60 @@ const COMPOSE: KeyRow[] = [
 ];
 
 /**
+ * CHATLET'S KEYS, bound by its screen (`routes/chatlet/shortcuts.ts`) for as
+ * long as it is open. Moving between rooms fires from inside the message box
+ * too, since a reader answering in one room is who moves to the next; marking
+ * a room read does not, because Escape in a box is the box's own.
+ */
+const CHAT: KeyRow[] = [
+  {
+    id: "chat.room",
+    scope: "chat",
+    presses: [
+      { key: "arrowup", alt: true, shift: false },
+      { key: "arrowdown", alt: true, shift: false },
+    ],
+    does: "Previous or next room",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chat.unread",
+    scope: "chat",
+    presses: [
+      { key: "arrowup", alt: true, shift: true },
+      { key: "arrowdown", alt: true, shift: true },
+    ],
+    does: "Previous or next room with unread messages",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chat.search",
+    scope: "chat",
+    presses: [{ key: "f", mod: true, shift: false }],
+    does: "Search the open room, or all of Chatlet",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chat.read",
+    scope: "chat",
+    presses: [{ key: "escape" }],
+    does: "Mark the open room as read",
+    by: "dashboard",
+  },
+  {
+    id: "chat.keys",
+    scope: "chat",
+    presses: [{ key: "/", mod: true }],
+    does: "Show Chatlet's keys",
+    by: "dashboard",
+    whileTyping: true,
+  },
+];
+
+/**
  * A CREATE PAGE'S KEY, bound by the shared frame every kind's create page
  * stands in (`routes/artifacts/new/CreateShell.tsx`) to the page's one primary
  * action, so every kind starts with the same press and none binds its own. It
@@ -452,7 +508,9 @@ const CHARTER: KeyRow[] = [
 ];
 
 /**
- * Scopes never live on one screen, which may therefore share a press: a
+ * Scopes whose rows never answer one press together, which may therefore
+ * share it: two never live on one screen, or one whose row stands aside
+ * while the other is live (Chatlet's Escape while a peek is open). A
  * reply's composer is the Inbox's and a task's, and a create page is
  * neither, so Send and a create page's main action are both the command key
  * with Enter. Company › Principles holds no composer, no create page and no
@@ -460,6 +518,13 @@ const CHARTER: KeyRow[] = [
  */
 export const SCOPES_APART: readonly (readonly [KeyScope, KeyScope])[] = [
   ["compose", "create"],
+  // CHATLET DRAWS NO CREATE PAGE AND NO CHARTER. A PEEK can be open over it
+  // (any address may carry one), and Chatlet's Escape is bound only while
+  // none is (`routes/chatlet/shortcuts.ts`), so the two never answer one
+  // press: Escape with a peek open closes the peek and marks nothing read.
+  ["chat", "peek"],
+  ["chat", "create"],
+  ["chat", "charter"],
   ["charter", "compose"],
   ["charter", "create"],
   ["charter", "peek"],
@@ -553,6 +618,7 @@ export const KEYMAP: readonly KeyRow[] = [
   ...FRAME,
   ...PAGE,
   ...COMPOSE,
+  ...CHAT,
   ...CREATE,
   ...CHARTER,
   ...SEARCH,

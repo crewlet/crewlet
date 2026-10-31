@@ -737,11 +737,11 @@ describe("a section, for a reader holding none of its grants", () => {
   });
 });
 
-// CHATLET, AS A PERSON. Each of its three pages is one component told which list
-// to draw, so a dispatch that swapped two of them draws the wrong list under a
-// correct trail and title — and "rendered something" passes that. Its
-// sections are drawn by ONE renderer, the screen's rail: a frame strip beside
-// it would be a second set of links to the same places.
+// CHATLET, AS A PERSON. Each of its places is one screen told which view to
+// draw, so a dispatch that swapped two of them draws the wrong view under a
+// correct trail and title, and "rendered something" passes that. Its sections
+// are drawn by ONE renderer, the screen's Rooms panel: a frame strip beside it
+// would be a second set of links to the same places.
 describe("chat, for a person", () => {
   const served = {
     read_level: "session",
@@ -804,33 +804,43 @@ describe("chat, for a person", () => {
     return view.container.querySelectorAll(`a[href="${buildHash(path)}"]`).length;
   }
 
-  test.each(["#/chatlet", "#/chatlet/mentions", "#/chatlet/search"])(
-    "%s draws each chat list once, and no section strip",
+  /** The chat row's views the Rooms panel draws, by the row's own table. */
+  const panelViews = () =>
+    (WORKSPACES.find((ws) => ws.key === "chatlet")?.sections ?? []).filter(
+      (s) => s.tab !== false && s.path.length > 1,
+    );
+
+  test.each(["#/chatlet", "#/chatlet/activity", "#/chatlet/search"])(
+    "%s draws each chat view once, in the Rooms panel, and no section strip",
     async (hash) => {
       const { view } = mountChat(hash);
-      await screen.findByRole("navigation", { name: "Your rooms" });
-      expect(linksTo(view, ["chatlet", "mentions"]), "links to Mentions").toBe(1);
-      expect(linksTo(view, ["chatlet", "search"]), "links to Search chat").toBe(1);
+      fireEvent.click(await screen.findByRole("button", { name: /^Menu/ }));
+      const panel = await screen.findByRole("dialog", { name: "Rooms" });
+      // NOT VACUOUS: the row declares the views the panel draws.
+      expect(panelViews().length).toBeGreaterThan(0);
+      for (const section of panelViews()) {
+        expect(linksTo(view, section.path), `links to ${section.label}`).toBe(1);
+        expect(within(panel).getByRole("link", { name: section.label })).toBeDefined();
+      }
       expect(view.container.querySelector(".section-tabs")).toBeNull();
       expect(view.container.querySelector(".crewlet-section-frame__nav")).toBeNull();
     },
   );
 
-  test("#/chatlet/mentions draws the mention feed", async () => {
-    const { asked } = mountChat("#/chatlet/mentions");
-    expect(await screen.findByText(/Where you were named/)).toBeDefined();
-    expect(asked).toContain("chat_mentions");
-    expect(screen.queryByRole("searchbox", { name: "Search the company's chat" })).toBeNull();
-  });
-
-  test("#/chatlet/search draws the search, and asks for no mentions", async () => {
-    const { asked } = mountChat("#/chatlet/search");
-    expect(
-      await screen.findByRole("searchbox", { name: "Search the company's chat" }),
-    ).toBeDefined();
-    expect(screen.queryByText(/Where you were named/)).toBeNull();
-    expect(asked).not.toContain("chat_mentions");
-  });
+  // EVERY VIEW IS ITS ROW'S SECTION, named in the trail as the row names it:
+  // a dispatch that drew another view under it would be named wrong.
+  test.each(["activity", "threads", "drafts", "saved", "search", "browse", "new"])(
+    "#/chatlet/%s is the row's section of that name",
+    async (view) => {
+      mountChat(`#/chatlet/${view}`);
+      const section = WORKSPACES.find((ws) => ws.key === "chatlet")?.sections.find(
+        (s) => s.key === view,
+      );
+      expect(section, view).toBeDefined();
+      const trail = await screen.findByRole("navigation", { name: "Breadcrumb" });
+      expect(within(trail).getByText(section!.label)).toBeDefined();
+    },
+  );
 });
 
 describe("live state reaches the screen", () => {

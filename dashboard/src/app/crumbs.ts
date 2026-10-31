@@ -36,7 +36,7 @@ import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { unitRoute } from "~/lib/seats.ts";
 import { SIDEBAR_GROUPS, ownedBy, workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
-import { ITEM_KEY_SHAPE, resolve, type SignInScreen } from "./routes.ts";
+import { ITEM_KEY_SHAPE, chatViewOf, resolve, type SignInScreen } from "./routes.ts";
 import { ALL_PROJECTS, LENS_LABELS, type ScopeAt } from "./scope.ts";
 
 export type Labels = Record<string, string>;
@@ -313,15 +313,20 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       // proportional face an unresolved id reads as something somebody called
       // a channel.
       //
-      // THE THREAD IS NOT A SEGMENT and so is not a crumb: it is `?thread=` on
-      // the room, which the trail deliberately ignores the way it ignores every
-      // other query — a pane open beside a room is not a place the reader has
-      // gone.
+      // A PANE IS NOT A SEGMENT and so is not a crumb: it is `?pane=` on the
+      // place, which the trail deliberately ignores the way it ignores every
+      // other query, since a pane open beside a room is not a place the
+      // reader has gone.
       return where.id ? inside("rooms", named(labels, where.id)) : [root(row, false)];
-    case "chatlet-mentions":
-      return sectionPage("mentions");
+    // A VIEW IS A SECTION OF THE ROW, named as the row names it (`nav.ts`).
+    case "chatlet-activity":
+    case "chatlet-threads":
+    case "chatlet-drafts":
+    case "chatlet-saved":
     case "chatlet-search":
-      return sectionPage("search");
+    case "chatlet-browse":
+    case "chatlet-new":
+      return sectionPage(chatViewOf(where.screen) ?? "");
     case "turns":
       return sectionPage("turns");
     case "turn": {
