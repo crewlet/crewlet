@@ -12,13 +12,12 @@
 import { EmptyState, Skeleton, Stack, Tag } from "@crewlethq/ui";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { changeLive, parseChangeRef, preconditionWord, refName } from "~/lib/code.ts";
+import { changeLive, parseChangeRef, preconditionWord, refName, repoPath } from "~/lib/code.ts";
 import { plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { CodeChangeDetail, CodePrecondition, CodeReadiness } from "~/protocol/index.ts";
 import { ChangeStateTag } from "./Changes.tsx";
-import { REPO_PARAM } from "./paths.ts";
 
 /**
  * How often an open peek reads its change again: a MINUTE, the listing's own
@@ -72,8 +71,7 @@ function ChangeReading({ change }: { change: CodeChangeDetail }) {
           {
             label: "Repository",
             value: change.repo,
-            path: ["code", "pushes"],
-            query: { [REPO_PARAM]: change.repo },
+            path: repoPath(change.repo),
           },
           {
             label: "Branches",

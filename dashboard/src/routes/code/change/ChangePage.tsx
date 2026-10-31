@@ -34,7 +34,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton } from "~/components/WriteButton.tsx";
-import { changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
+import { changeLive, changeRef, isRepoName, refName, repoPath } from "~/lib/code.ts";
 import { draftedRevisions, findingOf, forgetDrafts, readDrafts } from "~/lib/reviewDrafts.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -42,7 +42,6 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeVerdict } from "~/protocol/index.ts";
 import { ChangeStateTag } from "../Changes.tsx";
-import { REPO_PARAM } from "../paths.ts";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
 import { Commits, Provenance, Woke } from "./Facts.tsx";
@@ -138,8 +137,7 @@ function ChangeHeader({ change }: { change: CodeChangeDetail }) {
     {
       label: "Repository",
       value: change.repo,
-      path: ["code", "pushes"],
-      query: { [REPO_PARAM]: change.repo },
+      path: repoPath(change.repo),
     },
     {
       label: "Branches",

@@ -11728,3 +11728,138 @@ a.live-row:focus-visible {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* A REPOSITORY'S PAGE (`routes/code/repo/`). Its listings are plain ruled
+   tables and its file a column of numbered lines in the code face; nothing
+   here is a state, so nothing takes a hue. */
+.code-rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.code-rules > li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+.code-tree,
+.code-blame {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.code-tree caption {
+  text-align: start;
+  padding-block-end: var(--spacing-2);
+}
+
+.code-tree th {
+  text-align: start;
+  font-weight: inherit;
+  color: var(--color-text-secondary);
+}
+
+.code-tree th,
+.code-tree td {
+  padding: var(--spacing-1) var(--spacing-2);
+  border-block-end: 1px solid var(--color-border-default);
+}
+
+/* A FILE'S LINES: the number a button in its own track, the text in the
+   code face at the document's 13px, kept as git wrote it. A line too wide
+   scrolls the file, never the page. */
+.code-source {
+  overflow-x: auto;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-body);
+}
+
+.code-source__line {
+  display: grid;
+  grid-template-columns: 6ch max-content;
+  column-gap: var(--spacing-3);
+  padding-inline-end: var(--spacing-3);
+}
+
+/* A PICKED LINE IS RULED, not tinted, as a picked line of a diff is: a pick
+   is the reader's place, not the line's state. */
+.code-source__line[data-picked],
+.code-blame tr[data-picked] {
+  box-shadow: inset 2px 0 0 var(--color-border-strong);
+}
+
+.code-source__number {
+  padding: 0 var(--spacing-2) 0 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-tertiary);
+  font: inherit;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
+}
+
+.code-source__number:hover {
+  color: var(--color-text-primary);
+  text-decoration-line: underline;
+}
+
+.code-source__text {
+  white-space: pre;
+}
+
+.code-blame {
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-body);
+}
+
+.code-blame tr[data-run] td {
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-blame td {
+  padding: 0 var(--spacing-2);
+  vertical-align: top;
+}
+
+.code-blame__commit {
+  width: 18rem;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-blame__number {
+  width: 6ch;
+  text-align: right;
+}
+
+.code-blame__text {
+  white-space: pre;
+}
+
+.code-readme {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-block-start: var(--spacing-3);
+  border-block-start: 1px solid var(--color-border-default);
+}
+
+.code-readme__text {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

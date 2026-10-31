@@ -1276,7 +1276,8 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/code` | **Code › Changes**, Code's landing: the changes proposed to the company's repositories, a page at a time in the order of the engine's index its filters lead — each change's reference (`web!42`), title, state, readiness (a Meter of the preconditions met, titled by the engine's sentence of the first that is not), owner, work item, revisions, standing blockers and when it was opened — and above them the **Needs a person** band, the first five changes whose readiness waits on persons alone, with Show all. A row opens the change in the peek *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))* | `state=draft\|open\|closed\|merged\|all` (none is open; `all` only beside a repository, a work item, a reviewer or a need) · `needs=me\|review\|fix\|person` · `repo=` · `owner=` · `reviewer=` · `work=<backend>:<id>` · `peek=change:{repo}!{n}` |
-| `#/code/repos` | **Code › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its pushes | `status=active\|archived\|deleted\|purging` (none is active and archived) |
+| `#/code/repos` | **Code › Repositories**: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its page | `status=active\|archived\|deleted\|purging` (none is active and archived) |
+| `#/code/repos/{name}` | **A repository**: its header (name, description, state, owner, default branch and head, which seats read it, last push, size) and tabs **Overview** (what it holds and the README at its default branch's root), **Files** (a directory's listing or a file's numbered lines at a revision, the lines picked ruled, its **Blame**, its **History** and a **Permalink** at the commit the revision resolved to), **Branches** (its live branches by name, each opening its files), **Commits** (the history at a revision, of a path or of every path, with who pushed each commit), **Pushes** (its push history) and **Settings** (its settings, rules, merge gates and path owners, shown and never edited here: a declared repository's lead to Settings › Configuration) *(hidden where the company hosts no code)*. A name no repository can have is said in place | `tab=overview\|files\|branches\|commits\|pushes\|settings` · on Files and Commits, `ref=` (a branch, a tag's whole ref or a commit; none is the default branch) and `path=` (from the root) · on Files, `lens=blame` and `lines=` (`12`, or `12-20`) |
 | `#/code/repos/{name}/changes/{n}` | **A change**, `web!42` in full: its header (reference, title, state, repository, branches, owner, revisions, work item) and the page bar's **Approve**, **Request changes**, **Comment**, **Request review** and **Close**/**Reopen**; tabs **Conversation** (its readiness, description, and its reviews, threads and revisions in the order their records landed, with a comment of the reader's own), **Files** (the revision's files and one file's patch in the one `DiffView`, every finding and thread under the line it is on, the outdated ones under a Disclosure, a finding drafted on picked lines and sent with a review, and **Apply suggestion** on an open finding of the head), **Commits** (its revisions and their facts), **Provenance** (who opened it, from which turn and coding run, for which work item, and how it ended) and **Woke** (whom each record about it reached, and why) *(hidden where the company hosts no code)*. A number that is not a whole number from 1 is Not Found | `tab=conversation\|files\|commits\|provenance\|woke` · on Files, `rev=` (a revision; none is the head), `since=` (an earlier revision, to read what changed since it), `file=` (a path), `layout=unified\|split`, `thread=` (a thread on a line, opening its file and its revision) |
 | `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
@@ -7024,13 +7025,43 @@ section mounts.
   read it, its default branch and the commit it stands at, its last push, its
   pushes, its size and how many protection rules it carries. `status=` is the
   engine's own filter (`REPO_STATUSES`, held to `code.RepoStatuses`). A row
-  opens its pushes. Nothing here writes: a repository's settings are the
-  company document's `code.repos`, and an empty listing offers the
+  opens the repository's page. Nothing here writes: a repository's settings
+  are the company document's `code.repos`, and an empty listing offers the
   configuration to a reader who may open it.
+- **A repository's page**, `#/code/repos/{name}`, is its row (`code_repo`,
+  read at the tab's floor and again every minute) and its CONTENT, which its
+  home git node answers: a directory's listing (`code_tree`, and `code_blob`
+  for a path under the root, which answers a directory's listing where the
+  path names one, so a path is one read), a file's lines (`code_blob`, a page
+  at a time, the pages concatenating to the file's bytes), its blame
+  (`code_blame`), its history (`code_log`) and its branches (`code_refs`). The
+  address is the place: `ref=` the revision (none is the default branch; a
+  branch by its name, a tag by its whole ref, which no branch of the same
+  name can shadow), `path=` the directory or the file, `lens=blame`, and
+  `lines=` the lines picked — pressing a line's number picks it, Shift
+  extends the run — drawn RULED, never tinted, as a picked line of a diff is.
+  Opening a directory or a file is a new place in the history; picking lines,
+  the revision and the lens replace it. A read by a ref answers the commit the
+  ref resolved to, and the **Permalink** is the same place at that commit's
+  whole id: an address that says the same thing tomorrow, which the engine
+  answers immutably. **Overview** is what the repository holds and the README
+  at its default branch's root, read at the commit that root was listed at
+  and rendered by the dashboard's own Markdown renderer, which builds every
+  element itself. **Commits** is the history at a revision, of the path the
+  address names or of every path, with who pushed each commit where the
+  answering node's index holds the push — who pushed, which the commit's own
+  author line is not. **Pushes** is the repository's push history, as Code ›
+  Pushes draws it. **Settings** shows the repository's settings, its
+  protection rules with their merge gates and its path owners, and NEVER
+  edits them: a declared repository's are the company document's, settled by
+  every activation, and lead to Settings › Configuration; one a tool made is
+  changed by the code tools' lifecycle requests (`code_update_repo`,
+  `code_protect_branch`). Content is not polled: a reader reading a file reads
+  the revision they opened.
 - **Pushes** is one repository's history, `code_pushes`, newest first in the
   order the pushes landed. The engine keeps a history per repository and none
   that spans them, so the section is narrowed to one by `repo=` — chosen from
-  the repositories in its bar, or arriving from a Repositories row — and a
+  the repositories in its bar, or arriving from a link — and a
   name no repository can have (`REPO_NAME`, held to `code.ValidName`) is said
   in place rather than asked about. A row is when it landed, who pushed (the
   seat, or the credential a person pushed through with the seat it acts as),

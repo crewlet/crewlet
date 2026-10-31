@@ -7141,9 +7141,230 @@ export interface CodeChangeRoutingAnswer extends CodePage {
   };
 }
 
+/**
+ * One branch rule's merge gate (`code.MergeGate`): who may merge, how many
+ * approvals it waits for and what spares a change them, the paths a person
+ * must approve, the checks it waits for, how its queue lands a change, and
+ * its switches.
+ */
+export interface CodeMergeGate {
+  merge_by: "writers" | "maintainers" | "persons" | (string & {});
+  approvals: "none" | "one" | (string & {});
+  approvals_unless?: string[];
+  human_paths?: { glob: string; unless?: string[] }[];
+  checks?: string[];
+  landing: { policy: string; depth: number; batch: number };
+  owners_approve?: boolean;
+  delete_source: "seats" | "none" | (string & {});
+  auto_revert?: boolean;
+  agents_edit_checks?: boolean;
+}
+
+/** A rule's merge gate, named by the rule's pattern (`code.RuleGate`). */
+export interface CodeRuleGate {
+  pattern: string;
+  gate: CodeMergeGate;
+}
+
+/** Who owns which of a repository's paths, for review (`code.PathOwner`): globs over its tree. */
+export interface CodePathOwner {
+  owner: CodeOwner;
+  paths: string[];
+}
+
+/**
+ * One repository in detail (`code.RepoDetail`): its summary, how many
+ * branches, tags and deleted refs it holds, when it was declared, and — to
+ * this question, which asks for them — who owns its paths and its rules'
+ * merge gates.
+ */
+export interface CodeRepoDetail extends CodeRepoSummary {
+  branches: number;
+  tags: number;
+  tombstones: number;
+  created_at: string;
+  path_owners?: CodePathOwner[];
+  gates?: CodeRuleGate[];
+}
+
+/** `code_repo`: one repository, by its name — or by an old one a rename left redirecting. */
+export interface CodeRepoAnswer extends CodePage {
+  repo?: CodeRepoDetail;
+}
+
+/** One live ref (`code.RefRow`): its whole name, the object it points at, and where its last move landed. */
+export interface CodeRefRow {
+  ref: string;
+  oid?: string;
+  position: LogPosition;
+}
+
+/** `code_refs`: a repository's live refs under one prefix — its branches by default — in name order. */
+export interface CodeRefsAnswer extends CodePage {
+  /** Absent on a page that holds none. */
+  refs?: CodeRefRow[];
+}
+
+/** Who acts on a repository (`code.Principal`): a seat, or a credential and the seat it acts as. */
+export interface CodePrincipal {
+  kind: "agent" | "operator" | (string & {});
+  operator_id?: string;
+  seat?: string;
+  run?: CodePushRun;
+}
+
+/** The push that INTRODUCED a commit, as its git node's index holds it (`code.PushedBy`). */
+export interface CodePushedBy {
+  push_id: string;
+  position: LogPosition;
+  at: string;
+  principal: CodePrincipal;
+  via: string;
+}
+
+/** What a git node's index of pushes covers (`code.Coverage`). */
+export interface CodeCoverage {
+  from: LogPosition;
+  through: LogPosition;
+  complete?: boolean;
+  gap_from?: LogPosition;
+  gap_through?: LogPosition;
+}
+
+/** A ref a request's revision named, as it was resolved (`queries.CodeResolved`). */
+export interface CodeResolved {
+  ref: string;
+  oid: string;
+  moved?: LogPosition;
+}
+
+/** One entry of a directory's listing (`code.TreeEntry`), in git's own order. */
+export interface CodeTreeEntry {
+  /** Git's: 040000 a directory, 100644 a file, 100755 an executable, 120000 a link, 160000 a submodule. */
+  mode: string;
+  type: "tree" | "blob" | "commit" | (string & {});
+  oid: string;
+  /** From the repository's root; in base64 as `path_b64` where it is no valid UTF-8. */
+  path: string;
+  path_b64?: string;
+  /** A file's bytes; none for a directory, a submodule or an empty file. */
+  size?: number;
+}
+
+/** One page of a directory's listing (`code.TreeAnswer`). */
+export interface CodeTreeAnswer {
+  tree: string;
+  path?: string;
+  entries: CodeTreeEntry[] | null;
+  /** Every entry of the listing, on every page. */
+  total: number;
+}
+
+/** One page of a file's lines (`code.BlobAnswer`). */
+export interface CodeBlobAnswer {
+  path?: string;
+  oid: string;
+  size: number;
+  /** A file git calls binary, answered by its size with no text. */
+  binary?: boolean;
+  /** How many lines the whole file has. */
+  lines: number;
+  /** The lines `text` holds — begun `start_byte` bytes into the first where a page begins inside a line. */
+  start_line?: number;
+  end_line?: number;
+  start_byte?: number;
+  /** The page's text, which with every other page's concatenates to the file byte for byte. */
+  text?: string;
+  /** The page ends inside `end_line`, which the next page goes on with. */
+  continues?: boolean;
+}
+
+/** One commit of a history (`code.LogCommit`), every unbounded field described past its bound. */
+export interface CodeLogCommit {
+  oid: string;
+  parents?: string[];
+  parent_count?: number;
+  author?: string;
+  author_bytes?: number;
+  author_email?: string;
+  author_email_bytes?: number;
+  authored_at: string;
+  committed_at: string;
+  /** The message's first paragraph; absent past its bound with `subject_bytes` its size. */
+  subject?: string;
+  subject_bytes?: number;
+}
+
+/** One page of a history (`code.LogAnswer`), newest first by generation. */
+export interface CodeLogAnswer {
+  path?: string;
+  commits: CodeLogCommit[] | null;
+  scanned: number;
+  complete?: boolean;
+}
+
+/** One line of a blame (`code.BlameLine`): its number, the commit that last changed it, and its text. */
+export interface CodeBlameLine {
+  line: number;
+  commit: string;
+  orig_line: number;
+  orig_path?: string;
+  text?: string;
+  text_bytes?: number;
+}
+
+/** A commit a blame's lines name (`code.BlameCommit`). */
+export interface CodeBlameCommit {
+  author?: string;
+  author_email?: string;
+  authored_at: string;
+  /** The message's first LINE, as git's blame names it. */
+  subject?: string;
+  subject_bytes?: number;
+}
+
+/** One page of a blame (`code.BlameAnswer`): its lines, and each commit they name once. */
+export interface CodeBlameAnswer {
+  path: string;
+  start_line: number;
+  end_line: number;
+  lines: CodeBlameLine[] | null;
+  commits: Record<string, CodeBlameCommit> | null;
+}
+
+/**
+ * A repository's content as a code question answers it (`queries.CodePage`):
+ * the repository by the name it was asked by, the read's kind and its part,
+ * the object a tree or a file was read at, and the next page's cursor — and,
+ * on a read naming a ref, which is never immutable, each ref it resolved by
+ * the parameter that named it, the answering copy's position and the push
+ * that introduced each commit the page names. A read by whole object ids is
+ * answered with none of those, immutably, and read again by its tag.
+ */
+export interface CodeGitAnswer {
+  repo: string;
+  kind: "tree" | "blob" | "log" | "blame" | "diff" | "compare" | (string & {});
+  rev?: string;
+  next?: string;
+  tree?: CodeTreeAnswer;
+  blob?: CodeBlobAnswer;
+  log?: CodeLogAnswer;
+  blame?: CodeBlameAnswer;
+  resolved?: Record<string, CodeResolved>;
+  position?: LogPosition;
+  pushed_by?: Record<string, CodePushedBy>;
+  coverage?: CodeCoverage;
+}
+
 /** The code questions the dashboard asks, and what each answers. */
 export interface CodeQueryMap {
   code_repos: CodeReposAnswer;
+  code_repo: CodeRepoAnswer;
+  code_refs: CodeRefsAnswer;
+  code_tree: CodeGitAnswer;
+  code_blob: CodeGitAnswer;
+  code_log: CodeGitAnswer;
+  code_blame: CodeGitAnswer;
   code_pushes: CodePushesAnswer;
   code_changes: CodeChangesAnswer;
   code_change: CodeChangeAnswer;

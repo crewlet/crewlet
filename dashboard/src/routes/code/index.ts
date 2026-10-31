@@ -5,3 +5,4 @@ export { ChangePeek } from "./ChangePeek.tsx";
 export { Changes } from "./Changes.tsx";
 export { Pushes } from "./Pushes.tsx";
 export { Repositories } from "./Repositories.tsx";
+export { RepositoryPage } from "./repo/RepositoryPage.tsx";

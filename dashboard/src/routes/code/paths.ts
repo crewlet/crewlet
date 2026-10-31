@@ -5,7 +5,43 @@
 
 import { href } from "~/app/router.tsx";
 import type { ObjectRef } from "~/app/frame/objects.ts";
-import { changeRef } from "~/lib/code.ts";
+import { changeRef, repoPath } from "~/lib/code.ts";
+
+/** A repository page's tabs, the overview first: what a reader opens a repository for. */
+export const REPO_TABS = [
+  "overview",
+  "files",
+  "branches",
+  "commits",
+  "pushes",
+  "settings",
+] as const;
+export type RepoTab = (typeof REPO_TABS)[number];
+
+/**
+ * Where on a repository's page an address points, by its query keys: the tab,
+ * and on Files and Commits the revision (`ref`, a branch, a tag, a whole ref
+ * or a commit id; none is the default branch) and the path; on Files the lens
+ * (`blame`) and the lines picked (`12`, `12-20`).
+ */
+export interface RepoAt {
+  tab?: RepoTab;
+  ref?: string;
+  path?: string;
+  lens?: "blame";
+  lines?: string;
+}
+
+/** A repository's page, at `at`: `#/code/repos/{name}`, the overview where `at` names no tab. */
+export function repoHref(repo: string, at: RepoAt = {}): string {
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries(at)) {
+    // THE LANDING TAB IS NEVER SPELLED, as `useTab` drops it from the address
+    // a reader moves to: one page, one address.
+    if (value && !(key === "tab" && value === "overview")) query[key] = value;
+  }
+  return href(repoPath(repo), query);
+}
 
 /**
  * The query key that narrows Pushes to one repository, by its name — and
@@ -13,11 +49,6 @@ import { changeRef } from "~/lib/code.ts";
  * is a path, and a repository is what the section is narrowed to.
  */
 export const REPO_PARAM = "repo";
-
-/** Code › Pushes, narrowed to one repository's history. */
-export function pushesHref(repo: string): string {
-  return href(["code", "pushes"], { [REPO_PARAM]: repo });
-}
 
 /**
  * What Code › Changes is narrowed to, by its query keys: the engine's own

@@ -426,3 +426,58 @@ export function verdictWord(verdict: string): string {
 export function codeReasonPhrase(reason: string, voice: "short" | "about" | "why"): string {
   return CODE_PHRASES[reason]?.[voice] ?? reason.replace(/_/g, " ");
 }
+
+/** A repository's own page: `#/code/repos/{name}`. */
+export function repoPath(repo: string): string[] {
+  return ["code", "repos", repo];
+}
+
+/** The last segment of a path from a repository's root: what a listing names an entry by. */
+export function baseName(path: string): string {
+  const cut = path.lastIndexOf("/");
+  return cut < 0 ? path : path.slice(cut + 1);
+}
+
+/**
+ * Every directory a path passes through from the root, each with the path
+ * that names it: the trail a file is reached back up by.
+ */
+export function pathSteps(path: string): { name: string; path: string }[] {
+  const parts = path.split("/").filter(Boolean);
+  return parts.map((name, i) => ({ name, path: parts.slice(0, i + 1).join("/") }));
+}
+
+/** A run of a file's lines an address picks: its first line and its last, from 1. */
+export interface LineRun {
+  start: number;
+  end: number;
+}
+
+/** A line's number: a whole number from 1. */
+const LINE_NUMBER = /^[1-9][0-9]{0,8}$/;
+
+/**
+ * The lines an address picks (`lines=`): one line, `12`, or a run, `12-20`,
+ * either way round — or null for anything else, which picks nothing rather
+ * than a line nobody named.
+ */
+export function parseLines(value: string): LineRun | null {
+  const [first = "", last = first, ...rest] = value.split("-");
+  if (rest.length > 0 || !LINE_NUMBER.test(first) || !LINE_NUMBER.test(last)) return null;
+  const a = Number(first);
+  const b = Number(last);
+  return { start: Math.min(a, b), end: Math.max(a, b) };
+}
+
+/** A run of lines as an address writes it: `12`, or `12-20`. */
+export function linesValue(run: LineRun): string {
+  return run.start === run.end ? String(run.start) : `${run.start}-${run.end}`;
+}
+
+/**
+ * Whether a revision is named by a WHOLE object id: the one spelling no later
+ * push can move, which the engine answers immutably and a Permalink names.
+ */
+export function isWholeOID(rev: string): boolean {
+  return /^[0-9a-f]{40}$/.test(rev) && rev !== ZERO_OID;
+}

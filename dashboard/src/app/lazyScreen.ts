@@ -207,6 +207,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   "code-changes": "code",
   "code-change": "code",
   "code-repos": "code",
+  "code-repo": "code",
   "code-pushes": "code",
   knowledge: "knowledge",
   container: "knowledge",

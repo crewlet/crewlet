@@ -84,6 +84,7 @@ const WorkItem = lazyScreen("work", (m) => m.WorkItem);
 const Changes = lazyScreen("code", (m) => m.Changes);
 const ChangePage = lazyScreen("code", (m) => m.ChangePage);
 const Repositories = lazyScreen("code", (m) => m.Repositories);
+const RepositoryPage = lazyScreen("code", (m) => m.RepositoryPage);
 const Pushes = lazyScreen("code", (m) => m.Pushes);
 const OrgChart = lazyScreen("agents", (m) => m.OrgChart);
 const Roster = lazyScreen("agents", (m) => m.People);
@@ -187,6 +188,8 @@ export function screenFor(route: Resolved): ReactNode {
       );
     case "code-repos":
       return <Repositories />;
+    case "code-repo":
+      return <RepositoryPage key={route.repo} repo={route.repo} />;
     case "code-pushes":
       return <Pushes />;
     case "org-chart":

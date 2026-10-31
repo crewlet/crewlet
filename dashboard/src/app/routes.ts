@@ -206,6 +206,7 @@ export type FramedScreen =
   | { screen: "code-changes" }
   | { screen: "code-change"; repo: string; number: number }
   | { screen: "code-repos" }
+  | { screen: "code-repo"; repo: string }
   | { screen: "code-pushes" }
   | { screen: "principles" }
   | { screen: "brand" }
@@ -412,11 +413,18 @@ function work(rest: string[], screen: Make, under: Under): Route {
  * the bare `#/code` — the row's landing, as Work's projects are at `#/work` —
  * the repositories the engine hosts, and one repository's pushes, which
  * `repo=` names rather than a segment, since a section is a path and the
- * repository is what it is narrowed to.
+ * repository is what it is narrowed to. Under Repositories, each repository's
+ * own page, `repos/{name}`, and the objects under it.
  */
 function code(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   if (first === undefined) return screen({ screen: "code-changes" });
+  // A REPOSITORY'S OWN PAGE, by its name: the page holds the name to the
+  // engine's grammar and says in place what one no repository can have is,
+  // as a change's page does.
+  if (first === "repos" && tail.length === 1 && tail[0]) {
+    return screen({ screen: "code-repo", repo: tail[0] });
+  }
   // A CHANGE'S OWN PAGE, under its repository: `repos/{name}/changes/{n}`,
   // the path its reference (web!42) is the short form of — and the engine's
   // own REST path for it. The number is a whole number from 1, decided by its

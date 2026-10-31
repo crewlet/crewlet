@@ -9,9 +9,10 @@
  * them: a company-wide log here would be every repository's history merged in
  * the browser, page by page, which could only ever be right for the pages it
  * happened to hold. So the section is narrowed to one repository, `repo=`,
- * chosen in its bar or arriving from a Repositories row, and a name no
- * repository can have is said in place rather than asked about
- * (`lib/code.ts`).
+ * chosen in its bar or arriving from a link, and a name no repository can
+ * have is said in place rather than asked about (`lib/code.ts`). A
+ * repository's own page draws the same history on its Pushes tab
+ * ([PushHistory]).
  *
  * # A log reaches its older rows by fetching them
  *
@@ -112,7 +113,6 @@ const VIA_WORDS: Readonly<Record<string, string>> = {
 };
 
 export function Pushes() {
-  const seatBadge = useSeatBadgeOf();
   // THE REPOSITORY, by its name. A filter, so choosing another replaces the
   // history entry rather than adding one per repository looked at.
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
@@ -121,28 +121,6 @@ export function Pushes() {
   // first page, by name, which every other one is a press of Repositories'
   // Load more away.
   const choices = useCodeQuery("code_repos");
-  // IN BRIEF, every page of it: see the file's doc.
-  const params = useMemo(() => ({ name: repo, brief: true }), [repo]);
-  // ANOTHER REPOSITORY IS ANOTHER HISTORY: its first page is never followed by
-  // the last one's second, and the first page is held still from the press of
-  // Load older (see the file's doc).
-  const hold = usePageHold<CodePushesAnswer>(params);
-  const first = useCodeQuery("code_pushes", params, {
-    enabled: named,
-    pollMs: PUSHES_POLL_MS,
-    hold: hold.holding,
-  });
-  const paged = usePaged(
-    hold,
-    first,
-    (cursor) => codeRest.query("code_pushes", { ...params, cursor }),
-    pushesOf,
-    pushIdOf,
-    pushesAfter,
-  );
-  // ONE ROW PER PUSH across pages, by its id.
-  const rows = paged.items;
-  const more = paged.more;
 
   return (
     <>
@@ -171,7 +149,46 @@ export function Pushes() {
           “{repo}” is not a repository’s name: one is lowercase letters, digits and hyphens,
           beginning and ending with a letter or a digit, at most 63 in all.
         </Callout>
-      ) : first.error === "not_found" ? (
+      ) : (
+        <PushHistory repo={repo} />
+      )}
+    </>
+  );
+}
+
+/**
+ * One repository's push history, newest first, a page at a time — what Code ›
+ * Pushes draws for the repository its bar names, and a repository's own page
+ * draws on its Pushes tab. `repo` is a name a repository can have
+ * (`isRepoName`); the caller says in place what one that is not is.
+ */
+export function PushHistory({ repo }: { repo: string }) {
+  const seatBadge = useSeatBadgeOf();
+  // IN BRIEF, every page of it: see the file's doc.
+  const params = useMemo(() => ({ name: repo, brief: true }), [repo]);
+  // ANOTHER REPOSITORY IS ANOTHER HISTORY: its first page is never followed by
+  // the last one's second, and the first page is held still from the press of
+  // Load older (see the file's doc).
+  const hold = usePageHold<CodePushesAnswer>(params);
+  const first = useCodeQuery("code_pushes", params, {
+    pollMs: PUSHES_POLL_MS,
+    hold: hold.holding,
+  });
+  const paged = usePaged(
+    hold,
+    first,
+    (cursor) => codeRest.query("code_pushes", { ...params, cursor }),
+    pushesOf,
+    pushIdOf,
+    pushesAfter,
+  );
+  // ONE ROW PER PUSH across pages, by its id.
+  const rows = paged.items;
+  const more = paged.more;
+
+  return (
+    <>
+      {first.error === "not_found" ? (
         <EmptyState
           icon={<UploadGlyph size={32} />}
           title={`No repository named “${repo}”`}

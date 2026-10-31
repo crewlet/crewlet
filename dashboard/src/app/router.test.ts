@@ -632,16 +632,16 @@ describe("the resolver", () => {
     expect(resolve(["company", "org", "seats"]).resolved).toBe(false);
   });
 
-  // CODE'S SECTIONS ARE ITS ADDRESSES and take no tail: the repository a
-  // history is narrowed to is `repo=`, never a segment, and the bare `#/code`
-  // is the row's landing, its changes — as `#/work` is Work's projects.
+  // CODE'S SECTIONS ARE ITS ADDRESSES and take no tail of their own: the
+  // repository a history is narrowed to is `repo=`, never a segment, and the
+  // bare `#/code` is the row's landing, its changes — as `#/work` is Work's
+  // projects. (A repository's own page is under Repositories: below.)
   // Mutation: send the bare head to Not Found again and the row lands nowhere.
-  test("Code's sections are its three lists, and nothing else under it is a page", () => {
+  test("Code's sections are its three lists, and no word under them is a page", () => {
     expect(resolve(["code"])).toMatchObject({ screen: "code-changes", workspace: "code" });
     expect(resolve(["code", "repos"])).toMatchObject({ screen: "code-repos", workspace: "code" });
     expect(resolve(["code", "pushes"])).toMatchObject({ screen: "code-pushes", workspace: "code" });
     for (const path of [
-      ["code", "repos", "web"],
       ["code", "pushes", "web"],
       ["code", "changes"],
       ["code", "web"],
@@ -651,6 +651,25 @@ describe("the resolver", () => {
     }
     expect(workspaceRow("code")?.path).toEqual(["code"]);
     expect(ownedBy(workspaceRow("code")!)).toEqual(["code"]);
+  });
+
+  // A REPOSITORY'S PAGE IS UNDER REPOSITORIES, by its name, and its trail
+  // leads back to the listing. Its tabs, its revision and its path are the
+  // query, never a segment: one segment more is no page. Mutation: send
+  // `repos/{name}` to Not Found, or read a deeper tail as the repository, and
+  // this fails.
+  test("a repository's page is under Repositories, by its name", () => {
+    expect(resolve(["code", "repos", "web"])).toMatchObject({
+      screen: "code-repo",
+      repo: "web",
+      workspace: "code",
+    });
+    expect(resolve(["code", "repos", "web", "src"]).resolved).toBe(false);
+    expect(crumbsFor(["code", "repos", "web"]).map((c) => c.label)).toEqual([
+      "Code",
+      "Repositories",
+      "web",
+    ]);
   });
 
   // A CHANGE IS ITS REPOSITORY'S, at the path its reference is short for, and

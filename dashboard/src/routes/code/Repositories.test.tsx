@@ -140,15 +140,15 @@ const listed = () => [
   ...new Set(
     within(screen.getByRole("table", { name: "Repositories" }))
       .getAllByRole("link")
-      .map((a) => a.getAttribute("href")?.split("repo=")[1]),
+      .map((a) => a.getAttribute("href")?.split("#/code/repos/")[1]),
   ),
 ];
 
 // THE ENGINE'S LISTING, OVER REST, never one of the socket's slots — and each
-// row says what the listing knows and opens the repository's pushes.
+// row says what the listing knows and opens the repository's own page.
 // Mutation: ask `code_repos` on the socket, or link a row anywhere else, and
 // this fails.
-test("the repositories are the engine's listing over REST, each row opening its pushes", async () => {
+test("the repositories are the engine's listing over REST, each row opening its page", async () => {
   const asked = stubFetch((url) =>
     url.pathname === "/query/code_repos"
       ? json({
@@ -187,8 +187,8 @@ test("the repositories are the engine's listing over REST, each row opening its 
   const links = within(grid)
     .getAllByRole("link")
     .map((a) => a.getAttribute("href"));
-  expect(links).toContain("#/code/pushes?repo=web");
-  expect(links).toContain("#/code/pushes?repo=api");
+  expect(links).toContain("#/code/repos/web");
+  expect(links).toContain("#/code/repos/api");
 
   expect(asked.some((u) => u.pathname === "/query/code_repos")).toBe(true);
   expect(onSocket).not.toContain("code_repos");

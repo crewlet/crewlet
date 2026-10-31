@@ -13,13 +13,12 @@
  * by name, and the grid draws it as given: a head that sorted the pages
  * loaded would answer a different question under the same arrow.
  *
- * # A row opens the repository's pushes
+ * # A row opens the repository's page
  *
- * The one reading of a single repository this workspace draws is its push
- * history, so a row leads there (`#/code/pushes?repo=…`), and the row says
- * what the listing knows: who owns it, which seats read it, its default
- * branch and where that stands, its last push, its size and the rules that
- * protect it.
+ * A row leads to the repository's own page (`#/code/repos/{name}`: its files,
+ * branches, history, pushes and settings), and says what the listing knows:
+ * who owns it, which seats read it, its default branch and where that stands,
+ * its last push, its size and the rules that protect it.
  *
  * # Nothing here writes
  *
@@ -57,7 +56,7 @@ import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePageHold, usePaged } from "~/lib/usePaged.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import type { CodeRepoSummary, CodeReposAnswer } from "~/protocol/index.ts";
-import { pushesHref } from "./paths.ts";
+import { repoHref } from "./paths.ts";
 
 /**
  * How often the listing's first page is read again while it is open and
@@ -156,7 +155,7 @@ export function Repositories() {
           rowKey={(r) => r.id}
           // THE ENGINE'S ORDER, by name, over the whole set.
           serverSorted
-          rowHref={(r) => pushesHref(r.name)}
+          rowHref={(r) => repoHref(r.name)}
           onLoadMore={paged.more ? paged.older : undefined}
           loadedNote={
             paged.more || paged.held
@@ -189,7 +188,7 @@ export function Repositories() {
               header: "Owner",
               shrink: true,
               // NOT A LINK: the row around it is one, to the repository's
-              // pushes.
+              // page.
               cell: (r) =>
                 r.owner.kind === "seat" ? (
                   <TableEntityCell {...plainSeat({ ...seatBadge(r.owner.ref) })} />
