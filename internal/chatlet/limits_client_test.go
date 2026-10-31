@@ -41,8 +41,8 @@ func TestTheDashboardsChatLimitsAreTheEngines(t *testing.T) {
 	for name, engine := range map[string]int{
 		"MAX_CHANNEL_NAME":        chatlet.MaxChannelName,
 		"MAX_BODY_BYTES":          chatlet.MaxBody,
-		"MAX_TOPIC_BYTES":         chatlet.MaxTopic,
-		"MAX_PURPOSE_BYTES":       chatlet.MaxPurpose,
+		"MAX_TOPIC_CHARS":         chatlet.MaxTopic,
+		"MAX_PURPOSE_CHARS":       chatlet.MaxPurpose,
 		"MAX_DIRECT_PARTICIPANTS": chatlet.MaxDMParticipants,
 	} {
 		raw, err := clientsource.Scalar(tree, name)

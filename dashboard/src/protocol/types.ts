@@ -3918,6 +3918,66 @@ export interface ChatMessage {
   deleted_at?: string;
   deleted_by?: string;
   deleted_by_kind?: ChatAuthorKind;
+  /** Present on a ROOM EVENT rather than words somebody wrote: the row is the
+   *  room's own change, drawn as a quiet line in the transcript. Its author is
+   *  who made the change (`system` for the org chart's own membership), its
+   *  body, links and mentions are empty, it is never in a thread, and it takes
+   *  no reply, reaction, edit or delete. It counts toward no unread or mention
+   *  badge, is never a rail preview, and is never a search hit. */
+  event?: ChatRoomEvent;
+}
+
+/** What a room event says happened. OPEN, for the reason [ChatKind] is: a
+ *  line a newer peer wrote renders as a plain room event.
+ *
+ *  - `joined`: `handles` came into the room themselves, or were its founding
+ *    members, or the org chart put them in a unit's room.
+ *  - `added`: the author put `handles` in the room.
+ *  - `left`: `handles` took themselves out, or the org chart took them out of
+ *    a unit's room.
+ *  - `removed`: the author took `handles` out of the room.
+ *  - `description` and `topic`: the author set the room's purpose or topic to
+ *    `text`; an empty `text` cleared it.
+ *  - `template`: the author set the room up from the template named `text`,
+ *    one line in place of a `topic` and a `description` line. */
+export type ChatEventKind =
+  | "joined"
+  | "added"
+  | "left"
+  | "removed"
+  | "description"
+  | "topic"
+  | "template"
+  | (string & {});
+
+/** A room's own change, as its transcript row carries it. */
+export interface ChatRoomEvent {
+  kind: ChatEventKind;
+  /** Who joined, was added, left or was taken out, sorted. Absent for the
+   *  three kinds about the room's words. */
+  handles?: string[];
+  /** The new description or topic (empty when it was cleared), or the
+   *  template's name. Words somebody wrote, drawn as text. */
+  text?: string;
+}
+
+/** A root's replies, as the transcript shows them under it. Present only on
+ *  a room post that has at least one reply. */
+export interface ChatThreadSummary {
+  /** Every reply, a deleted one included: its tombstone still sits in the
+   *  thread. */
+  replies: number;
+  /** The newest reply's broker instant. */
+  last_reply_at: string;
+  /** The newest reply's record, PACKED the way a read cursor is, so a screen
+   *  can tell whether the thread moved past what this reader has read. */
+  last_reply_position: LogPosition;
+  /** The first few people and agents who replied, in the order of their first
+   *  reply, at most `chatlet.MaxThreadRepliers` (3). */
+  repliers: string[];
+  /** How many different people and agents replied, for the "+N" past
+   *  `repliers`. */
+  replier_count: number;
 }
 
 /** One emoji on one message, with whether this viewer is among the reactors. */
@@ -3939,6 +3999,9 @@ export interface ChatMessageView {
    *  stores, which is why the position travels rather than the sequence. */
   position: LogPosition;
   reactions?: ChatReaction[];
+  /** The replies under a room post, on a transcript page and on a thread's
+   *  root. Absent on a reply, a room event and a post nobody answered. */
+  thread?: ChatThreadSummary;
 }
 
 /** The newest message in a room, as the rail previews it. */
@@ -3966,11 +4029,19 @@ export interface ChatChannelSummary {
   /** THIS VIEWER'S membership flag: every message in the room reaches them. */
   follow_all?: boolean;
   /** Messages above this viewer's cursor, counted to `chatlet.UnreadLimit`
-   *  (100). Their own messages and the tombstones do not count. */
+   *  (100). Their own messages, the tombstones and room events do not
+   *  count. */
   unread: number;
   /** The count stopped at the limit — the "99+" case, stated rather than
    *  inferred from the number. */
   unread_capped?: boolean;
+  /** Of `unread`, the messages that name this viewer or the whole room
+   *  (`@channel`): the accent badge. Counted over the same messages, so it is
+   *  never more than `unread` and it stopped where `unread_capped` says that
+   *  did. A direct conversation is counted the same way; a screen that treats
+   *  every unread message there as addressed to the reader reads `unread`. A
+   *  muted room is counted too: the mute is the screen's to apply. */
+  mentions: number;
   last?: ChatMessagePreview;
   /** Who is in a direct conversation, which is how one is titled. */
   participants?: string[];
@@ -4339,6 +4410,12 @@ export interface ChatReceipt {
    * ordinary answer — the conversation is open, and it is that one.
    */
   created?: boolean;
+  /**
+   * `add_channel_members` only: who this call put in the room, sorted. The
+   * people named who were already in it are left out, and an empty list
+   * beside a landed outcome is everybody named already being a member.
+   */
+  added?: string[];
 }
 
 /**

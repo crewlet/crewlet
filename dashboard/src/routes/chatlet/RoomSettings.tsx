@@ -42,7 +42,7 @@ import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { Button, FormField, InlineCode, Input, Modal, Textarea } from "@crewlethq/ui";
 import { PencilGlyph } from "@crewlethq/icons/glyphs";
-import { MAX_PURPOSE_BYTES, MAX_TOPIC_BYTES } from "~/contract/chat.ts";
+import { MAX_PURPOSE_CHARS, MAX_TOPIC_CHARS } from "~/contract/chat.ts";
 import { textBudget } from "~/lib/format.ts";
 import type { ChatChannel } from "~/protocol/index.ts";
 
@@ -70,8 +70,8 @@ export function RoomSettings({
   // HELD TO THE CONTRACT'S CAPS IN BYTES, of what is sent — the trimmed
   // value — through the one measure every form in the dashboard uses
   // (`textBudget`), so this dialog and New room cannot disagree about a topic.
-  const topicBudget = textBudget(topic, MAX_TOPIC_BYTES, "a topic", SHORTEN);
-  const purposeBudget = textBudget(purpose, MAX_PURPOSE_BYTES, "a purpose", SHORTEN);
+  const topicBudget = textBudget(topic, MAX_TOPIC_CHARS, "a topic", SHORTEN);
+  const purposeBudget = textBudget(purpose, MAX_PURPOSE_CHARS, "a purpose", SHORTEN);
   const tooLong = topicBudget.over || purposeBudget.over;
   const moved =
     topic.trim() !== (channel.topic ?? "") || purpose.trim() !== (channel.purpose ?? "");

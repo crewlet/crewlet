@@ -29,7 +29,7 @@ import {
   type ActReply,
   type Pressed,
 } from "~/test/chat.tsx";
-import { MAX_TOPIC_BYTES } from "~/contract/chat.ts";
+import { MAX_TOPIC_CHARS } from "~/contract/chat.ts";
 import { StartRoom } from "./StartRoom.tsx";
 
 let reply: ActReply;
@@ -75,9 +75,9 @@ test("a topic past its cap is held here, as the room's own Topic dialog holds it
   mount();
   await named("launch");
   const topic = screen.getByLabelText(/^Topic/);
-  fireEvent.change(topic, { target: { value: "🙂".repeat(MAX_TOPIC_BYTES / 4) } });
+  fireEvent.change(topic, { target: { value: "🙂".repeat(MAX_TOPIC_CHARS / 4) } });
   await waitFor(() => expect(create().getAttribute("aria-disabled")).not.toBe("true"));
-  fireEvent.change(topic, { target: { value: "x".repeat(MAX_TOPIC_BYTES + 1) } });
+  fireEvent.change(topic, { target: { value: "x".repeat(MAX_TOPIC_CHARS + 1) } });
   expect(screen.getByText(/257 bytes, but a topic holds at most 256/)).toBeTruthy();
   expect(create().getAttribute("aria-disabled")).toBe("true");
   expect(create().getAttribute("title")).toBe("Shorten the topic first.");

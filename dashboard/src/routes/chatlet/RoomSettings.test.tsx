@@ -16,7 +16,7 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import { MAX_TOPIC_BYTES } from "~/contract/chat.ts";
+import { MAX_TOPIC_CHARS } from "~/contract/chat.ts";
 import {
   actEngine,
   applied,
@@ -103,7 +103,7 @@ test("emptying a field is a change rather than a field left out", async () => {
 
 test("a topic past its cap is refused here rather than cut to fit", async () => {
   mount();
-  fireEvent.change(topic(), { target: { value: "x".repeat(MAX_TOPIC_BYTES + 1) } });
+  fireEvent.change(topic(), { target: { value: "x".repeat(MAX_TOPIC_CHARS + 1) } });
   expect(screen.getByText(/257 bytes, but a topic holds at most 256/i)).toBeTruthy();
   expect(held()).toBe(true);
   fireEvent.click(save());
@@ -116,9 +116,9 @@ test("the cap is bytes, so a multi-byte character counts as what it costs", asyn
   // of emoji would pass here and be refused there, naming a number the person
   // cannot see.
   mount();
-  fireEvent.change(topic(), { target: { value: "🙂".repeat(MAX_TOPIC_BYTES / 4) } });
+  fireEvent.change(topic(), { target: { value: "🙂".repeat(MAX_TOPIC_CHARS / 4) } });
   await pressable();
-  fireEvent.change(topic(), { target: { value: "🙂".repeat(MAX_TOPIC_BYTES / 4 + 1) } });
+  fireEvent.change(topic(), { target: { value: "🙂".repeat(MAX_TOPIC_CHARS / 4 + 1) } });
   expect(held()).toBe(true);
 });
 

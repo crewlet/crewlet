@@ -60,12 +60,15 @@ export const CHANNEL_NAME_PATTERN = "^[a-z0-9][a-z0-9_-]{0,63}$";
 export const MAX_BODY_BYTES = 32768;
 
 /**
- * A room's topic and purpose, in UTF-8 bytes — `chatlet.MaxTopic` and
- * `chatlet.MaxPurpose`. BYTES, NOT CHARACTERS: the engine bounds the record's own
- * field, and an emoji in a topic is four of these and one of those.
+ * A room's topic and its description (the engine's `purpose`), in CHARACTERS:
+ * `chatlet.MaxTopic` and `chatlet.MaxPurpose`, which count Unicode code points.
+ * One limit for both, because a person edits them in one dialog with one
+ * counter, and a counter has to count what the person sees: an emoji is one
+ * character here and one there. Count with `[...text].length`, never
+ * `text.length`, which counts an emoji twice.
  */
-export const MAX_TOPIC_BYTES = 256;
-export const MAX_PURPOSE_BYTES = 600;
+export const MAX_TOPIC_CHARS = 250;
+export const MAX_PURPOSE_CHARS = 250;
 
 /**
  * The most people one direct conversation may hold — `chatlet.MaxDMParticipants`,

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -275,14 +276,11 @@ func (c ChannelCreate) Validate() error {
 	if err := c.checkAddress(); err != nil {
 		return err
 	}
-	if len(c.Topic) > MaxTopic {
-		return invalid("topic", "a topic is %d bytes against a %d cap",
-			len(c.Topic), MaxTopic)
+	if err := checkTopic(c.Topic); err != nil {
+		return err
 	}
-	if len(c.Purpose) > MaxPurpose {
-		return invalid("purpose", "a purpose is %d bytes against a %d cap — "+
-			"anything longer is describing a project, and a project has a page",
-			len(c.Purpose), MaxPurpose)
+	if err := checkPurpose(c.Purpose); err != nil {
+		return err
 	}
 	if c.CreatedBy == "" {
 		return invalid("created_by", "a room records who made it, and a create "+
@@ -395,6 +393,19 @@ type ChannelPatch struct {
 	// of it readable — its creator's, its unit's lead's or an admin's to
 	// move, never any member's ([ChannelAuthority]).
 	Archived *bool `json:"archived,omitempty"`
+
+	// Template is the name of the template this patch sets the room up
+	// from, and the room's transcript records it as ONE line
+	// ([EventTemplate]) in place of the topic and description lines the
+	// same patch would otherwise write.
+	//
+	// A NAME AND NOTHING ELSE. A template is the client's preset: the words
+	// it sets are this patch's own Topic and Purpose, carried and applied
+	// like any other, and the server keeps no catalogue of templates to
+	// check the name against. So a template patch must set at least one of
+	// the two, or it would be a line saying the room was set up when
+	// nothing about it changed.
+	Template *string `json:"template,omitempty"`
 }
 
 // Validate refuses a patch this build will not write.
@@ -403,13 +414,30 @@ func (p ChannelPatch) Validate() error {
 		return invalid("patch", "a patch sets no field — an empty patch is a "+
 			"record on the log and a live frame for a change nobody made")
 	}
-	if p.Topic != nil && len(*p.Topic) > MaxTopic {
-		return invalid("topic", "a topic is %d bytes against a %d cap",
-			len(*p.Topic), MaxTopic)
+	if p.Topic != nil {
+		if err := checkTopic(*p.Topic); err != nil {
+			return err
+		}
 	}
-	if p.Purpose != nil && len(*p.Purpose) > MaxPurpose {
-		return invalid("purpose", "a purpose is %d bytes against a %d cap",
-			len(*p.Purpose), MaxPurpose)
+	if p.Purpose != nil {
+		if err := checkPurpose(*p.Purpose); err != nil {
+			return err
+		}
+	}
+	if p.Template != nil {
+		name := *p.Template
+		switch {
+		case p.Topic == nil && p.Purpose == nil:
+			return invalid("template", "a template sets a room's topic and "+
+				"description, and this patch sets neither. Send the template's "+
+				"topic and purpose with its name")
+		case strings.TrimSpace(name) == "" || name != strings.TrimSpace(name):
+			return invalid("template", "%q is not a template's name: name the "+
+				"template the room was set up from, without surrounding space", name)
+		case textChars(name) > MaxTemplateName:
+			return invalid("template", "a template's name is %d characters "+
+				"against a %d cap", textChars(name), MaxTemplateName)
+		}
 	}
 	return nil
 }
@@ -1061,6 +1089,29 @@ func checkMembers(ms []Member, max int) error {
 				"record claim a set it did not derive", m.Handle)
 		}
 		seen[m.Handle] = true
+	}
+	return nil
+}
+
+// textChars is how long a person's text is as they see it: its Unicode code
+// points. It is what [MaxTopic], [MaxPurpose] and [MaxTemplateName] count.
+func textChars(s string) int { return utf8.RuneCountInString(s) }
+
+// checkTopic and checkPurpose hold a room's two words to their caps, one
+// rule for the create and the patch alike.
+func checkTopic(topic string) error {
+	if n := textChars(topic); n > MaxTopic {
+		return invalid("topic", "a topic is %d characters against a %d cap",
+			n, MaxTopic)
+	}
+	return nil
+}
+
+func checkPurpose(purpose string) error {
+	if n := textChars(purpose); n > MaxPurpose {
+		return invalid("purpose", "a purpose is %d characters against a %d cap. "+
+			"Anything longer is describing a project, and a project has a page",
+			n, MaxPurpose)
 	}
 	return nil
 }

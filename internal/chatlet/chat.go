@@ -118,18 +118,30 @@ const (
 	// 512 KiB with a title, a history and a name somebody can find it by.
 	MaxBody = 32 << 10
 
-	// MaxTopic bounds a channel's topic.
+	// MaxTopic bounds a channel's topic, and [MaxPurpose] its purpose (the
+	// description a person reads under its name), each in CHARACTERS:
+	// Unicode code points, counted by [textChars].
 	//
-	// 256 bytes: a line in the room's header, which is what a topic is.
-	MaxTopic = 256
+	// THE ONE BOUND IN THIS BLOCK THAT IS NOT BYTES, because a person edits
+	// both in one dialog under a visible counter, and a counter has to count
+	// what the person sees: a byte bound let a sentence in a script that
+	// spends two or three bytes a character stop at a third of the length
+	// the same sentence in English reached. The record stays small either
+	// way, at most four bytes a character.
+	//
+	// 250 EACH, one figure for both: a topic is a line in the room's header,
+	// and a purpose is a paragraph somebody reads before deciding to join.
+	// One that needs more is describing a project, which has a page.
+	MaxTopic   = 250
+	MaxPurpose = 250
 
-	// MaxPurpose bounds a channel's purpose.
+	// MaxTemplateName bounds the name a room's template event records
+	// ([ChannelPatch.Template]), in characters like [MaxTopic].
 	//
-	// 600 bytes, the same figure as [MaxExcerpt] and for the same reason
-	// — it is a paragraph somebody reads before deciding to join, and a
-	// purpose that needs more than a paragraph is describing a project,
-	// which has a page.
-	MaxPurpose = 600
+	// SIXTY-FOUR: a template's name is a label in a picker ("Project
+	// room"), and the server records it as the template's name and nothing
+	// else, since the template itself is the client's preset.
+	MaxTemplateName = 64
 
 	// MaxChannelName bounds a channel's name.
 	//
@@ -171,8 +183,8 @@ const (
 
 	// MaxEraseReason bounds the reason an erase records.
 	//
-	// 600 BYTES, the same figure as [MaxPurpose] and for its reason: why
-	// the company destroyed something is a sentence or two — "a credential
+	// 600 BYTES, the same figure as [MaxExcerpt]: why the company
+	// destroyed something is a sentence or two — "a credential
 	// was pasted here" — and an account longer than a paragraph belongs to
 	// the incident it is part of. It is bounded at all because the reason
 	// rides a gate-installing record every node holds for the log's whole

@@ -89,8 +89,8 @@ const (
 // ([chatLinkShape]).
 const (
 	chatBodyBytes    = 32 << 10 // chatlet.MaxBody
-	chatTopicBytes   = 256      // chatlet.MaxTopic
-	chatPurposeBytes = 600      // chatlet.MaxPurpose
+	chatTopicChars   = 250      // chatlet.MaxTopic, in characters
+	chatPurposeChars = 250      // chatlet.MaxPurpose, in characters
 	chatLinks        = 8        // chatlet.MaxLinks
 	chatLinkBytes    = 2 << 10  // chatlet.MaxLinkBytes
 	chatMembers      = 1000     // chatlet.MaxMembers
@@ -504,10 +504,10 @@ func chatWrites() []Tool {
 				"lead or an administrator.",
 			object([]string{"channel"}, map[string]*schema{
 				"channel": room,
-				"topic": text("What is being discussed now. An empty string clears it.",
-					chatTopicBytes),
-				"purpose": text("What the room is for. An empty string clears it.",
-					chatPurposeBytes),
+				"topic": chars("What is being discussed now. An empty string clears it.",
+					chatTopicChars),
+				"purpose": chars("What the room is for. An empty string clears it.",
+					chatPurposeChars),
 				"archived": flag("True closes the room to new messages; false opens it again."),
 			})),
 		members,

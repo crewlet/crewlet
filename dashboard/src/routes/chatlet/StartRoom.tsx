@@ -34,7 +34,7 @@ import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { Button, FormField, Input, Modal, Select, TagsInput } from "@crewlethq/ui";
 import { HashGlyph } from "@crewlethq/icons/glyphs";
-import { MAX_CHANNEL_NAME, MAX_TOPIC_BYTES } from "~/contract/chat.ts";
+import { MAX_CHANNEL_NAME, MAX_TOPIC_CHARS } from "~/contract/chat.ts";
 import { textBudget } from "~/lib/format.ts";
 import type { ChatKind } from "~/protocol/index.ts";
 
@@ -79,7 +79,7 @@ export function StartRoom({
   // THE TOPIC IS HELD TO THE ENGINE'S CAP HERE, as the room's own Topic
   // dialog holds it, rather than sent to be refused: measured in bytes of
   // what is sent (`textBudget`), and said on the field.
-  const topicBudget = textBudget(topic, MAX_TOPIC_BYTES, "a topic", SHORTEN);
+  const topicBudget = textBudget(topic, MAX_TOPIC_CHARS, "a topic", SHORTEN);
   const blocked = !ready
     ? "Name the room first."
     : topicBudget.over
