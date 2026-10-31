@@ -61,18 +61,33 @@ const refsCandidateFloor = (MaxRefsPerRepo + 1) / 2
 // least [refsCandidateFloor] live refs, half the bound — the only ones
 // NearLimit can hold for, since a repository's recent refs are some of its
 // live ones — found by a keyset walk of code_repos in name order on
-// code_repos_name_idx ([lifePage] at a time), and each one's refs set within
-// [RefExpiry] by one count over its own live refs.
+// code_repos_name_idx (up to [lifePage] candidates a statement), and each
+// one's refs set within [RefExpiry] by one count over its own live refs.
 //
 // AN ARCHIVED REPOSITORY IS NEVER COUNTED: it takes no push, so nothing it
 // holds moves towards the bound, and a deleted one's refs are its purge's.
 //
 // EVERY STATEMENT IS ITS OWN STALE READ of this node's rows, as every alarm's
 // reading is (the alarm says what this node holds): a page of the listing,
-// or one candidate's count — so no read holds one of the estate's reader
-// connections for longer than one range of one index, [MaxRefsPerRepo]
-// entries at the most, however many repositories are near the bound. A
-// repository renamed or archived between two of them is read as the later
+// or one candidate's count, so no read holds one of the estate's reader
+// connections across another's work. What each one reads:
+//
+//   - a page of the listing visits code_repos_name_idx from the last
+//     candidate's name on, every row with a row lookup — active, archived,
+//     deleted and purging alike, since no index leads with status or refs —
+//     until it has found lifePage candidates or reached the table's end. Its
+//     LIMIT counts candidates, not rows visited, so with fewer than lifePage
+//     of them (the usual case) ONE statement visits every row: it is bounded
+//     by the table — the repositories a document declares
+//     (config.CodeMaxRepos), those tools made and those not yet purged —
+//     never by lifePage;
+//   - a candidate's count is one range of code_refs' primary key over its
+//     repo_id prefix, which holds its live refs AND its tombstones: up to
+//     MaxRefsPerRepo + [MaxTombstonesPerRepo] entries, 200 000, each with a
+//     row lookup for its target and its time (BenchmarkRefsNearLimit's
+//     widest range).
+//
+// A repository renamed or archived between two of them is read as the later
 // statement finds it, which the next reading corrects.
 //
 // Measured on the trim's quarter-hour tick and cached until the next one
@@ -143,11 +158,12 @@ func (r *Reader) RefsNearLimit(ctx context.Context, now time.Time) (RefsNear, er
 // code_repos_name_idx, as livesSQL's is — never a scan, which
 // TestEveryCodeIndexServesARegisteredQuery refuses — the status and the
 // counter tested on each row the seek reaches: no index leads with refs, and
-// the table is at most the repositories a document declares (code.repos,
-// config.CodeMaxRepos) and those tools made. A candidate's recent refs are
-// counted over its own rows by its key's repo_id prefix, the live rows alone:
-// at most MaxRefsPerRepo of them and MaxTombstonesPerRepo tombstones, the
-// tombstones (an empty target) never counted — a deletion is not a ref set.
+// the table is the repositories a document declares (code.repos,
+// config.CodeMaxRepos), those tools made and those not yet purged. A
+// candidate's recent refs are counted over its own rows by its key's repo_id
+// prefix, which reaches at most MaxRefsPerRepo live rows and
+// MaxTombstonesPerRepo tombstones, the tombstones (an empty target) never
+// counted — a deletion is not a ref set.
 const (
 	refsCandidatesSQL = `SELECT id, name, refs FROM code_repos
 		WHERE name > ? AND status = 'active' AND refs >= ?

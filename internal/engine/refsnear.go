@@ -35,11 +35,12 @@ func (e *Engine) refsNearLimit(ctx context.Context, now time.Time) (code.RefsNea
 // it for the tick's reports, the vector coverage's idiom
 // ([retention.measureCoverage]).
 //
-// ON THE TICK AND NEVER ON A REPORT: the reading is a walk of the
-// repositories and a count over each one's refs near the bound — up to
-// code.MaxRefsPerRepo index entries a repository — while a report is assembled
-// on every alarm beat, operator request and dashboard poll, and the figure
-// moves over days: a quarter-hour is a resolution it is honest at.
+// ON THE TICK AND NEVER ON A REPORT: the reading is a walk of every
+// repository row and a count over each one's refs near the bound — its live
+// refs and its tombstones, up to code.MaxRefsPerRepo +
+// code.MaxTombstonesPerRepo index entries a repository — while a report is
+// assembled on every alarm beat, operator request and dashboard poll, and the
+// figure moves over days: a quarter-hour is a resolution it is honest at.
 //
 // A MEASUREMENT THAT FAILS LEAVES NOTHING rather than the last figure, and is
 // said once a tick (`code_refs_near_limit_unread`): an unread estate is not one
