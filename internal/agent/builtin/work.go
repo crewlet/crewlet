@@ -4096,6 +4096,21 @@ func positionOf(at statelog.Position) any {
 	return at.String()
 }
 
+// positionText is [positionOf] for a typed answer: the position a write
+// landed at as the string every write tool's answer states it in
+// (`<stream>@<generation>:<sequence>`), "" for none. THE ACT TRANSPORT READS
+// IT AS THAT STRING (operator.receiptOf), lifting it beside the answer as the
+// position the dashboard's read floor rises to — an answer that spelled it as
+// the position's object was one whose outcome and position the transport
+// could not read at all, so a pending write was reported applied and the
+// reads after it were asked at no floor.
+func positionText(at statelog.Position) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.String()
+}
+
 // seatReadLevel is what every read on this surface uses, and [seatRead] is
 // the same decision in the shape the point readers take.
 //

@@ -162,15 +162,15 @@ func (cv conversing) decided(ctx context.Context, w code.ConversationWrite) (cod
 // findings' ids in the order it raised them — and, for a comment that also
 // set its thread's state, what became of that.
 type codeConversationAnswer struct {
-	Repo          string            `json:"repo"`
-	RenamedTo     string            `json:"renamed_to,omitempty"`
-	RedirectUntil time.Time         `json:"redirect_until,omitzero"`
-	Change        string            `json:"change"`
-	Outcome       statelog.Outcome  `json:"outcome"`
-	Unchanged     bool              `json:"unchanged,omitempty"`
-	ID            string            `json:"id,omitempty"`
-	Findings      []string          `json:"findings,omitempty"`
-	Position      statelog.Position `json:"position,omitzero"`
+	Repo          string           `json:"repo"`
+	RenamedTo     string           `json:"renamed_to,omitempty"`
+	RedirectUntil time.Time        `json:"redirect_until,omitzero"`
+	Change        string           `json:"change"`
+	Outcome       statelog.Outcome `json:"outcome"`
+	Unchanged     bool             `json:"unchanged,omitempty"`
+	ID            string           `json:"id,omitempty"`
+	Findings      []string         `json:"findings,omitempty"`
+	Position      string           `json:"position,omitempty"`
 	// ThreadResolved is the state a comment's call left its thread in, and
 	// ThreadNotSet why it left the thread as it was: the comment stands all
 	// the same.
@@ -184,7 +184,7 @@ func (cv conversing) answerOf(res code.ConversationResult) codeConversationAnswe
 	g := cv.g
 	return codeConversationAnswer{Repo: g.repo.Name, RenamedTo: g.repo.Redirect, RedirectUntil: g.repo.RedirectUntil,
 		Change: g.ref(), Outcome: res.Outcome, Unchanged: res.Unchanged, ID: res.ID, Findings: res.FindingIDs,
-		Position: res.Position, OpID: g.c.actor.Operation}
+		Position: positionText(res.Position), OpID: g.c.actor.Operation}
 }
 
 // page renders an answer, every string defused as every code answer's is.

@@ -517,17 +517,17 @@ func (t *codeBranchWrite) resolve(ctx context.Context, turn *turnctx.Turn, c cod
 // codeBranchAnswer is an engine write's answer: the change it made, or the
 // refusal of it with — for a conflict — each conflicted path.
 type codeBranchAnswer struct {
-	Repo          string            `json:"repo"`
-	RenamedTo     string            `json:"renamed_to,omitempty"`
-	RedirectUntil time.Time         `json:"redirect_until,omitzero"`
-	Branch        string            `json:"branch"`
-	Outcome       statelog.Outcome  `json:"outcome,omitempty"`
-	Commit        string            `json:"commit,omitempty"`
-	Previous      string            `json:"previous,omitempty"`
-	Position      statelog.Position `json:"position,omitzero"`
-	Refusal       string            `json:"refusal,omitempty"`
-	Detail        string            `json:"detail,omitempty"`
-	Conflicts     []code.Conflict   `json:"conflicts,omitempty"`
+	Repo          string           `json:"repo"`
+	RenamedTo     string           `json:"renamed_to,omitempty"`
+	RedirectUntil time.Time        `json:"redirect_until,omitzero"`
+	Branch        string           `json:"branch"`
+	Outcome       statelog.Outcome `json:"outcome,omitempty"`
+	Commit        string           `json:"commit,omitempty"`
+	Previous      string           `json:"previous,omitempty"`
+	Position      string           `json:"position,omitempty"`
+	Refusal       string           `json:"refusal,omitempty"`
+	Detail        string           `json:"detail,omitempty"`
+	Conflicts     []code.Conflict  `json:"conflicts,omitempty"`
 	// ConflictsOmitted counts the conflicted paths this answer leaves out:
 	// those past the git node's page and those past one tool answer.
 	ConflictsOmitted int    `json:"conflicts_omitted,omitempty"`
@@ -551,7 +551,7 @@ func (t *codeBranchWrite) answer(ctx context.Context, turn *turnctx.Turn, c code
 			fmt.Sprintf("%s changed nothing: %s (%s). The same call is refused again; change what it asks for.",
 				tool, res.Detail, res.Refusal)), nil
 	case res.Outcome == statelog.OutcomeApplied, res.Outcome == statelog.OutcomePending:
-		out.Outcome, out.Commit, out.Position = res.Outcome, res.Commit, res.Position
+		out.Outcome, out.Commit, out.Position = res.Outcome, res.Commit, positionText(res.Position)
 		out.Previous = res.Command.Old
 		if out.Previous == code.ZeroOID {
 			out.Previous = ""
@@ -1042,9 +1042,9 @@ type codeRepoWriteAnswer struct {
 	// as the rule's gate held it — and absent where the rule was removed, or
 	// where the request is pending: the row a pending answer carries is the
 	// one its decide read, before the change.
-	Rule     *code.Protection  `json:"rule,omitempty"`
-	Position statelog.Position `json:"position,omitzero"`
-	OpID     string            `json:"op_id,omitempty"`
+	Rule     *code.Protection `json:"rule,omitempty"`
+	Position string           `json:"position,omitempty"`
+	OpID     string           `json:"op_id,omitempty"`
 }
 
 // answer is what a lifecycle request came to, as this tool says it.
@@ -1075,7 +1075,7 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 		forget(turn, c.asker, repo)
 	}
 	out := codeRepoWriteAnswer{Repo: name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
-		Outcome: res.Outcome, Position: res.Position, OpID: c.actor.Operation}
+		Outcome: res.Outcome, Position: positionText(res.Position), OpID: c.actor.Operation}
 	if r := res.Repo; r.ID != "" {
 		out.Repository = &codeRepoState{Name: r.Name, Kind: r.Kind, Status: r.Status, Owner: r.Owner,
 			Visibility: r.Visibility, Search: r.Search, DefaultBranch: r.DefaultBranch,

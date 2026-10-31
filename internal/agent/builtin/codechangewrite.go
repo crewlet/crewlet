@@ -389,7 +389,7 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	out := codeChangeWriteAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
-		Outcome: res.Outcome, Version: res.Version, Position: res.Position, OpID: c.actor.Operation}
+		Outcome: res.Outcome, Version: res.Version, Position: positionText(res.Position), OpID: c.actor.Operation}
 	if res.Number > 0 {
 		// A PENDING OPEN NAMES NO NUMBER: the apply that opens the change
 		// numbers it, and none has run where the answer was formed.
@@ -725,7 +725,7 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 	}
 	out := codeChangeWriteAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
 		Change: code.ChangeRef(repo.Name, number), Outcome: res.Outcome, Unchanged: res.Unchanged,
-		Version: res.Version, Position: res.Position, OpID: c.actor.Operation}
+		Version: res.Version, Position: positionText(res.Position), OpID: c.actor.Operation}
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
 }
 
@@ -734,14 +734,14 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 // later record moved the change since, which is read again before it is
 // written.
 type codeChangeWriteAnswer struct {
-	Repo          string            `json:"repo"`
-	RenamedTo     string            `json:"renamed_to,omitempty"`
-	RedirectUntil time.Time         `json:"redirect_until,omitzero"`
-	Change        string            `json:"change,omitempty"`
-	Outcome       statelog.Outcome  `json:"outcome"`
-	Unchanged     bool              `json:"unchanged,omitempty"`
-	Version       int64             `json:"version,omitempty"`
-	Position      statelog.Position `json:"position,omitzero"`
+	Repo          string           `json:"repo"`
+	RenamedTo     string           `json:"renamed_to,omitempty"`
+	RedirectUntil time.Time        `json:"redirect_until,omitzero"`
+	Change        string           `json:"change,omitempty"`
+	Outcome       statelog.Outcome `json:"outcome"`
+	Unchanged     bool             `json:"unchanged,omitempty"`
+	Version       int64            `json:"version,omitempty"`
+	Position      string           `json:"position,omitempty"`
 	// Reviewers are the reviewers an open asked once the change was open,
 	// and ReviewersNotAsked why it asked none: the change opened all the
 	// same.

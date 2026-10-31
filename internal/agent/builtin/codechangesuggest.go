@@ -78,18 +78,18 @@ func (t *codeApplySuggestions) Call(ctx context.Context, args map[string]any) (t
 // push — its commit and the head it moved — and of its findings' answer: the
 // findings resolved with the commit, or why they were not.
 type codeAppliedAnswer struct {
-	Repo                string            `json:"repo"`
-	RenamedTo           string            `json:"renamed_to,omitempty"`
-	RedirectUntil       time.Time         `json:"redirect_until,omitzero"`
-	Change              string            `json:"change"`
-	Branch              string            `json:"branch"`
-	Outcome             statelog.Outcome  `json:"outcome"`
-	Commit              string            `json:"commit,omitempty"`
-	Previous            string            `json:"previous,omitempty"`
-	Position            statelog.Position `json:"position,omitzero"`
-	FindingsResolved    []string          `json:"findings_resolved,omitempty"`
-	FindingsNotResolved string            `json:"findings_not_resolved,omitempty"`
-	OpID                string            `json:"op_id,omitempty"`
+	Repo                string           `json:"repo"`
+	RenamedTo           string           `json:"renamed_to,omitempty"`
+	RedirectUntil       time.Time        `json:"redirect_until,omitzero"`
+	Change              string           `json:"change"`
+	Branch              string           `json:"branch"`
+	Outcome             statelog.Outcome `json:"outcome"`
+	Commit              string           `json:"commit,omitempty"`
+	Previous            string           `json:"previous,omitempty"`
+	Position            string           `json:"position,omitempty"`
+	FindingsResolved    []string         `json:"findings_resolved,omitempty"`
+	FindingsNotResolved string           `json:"findings_not_resolved,omitempty"`
+	OpID                string           `json:"op_id,omitempty"`
 }
 
 func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Turn,
@@ -166,7 +166,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 			fmt.Sprintf("%s applied nothing: %s (%s). The same call is refused again; change what it asks for.",
 				tool, res.Detail, res.Refusal)), nil
 	case res.Outcome == statelog.OutcomeApplied, res.Outcome == statelog.OutcomePending:
-		out.Outcome, out.Commit, out.Position = res.Outcome, res.Commit, res.Position
+		out.Outcome, out.Commit, out.Position = res.Outcome, res.Commit, positionText(res.Position)
 		if res.Command.Old != code.ZeroOID {
 			out.Previous = res.Command.Old
 		}
