@@ -532,10 +532,10 @@ compaction of a repository drops its multi-pack index and that index's bitmap
 on every git node — the commit-graph is kept, since a merge drops no commit —
 and the background indexing writes them again at its own pace, so a clone
 between the two counts its objects by walking
-([Compaction](code-host.md#compaction)) — and a seat pushes only through its code tools, each change one push the
-engine builds ([Engine-built commits](code-host.md#engine-built-commits)), never from a git client of its own yet: the
-rates in the table are what the code host is built for, where this release's pushes are people's, their CI's and those
-tools'.
+([Compaction](code-host.md#compaction)) — and a seat pushes through its code tools, each change one push the
+engine builds ([Engine-built commits](code-host.md#engine-built-commits)), and from its coding box
+([Coding boxes](code-host.md#coding-boxes)), never from a git client of its own: the rates in the table are what the
+code host is built for, where this release's pushes are people's, their CI's, those tools' and their boxes'.
 
 ### How a request reaches the estate
 

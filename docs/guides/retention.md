@@ -2147,8 +2147,9 @@ a day, 3 000 turns a day, 50 projects):
 
 The code host's line is for a company whose seats push — 3 000 pushes a day,
 the rate the code host is built for, every one of them a seat's (a hundred
-seats pushing thirty times a day); in this release pushes are people's and
-their CI's, and the line scales with them. A seat's push leaves a push row of
+seats pushing thirty times a day); in this release pushes are people's, their
+CI's, and their seats' — through the code tools and from coding boxes — and
+the line scales with them. A seat's push leaves a push row of
 about 680 bytes, naming the seat and the turn, work item and model behind it
 (a person's is about 623), kept the 181 days of the push-history horizon
 (369 MB once the horizon is reached, in the first year), and its pack's row

@@ -44,12 +44,12 @@ declaring a repository and pushing to it are the steps of the
 
 This is the product's current shape, not a configuration choice:
 
-- **Only people use git yet.** A person clones, fetches and pushes over HTTPS
-  with their own API token ([Persons and their
-  tokens](#persons-and-their-tokens)). A seat's coding box is admitted to git
-  with its run's own credential ([Coding boxes](#coding-boxes)), but no launch
-  gives a run a repository yet, so no box clones or pushes. A seat reads and
-  changes the company's repositories through its code tools instead
+- **A seat has no git client of its own.** A person clones, fetches and
+  pushes over HTTPS with their own API token ([Persons and their
+  tokens](#persons-and-their-tokens)), and a seat's coding box with its run's
+  own credential, in the repositories its run was given at launch ([Coding
+  boxes](#coding-boxes)). A seat itself reads and changes the company's
+  repositories through its code tools
   ([The company's code](../guides/tools-and-mcp.md#the-companys-code)): its
   reads are answered on the server ([Server-side reads](#server-side-reads)),
   and each change it asks — files committed, a commit reverted or picked, a
@@ -3879,20 +3879,22 @@ worst — judge a seat: it answers a seat's listing, read or ref `behind_config`
 even when it is the last data node left to ask, because the revision it failed
 to apply may be the one that revoked the seat's grant, so the read is answered
 by a current node or by nobody; a person's read it answers as before, asked
-last. In this release a seat reads a repository through its code tools
-([Server-side reads](#server-side-reads)) and pushes only through them, each
+last. A seat reads a repository through its code tools
+([Server-side reads](#server-side-reads)) and pushes through them, each
 change one push the code host builds for it ([Engine-built
-commits](#engine-built-commits)) — never from a git client of its own yet
+commits](#engine-built-commits)), or from its coding box
+([Coding boxes](#coding-boxes)) — never from a git client of its own
 ([What it does not do yet](#what-it-does-not-do-yet)).
 
 ### A seat's push
 
 A seat's push is decided by its repository's [committer](#the-committer), as
 a person's is, and held to four rules a person's is not — each judged from
-the chart and the calendar of the data node that decides it. In this release
-a seat pushes only through its code tools, each change a push the code host
-builds for it ([Engine-built commits](#engine-built-commits)); these are the
-rules the committer holds every such push to.
+the chart and the calendar of the data node that decides it. A seat pushes
+through its code tools, each change a push the code host builds for it
+([Engine-built commits](#engine-built-commits)), and from its coding box
+([Coding boxes](#coding-boxes)); these are the rules the committer holds
+every such push to, whichever way it came.
 
 - **Its grant, at the decide.** Every command is judged against the seat's
   grant (the table above) before anything about its ref is read, and one the
