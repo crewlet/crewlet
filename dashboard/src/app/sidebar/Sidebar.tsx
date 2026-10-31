@@ -67,10 +67,10 @@
  * `CompactNav`: Search, then the places about you, each its glyph over its
  * name, then each named group folded into ONE tile (Company, Workspace) whose
  * flyout lists its places; Settings and the reader's face stand under the
- * foot's rule, and the engine's status at the top of the foot. Both shapes
- * are drawn from [placeOf], so they list the same places with the same
- * figures, links and locks, and a group's tile carries its places' badges and
- * says when the page on screen is one of them. The live shortcuts (Pinned,
+ * foot's rule, and the engine's status on a row of its own under the mark.
+ * Both shapes are drawn from [placeOf], so they list the same places with the
+ * same figures, links and locks, and a group's tile carries its places'
+ * badges and says when the page on screen is one of them. The live shortcuts (Pinned,
  * Starred, Running) are the full sidebar's: the folded rail is the places,
  * and one press unfolds the rest.
  *
@@ -366,8 +366,8 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       }
       // THE ENGINE'S STATE ON THE NAME'S LINE, compact: a dot and the
       // alarms, its words in its name and title, the panel below it. In the
-      // compact rail the kit stands it at the top of the foot, and the panel
-      // opens above it.
+      // compact rail the kit stands it on a row of its own under the mark,
+      // and the panel still opens below it.
       status={
         <RailBoundary label="Engine" resetKey={at} compact>
           <EnginePanel
@@ -381,7 +381,6 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
             })}
             readsReport={readsReport}
             onSignIn={goSignIn}
-            side={compact ? "top" : "bottom"}
           />
         </RailBoundary>
       }

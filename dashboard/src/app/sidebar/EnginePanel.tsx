@@ -242,7 +242,6 @@ export function EnginePanel({
   reading,
   readsReport,
   onSignIn,
-  side = "bottom",
 }: {
   reading: EngineReading;
   /**
@@ -251,11 +250,6 @@ export function EnginePanel({
    */
   readsReport: boolean;
   onSignIn: () => void;
-  /**
-   * Which way the panel opens from the status: down from the full sidebar's
-   * head, and up from the compact rail's foot, where the kit stands it.
-   */
-  side?: "top" | "bottom";
 }) {
   // NOBODY SIGNED IN IS THE ONE STATE A PRESS CAN FIX, so the status is that
   // button, named for what pressing it does.
@@ -286,7 +280,9 @@ export function EnginePanel({
   return (
     <Popover
       label="Engine"
-      side={side}
+      // BELOW THE STATUS IN EITHER SHAPE: on the head's line in the full
+      // sidebar, and on its own row under the mark in the compact rail.
+      side="bottom"
       // INTO THE ROOM BESIDE THE RAIL: the status ends on the rail's inner
       // edge, so a panel aligned to its start opens over the screen rather
       // than back across the rail (and is clamped to the drawer on a phone).

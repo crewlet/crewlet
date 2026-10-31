@@ -1564,6 +1564,24 @@ describe("the compact sidebar", () => {
     }
   });
 
+  // THE ENGINE'S STATUS STANDS UNDER THE MARK, out of the foot, so its panel
+  // opens below it as it does in the full sidebar; and the reader's face is
+  // at the compact tiles' small step, on their line. Mutation: draw the face
+  // at the medium step, or put the status back in the foot, and this fails.
+  test("stands the engine's status under the mark and the face at the tiles' step", async () => {
+    const win = await folded();
+    try {
+      const status = document.querySelector(".crewlet-app-shell__rail-status");
+      expect(status, "the engine's status is drawn").not.toBeNull();
+      expect(status?.closest(".crewlet-app-shell__rail-foot")).toBeNull();
+      const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+      const face = foot.querySelector(".crewlet-account-row .crewlet-avatar");
+      expect(face?.classList.contains("crewlet-avatar--sm")).toBe(true);
+    } finally {
+      win.restore();
+    }
+  });
+
   test("keeps Settings in the foot, and the face's menu opens the preferences", async () => {
     const win = await folded();
     try {
