@@ -31,10 +31,10 @@ import (
 // value: the screen's copy is a convenience and this package's constant is the
 // rule.
 //
-// The browse dialog's bound (MAX_BROWSE_ROOMS) is not one of these: it is one
-// wave of the socket's queries, derived from the contract's
-// MAX_IN_FLIGHT_QUERIES, which `internal/api/stream` holds to
-// `stream.MaxInFlightQueries` — the package that owns that number.
+// The link previews' bound is not one of these: it is one wave of the
+// socket's queries, the contract's MAX_IN_FLIGHT_QUERIES, which
+// `internal/api/stream` holds to `stream.MaxInFlightQueries`, the package that
+// owns that number.
 func TestTheDashboardsChatLimitsAreTheEngines(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)

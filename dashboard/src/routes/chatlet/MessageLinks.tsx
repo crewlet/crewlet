@@ -28,7 +28,7 @@
  * eight previews would bury the words they hang from. The rest are tokens.
  */
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import { ArtifactKindGlyph, LinkCard, safeHref } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
@@ -38,7 +38,9 @@ import { appRoute } from "~/lib/appRoute.ts";
 import { describeLink, type LinkDescription } from "~/lib/inlineTokens.ts";
 import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { createWave, useWaveSlot } from "~/lib/wave.ts";
 import type { LinkHost } from "~/contract/integrations.ts";
+import { MAX_IN_FLIGHT_QUERIES } from "~/contract/wire.ts";
 import type { ChatUnfurl, ChatUnfurlKind } from "~/protocol/index.ts";
 
 import { ChatFace } from "./Face.tsx";
@@ -77,6 +79,14 @@ export function unfurlHref(
 }
 
 /** One link, as the message draws it. */
+/**
+ * The previews asked at once: ONE WAVE OF THE SOCKET'S QUERIES, shared by every
+ * message and every Shared row on screen. A transcript asks one preview read
+ * per message that carries links, and unbounded, a screenful of them held the
+ * room's own re-reads behind every one ([MAX_IN_FLIGHT_QUERIES]).
+ */
+const PREVIEWS = createWave(MAX_IN_FLIGHT_QUERIES);
+
 type Drawn =
   | { kind: "record"; link: string; unfurl: ChatUnfurl }
   | { kind: "app"; link: string; said: LinkDescription }
@@ -94,7 +104,14 @@ function Unfurled({ links }: { links: readonly string[] }) {
   // ONE READ FOR THE MESSAGE'S LINKS, the safe ones only: an address the
   // scheme allowlist refuses names nothing anybody may open.
   const urls = links.filter((link) => safeHref(link) !== null);
-  const read = useQuery("chat_unfurls", { urls }, { enabled: urls.length > 0 });
+  const { granted, release } = useWaveSlot(PREVIEWS, urls.length > 0);
+  const read = useQuery("chat_unfurls", { urls }, { enabled: urls.length > 0 && granted });
+  // THE SLOT GOES BACK WITH THE ANSWER, whatever it was: a refused read is as
+  // finished as a previewed one.
+  const answered = read.data !== null || read.error !== null;
+  useEffect(() => {
+    if (answered) release();
+  }, [answered, release]);
   const resolved = new Map((read.data?.unfurls ?? []).map((u) => [u.url, u]));
 
   let cards = 0;
