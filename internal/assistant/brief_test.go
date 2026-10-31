@@ -448,7 +448,7 @@ func TestABriefRowMayCiteAChatRoom(t *testing.T) {
 				"needs": []any{need(launch, "Answer Ada in #launch: approve the launch copy?"),
 					need("#release", "Answer Ada in #release: ship Friday or hold?"),
 					need(secret, "Answer Ada in #secret")}})}})
-	mentionsPage := &wire.PageContext{Screen: "chatlet-mentions", Title: "Chatlet › Mentions",
+	mentionsPage := &wire.PageContext{Screen: "chatlet-activity", Title: "Chatlet › Activity",
 		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
 		SourceRevision: "mentions@1", Accepts: []string{}}
 	accepted, err := f.Brief("rooms", "Brief me on this page", mentionsPage)

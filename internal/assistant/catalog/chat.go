@@ -296,7 +296,7 @@ func chatReads() []Tool {
 					col("kind", "Room kind", "channel_kind", tLabel),
 					col("room_id", "Room ID", "channel_id", tText),
 					col("id", "Message ID", "message_id", tText)},
-				More: "next_cursor", Open: &cards.Open{Screen: "chatlet-mentions"}}}),
+				More: "next_cursor", Open: &cards.Open{Screen: "chatlet-activity"}}}),
 			Label: func(map[string]any) string { return "Reading where you were named" },
 		},
 		{

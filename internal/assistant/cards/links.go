@@ -70,7 +70,7 @@ var links = map[string]screen{
 	"container":        {address: "#/doclet/{CONTAINER}", app: iam.GrantDoclet},
 	"page":             {address: "#/doclet/pages/{id}", app: iam.GrantDoclet, noun: "page"},
 	"chatlet":          {address: "#/chatlet/{id}", app: iam.GrantChatlet, noun: "room"},
-	"chatlet-mentions": {address: "#/chatlet/mentions", app: iam.GrantChatlet, label: "Mentions"},
+	"chatlet-activity": {address: "#/chatlet/activity", app: iam.GrantChatlet, label: "Activity"},
 	"chatlet-search":   {address: "#/chatlet/search", app: iam.GrantChatlet, label: "Search chat"},
 	"artifacts":        {address: "#/artifacts", label: "Artifacts"},
 	"artifact":         {address: "#/artifacts/{id}", noun: "artifact"},
