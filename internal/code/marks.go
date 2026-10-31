@@ -383,39 +383,6 @@ func (m *Marks) answer(ctx context.Context, w MarkWrite, last markDecision, deci
 	return MarkResult{Outcome: statelog.OutcomeUnknown}, nil
 }
 
-// applyMarks applies one marks record: the gesture it carries, with the
-// positions its decide found, to the row the person's last record left, at the
-// record's broker instant (this file's head).
-func (a *Applier) applyMarks(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
-	payload, err := DecodeMutation(at.record)
-	if err != nil {
-		return 0, err
-	}
-	p, ok := payload.(PersonMarks)
-	if !ok || at.record.Op != OpMarks {
-		return 0, fmt.Errorf("code: %s is not an op this build applies to a person's code inbox (the record at %s)",
-			at.record.Op, at.position)
-	}
-	if p.Handle != at.record.Subject.ID {
-		return 0, fmt.Errorf("code: the record at %s is on person.%s and its payload names %s — a record on one "+
-			"person's subject may write only that person's marks", at.position, at.record.Subject.ID, p.Handle)
-	}
-	marks, _, err := marksIn(ctx, tx, p.Handle)
-	if err != nil {
-		return 0, err
-	}
-	if err := inbox.Apply(&marks, p.Gesture.Gesture(), p.Positions, at.brokerAt); err != nil {
-		// THE SAME ON EVERY NODE: the rules, the row before and the instant
-		// are each node's alike, so a refusal here is every node's, and the
-		// record writes nothing anywhere rather than stopping an applier.
-		return 0, nil //nolint:nilerr // a gesture the rules refuse at the apply writes no row on any node
-	}
-	if err := writeMarks(ctx, tx, p.Handle, marks, at.packed); err != nil {
-		return 0, err
-	}
-	return 1, nil
-}
-
 // marksIn is the person's code inbox marks in tx and the position of the
 // record that last wrote them — zero marks and zero for a person who never
 // marked anything.
@@ -448,33 +415,6 @@ func marksIn(ctx context.Context, tx *sql.Tx, handle string) (inbox.Marks[Reason
 	return normalMarks(m), position, nil
 }
 
-// writeMarks stores a person's marks as the record at position leaves them.
-func writeMarks(ctx context.Context, tx *sql.Tx, handle string, m inbox.Marks[Reason], position int64) error {
-	list := func(v any, empty bool) (string, error) {
-		if empty {
-			return "[]", nil
-		}
-		b, err := json.Marshal(v)
-		return string(b), err
-	}
-	var cols [4]string
-	for i, part := range []struct {
-		v     any
-		empty bool
-	}{{m.Read, len(m.Read) == 0}, {m.Unread, len(m.Unread) == 0}, {m.Snoozed, len(m.Snoozed) == 0},
-		{m.PrimaryReasons, len(m.PrimaryReasons) == 0}} {
-		var err error
-		if cols[i], err = list(part.v, part.empty); err != nil {
-			return fmt.Errorf("code: encode %s's code inbox marks: %w", handle, err)
-		}
-	}
-	if _, err := tx.ExecContext(ctx, writeMarksSQL, handle, m.Generation, m.SeenThrough.Stream,
-		int64(m.SeenThrough.Packed()), cols[0], cols[1], cols[2], cols[3], position); err != nil {
-		return fmt.Errorf("code: write %s's code inbox marks: %w", handle, err)
-	}
-	return nil
-}
-
 // noticePositionsIn is the packed position of every record ids names among
 // handle's own code notices, and the first id that is none of them, "" when
 // every one is.
@@ -495,20 +435,14 @@ func noticePositionsIn(ctx context.Context, tx *sql.Tx, handle string, ids []str
 	return out, "", nil
 }
 
-// The marks' statements, each registered in plan_test.go: a person's row by
-// its key, written whole by its key, and one notice of theirs by the notice
-// table's key — named, since the planner would otherwise take the person's
-// inbox range (code_notifications_inbox_idx) and read every notice they hold
-// to find one.
+// The marks' reads, each registered in plan_test.go: a person's row by its
+// key, and one notice of theirs by the notice table's key — named, since the
+// planner would otherwise take the person's inbox range
+// (code_notifications_inbox_idx) and read every notice they hold to find one.
+// The row's one write is the applier's (apply_marks.go).
 const (
 	personMarksSQL = `SELECT generation, seen_stream, seen_through, read, unread, snoozed, primary_reasons,
 		position FROM code_person_marks WHERE handle = ?`
-	writeMarksSQL = `INSERT INTO code_person_marks (handle, generation, seen_stream, seen_through, read, unread,
-			snoozed, primary_reasons, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (handle) DO UPDATE SET generation = excluded.generation, seen_stream = excluded.seen_stream,
-			seen_through = excluded.seen_through, read = excluded.read, unread = excluded.unread,
-			snoozed = excluded.snoozed, primary_reasons = excluded.primary_reasons, position = excluded.position`
 	noticePositionSQL = `SELECT log_seq FROM code_notifications INDEXED BY sqlite_autoindex_code_notifications_1
 		WHERE record_id = ? AND recipient = ?`
 )

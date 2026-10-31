@@ -589,8 +589,10 @@ var allowedReplicatedWriter = []allowance{
 			"notices a change record writes per recipient and a purge removes, " +
 			"its merge queues on its own subject, and its checks on their own " +
 			"subject — each attempt's queue, claim and ending joined into one " +
-			"row with its log and its horizon, and the home's dispatch of a " +
-			"change head under its target's checks file (apply_dispatch.go).",
+			"row with its log and its horizon, the home's dispatch of a " +
+			"change head under its target's checks file (apply_dispatch.go), " +
+			"and a person's marks over their own code notices on their own " +
+			"subject (apply_marks.go).",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,
