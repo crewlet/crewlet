@@ -1663,7 +1663,7 @@ func dial(cfg Config, at watched) (*nats.Conn, error) {
 	// check existed and as the suites staging that refusal expect. Every
 	// connection on an external broker comes through here, the
 	// coordination store's and every [Queue.DialOwned] one's included.
-	if nc, err = heldToAuthentication(nc, recorded.info()); err != nil {
+	if nc, err = heldToAuthentication(nc, recorded, cfg.URL); err != nil {
 		return nil, err
 	}
 	at.track(nc)

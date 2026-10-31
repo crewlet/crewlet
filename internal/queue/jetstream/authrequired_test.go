@@ -332,6 +332,126 @@ func TestTheAddressesBehindOneNameAreDialledInRandomOrder(t *testing.T) {
 	}
 }
 
+// THE INFO JUDGED IS THE ONE OF THE SERVER THE CLIENT IS ON.
+//
+// Not the newest connection the dialer opened: nats.go dials the next member
+// at once when a server drops a connection, so a member restarting between
+// the connect and the check leaves the newest connection on a member whose
+// INFO is not read yet, while the client still names the server it completed
+// on — or, its reconnect not done, none. The line judged is the one carrying
+// the server_id the client names; a client on no server is refused as having
+// lost its connection, not as a server that sent no INFO; and once the dial
+// has asked, the dialer records nothing more, so a connection that
+// reconnects for its whole life keeps no line of each.
+//
+// Mutations: answer for the newest connection and the restarted member's
+// unread one is judged, refusing a server that authenticates; leave the
+// dialer unsealed and a later connection is still recorded; drop the branch
+// for a client on no server and it is refused as one that read no INFO.
+func TestTheINFOJudgedIsTheOneOfTheServerTheClientIsOn(t *testing.T) {
+	t.Parallel()
+	// opened is a dialer that has opened three connections: to server A,
+	// which requires authentication, to server B, which does not, and a
+	// newest that has read nothing yet.
+	opened := func(t *testing.T) *infoDialer {
+		t.Helper()
+		d := newInfoDialer(externalHandshake)
+		var servers []net.Conn
+		d.connect = func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			servers = append(servers, server)
+			return client, nil
+		}
+		t.Cleanup(func() {
+			for _, s := range servers {
+				_ = s.Close()
+			}
+		})
+		for _, info := range []string{
+			`INFO {"server_id":"A","auth_required":true}`,
+			`INFO {"server_id":"B"}`,
+			"",
+		} {
+			c, err := d.Dial("tcp", "192.0.2.1:4222")
+			if err != nil {
+				t.Fatalf("Dial: %v", err)
+			}
+			t.Cleanup(func() { _ = c.Close() })
+			if info == "" {
+				continue
+			}
+			server := servers[len(servers)-1]
+			go func() { _, _ = server.Write([]byte(info + "\r\n")) }()
+			if _, err := c.Read(make([]byte, 256)); err != nil {
+				t.Fatalf("read the INFO: %v", err)
+			}
+		}
+		return d
+	}
+
+	t.Run("a client on an older connection's server", func(t *testing.T) {
+		t.Parallel()
+		info := opened(t).sealedInfo("A")
+		if err := requiresAuthentication("server A", info); err != nil {
+			t.Errorf("the INFO of the server the client is on, which requires "+
+				"authentication, was not the one judged: %v", err)
+		}
+	})
+	t.Run("each connection's server by its own id", func(t *testing.T) {
+		t.Parallel()
+		if got, want := string(opened(t).sealedInfo("B")), `INFO {"server_id":"B"}`; got != want {
+			t.Errorf("the INFO for server B = %q, want %q", got, want)
+		}
+	})
+	t.Run("a server no connection read an INFO from", func(t *testing.T) {
+		t.Parallel()
+		for _, id := range []string{"C", ""} {
+			if info := opened(t).sealedInfo(id); info != nil {
+				t.Errorf("the INFO for server %q = %q, want none", id, info)
+			}
+		}
+	})
+	t.Run("a connection opened once the dial has asked", func(t *testing.T) {
+		t.Parallel()
+		d := opened(t)
+		d.sealedInfo("A")
+		c, err := d.Dial("tcp", "192.0.2.1:4222")
+		if err != nil {
+			t.Fatalf("Dial: %v", err)
+		}
+		defer func() { _ = c.Close() }()
+		if _, recorded := c.(*infoConn); recorded {
+			t.Error("a connection opened after the dial asked is still recorded")
+		}
+		if len(d.opened) != 0 {
+			t.Errorf("the sealed dialer still holds %d connections", len(d.opened))
+		}
+	})
+	t.Run("a live client on no server", func(t *testing.T) {
+		t.Parallel()
+		srv := externaltest.Start(t, queue.MaxPayloadBytes)
+		opts, recorded, err := dialOptions(Config{Token: externaltest.Token})
+		if err != nil {
+			t.Fatalf("dialOptions: %v", err)
+		}
+		nc, err := nats.Connect(srv.URL(), opts...)
+		if err != nil {
+			t.Fatalf("connect: %v", err)
+		}
+		nc.Close()
+		_, err = heldToAuthentication(nc, recorded, srv.URL())
+		if err == nil || errors.Is(err, ErrUnauthenticatedBroker) {
+			t.Fatalf("err = %v, want a refusal for a lost connection, not a "+
+				"finding about a server that authenticates", err)
+		}
+		for _, says := range []string{"was lost before", "nats://" + srv.HostPort()} {
+			if !strings.Contains(err.Error(), says) {
+				t.Errorf("the refusal does not say %q: %v", says, err)
+			}
+		}
+	})
+}
+
 // AN INFO LINE IS KEPT WHOLE, AND NOTHING AFTER IT OR PAST ITS BOUND.
 //
 // A large cluster's INFO behind a small first TCP segment arrives in several

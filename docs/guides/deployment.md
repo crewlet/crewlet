@@ -725,9 +725,10 @@ admits a plaintext client that presents no certificate at all. And a token the
 server does not require is no authentication either — the server admits
 everybody else as well — which is why the server's own word is read rather
 than this node's. The check judges the server each connection the node opens
-first reaches — the coordination store's and every second connection
-included — and not one a connection reconnects to later, so configure every
-server of the cluster alike: a client fails over to whichever answers.
+is on when its dial completes — the coordination store's and every second
+connection included — and not one a connection reconnects to later, so
+configure every server of the cluster alike: a client fails over to whichever
+answers.
 
 **`stream.tls` is the transport underneath that authentication**, and it is a
 separate question from who you are: a broker configured `tls { verify: true }`

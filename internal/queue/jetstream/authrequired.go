@@ -100,10 +100,37 @@ func requiresAuthentication(server string, info []byte) error {
 		ErrUnauthenticatedBroker, server)
 }
 
-// heldToAuthentication hands nc back where info admits it, and closes it and
-// answers the refusal where it does not — [heldToTheContract]'s shape.
-func heldToAuthentication(nc *nats.Conn, info []byte) (*nats.Conn, error) {
-	if err := requiresAuthentication(serverOf(nc, false), info); err != nil {
+// heldToAuthentication hands nc back where the INFO of the server it is
+// connected to admits it, and closes it and answers the refusal where it does
+// not — [heldToTheContract]'s shape. recorded is the dialer nc dialled
+// through, and url the stream.url it dialled.
+//
+// # The INFO of the server the client is ON
+//
+// Not the newest connection the dialer opened. The dial reconnects forever,
+// and nats.go dials the next member of a pool at once, with no wait, when the
+// server drops the connection: a member restarting or leaving in lame-duck
+// mode between the connect and this check — the rolling restart an external
+// cluster's operator makes routinely — leaves the dialer's newest connection
+// on a member whose INFO is not read yet. So the line judged is the one whose
+// server_id is the id the client says it is connected to
+// ([infoDialer.sealedInfo]), and a client on no server at all — its server
+// gone between the connect and here, its reconnect not completed — is refused
+// as that, never as a server that sent no INFO.
+func heldToAuthentication(nc *nats.Conn, recorded *infoDialer, url string) (*nats.Conn, error) {
+	id := nc.ConnectedServerId()
+	info := recorded.sealedInfo(id)
+	var err error
+	if id == "" {
+		err = fmt.Errorf("jetstream: this node's connection to %s was lost before it "+
+			"could tell whether that server authenticates its clients, and a "+
+			"connection nobody checked is not handed on: the dial fails rather than "+
+			"wait out the client's reconnect, so dial again once that cluster is serving",
+			serverAddresses(url))
+	} else {
+		err = requiresAuthentication(serverOf(nc, false), info)
+	}
+	if err != nil {
 		nc.Close()
 		return nil, err
 	}
@@ -153,10 +180,11 @@ const infoLineMax = 64 << 10
 //
 // # Which INFO it answers for
 //
-// The NEWEST connection it opened. A connect that tries a cluster's members
-// in turn opens one per attempt, and the one it completed on is the last; a
-// reconnect later opens more, and the dial asks before it hands the
-// connection to anybody.
+// The one whose server_id the client names ([infoDialer.sealedInfo]), and for
+// one dial only: the dial seals the dialer once it has asked, and a
+// connection opened after that — every reconnect for the connection's life —
+// is handed to the client unwrapped and recorded nowhere, so what it keeps is
+// bounded by the connections one connect opens.
 type infoDialer struct {
 	// budget bounds the lookup of a member's name, and then the dials to
 	// its addresses together.
@@ -168,7 +196,8 @@ type infoDialer struct {
 	connect func(ctx context.Context, network, address string) (net.Conn, error)
 
 	mu     sync.Mutex
-	newest *infoConn
+	sealed bool
+	opened []*infoConn
 }
 
 // newInfoDialer is the dialer an external dial goes through, each attempt at
@@ -182,17 +211,20 @@ func newInfoDialer(budget time.Duration) *infoDialer {
 	}
 }
 
-// Dial opens one connection to the member at address and makes it the one
-// [infoDialer.info] answers for.
+// Dial opens one connection to the member at address, recording the line it
+// reads first until the dial seals the dialer.
 func (d *infoDialer) Dial(network, address string) (net.Conn, error) {
 	c, err := d.dialMember(network, address)
 	if err != nil {
 		return nil, err
 	}
-	recorded := &infoConn{Conn: c}
 	d.mu.Lock()
-	d.newest = recorded
-	d.mu.Unlock()
+	defer d.mu.Unlock()
+	if d.sealed {
+		return c, nil
+	}
+	recorded := &infoConn{Conn: c}
+	d.opened = append(d.opened, recorded)
 	return recorded, nil
 }
 
@@ -233,16 +265,29 @@ func (d *infoDialer) dialMember(network, address string) (net.Conn, error) {
 	return nil, err
 }
 
-// info is the INFO line the newest connection read, or nil where it read
-// none (or none within [infoLineMax]).
-func (d *infoDialer) info() []byte {
+// sealedInfo is the INFO line read by the connection whose server_id is
+// serverID — the newest such, nil where none completed one — and stops the
+// dialer recording: see [infoDialer].
+func (d *infoDialer) sealedInfo(serverID string) []byte {
 	d.mu.Lock()
-	newest := d.newest
+	opened := d.opened
+	d.sealed, d.opened = true, nil
 	d.mu.Unlock()
-	if newest == nil {
+	if serverID == "" {
 		return nil
 	}
-	return newest.line()
+	for i := len(opened) - 1; i >= 0; i-- {
+		line := opened[i].line()
+		var announced struct {
+			ServerID string `json:"server_id"`
+		}
+		body, ok := bytes.CutPrefix(line, []byte("INFO "))
+		if ok && json.Unmarshal(bytes.TrimSpace(body), &announced) == nil &&
+			announced.ServerID == serverID {
+			return line
+		}
+	}
+	return nil
 }
 
 // infoConn keeps the first line read through it, and passes every read
