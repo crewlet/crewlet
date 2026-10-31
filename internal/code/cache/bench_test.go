@@ -1927,9 +1927,10 @@ const lookupFetch = 4
 //     whole history: the request a cold cache was synced for, and the first
 //     a coding run's fresh sandbox makes.
 //
-// layers=… (100MB) is the same history's 64 pushes under a PUBLISHED chain of
-// that many layers (layerLookupArms): what a lookup pays per layer of a chain
-// a node installs, which code.MaxPublishedLayers bounds.
+// layers=… (100MB) is the same history under a PUBLISHED chain of that many
+// layers, cut as compact's planner keeps one (layerLookupArms): what a lookup
+// pays per layer of a chain a node installs, which code.MaxPublishedLayers
+// bounds.
 func BenchmarkPackLookup(b *testing.B) {
 	quiet(b)
 	for _, size := range lookupSizes {

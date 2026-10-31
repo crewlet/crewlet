@@ -1584,49 +1584,86 @@ func catchUp(b *testing.B, firstByte time.Duration, repos int) {
 }
 
 // layerLookups are BenchmarkPackLookup's layers= arms: one chain each, of
-// that many layers over the same 64 packs.
-var layerLookups = []int{1, 8, 32, 64}
+// that many layers over the same history — the twenty-one the default
+// repo_max_bytes' chain reaches (code.MaxPublishedLayers' reason), the bound,
+// and twice it.
+var layerLookups = []int{1, 8, 21, 32, 64}
+
+// geometricLayers is how a chain of layers layers cuts a history of commits
+// commits, ROOT FIRST, each layer's count of commits: shaped as compact's
+// planner keeps a chain — every layer compact.LayerSplitFactor times the one
+// above it, the top one a single commit, and the root over the rest, at
+// least half the history. A history doubles to only so many layers inside
+// its half; a chain deeper than that stacks one-commit layers on its top, as
+// a publisher whose every publication is small leaves them before its top
+// layers merge.
+func geometricLayers(commits, layers int) []int {
+	doubling, sum := 0, 0
+	for size := 1; doubling < layers-1 && sum+size <= commits/2; size *= compact.LayerSplitFactor {
+		sum += size
+		doubling++
+	}
+	sizes := []int{commits - sum - (layers - 1 - doubling)}
+	for i := doubling - 1; i >= 0; i-- {
+		size := 1
+		for range i {
+			size *= compact.LayerSplitFactor
+		}
+		sizes = append(sizes, size)
+	}
+	for range layers - 1 - doubling {
+		sizes = append(sizes, 1)
+	}
+	return sizes
+}
 
 // layerLookupArms is BenchmarkPackLookup's layers= arms over the history of
-// commits in src, its 64 pushes packed into a scratch of their own: a chain
-// of that many layers over them, each over an equal share of the packs, and
-// a lookup through it — op=lookup is cat-file --batch-check of
-// lookupIDs ids drawn from every object the history holds (ns/lookup each),
-// op=count a count of main's objects through the chain's bitmaps.
+// commits in src: a chain of that many bitmapped layers cut as
+// geometricLayers cuts it, each layer one pack of its commits' objects
+// packed into a scratch of its own, and a lookup through it — op=lookup is
+// cat-file --batch-check of lookupIDs ids drawn from every object the
+// history holds (ns/lookup each), op=count a count of main's objects through
+// the chain's bitmaps. git looks an object up from the TOP layer down
+// (bsearch_midx), so an id the root holds is looked for in every layer — as
+// at least half of them are here (root-share), and as most are in a
+// geometric chain: an arm of equal layers looks the average id up through
+// half of them, and understates what depth costs.
 // code.MaxPublishedLayers stays unless 32 layers cost more than twice one per
 // lookup; then it is the longest chain that does not.
 //
-// The packs and the ids are made by the first arm that runs, so a pattern
-// that selects none of them makes neither.
+// The ids are drawn by the first arm that runs, so a pattern that selects no
+// arm draws none.
 func (w *syncWorld) layerLookupArms(b *testing.B, src string, commits []string) {
 	b.Helper()
 	root := b.TempDir()
-	pushes := splitPushes(commits, gittest.HistorySessions)
-	var (
-		packs, ids string
-		hist       []string
-	)
+	var ids string
 	for _, layers := range layerLookups {
 		b.Run(fmt.Sprintf("layers=%d", layers), func(b *testing.B) {
-			if packs == "" {
-				packs = scratchRepo(b, root, "packs")
-				for _, p := range pushes {
-					revs := []string{p.tip}
-					if p.base != "" {
-						revs = append(revs, "^"+p.base)
-					}
-					hist = append(hist, gittest.Pack(b, w.client, packs, src, revs...))
-				}
+			if ids == "" {
 				ids = lookupIDs(b, w, src)
 			}
-			dir := linkScratch(b, root, "layers", packs, func(string) bool { return true })
+			dir := scratchRepo(b, root, "layers")
 			defer removeAll(b, dir)
-			per, base := len(hist)/layers, "none"
-			var chain []string
-			var s steps
-			for i := range layers {
-				setMain(b, dir, pushes[(i+1)*per-1].tip)
-				id := strings.TrimSpace(string(s.run(b, w.pool, midxLayerCmd(dir, hist[i*per:(i+1)*per], base, true)).Stdout))
+			base, cut := "none", 0
+			var (
+				chain      []string
+				s          steps
+				rootN, all int64
+			)
+			for i, n := range geometricLayers(len(commits), layers) {
+				revs := []string{commits[cut+n-1]}
+				if cut > 0 {
+					revs = append(revs, "^"+commits[cut-1])
+				}
+				cut += n
+				pack := gittest.Pack(b, w.client, dir, src, revs...)
+				objects := idxObjects(b, packPath(dir, pack, ".idx"))
+				if i == 0 {
+					rootN = objects
+				}
+				all += objects
+				setMain(b, dir, commits[cut-1])
+				id := strings.TrimSpace(string(s.run(b, w.pool, midxLayerCmd(dir, []string{pack}, base, true)).Stdout))
 				chain = append(chain, id)
 				writeMidxChain(b, dir, chain...)
 				base = id
@@ -1641,6 +1678,7 @@ func (w *syncWorld) layerLookupArms(b *testing.B, src string, commits []string) 
 					}
 				}
 				b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/lookupCount, "ns/lookup")
+				b.ReportMetric(float64(rootN)/float64(all), "root-share")
 			})
 			b.Run("op=count", func(b *testing.B) {
 				for b.Loop() {

@@ -1250,16 +1250,25 @@ const (
 	// publisher merges the top layers whatever their sizes.
 	//
 	// CONFIRMED by what a chain's depth costs (internal/code/cache's
-	// BenchmarkPackLookup layers={1,8,32,64}: the 100 MB source history's 64
-	// pushes under a chain of that many bitmapped layers, each over an equal
-	// share of the packs; git 2.56.0, one bounded run of each arm —
-	// -benchtime 1x, one count — on two E-cores of an Intel Core Ultra 7
-	// 265U, 2026-10-29): a lookup of 10 000 ids drawn from every object took
-	// 4.5 µs an id through one layer, 4.8 through eight, 6.4 through
-	// thirty-two and 7.8 through sixty-four, and a count of main's objects
-	// through the bitmaps 3.9, 3.8, 6.2 and 7.3 ms. Thirty-two layers cost a
-	// lookup 1.4 times one layer's, under the twice past which the bound
-	// would come down to the longest chain that does not, so it stays.
+	// BenchmarkPackLookup layers={1,8,21,32,64}: the 100 MB source history,
+	// 42 240 commits, under a chain of that many bitmapped layers cut as the
+	// planner keeps one — each layer twice the one above it from a
+	// one-commit top, the root over the rest, three fifths of the objects or
+	// more, and one-commit layers stacked on top past the fourteen doublings
+	// the history holds — so the average id is looked for through nearly
+	// every layer, git searching from the top layer down; git 2.56.0, one
+	// bounded run of each arm — -benchtime 1x, one count — on two E-cores of
+	// an Intel Core Ultra 7 265U, 2026-10-31): a lookup of 10 000 ids drawn
+	// from every object took 5.5 µs an id through one layer, 5.8 through
+	// eight, 5.5 through twenty-one, 5.8 through thirty-two and 6.2 through
+	// sixty-four — a layer a lookup passes costs it a midx's fan-out and a
+	// binary search of a few entries, lost beside the rest of the lookup —
+	// and a count of main's objects through the bitmaps, one bitmap loaded a
+	// layer, 1.8, 2.4, 3.4, 5.2 and 6.3 ms. Thirty-two layers cost a lookup
+	// 1.06 times one layer's, under the twice past which the bound would come
+	// down to the longest chain that does not, so it stays. (An earlier arm
+	// cut the chain into equal layers, a shape no publisher keeps — some
+	// 9 200 objects each at thirty-two: 1.4 times there.)
 	MaxPublishedLayers = 32
 
 	// LayerPartBytes is the most bytes one stored object of a layer holds:
