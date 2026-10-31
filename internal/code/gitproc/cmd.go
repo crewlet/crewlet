@@ -117,18 +117,21 @@ var identityVars = []string{
 // writes a message holds it to that rule itself.
 //
 // THE DATES are written in the one form git reads as seconds whatever their
-// digits, `@<unix seconds> +0000` — without the `@`, git reads a number of
+// digits, `@<unix seconds> <zone>` — without the `@`, git reads a number of
 // eight digits or fewer as a calendar date, as it reads 20070606, and refuses
 // the epoch's 0 as one it cannot read — so each is held to WHOLE seconds at or
 // after the epoch: a fraction of a second is refused rather than dropped, so
-// the call states the second it means. CommitterWhen is never before
-// AuthorWhen and may be after it: an engine-built commit's committer date is
-// held to its parent's, so no child is dated before its parent, while its
-// author date stays the instant its principal acted.
+// the call states the second it means. The zone is the time's own offset —
+// `+0000` for the engine's own dates, which are UTC, and an author's own for
+// a rebased commit, which keeps its author date as its author wrote it (U43
+// a). CommitterWhen is never before AuthorWhen and may be after it: an
+// engine-built commit's committer date is held to its parent's, so no child is
+// dated before its parent, while its author date stays the instant its
+// principal acted.
 type Identity struct {
 	AuthorName, AuthorEmail       string
 	CommitterName, CommitterEmail string
-	AuthorWhen                    time.Time // GIT_AUTHOR_DATE, written "@<unix seconds> +0000"
+	AuthorWhen                    time.Time // GIT_AUTHOR_DATE, written "@<unix seconds> <its zone>"
 	CommitterWhen                 time.Time // GIT_COMMITTER_DATE, the same form; never before AuthorWhen
 }
 
@@ -146,9 +149,10 @@ func (id *Identity) env() []string {
 }
 
 // gitDate is t as the timestamp git writes into a commit, seconds since the
-// epoch at +0000, behind the `@` that makes git read it as one.
+// epoch behind the `@` that makes git read it as one, at t's own offset
+// (`-0700`'s form: a sign and four digits, which is git's).
 func gitDate(t time.Time) string {
-	return "@" + strconv.FormatInt(t.Unix(), 10) + " +0000"
+	return "@" + strconv.FormatInt(t.Unix(), 10) + " " + t.Format("-0700")
 }
 
 // checkIdentity holds a run's identity to its subcommand — commit-tree's

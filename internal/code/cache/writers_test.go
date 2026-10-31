@@ -543,11 +543,13 @@ var cacheWriters = []writerRow{
 	{"internal/code/host/build.go", kindGit + " mktree",
 		"an engine write's touched directories, written into its scratch a level at a time; freshening as above", nil},
 	{"internal/code/host/build.go", kindGit + " commit-tree",
-		"an engine write's commit — a merge_change's merge commit or squash among them — written into its " +
+		"an engine write's commit — a merge_change's merge commit or squash and a rebase's replayed commits " +
+			"among them — written into its " +
 			"scratch", nil},
 	{"internal/code/host/build.go", kindGit + " merge-tree",
 		"a revert's or a cherry-pick's merged tree (`--write-tree`), and a merge_change's of its change into its " +
-			"target (`--allow-unrelated-histories`, as the home's mergeability merges them), and its conflicted " +
+			"target (`--allow-unrelated-histories`, as the home's mergeability merges them), and a rebase's of " +
+			"each commit it replays onto what it rebased so far, and its conflicted " +
 			"files, written into its scratch; freshening as above", nil},
 	{"internal/code/host/build.go", kindGit + " pack-objects",
 		"an engine write's one pack (`--stdout`), of its scratch's loose objects into a file staged in its " +
@@ -563,6 +565,11 @@ var cacheWriters = []writerRow{
 	{"internal/code/host/scan.go", kindRuntime,
 		"rev-list over a push's new values in its scratch — the path of a blob over the limit and the " +
 			"commits the push introduces — whose argument lists are this file's literals and object ids", nil},
+	{"internal/code/host/rebase.go", kindGit + " rev-list",
+		"a rebase's listing of the commits it replays — `--topo-order --parents --max-count=<n>` of the head the " +
+			"write read less the target's tip — in the copy, whose only arguments not spelled as literals are the " +
+			"count, formatted from code.MaxRebaseCommits, and the two whole commit ids the write named and the " +
+			"copy's for-each-ref read: no --output can be among them", nil},
 	{"internal/code/host/relay.go", kindOS,
 		"the hook relay's private socket directory under TMPDIR, made at Start and removed at Stop: no " +
 			"path of the cache's", nil},

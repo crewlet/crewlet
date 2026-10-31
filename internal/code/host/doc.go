@@ -100,6 +100,10 @@
 // times. A target whose merges land through its queue takes an enqueue
 // instead, built by nothing here.
 //
+// A CHANGE'S REBASE (rebase.go) is an engine write landing as one forced push
+// of its source: its commits replayed onto the target's tip, each keeping its
+// author and author date, under code.RebaseBuildDeadline.
+//
 // # A push's walks go by generation, and are bounded by the history
 //
 // A push walks its repository's history up to four times: the force check's
@@ -815,4 +819,19 @@
 // entries, 0.60–0.85 s (0.68–1.2 s at the p99) and 2 393 208 bytes into one
 // of 100 000 — 24 bytes an entry, the ids incompressible — which is
 // code.MaxWritePackBytes' measure.
+//
+// WHAT A REBASE COSTS (BenchmarkEngineRebase; git 2.56.0 on two E-cores of a
+// Core Ultra 7 265U, the machine loaded beside another session, -benchtime
+// 1x and one count — ONE rebase, the bound this machine's validation runs a
+// benchmark at, so the figure is one sample, never a percentile; 2026-10-31):
+// a change of code.MaxRebaseCommits commits, each adding a file of its own,
+// rebased onto a target that moved by one commit over a tree of 1 000 files,
+// builds in 3 095 ms and lands in 3 137 — about three milliseconds a
+// replayed commit, its merge-tree and its commit-tree each one process whose
+// cost follows the commit's own change, since merge-tree skips every subtree
+// both sides share. So code.RebaseBuildDeadline's forty seconds hold the
+// longest rebase an engine write takes some thirteen times over, the margin
+// left for commits whose changes are wide and for a node at its share;
+// PROVISIONAL, as the arms over 100 000 files (CREWLET_GIT_LARGE=1) and a
+// production p99 are what move it.
 package host

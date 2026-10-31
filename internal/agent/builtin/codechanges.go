@@ -139,6 +139,9 @@ var changeToolNeeds = map[string]code.Access{
 	// namespace on a repository it reads among them — so read, the push's
 	// rule the git node's and the committer's.
 	CodeApplySuggestionsTool: code.AccessRead,
+	// A rebase force-pushes the change's source branch, its rule likewise the
+	// git node's and the committer's.
+	CodeRebaseChangeTool: code.AccessRead,
 }
 
 // The listing's page. A listed change is its row and its readiness in a line,

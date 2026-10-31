@@ -1133,6 +1133,7 @@ func holdingCall(name string) (map[string]any, bool) {
 			"resolution": "dismissed"},
 		builtin.CodeApplySuggestionsTool: {"repo": repo, "change": 7, "findings": []any{suggestedA},
 			"expected_head": revHead(3)},
+		builtin.CodeRebaseChangeTool: {"repo": repo, "change": 7, "expected_head": revHead(3)},
 	}
 	args, ok := rows[name]
 	return args, ok

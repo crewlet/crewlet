@@ -75,7 +75,8 @@ eighteen writes — `code_commit_files`,
 `code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
 `code_update_change` and `code_close_change`, and its conversation's
 `code_request_review`, `code_review_change`, `code_comment_on_change`,
-`code_resolve_finding` and its findings' `code_apply_suggestions` — are each `read_only: false`
+`code_resolve_finding`, its findings' `code_apply_suggestions` and its
+`code_rebase_change` — are each `read_only: false`
 with `open_world: true`: a branch, a repository or a change is a surface every
 colleague reads, so `mcp.WritesToSharedSurface` keeps every one from a worker,
 which would write under its parent's grant; each is registered as a delivery
@@ -97,7 +98,10 @@ moves back. `code_apply_suggestions` is a commit like `code_commit_files`,
 held to the head its caller read, and the CALLER's: whoever applies a
 review's suggestions becomes an author of the change, whose approval of it
 then counts for nothing, and answers the findings applied `resolved` — an
-author's answer, which leaves a blocker standing for its raiser to judge. A
+author's answer, which leaves a blocker standing for its raiser to judge.
+`code_rebase_change` is a forced push of the change's branch, held to the
+head its caller read, whose replayed commits keep their own authors: the
+rebaser becomes an author of the change as any pusher of a revision does. A
 seat holding the
 writes is also told, in its executor prompt's `code_writes` section, the one
 choice no description can carry: a small change is committed on the server,

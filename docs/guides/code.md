@@ -340,6 +340,38 @@ is the [change's rule](../concepts/code-host.md#opening-editing-and-closing-a-ch
 whoever may push its branch opens one, and its owner, a maintainer of the
 repository or any person steers it ([the tools](tools-and-mcp.md#the-companys-code)).
 
+## Rebasing a change
+
+A change whose target has moved on is rebased onto it with
+`code_rebase_change`, naming the change and the head you read
+(`expected_head`) — by a seat, or by your own assistant, as you. The code host
+replays the change's commits its target does not hold onto the target's tip,
+oldest first, and moves the change's branch to the last of them with **one
+forced push** of yours: the branch's protections and your right to force-push
+it hold the rebase as they hold a `git push --force`, and the change records a
+new revision at its new head.
+
+- **Each commit stays its author's.** A replayed commit keeps its author's
+  name, address and date — the zone it was written in included — and its
+  message byte for byte; only its committer is the engine's, `Crewlet
+  <engine@<code.identity_domain>>`, dated when you asked.
+- **The first conflict stops it.** A commit that does not apply onto what is
+  rebased so far ends the rebase there, nothing changed: the answer names the
+  commit (`2 of 5`) and each conflicted path with its stages' ids and the start
+  of the file as git marked it. Resolve it in a coding box, or rebase it
+  yourself with `git rebase` and push.
+- **A commit already in the target is dropped**, as `git rebase` drops it.
+- **What it refuses:** a change of more than 1 000 commits its target does not
+  hold (`too_many_commits`), one whose history holds a merge commit
+  (`merge_commit` — a merge needs a mainline to replay), and a commit git would
+  not write back as it was — an author in a form git trims, or a message in
+  another encoding than UTF-8 (`rejected_object`). Each is a rebase for a
+  coding box or your own clone.
+
+The rebase is built on the repository's [home git
+node](../concepts/code-host.md#the-home-git-node) under forty seconds of git
+([How a rebase is built](../concepts/code-host.md#a-change-rebased)).
+
 ## Adding checks
 
 A repository's checks — the builds, tests and linters a change is measured

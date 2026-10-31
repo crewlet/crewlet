@@ -2101,10 +2101,10 @@ func Catalogue() []Instrument {
 			Attributes: []string{"kind", "outcome"},
 			Shows: "Every engine write this git node built or answered — a " +
 				"commit, a revert, a cherry-pick, a branch created or deleted, " +
-				"a review's suggestions applied through a tool, a change merged, " +
+				"a review's suggestions applied through a tool, a change merged or rebased, " +
 				"a seat's or a person's — by `kind` (`commit_files`, `revert`, " +
 				"`cherry_pick`, `create_branch`, `delete_branch`, " +
-				"`apply_suggestions`, `merge_change`) and " +
+				"`apply_suggestions`, `merge_change`, `rebase_change`) and " +
 				"`outcome`: `applied`, `pending` and `unknown` as a push's, " +
 				"from its row — a merge's from its merge record, or its " +
 				"enqueue's where its target's queue took it; `refused`, a " +
@@ -2133,7 +2133,8 @@ func Catalogue() []Instrument {
 				"wait for its row, a merge's its merge record's and every " +
 				"rebuild onto a target that moved; and `total`. A `build` tail " +
 				"near ten seconds — thirty for a `merge_change`, whose one " +
-				"merge is a mergeability's — is changes too wide or too deep " +
+				"merge is a mergeability's, and forty for a `rebase_change`, " +
+				"each of whose commits replays one — is changes too wide or too deep " +
 				"for an engine write, answered too_large; a `land` tail is the " +
 				"code log's, as a push's is.",
 		},

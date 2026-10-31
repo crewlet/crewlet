@@ -607,7 +607,7 @@ func (t *codeBranchWrite) answer(ctx context.Context, turn *turnctx.Turn, c code
 		Branch: strings.TrimPrefix(w.Ref, branchRoot), OpID: c.actor.Operation}
 	switch {
 	case res.Refusal == code.WriteConflict:
-		return t.conflicted(ctx, turn, c, out, res)
+		return conflictedWrite(ctx, turn, c, tool, out, res)
 	case res.Refusal != "":
 		return refusedBy(tools.RefusalInvalid, writeRefusalError(string(res.Refusal), res.Detail),
 			fmt.Sprintf("%s changed nothing: %s (%s). The same call is refused again; change what it asks for.",
@@ -635,14 +635,14 @@ func (t *codeBranchWrite) answer(ctx context.Context, turn *turnctx.Turn, c code
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
 }
 
-// conflicted is a revert's or a cherry-pick's conflict: nothing was stored,
-// and each conflicted path goes out with its stages' ids and the start of
-// the file as git marked it, FENCED — a repository's text is its
-// committers' — as many as fit one answer, the rest counted.
-func (t *codeBranchWrite) conflicted(ctx context.Context, turn *turnctx.Turn, c codeCaller,
-	out codeBranchAnswer, res code.EngineWriteResult) (tools.Result, error) {
+// conflictedWrite is an engine write's conflict as tool answers it — a
+// revert's, a cherry-pick's or a rebase's: nothing was stored, and each
+// conflicted path goes out with its stages' ids and the start of the file as
+// git marked it, FENCED — a repository's text is its committers' — as many as
+// fit one answer, the rest counted.
+func conflictedWrite(ctx context.Context, turn *turnctx.Turn, c codeCaller, tool string, out codeBranchAnswer,
+	res code.EngineWriteResult) (tools.Result, error) {
 
-	tool := t.Name()
 	out.Refusal = string(code.WriteConflict)
 	out.Detail = fmt.Sprintf("%s Nothing was committed. Read each path's stages with %s by the ids "+
 		"below (base, ours — the branch — and theirs), make the change yourself, and commit it with %s.",

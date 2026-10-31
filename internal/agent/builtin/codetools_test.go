@@ -1710,7 +1710,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the twenty-nine code tools'
+// codeCatalogueBudget is the most bytes the thirty code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // a seat at full_access carries, the one tier offered the writes
 // (CodeWritesWithheld); every other seat carries the reads alone
@@ -1782,12 +1782,12 @@ const codeReadsCatalogueBudget = 18_600
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
 // code carries the eleven reads' definitions on every round of every turn, and
-// a seat at full_access the eighteen writes' beside them: a CLI's catalogue
+// a seat at full_access the nineteen writes' beside them: a CLI's catalogue
 // rides in the user text (cliagent.RenderPrompt), so nothing caches them, and
 // each byte is paid again every round. Measured as that catalogue renders them
 // — indented, HTML-escaped, added to a catalogue already holding a tool, so
 // each one's separator and indentation count — the reads alone and all
-// twenty-nine, each held to a budget, so a later description edit is a
+// thirty, each held to a budget, so a later description edit is a
 // decision rather than drift, as the executor prompt's budgets make a sentence
 // one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1815,7 +1815,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		got, budget int
 	}{
 		{"the eleven code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all twenty-nine code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
+		{"all thirty code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
 			codeCatalogueBudget},
 	} {
 		tokens := cliagent.EstimateTokens(strings.Repeat(" ", c.got))

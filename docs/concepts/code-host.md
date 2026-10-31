@@ -5874,6 +5874,7 @@ code](../guides/tools-and-mcp.md#the-companys-code)).
 | `delete_branch` | A branch, at the head its caller read. |
 | `apply_suggestions` | Up to 64 findings' [suggestions](#findings) put in place of the lines they are anchored to, on a change's source branch at the head its caller read, as one commit — all of them or none ([A review's suggestions applied](#a-reviews-suggestions-applied)). |
 | `merge_change` | A change merged into its target — a merge commit, one squashed commit or a fast-forward — at the head its caller read, landed as one **merge record** rather than a push; or, on a target whose merges land through its queue, enqueued ([How a merge is built](#how-a-merge-is-built)). |
+| `rebase_change` | A change's commits its target does not hold replayed onto the target's tip — each keeping its author — and its source branch moved to them from the head its caller read by one forced push ([A change rebased](#a-change-rebased)). |
 
 Every write that moves a branch names the head its caller read, so a write
 onto a branch that moved since is refused `stale` rather than land on a
@@ -6064,10 +6065,11 @@ repository's committer reaches is recorded as any push's is. A refusal of the
 | `path_conflict` | A file where a directory is needed or the reverse, or one path beneath another the same call makes, keeps or moves. |
 | `path_not_found` | An edit, a delete, a move or a mode of a path the tree does not hold. |
 | `not_a_file` | An edit or a mode of a directory, a link or a submodule. |
-| `merge_commit` | A revert or a cherry-pick of a merge, which needs a mainline: make it in a coding box. |
+| `merge_commit` | A revert or a cherry-pick of a merge, or a rebase of a change whose history holds one: a merge needs a mainline. Make it in a coding box. |
 | `not_fast_forward` | A `fast_forward` merge of a change whose head does not hold its target's tip: merge or squash it, or rebase it onto its target first. |
-| `too_large` | The write's pack is past 4 MiB, or its build ran its ten seconds of git — a merge's thirty. |
-| `rejected_object` | An object the build made fails `index-pack --strict`; the sentence is git's own first error, naming the object and the check. |
+| `too_many_commits` | A rebase of a change holding more than 1 000 commits its target does not. |
+| `too_large` | The write's pack is past 4 MiB, or its build ran its ten seconds of git — a merge's thirty, a rebase's forty. |
+| `rejected_object` | An object the build made fails `index-pack --strict` — the sentence is git's own first error, naming the object and the check — or a commit a rebase would replay that git would not write back as it was: an author in a form git trims, or a message in another encoding than UTF-8. |
 | `suggestion_outdated` | A suggestion whose finding's lines changed since they were read — a hunk between the blob they were read in and the head's touched them — or whose file is gone or no regular file at the head, or holds fewer lines than it names; every such finding is named, and nothing is applied. |
 | `suggestion_overlap` | Suggestions whose lines, placed in the head's file, overlap; every finding in an overlap is named beside one it overlaps, and nothing is applied. |
 
@@ -6100,6 +6102,42 @@ write ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
   where the applier is an author. An answer leaves a blocker standing for its
   raiser to judge ([Findings](#findings)): applying a suggestion answers a
   finding, it never clears one.
+
+### A change rebased
+
+`code_rebase_change` rebases a change onto its target's tip as one engine
+write of kind `rebase_change`: the change by its number, and its source branch
+at the head its caller read. The build:
+
+1. **Lists what to replay**: one `git rev-list --topo-order --parents` of the
+   head less the target's tip, oldest first — at most 1 000 commits
+   (`too_many_commits` past it), none a merge (`merge_commit`).
+2. **Replays each commit** onto what is rebased so far: one `git merge-tree
+   --write-tree --merge-base=<its parent>` of the tip and the commit — a
+   cherry-pick of it — and one `git commit-tree`. The **first** that conflicts
+   stops the rebase with nothing stored, its answer naming the commit (`2 of
+   5`) and its conflicted paths as a revert's are. A commit whose change the
+   tip already holds is dropped, as `git rebase` drops it.
+3. **Keeps each commit its author's** (U43, answered (a)): its author's name,
+   address and date — with the zone it was written in — and its message byte
+   for byte; its committer is the engine, at the instant the rebase was asked,
+   or its new parent's committer date, or its own author date, whichever is
+   latest, so no commit is committed before it is authored or dated before its
+   parent, and a rebase asked again builds the same commits. A commit git would
+   not write back as it was — an author in a form git trims, a message in
+   another encoding than UTF-8 — is refused `rejected_object` rather than
+   rewritten.
+4. **Lands one forced push** of the source branch from the head its caller
+   read to the last replayed commit, through the [one landing](#how-a-write-is-built):
+   the branch's protections and the caller's right to force-push it hold the
+   rebase as they hold a `git push --force`, and the push's apply records the
+   change's new revision.
+
+The commits are read sixteen at a time, so what a rebase holds of their
+messages is bounded whatever its length. A rebase's build is given **forty
+seconds** of git (BenchmarkEngineRebase measures it), and a router gives it
+**112 seconds** on one git node — an engine write's 82 with its build term
+replaced by the rebase's.
 
 ### The bounds
 

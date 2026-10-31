@@ -2088,7 +2088,8 @@ func TestProductionsGitWriteAttemptHoldsAWritesWaits(t *testing.T) {
 // AN ENGINE WRITE'S ATTEMPT FOLLOWS ITS KIND'S BUILD (M5-D11): the git write
 // attempt's build term — a push-landing write's ten seconds — is replaced by
 // the kind's own, so a merge_change, built under a mergeability's thirty
-// seconds, is given 102 s and every other kind its 82 s; and the walk reads it
+// seconds, is given 102 s, a rebase_change, built under its forty, 112 s,
+// and every other kind its 82 s; and the walk reads it
 // off the write it carries, every attempt of it, the home's included.
 //
 // Mutation: give every write the class's attempt → the merge's 82 s, red.
@@ -2097,9 +2098,10 @@ func TestAnEngineWritesAttemptFollowsItsKind(t *testing.T) {
 	prod := Production()
 	r := newFleet(t).client
 	for _, kind := range code.EngineWriteKinds() {
-		want := 82 * time.Second
-		if kind == code.WriteMergeChange {
-			want = 102 * time.Second
+		want := map[code.EngineWriteKind]time.Duration{code.WriteMergeChange: 102 * time.Second,
+			code.WriteRebaseChange: 112 * time.Second}[kind]
+		if want == 0 {
+			want = 82 * time.Second
 		}
 		if got := prod.GitWriteAttemptFor(kind); got != want {
 			t.Errorf("production gives a %s %v, want %v: the git write attempt with its build term the kind's",

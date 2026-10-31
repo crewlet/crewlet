@@ -201,7 +201,11 @@ func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 // beneath it as a directory — one of which may exist where the branch does
 // not — so only the line naming it exactly is read. A branch naming anything
 // but a commit is code.ErrInvalid: no engine write moves one.
-func (wr *writing) head(ctx context.Context) (string, error) {
+func (wr *writing) head(ctx context.Context) (string, error) { return wr.headOf(ctx, wr.w.Ref) }
+
+// headOf is where branch ref is in the copy, "" where it does not exist, read
+// as [writing.head] reads the write's own — a rebase's target among them.
+func (wr *writing) headOf(ctx context.Context, branch string) (string, error) {
 	var head, kind string
 	lines := gitproc.NewLines(func(line []byte) error {
 		id, rest, ok := bytes.Cut(line, []byte{' '})
@@ -209,13 +213,13 @@ func (wr *writing) head(ctx context.Context) (string, error) {
 		if !ok || !ok2 || !gitref.ValidOID(id) {
 			return fmt.Errorf("host: for-each-ref answered %q, which names no ref", line)
 		}
-		if string(ref) == wr.w.Ref {
+		if string(ref) == branch {
 			head, kind = string(id), string(typ)
 		}
 		return nil
 	})
 	res, err := wr.s.runGit(ctx, gitproc.Cmd{
-		Dir: wr.synced.Dir, Args: []string{"for-each-ref", "--format=%(objectname) %(objecttype) %(refname)", wr.w.Ref},
+		Dir: wr.synced.Dir, Args: []string{"for-each-ref", "--format=%(objectname) %(objecttype) %(refname)", branch},
 		Config: wr.s.o.Cache.ServeConfig(), Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
 	})
 	if err == nil {
@@ -226,7 +230,7 @@ func (wr *writing) head(ctx context.Context) (string, error) {
 	}
 	if head != "" && kind != "commit" {
 		return "", fmt.Errorf("%w: ref: %s names a %s, not a commit, which no engine write moves", code.ErrInvalid,
-			wr.w.Ref, kind)
+			branch, kind)
 	}
 	return head, nil
 }
@@ -510,6 +514,8 @@ func (wr *writing) build(ctx context.Context, sc *cache.Scratch, j judgement) (b
 		commit, res, done, err = b.commitFiles(ctx, j)
 	case code.WriteApplySuggestions:
 		commit, res, done, err = b.applySuggestions(ctx, j)
+	case code.WriteRebaseChange:
+		commit, res, done, err = b.rebase(ctx)
 	default:
 		commit, res, done, err = b.pick(ctx)
 	}
@@ -1213,11 +1219,13 @@ func (b *building) readCommits(ctx context.Context, ids []string, into []*commit
 }
 
 // commitHeader is what a build reads of a commit object as it streams: its
-// tree, its parents, its committer's date and its encoding, and its message —
-// kept up to keep bytes, cut marking one longer.
+// tree, its parents, its author line as git wrote it (`<name> <<email>>
+// <seconds> <zone>`, which a rebase replays), its committer's date and its
+// encoding, and its message — kept up to keep bytes, cut marking one longer.
 type commitHeader struct {
 	tree      string
 	parents   []string
+	author    string
 	committed time.Time
 	encoding  string
 	message   []byte
@@ -1254,6 +1262,8 @@ func (h *commitHeader) Write(p []byte) (int, error) {
 			h.tree = strings.TrimPrefix(line, "tree ")
 		case strings.HasPrefix(line, "parent "):
 			h.parents = append(h.parents, strings.TrimPrefix(line, "parent "))
+		case strings.HasPrefix(line, "author "):
+			h.author = strings.TrimPrefix(line, "author ")
 		case strings.HasPrefix(line, "committer "):
 			h.committed = identDate(line)
 		case strings.HasPrefix(line, "encoding "):

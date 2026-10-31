@@ -127,14 +127,19 @@ func TestOnlyCommitTreeTakesAnIdentity(t *testing.T) {
 	epoch := gitproc.Identity{
 		AuthorName: "Ada Author", AuthorEmail: "ada@example.com",
 		CommitterName: "Crewlet", CommitterEmail: "engine@seats.invalid",
-		AuthorWhen: time.Unix(0, 0), CommitterWhen: time.Unix(0, 0),
+		AuthorWhen: time.Unix(0, 0).UTC(), CommitterWhen: time.Unix(0, 0).UTC(),
 	}
+	// A REBASED COMMIT'S AUTHOR DATE KEEPS ITS AUTHOR'S ZONE (U43 a): the
+	// offset of the time it is given, written as git writes one.
+	zoned := suiteIdentity()
+	zoned.AuthorWhen = time.Unix(1700000000, 0).In(time.FixedZone("", -(5*3600 + 30*60)))
 	for _, tc := range []struct {
 		id                gitproc.Identity
 		author, committer string
 	}{
 		{suiteIdentity(), "@1700000000 +0000", "@1700003600 +0000"},
 		{epoch, "@0 +0000", "@0 +0000"},
+		{zoned, "@1700000000 -0530", "@1700003600 +0000"},
 	} {
 		res, err := fake.Run(t.Context(), gitproc.Cmd{Args: []string{"commit-tree", emptyTree}, Identity: &tc.id,
 			Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline})
@@ -392,7 +397,7 @@ func identityPartsOn(t *testing.T, git string) {
 
 	for _, sec := range []int64{0, 1, 86400, 1700000000, 253402300799} {
 		id := suiteIdentity()
-		id.AuthorWhen, id.CommitterWhen = time.Unix(sec, 0), time.Unix(sec, 0)
+		id.AuthorWhen, id.CommitterWhen = time.Unix(sec, 0).UTC(), time.Unix(sec, 0).UTC()
 		commit, admitted := poolWrites(id)
 		if !admitted {
 			t.Errorf("the second %d is refused", sec)

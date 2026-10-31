@@ -101,7 +101,7 @@ roles:
 type unwrittenCode struct{ builtin.CodeWriter }
 
 // A SEAT'S MODEL IS SHOWN THE CODE WRITES ONLY WHERE ITS TIER WRITES. Every
-// seat's registry holds the eighteen, as it holds every builtin; the runner
+// seat's registry holds the nineteen, as it holds every builtin; the runner
 // the epoch builds for a turn leaves them off a seat whose code tier caps it
 // below write — no repository's grant would let one of its calls through — and
 // so does the executor's guidance on changing code, which is gated on holding
@@ -110,7 +110,7 @@ type unwrittenCode struct{ builtin.CodeWriter }
 // runner's, and either half alone could drop it.
 //
 // Mutation: withheldFrom leaving the code writes to the authority table alone
-// → the read_only and review seats are shown all eighteen and told how to
+// → the read_only and review seats are shown all nineteen and told how to
 // commit, red; withholding them at every tier → the full_access seat is shown
 // none, red.
 func TestASeatsModelIsShownTheCodeWritesOnlyWhereItsTierWrites(t *testing.T) {

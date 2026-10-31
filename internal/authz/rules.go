@@ -181,6 +181,9 @@ const (
 	// change's branch, judged as every engine write is — the grant's ref rule
 	// and the protections, on the git node and at the committer.
 	ActionCodeApplySuggestions Action = "code_apply_suggestions"
+	// And its commits rebased onto its target: an engine write of its source,
+	// a forced push of it, judged as every engine write is.
+	ActionCodeRebaseChange Action = "code_rebase_change"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
@@ -823,6 +826,8 @@ var rules = map[Action]rule{
 	ActionCodeResolveFinding:  {class: ClassEverybody, recency: iam.RecencyAny},
 	// AND ITS SUGGESTIONS APPLIED, on code.git's footing as every engine write.
 	ActionCodeApplySuggestions: {class: ClassEverybody, recency: iam.RecencyAny},
+	// AND ITS REBASE, on the same footing.
+	ActionCodeRebaseChange: {class: ClassEverybody, recency: iam.RecencyAny},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the

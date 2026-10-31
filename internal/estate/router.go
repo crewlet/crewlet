@@ -215,7 +215,9 @@ func Production() Timing {
 // build of a write landing as one push — replaced by the kind's own
 // (code.EngineWriteKind.BuildDeadline). So a merge_change, whose build is a
 // mergeability's (code.MergeBuildDeadline, 30 s), is given 102 s in
-// production, and every other kind the 82 s it was: the git node fits every
+// production, a rebase_change, whose build replays up to
+// code.MaxRebaseCommits commits (code.RebaseBuildDeadline, 40 s), 112 s, and
+// every other kind the 82 s it was: the git node fits every
 // stage of the write into its attempt (internal/code/host's deadline rule),
 // and a kind given a longer build must be given the time to run it before its
 // upload and proposal, or every such build near its bound is answered busy.

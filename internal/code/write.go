@@ -79,12 +79,19 @@ const (
 	// delete its source in one record, and an engine-built push carries one
 	// command (M5-D10).
 	WriteMergeChange EngineWriteKind = "merge_change"
+	// WriteRebaseChange replays a change's ([EngineWrite.Change]) commits onto
+	// its target's tip, each keeping its author and its author date (U43 a),
+	// and moves its source branch ([EngineWrite.Ref], at the head its caller
+	// read) to the last of them — ONE PUSH, forced, since the branch no longer
+	// holds its old head. At most [MaxRebaseCommits] commits, none a merge;
+	// the first that conflicts stops it, nothing stored.
+	WriteRebaseChange EngineWriteKind = "rebase_change"
 )
 
 // EngineWriteKinds is the closed set, in the order a reader is told them.
 func EngineWriteKinds() []EngineWriteKind {
 	return []EngineWriteKind{WriteCommitFiles, WriteRevert, WriteCherryPick, WriteCreateBranch, WriteDeleteBranch,
-		WriteApplySuggestions, WriteMergeChange}
+		WriteApplySuggestions, WriteMergeChange, WriteRebaseChange}
 }
 
 // Valid reports a kind this build knows.
@@ -96,19 +103,24 @@ func (k EngineWriteKind) Valid() bool { return slices.Contains(EngineWriteKinds(
 // of its own, whose commit is its method's and whose signature U43's
 // (internal/code/host's merge.go).
 func (k EngineWriteKind) Commits() bool {
-	return k == WriteCommitFiles || k == WriteRevert || k == WriteCherryPick || k == WriteApplySuggestions
+	return k == WriteCommitFiles || k == WriteRevert || k == WriteCherryPick || k == WriteApplySuggestions ||
+		k == WriteRebaseChange
 }
 
 // BuildDeadline is the git run time a write of the kind is given for its
 // whole build, every process of it together: [MergeBuildDeadline] for a
 // merge_change, whose one merge-tree is the one a change's mergeability is
-// measured by, and [WriteBuildDeadline] for every kind that lands as one
-// push. The estate's attempt on a git node follows it
+// measured by; [RebaseBuildDeadline] for a rebase_change, which replays up to
+// [MaxRebaseCommits] commits a merge each; and [WriteBuildDeadline] for every
+// other kind. The estate's attempt on a git node follows it
 // (internal/estate's Timing.GitWriteAttemptFor), so a kind given a longer
 // build is given the time to run it and nothing more.
 func (k EngineWriteKind) BuildDeadline() time.Duration {
-	if k == WriteMergeChange {
+	switch k {
+	case WriteMergeChange:
 		return MergeBuildDeadline
+	case WriteRebaseChange:
+		return RebaseBuildDeadline
 	}
 	return WriteBuildDeadline
 }
@@ -207,11 +219,12 @@ type EngineWrite struct {
 	// the domain has run without it, none of the domain being on main — so
 	// every git node asked it reads it.
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
-	// Change is a merge_change's change, by its number on the repository —
-	// web!42's 42, the name every change tool and the `change` read give it —
-	// whose row the git node reads at the caller's floor for its source, its
-	// title and its authors. Its Ref is the change's target and its
-	// ExpectedHead the change's head, each as its caller read them.
+	// Change is a merge_change's or a rebase_change's change, by its number
+	// on the repository — web!42's 42, the name every change tool and the
+	// `change` read give it — whose row the git node reads at the caller's
+	// floor. A merge's Ref is the change's target and its ExpectedHead the
+	// change's head; a rebase's Ref is the change's source, which it moves,
+	// at that head — each as its caller read them.
 	Change int64 `json:"change,omitempty"`
 	// Method is a merge_change's [MergeMethod]: a merge commit, one squashed
 	// commit, or a fast-forward.
@@ -390,13 +403,18 @@ const (
 	// WriteNotAFile is an edit or a mode of a directory, a link or a
 	// submodule.
 	WriteNotAFile WriteRefusal = "not_a_file"
-	// WriteMergeCommit is a revert or a cherry-pick of a merge commit.
+	// WriteMergeCommit is a revert or a cherry-pick of a merge commit, or a
+	// rebase of a change one of whose commits is one: a merge needs a
+	// mainline to replay.
 	WriteMergeCommit WriteRefusal = "merge_commit"
 	// WriteTooLarge is a pack past MaxWritePackBytes, or a build past
 	// WriteBuildDeadline.
 	WriteTooLarge WriteRefusal = "too_large"
 	// WriteRejectedObject is an object the build made that the relay's own
-	// check — index-pack --strict, receive.fsckObjects' — refuses.
+	// check — index-pack --strict, receive.fsckObjects' — refuses, or a
+	// commit a rebase would replay that git would not write back as it was:
+	// an author it names in a form git trims or refuses, or a message in an
+	// encoding other than UTF-8.
 	WriteRejectedObject WriteRefusal = "rejected_object"
 	// WriteSuggestionOutdated is an apply_suggestions one of whose findings'
 	// lines changed since they were read — a hunk between the blob they were
@@ -412,13 +430,18 @@ const (
 	// head does not hold its target's tip: the target cannot move to it
 	// without dropping what it holds — merged or squashed, it can.
 	WriteNotFastForward WriteRefusal = "not_fast_forward"
+	// WriteTooManyCommits is a rebase_change of a change carrying more than
+	// [MaxRebaseCommits] commits its target does not hold: a history that
+	// long is rebased in a coding box.
+	WriteTooManyCommits WriteRefusal = "too_many_commits"
 )
 
 // WriteRefusals is the closed set.
 func WriteRefusals() []WriteRefusal {
 	return []WriteRefusal{WriteConflict, WriteNothingChanged, WriteEditNotFound, WriteEditAmbiguous,
 		WriteEditBinary, WriteEditLineEndings, WritePathConflict, WriteNotFound, WriteNotAFile, WriteMergeCommit,
-		WriteTooLarge, WriteRejectedObject, WriteSuggestionOutdated, WriteSuggestionOverlap, WriteNotFastForward}
+		WriteTooLarge, WriteRejectedObject, WriteSuggestionOutdated, WriteSuggestionOverlap, WriteNotFastForward,
+		WriteTooManyCommits}
 }
 
 // Valid reports a refusal this build knows.
@@ -504,6 +527,22 @@ const (
 	// than its merges are built — a queue's work (M5-D9), or a person's —
 	// and a fifth rebuild would only spend the attempt the write is given.
 	MergeRecomputes = 4
+
+	// MaxRebaseCommits is the most commits one rebase_change replays: A
+	// THOUSAND (the design's, PLAN.md). Each is one merge-tree and one
+	// commit-tree in its build, so the bound is what holds a rebase inside
+	// RebaseBuildDeadline; a longer history is a coding box's to rebase.
+	MaxRebaseCommits = 1_000
+
+	// RebaseBuildDeadline is a rebase_change's whole build — its listing,
+	// its commits read, and one merge-tree and one commit-tree a replayed
+	// commit: FORTY SECONDS, PROVISIONAL. MEASURED (BenchmarkEngineRebase,
+	// internal/code/host's doc.go "What a rebase costs", one sample at this
+	// machine's bound): MaxRebaseCommits commits over a tree of 1 000 files
+	// build in 3.1 s, some three milliseconds a commit, so the deadline holds
+	// the longest rebase some thirteen times over for commits whose changes
+	// are wider; what moves it is a production rebase whose p99 nears it.
+	RebaseBuildDeadline = 40 * time.Second
 
 	// MaxTreePathBytes is the longest path a write names: Linux's PATH_MAX,
 	// since a path no checkout can create is a tree no client can use.
@@ -800,8 +839,22 @@ func (w EngineWrite) validKind() error {
 	merging := []field{{"change", w.Change != 0}, {"method", w.Method != ""},
 		{"delete_source", w.DeleteSource}, {"override", w.Override != ""}, {"close_task", w.CloseTask},
 		{"auto_revert", w.AutoRevert}}
-	if w.Kind == WriteMergeChange {
+	switch w.Kind {
+	case WriteMergeChange:
 		return w.validMerge(want(head), none(commit, files, base, message, suggestions))
+	case WriteRebaseChange:
+		// ONTO ITS TARGET'S TIP, FROM THE HEAD ITS CALLER READ: the commits
+		// replayed keep their own messages, so a rebase carries none.
+		if err := want(head); err != nil {
+			return err
+		}
+		if err := none(append([]field{commit, files, base, message, suggestions}, merging[1:]...)...); err != nil {
+			return err
+		}
+		if w.Change < 1 {
+			return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
+		}
+		return nil
 	}
 	if err := none(merging...); err != nil {
 		return err
