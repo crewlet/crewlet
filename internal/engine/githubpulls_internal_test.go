@@ -21,18 +21,18 @@ func TestAPullPreviewIsReadThroughTheWiringInForce(t *testing.T) {
 	g := &githubPullReader{now: func() time.Time { return now }}
 	ref := github.PullRef{Owner: "acme", Repo: "web", Number: 41}
 
-	if _, _, err := g.read(t.Context(), ref); !errors.Is(err, errNoGitHub) {
+	if _, err := g.read(t.Context(), ref); !errors.Is(err, errNoGitHub) {
 		t.Fatalf("an unwired reader answered %v, want no GitHub", err)
 	}
-	g.wire(&github.SeatLookup{}, "https://github.com")
-	if _, _, err := g.read(t.Context(), ref); !errors.Is(err, github.ErrNoSeatCanRead) {
+	g.wire(&github.SeatLookup{})
+	if _, err := g.read(t.Context(), ref); !errors.Is(err, github.ErrNoSeatCanRead) {
 		t.Fatalf("a wiring with no agent's app answered %v, want no seat can read", err)
 	}
 	if hit, ok := g.entries[ref]; !ok || !errors.Is(hit.err, github.ErrNoSeatCanRead) {
 		t.Errorf("the read was not kept for reuse: %+v", g.entries)
 	}
-	g.wire(nil, "")
-	if _, _, err := g.read(t.Context(), ref); !errors.Is(err, errNoGitHub) {
+	g.wire(nil)
+	if _, err := g.read(t.Context(), ref); !errors.Is(err, errNoGitHub) {
 		t.Errorf("a retired wiring answered %v, want no GitHub", err)
 	}
 }

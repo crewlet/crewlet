@@ -57,7 +57,6 @@ type githubPullReader struct {
 
 	mu      sync.Mutex
 	lookup  *github.SeatLookup
-	web     string
 	entries map[github.PullRef]pullPreview
 	now     func() time.Time
 }
@@ -69,13 +68,15 @@ type pullPreview struct {
 	at  time.Time
 }
 
-// wire replaces the reader's credential and host with a new wiring's, or
-// empties it (nil) when GitHub is retired, dropping every cached read: a
-// rotated credential or a removed app must not go on answering.
-func (g *githubPullReader) wire(lookup *github.SeatLookup, web string) {
+// wire replaces the reader's credential with a new wiring's, or empties it
+// (nil) when GitHub is retired, dropping every cached read: a rotated
+// credential or a removed app must not go on answering. Which host a pull
+// request's address is read against is the preview's own check, against the
+// company document (`chat_unfurls`), before it asks.
+func (g *githubPullReader) wire(lookup *github.SeatLookup) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.lookup, g.web, g.entries = lookup, web, nil
+	g.lookup, g.entries = lookup, nil
 }
 
 // clock is the reader's time, the wall clock unless a suite set one.
@@ -88,36 +89,36 @@ func (g *githubPullReader) clock() time.Time {
 
 // read is one pull request, from the cache while it is fresh.
 func (g *githubPullReader) read(ctx context.Context, ref github.PullRef) (
-	github.PullRequest, string, error) {
+	github.PullRequest, error) {
 
 	g.mu.Lock()
-	lookup, web := g.lookup, g.web
+	lookup := g.lookup
 	if hit, ok := g.entries[ref]; ok && g.clock().Sub(hit.at) < pullPreviewTTL {
 		g.mu.Unlock()
-		return hit.pr, web, hit.err
+		return hit.pr, hit.err
 	}
 	g.mu.Unlock()
 	if lookup == nil {
-		return github.PullRequest{}, "", errNoGitHub
+		return github.PullRequest{}, errNoGitHub
 	}
 	g.once.Do(func() { g.reading = make(chan struct{}, pullPreviewReads) })
 	select {
 	case g.reading <- struct{}{}:
 	case <-ctx.Done():
-		return github.PullRequest{}, web, ctx.Err()
+		return github.PullRequest{}, ctx.Err()
 	}
 	pr, err := lookup.PullRequest(ctx, ref)
 	<-g.reading
 	if err != nil && ctx.Err() != nil {
 		// THE CALLER WENT AWAY, which says nothing about the pull request.
-		return github.PullRequest{}, web, err
+		return github.PullRequest{}, err
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.lookup != lookup {
 		// REWIRED WHILE THIS READ WAS OUT: its answer is the old
 		// credential's, and is not kept.
-		return pr, web, err
+		return pr, err
 	}
 	if g.entries == nil {
 		g.entries = map[github.PullRef]pullPreview{}
@@ -126,7 +127,7 @@ func (g *githubPullReader) read(ctx context.Context, ref github.PullRef) (
 		g.evictOldest()
 	}
 	g.entries[ref] = pullPreview{pr: pr, err: err, at: g.clock()}
-	return pr, web, err
+	return pr, err
 }
 
 // evictOldest drops the read made longest ago.
@@ -147,17 +148,5 @@ func (g *githubPullReader) evictOldest() {
 func (e *Engine) PullRequestPreview(ctx context.Context, ref github.PullRef) (
 	github.PullRequest, error) {
 
-	pr, _, err := e.githubPulls.read(ctx, ref)
-	return pr, err
-}
-
-// GitHubWeb is the web base of the GitHub wiring now in force, empty where
-// the company runs none: the host a pull request's address is read against.
-func (e *Engine) GitHubWeb() string {
-	e.githubPulls.mu.Lock()
-	defer e.githubPulls.mu.Unlock()
-	if e.githubPulls.lookup == nil {
-		return ""
-	}
-	return e.githubPulls.web
+	return e.githubPulls.read(ctx, ref)
 }
