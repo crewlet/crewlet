@@ -336,6 +336,10 @@ export function Inbox() {
   // rows moved ([pairAnswered]): a run's answer is held as sent before it
   // moves, and its entry was made before rows answered in the meantime.
   const moves = useRef(0);
+  // WHAT HAS MOVED, written as each answer moves rather than read off the
+  // last draw: two answers told in one tick both met a draw that had moved
+  // neither, so each moved the row, announced it and opened the next.
+  const moved = useRef(new Set<string>());
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const settle = useCallback(
@@ -362,7 +366,8 @@ export function Inbox() {
       if (label) {
         // ONCE: a second word on a row already moved (a press repeated before
         // the list drew again) answers nothing and moves nobody on twice.
-        if (live.current.settled.get(row.key)?.moved) return;
+        if (moved.current.has(row.key)) return;
+        moved.current.add(row.key);
         const given: Settled = { label, row, moved: true, order: ++moves.current };
         if (answer) given.answer = answer;
         setSettled((was) => new Map(was).set(row.key, given));
@@ -376,6 +381,7 @@ export function Inbox() {
           before,
           new Set([
             ...live.current.settled.keys(),
+            ...moved.current,
             ...order.filter((r) => r.kind === "answered").map((r) => r.key),
           ]),
         );

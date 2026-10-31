@@ -30,6 +30,49 @@ import { ACT_ERRORS } from "~/contract/errors.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 import { fakeTransition } from "~/test/motion.ts";
 
+// THE PANE AND THE KIT AS THEY ARE, unless a case asks otherwise: a case
+// sets `seam.twice` to stand a pane in that tells the screen of one answer
+// twice in one tick, which no pane does today (a pressed control is busy
+// until its write returns) and the screen must hold to all the same; and
+// what the screen announces is kept in `seam.announced`.
+const seam = vi.hoisted(() => ({ twice: false, announced: [] as string[] }));
+vi.mock("./InboxPane.tsx", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./InboxPane.tsx")>();
+  return {
+    ...real,
+    InboxPane: (props: Parameters<typeof real.InboxPane>[0]) =>
+      seam.twice ? (
+        <button
+          type="button"
+          onClick={() => {
+            const said = {
+              kind: "choice",
+              id: "hold",
+              label: "Hold release",
+              recommended: true,
+            } as const;
+            props.onSettled("Answered", said);
+            props.onSettled("Answered", said);
+          }}
+        >
+          Answer twice
+        </button>
+      ) : (
+        <real.InboxPane {...props} />
+      ),
+  };
+});
+vi.mock("@crewlethq/ui", async (importOriginal) => {
+  const kit = await importOriginal<typeof import("@crewlethq/ui")>();
+  return {
+    ...kit,
+    announce: (text: string) => {
+      seam.announced.push(text);
+      kit.announce(text);
+    },
+  };
+});
+
 class InertWebSocket {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -1031,6 +1074,32 @@ describe("the pane", () => {
     await settle();
     expect(location.hash).toContain("row=ask%3Ac-13");
     expect(posted.filter((p) => p.tool === "comment_on_work_item")).toHaveLength(1);
+  });
+
+  // ONE MOVE PER ANSWER, even told twice in one tick, before the screen has
+  // drawn again: the guard reads what has moved as each move is written,
+  // never what the last draw saw. Mutation: guard on the drawn state, and
+  // the move is said twice.
+  test("an answer told twice in one tick moves the reader on once", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    seam.twice = true;
+    try {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ answers: { decisions: decisionsOf(askItem(), second) } });
+      await settle();
+      seam.announced.length = 0;
+      fireEvent.click(screen.getByRole("button", { name: "Answer twice" }));
+      await settle();
+      expect(seam.announced).toHaveLength(1);
+      expect(seam.announced[0]).toMatch(/^Answered\. Next: /);
+      expect(location.hash).toContain("row=ask%3Ac-13");
+    } finally {
+      seam.twice = false;
+    }
   });
 
   test("a run answered in words stays in place with what was written under it", async () => {
