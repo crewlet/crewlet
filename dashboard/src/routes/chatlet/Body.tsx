@@ -34,6 +34,7 @@ import { MentionChip, Prose } from "@crewlethq/ui";
 
 import { CHAT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { inlineTokens } from "~/lib/inlineTokens.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import type { ChatMessage } from "~/protocol/index.ts";
 
 /** The handle the engine reads as the whole room. */
@@ -101,13 +102,13 @@ function Mention({
 }) {
   // THE WHOLE ROOM IS NOBODY TO OPEN, and reached the reader as surely as
   // their own name, so it takes the same tone.
-  if (everyone) return <MentionChip tone="everyone">@{ROOM_HANDLE}</MentionChip>;
+  if (everyone) return <MentionChip tone="everyone">{handleLabel(ROOM_HANDLE)}</MentionChip>;
   return (
     <MentionChip
       tone={mine ? "self" : "other"}
       {...(onPerson ? { onPress: () => onPerson(handle) } : {})}
     >
-      @{nameOf(handle)}
+      {handleLabel(nameOf(handle))}
     </MentionChip>
   );
 }
