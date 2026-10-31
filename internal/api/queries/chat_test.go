@@ -48,15 +48,18 @@ import (
 // different posture from its siblings.
 var chatQuestions = []string{
 	"chat_channels", "chat_channel", "chat_messages", "chat_thread",
-	"chat_mentions", "chat_search", "chat_room_names",
+	"chat_activity", "chat_threads", "chat_saved", "chat_sent",
+	"chat_links", "chat_message", "chat_search", "chat_room_names", "chat_rooms",
 }
 
-// chatAsked is a parameter set per question, so one table can ask all seven
+// chatAsked is a parameter set per question, so one table can ask them all
 // without a question being skipped for want of a room id.
 func chatAsked(what string) map[string]any {
 	switch what {
-	case "chat_channel", "chat_messages":
+	case "chat_channel", "chat_messages", "chat_links":
 		return map[string]any{"channel_id": cEng}
+	case "chat_message":
+		return map[string]any{"channel_id": cEng, "message_id": "m-1"}
 	case "chat_thread":
 		return map[string]any{"channel_id": cEng, "root_id": "m-1"}
 	case "chat_search":
@@ -115,7 +118,8 @@ type stubChat struct {
 	channels chatlet.ChannelsQuery
 	page     chatlet.TranscriptQuery
 	thread   chatlet.ThreadQuery
-	feed     chatlet.MentionQuery
+	activity chatlet.ActivityQuery
+	saved    chatlet.SavedQuery
 
 	// reads counts every call that reached this reader, so a case about a
 	// refusal can prove nothing was read rather than that nothing was
@@ -125,7 +129,7 @@ type stubChat struct {
 	listing    chatlet.ChannelListing
 	transcript chatlet.Transcript
 	replies    chatlet.Thread
-	mentions   chatlet.MentionFeed
+	feed       chatlet.Activity
 	detail     chatlet.ChannelDetail
 
 	err error
@@ -214,16 +218,25 @@ func (s *stubChat) Thread(_ context.Context, viewer string, q chatlet.ThreadQuer
 	return out, nil
 }
 
-func (s *stubChat) Mentions(_ context.Context, viewer string, q chatlet.MentionQuery,
-	fresh statelog.Freshness) (chatlet.MentionFeed, error) {
+// Directory answers every named room this viewer may browse, by the reader's
+// own rule: a private room only to a member of it, with its member count and
+// whether the viewer is in it.
+func (s *stubChat) Directory(_ context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.Directory, error) {
 
 	s.reads++
-	s.viewer, s.fresh, s.feed = viewer, fresh, q
+	s.viewer, s.fresh = viewer, fresh
 	if s.err != nil {
-		return chatlet.MentionFeed{}, s.err
+		return chatlet.Directory{}, s.err
 	}
-	out := s.mentions
-	out.Handle, out.Served = viewer, chatServed
+	out := chatlet.Directory{Served: chatServed, Rooms: []chatlet.DirectoryRoom{}}
+	for _, id := range slices.Sorted(maps.Keys(s.rooms)) {
+		if room := s.rooms[id]; room.Name != "" && s.see(viewer, id) == nil {
+			out.Rooms = append(out.Rooms, chatlet.DirectoryRoom{Channel: room,
+				Members: len(s.members[id]),
+				Member:  slices.Contains(s.members[id], viewer)})
+		}
+	}
 	return out, nil
 }
 
@@ -910,7 +923,7 @@ func TestAPageCursorRoundTripsUnchanged(t *testing.T) {
 	t.Parallel()
 	reader := newStubChat()
 	reader.transcript.NextCursor = "41"
-	reader.mentions.NextCursor = chatAt.String()
+	reader.feed.NextCursor = chatAt.String()
 	sources := chatSources(t, reader, nil, nil)
 
 	page := askChatJSON(t, sources, "chat_messages", map[string]any{"channel_id": cEng})
@@ -936,17 +949,17 @@ func TestAPageCursorRoundTripsUnchanged(t *testing.T) {
 		t.Errorf("the thread was asked %+v, want root m-1 from cursor 17", reader.thread)
 	}
 
-	feed := askChatJSON(t, sources, "chat_mentions", nil)
+	feed := askChatJSON(t, sources, "chat_activity", nil)
 	from, _ := feed["next_cursor"].(string)
 	if from != chatAt.String() {
-		t.Fatalf("the feed's next_cursor = %q, want a log position", from)
+		t.Fatalf("Activity's next_cursor = %q, want a log position", from)
 	}
-	if _, err := askChat(t, sources, "chat_mentions",
+	if _, err := askChat(t, sources, "chat_activity",
 		map[string]any{"cursor": from}); err != nil {
-		t.Fatalf("the second page of the feed: %v", err)
+		t.Fatalf("the second page of Activity: %v", err)
 	}
-	if reader.feed.Cursor != from {
-		t.Errorf("the feed resumed from %q, want %q", reader.feed.Cursor, from)
+	if reader.activity.Cursor != from {
+		t.Errorf("Activity resumed from %q, want %q", reader.activity.Cursor, from)
 	}
 }
 
@@ -962,7 +975,7 @@ func TestAPageTakesTheDomainsOwnDefaultAndCeiling(t *testing.T) {
 	for what, limit := range map[string]func() int{
 		"chat_messages": func() int { return reader.page.Limit },
 		"chat_thread":   func() int { return reader.thread.Limit },
-		"chat_mentions": func() int { return reader.feed.Limit },
+		"chat_activity": func() int { return reader.activity.Limit },
 	} {
 		if _, err := askChat(t, sources, what, chatAsked(what)); err != nil {
 			t.Fatalf("%s: %v", what, err)

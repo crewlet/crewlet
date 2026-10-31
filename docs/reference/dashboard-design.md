@@ -438,11 +438,12 @@ list a section of Settings.
   ([Worklet's scope](#worklets-scope-is-named-and-switched-in-the-trail)).
 - A **section** is a **path segment** inside a workspace, drawn by one
   renderer: `tabs` in the page header, `lenses` beside Worklet's scope in the
-  trail, `column` for Settings, or `rail` for Chatlet, whose screen draws them
-  beside its rooms. Chatlet draws no tabs because the header draws them on a
-  section's own page and never on an object's, and a room is the object page a
-  chat reader spends their time on, so Mentions and Search sit at the head of
-  the rail, drawn from the same table, and the frame draws nothing for them.
+  trail, `column` for Settings, or `panel` for Chatlet, whose screen draws them
+  at the head of its Rooms panel. Chatlet draws no tabs because the header
+  draws them on a section's own page and never on an object's, and a room is
+  the object page a chat reader spends their time on, so Activity, Threads,
+  Drafts and sent and Saved head the panel, drawn from the same table, and the
+  frame draws nothing for them.
 - An **object tab** is a `tab=` query on an object's own page (a seat's
   Overview, Work, Turns…), bound to 1–9.
 
@@ -690,7 +691,7 @@ the foot is the reader, with Settings and Preferences as glyphs beside them.
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
 | **Worklet** | `#/worklet` | none |
-| **Chatlet** | `#/chatlet` | none (the unread counts are per room, on the screen's own rail). Locked, like Worklet, for a reader without Chatlet access; a reader who holds it but whose credential acts as no seat is answered by the screen itself, since every chat page is read as a seat |
+| **Chatlet** | `#/chatlet` | the accent **badge**: what waits on you in Chatlet, the unread messages that name you (or the whole room) in a named room and every unread message in a direct conversation, in the rooms you have not muted; a floor ("100+") where a room counted to the engine's bound or the list was cut short, and none where the counts were not measured. Counted from the frame's ONE reading of your rooms (`lib/chatRooms.ts`), which the Chatlet screen draws too, so the badge and the list beside it cannot name two numbers; re-read on every live chat frame, at the room's rate while a surface draws the rooms and every two seconds at most while only the badge reads it. Locked, like Worklet, for a reader without Chatlet access; a reader who holds it but whose credential acts as no seat is answered by the screen itself, since every chat page is read as a seat |
 | **Doclet** | `#/doclet` | none |
 | **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
 | **Live** | `#/live` | the agents working now, beside the working mark, the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on the org chart's row it sent a reader looking for a running turn to the chart |
@@ -743,6 +744,28 @@ Preferences as icon buttons at its end: Settings a link to where its row
 opened (the kit's `IconButtonLink`, current on a Settings page), Preferences
 its popover. The head carries the company's lockup and, at the end of its
 line, the **engine panel**'s compact status.
+
+**The sidebar folds to a compact rail.** Above the shell breakpoint the kit's
+fold control, or `Mod+\`, folds the sidebar to the kit's 76 px rail and back,
+and the choice is the reader's, kept per reader in this browser
+(`app/sidebar/railShape.ts`), as their Home board is. Folded, it is the kit's
+`CompactNav`: **Search** (the palette the full sidebar's field opens), then
+Home, Inbox and My work, each its glyph over its name, then ONE tile for
+Company and one for Workspace, each opening a flyout of its places beside the
+rail on a point, a press or the arrow keys; the tile carries its places'
+badges and is marked current when the page on screen is one of them. Under
+the foot's rule stand the engine's status (its dot and alarms), **Settings**
+as a tile, and the reader's face alone, which opens the same menu the user
+block's row does, with **Preferences** in it, opening as a dialog of the same
+three controls. Both shapes are drawn from one list of places, so they cannot
+list a place with a different link, lock or figure. The live shortcuts
+(Pinned, Starred, Running) are the full sidebar's, and a shortcut is never
+current in the folded rail, so the place holding the page keeps the mark. The
+company's mark and the fold control stand in the same place in both shapes,
+the mark in the head's row and the control in the row under it, so neither
+moves when the sidebar folds. Below the breakpoint the sidebar is the drawer,
+which is always the full list, and the stored choice comes back when the
+window widens.
 
 **Every "New task" is one sheet.** A work screen's
 page-bar New task (Home, the Tasks lens, every lens of a project) and a board lane's `+` all open the
@@ -1216,10 +1239,15 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
-| `#/chatlet` | **Chatlet**: the company's own rooms, with the rail of what you are in *(the whole of Chatlet needs Chatlet access)*. Every chat page is read as the seat your session holds: a credential acting as no seat (a deployment's own token, or a service account bound to nobody) reads nothing here, not even a public room | `dm=` (a seat's handle, from its page or peek: opens New direct message with that seat chosen, once, then leaves the address) |
-| `#/chatlet/mentions` | **Chatlet › Mentions**: every message that named you, across every room. The whole away story: the engine sends no email, no push and no SMS | |
-| `#/chatlet/search` | **Chatlet › Search chat**: ranked over every room you may READ, which is wider than your rail | `q=` · `in=` (narrowed to one room) |
-| `#/chatlet/{id}` | **Room**: the transcript, who is here, and the composer | `thread=` (which thread is open in it, one level deep) |
+| `#/chatlet` | **Chatlet**: the company's own rooms and conversations, under a top bar (Menu, the Rooms and Messages switchers, and the open room's actions), with the Rooms panel slid in from Menu or pinned beside the conversation *(the whole of Chatlet needs Chatlet access)*. Every chat page is read as the seat your session holds: a credential acting as no seat (a deployment's own token, or a service account bound to nobody) reads nothing here, not even a public room | `dm=` (a seat's handle, from its page or peek: replaced at once by `#/chatlet/new?to={handle}`) · `pane=` (on every Chatlet address: see the room) |
+| `#/chatlet/activity` | **Chatlet › Activity**: every message that named you, every reply in a thread you follow and every reaction to what you said, across every room. The whole away story: the engine sends no email, no push and no SMS | |
+| `#/chatlet/threads` | **Chatlet › Threads**: every thread you follow, newest reply first | |
+| `#/chatlet/drafts` | **Chatlet › Drafts and sent**: what you have not sent yet, in every room and thread, and what you sent | |
+| `#/chatlet/saved` | **Chatlet › Saved**: the messages you saved for later | |
+| `#/chatlet/search` | **Chatlet › Search chat**: ranked over every room you may READ, which is wider than your own rooms | `q=` · `in=` (narrowed to one room) |
+| `#/chatlet/browse` | **Chatlet › Browse rooms**: every room you can read, to join or open | |
+| `#/chatlet/new` | **Chatlet › New message**: a conversation with the people or agents you name, the one you already share with them if there is one | `to=` (handles, comma-separated) |
+| `#/chatlet/{id}` | **Room**: the transcript, who is here, and the composer | `message=` (the message a link landed on, flashed, then left) · `pane=thread:{room}:{root}` · `pane=details:{room}:about\|members\|shared\|notifications` · `pane=profile:{handle}` · `pane=catchup:{room}` · `pane=summarize:{room}` (ONE pane at a time, beside the conversation or over it; any place may carry one) |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
@@ -1981,8 +2009,9 @@ rounded, with ONE scroller inside it. Below the kit's `breakpoint.shell`
 (1024 px) the sheet is the whole window and the sidebar is a modal drawer that
 takes Escape, traps Tab, hands focus back to its toggle and closes on a
 navigation — opened from the bar's toggle or with `Mod+\` (`⌘\` on a Mac,
-`Ctrl+\` elsewhere), a chord that does nothing above the breakpoint, where the
-sidebar is always on screen; the skip link precedes everything and lands on
+`Ctrl+\` elsewhere), the chord that above the breakpoint, where the sidebar is
+always on screen, folds it to its compact rail and back
+([The sidebar](#the-sidebar)); the skip link precedes everything and lands on
 the scroller. None of that is written in this repository, because a second
 copy of it is how the two drift. What `dashboard/src/app/` owns:
 
@@ -2129,7 +2158,7 @@ for the keys is the reader who does not know `?` yet.
 
 | Where it is live | Keys |
 |---|---|
-| Anywhere | `Mod+K` search (the same chord closes it), `Mod+.` Ask Crewlet (pressed inside it, it closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Worklet's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
+| Anywhere | `Mod+K` search (the same chord closes it), `Mod+.` Ask Crewlet (pressed inside it, it closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Worklet's trail on its scope pages, centred everywhere else), `Mod+\` folds the sidebar to its compact rail and back, and opens the navigation drawer on a narrow window |
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
@@ -2137,7 +2166,9 @@ for the keys is the reader who does not know `?` yet.
 | In the artifacts gallery and its folders | `x` starts picking artifacts (and, pressed again, stops and clears the picks), `m` moves what is picked to a folder, `n` makes a new folder where the reader is, `u` goes up to the folder above. Bare letters, since a window chord compares no Shift and no Alt |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
-| Writing a reply or a message | `Mod+Enter` sends it: a reply in the Inbox, a comment on a task, a message in a chat room or a thread. `Enter` alone is a new line, since what you say to somebody is often several lines. Ask Crewlet's question box is the one exception: a question is one line far more often than not, so `Enter` sends it there (below) |
+| Writing a reply or a message | `Mod+Enter` sends it: a reply in the Inbox or a comment on a task. `Enter` alone is a new line, since such a letter is often several lines |
+| Writing a chat message | `Enter` sends it and `Shift+Enter` adds a line (bound by the design system's `Composer`), `Up` in an empty box edits your last message, `Mod+B` and `Mod+I` bold and italicise the selection |
+| On a focused chat message | `E` edits your message, `T` opens its thread, `S` saves it for later, `Delete` deletes it, `Up` and `Down` move to the message above and below |
 | Writing the company's principles | `Mod+Enter` saves the part being written and `Esc` stops writing it, asking first when it has changes (bound by the design system's `InlineEditor`); in the standing policies `Enter` adds the policy typed, and `Alt+Up` and `Alt+Down` move the one you are in |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
 | In Ask Crewlet | `Enter` sends the question and `Shift+Enter` adds a line (bound by the design system's `Composer`); `Esc` stops a running answer first, then closes Ask Crewlet and never a peek beside it; `Up` in an empty box brings back the last question |
@@ -4085,9 +4116,17 @@ injected instruction would carry words away. An address an ask cites as
 evidence is the same: a button only when it is rebuilt on the company's host,
 labelled by the dashboard with the reference it is and its app's mark, and
 otherwise the address as written, never the asker's label ([ADR-0061](../../adr/0061-a-read-is-named-in-the-answer-never-drawn-as-a-card.md)).
-A chat message's links are read the same way, whoever wrote the message
-(`routes/chatlet/MessageLinks.tsx`): each is the address token, and one whose
-scheme the allowlist refuses is its words.
+A chat message is read the same way, whoever wrote it, with one addition
+(`links: "own"`, `CHAT_WORDS`): a page of the dashboard's own (a `#/` route,
+or the whole address a Copy link writes on its origin) opens in place, rebuilt
+from its path alone (`lib/appRoute.ts`), so the task or page a message is about
+is one click away and no query a writer chose rides along. Ask Crewlet's
+answers never take it: their one way to move the page is an Open in app card
+the engine built. A message's links (`routes/chatlet/MessageLinks.tsx`): a task, a page, an artifact or a pull
+request the reader may open unfurls into a preview the engine resolved as the
+reader (`chat_unfurls`, with an address the engine built), an address of an app
+the dashboard knows unfurls into its mark, name and reference, every other is
+the address token, and one whose scheme the allowlist refuses is its words.
 A coding run's question is read so wherever it is answered: its Answer dialog
 (`components/writes.tsx`), opened from Live › Runs, a seat's page and every
 decision row, reads the run's context and reasoning `checked`.
@@ -4508,7 +4547,9 @@ page action the screen itself declared. There is no
 answer rating, and the one toast is "Conversation cleared". The toast stack
 keeps clear of the panel (`app/toastInset.tsx`): beside it while it is a
 column or over the page, above its composer while it is the whole window on a
-phone.
+phone. On a screen with a bar of its own, Chatlet's, it stands under that bar
+at the top right instead (see
+[Chatlet](#chatlet-a-top-bar-a-rooms-panel-a-room-and-where-you-have-read-to)).
 
 **The panel is a chunk of its own**: the first paint carries the Ask button,
 the page context registry, the bus and the one-word status the button reads,
@@ -4734,16 +4775,23 @@ a tool arrives in it with the control that sends it. The controls
 | Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from |
 | Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
-| Send (`Mod+Enter`) | A chat room's composer | `post_message{channel, body}` — under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one |
-| Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body}` |
-| Edit, then Save | A chat message of your own | `edit_message{channel, message_id, body}` — the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
-| Delete (pressed twice) | A chat message of your own, and anybody's to an admin | `delete_message{channel, message_id}` — the author's, or an admin's moderation, and the tombstone records who. Reaches past membership and past an archive; held on a room this build cannot classify, and while another message's delete is out |
+| Send (`Enter`) | A chat room's composer | `post_message{channel, body, links?}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one. `links` are what the words link to that a room previews, read from the body when it is sent: this dashboard's records (a task, a page or an artifact the Attach pickers wrote in, or one linked by hand) as whole addresses on it, and github.com pull requests (`https://github.com/{owner}/{repo}/pull/{n}`, pasted or linked), once each and at most `MAX_MESSAGE_LINKS` (`chatlet.MaxLinks`), so the room previews what a person attached as it does what a seat links. Nothing is checked against the sender: `chat_unfurls` reads each record as the reader looking at the message, and a pull request only under an owner the GitHub configuration names, so a link previews nothing for a reader who may not open it, whoever sent it. A message of words alone sends none |
+| Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body, links?}`, its links read from the body as Send's are |
+| Edit message, then Save | A chat message of your own (its More menu) | `edit_message{channel, message_id, body}`: the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
+| Delete, then Delete in its dialog | A chat message of your own (its More menu), and anybody's to an admin | `delete_message{channel, message_id}`: the author's, or an admin's moderation, and the tombstone records who. The dialog shows the message as the room draws it and says that everybody in the room sees who deleted it. Reaches past membership and past an archive; held on a room this build cannot classify |
 | A reaction | A chat message's reaction chips | `react_to_message{channel, message_id, emoji, remove}` — quiet, no toast; a refusal is said above the transcript. Held outside a private room you are not in, as a post is; an archived room takes it |
-| Join · Leave | A chat room's header; Join in **Find a room** | `join_channel{channel}` / `leave_channel{channel}` — refused on a unit's room and a direct conversation, so neither offers it |
+| Join · Leave | Join on a room you are not in and in **Browse rooms**; Leave in the room's **More** | `join_channel{channel}` / `leave_channel{channel}`, refused on a unit's room and a direct conversation, so neither offers it |
 | Mute · Unmute | A chat room's header | `mark_chat_read{mute}` / `{unmute}` — this room alone, every other room's state kept |
-| New room | The chat rail | `create_channel{channel, kind, topic?, members?}` |
-| New direct message | The chat rail | `open_dm{to}` — a direct conversation's identity is who is in it, so opening one again reaches the same room |
-| Topic · Purpose | A chat room's settings dialog | `update_channel{channel, topic?, purpose?}` — only the fields changed. Archiving and the room's horizon are not offered anywhere in the dashboard, and the dialog says so: an archive closes the room for everybody in it, and the horizon decides what survives on every data node and is an administrator's step-up gesture (`PUT /chatlet/channels/{channel_id}/retention`) |
+| New room | The Rooms switcher's and the Rooms panel's foot, and Browse rooms | `create_channel{channel, kind, topic?, members?}`: the name is claimed, never renamed, and a name somebody holds goes back to its field; the visibility opens on the company's own default |
+| A new message | **New message** (`#/chatlet/new`) | `open_dm{to}`, then `post_message` to the conversation it answers: only once there is something to say; the people chosen may already share a conversation, which the view shows and sending adds to |
+| Add people | A room's details (Members), its first-step card and More | `add_channel_members{channel, members}`: never on a unit's room (the org chart's) or a direct conversation (its people are its identity); the answer names who it actually put in. Leaving a new room's dialog with nobody chosen asks once |
+| When new agents and people join, add them | Add people, to an admin, on a public room | `update_channel{channel, auto_join}`: an admin's alone, on a public room alone; it adds the seats that join the company from then on and nobody already in it |
+| Topic · Description · A template | A room's details (About), its first-step cards and More | `update_channel{channel, topic?, purpose?, template?}`: only the field changed; each held to 250 characters, counted as the engine counts them (code points, so an emoji is one); a template sets both in one change that names it, one line in the transcript. Archiving and the room's horizon are not offered anywhere in the dashboard: an archive closes the room for everybody in it, and the horizon decides what survives on every data node and is an administrator's step-up gesture (`PUT /chatlet/channels/{channel_id}/retention`) |
+| Every message · Mentions · Muted | The top bar's notification choice, and a room's details (Notifications) | `mark_chat_read{notify}`: the reader's own mark, waking nobody; Muted is the mute |
+| Follow · Unfollow | A thread's pane, and Threads | `mark_chat_read{follow}` / `{unfollow}`: the reader's own mark; a thread they started, replied in or were named in is followed without one, and replying in one they unfollowed follows it again |
+| Save for later · Remove from Saved | A chat message's tray, and Saved | `mark_chat_read{save}` / `{unsave}`: the reader's own; past `MAX_READER_MARKS` the press says Saved is full rather than sending, and a saved message that is gone stays listed until it is removed |
+| Mark unread | A chat message's More menu | `mark_chat_read{rewind}`: the room's place set to just before the message, the one way it moves back |
+| Join room | The bar in place of a room's composer, for a room you may read but are not in | `join_channel{channel}` |
 | — (the read cursor, no control) | Written as you read a chat room | `mark_chat_read{cursors}` — every `READ_FLUSH_MS` (15 s) and at once on leaving the room, hiding the tab or closing it; quiet, and on no log (`domain: null`). Its answer is your seat's read state as it left it, and the tab applies it as it would the push — so the rail asks again once, when the revision moves |
 
 A change to the **company's configuration** is not an act. The company
@@ -6244,7 +6292,10 @@ lets each column scroll on its own, as a task does with its body and its rail
 (`.inbox-list`, `.inbox-pane`). Each column is exactly the main region's
 height, so `100cqb` is its view too, and on that screen those columns are the
 page's scrollers: a box inside one hands the wheel to the column, not to
-`#screen-scroll`. And a **box inside the page** may scroll its own content, on
+`#screen-scroll`. Chatlet asks for the height FLUSH (`useFillScreen(true, {
+flush: true })`, the kit's `fill="flush"`): its conversation runs edge to edge
+under the page bar, so the content column drops its inset, its measure and
+its gap. And a **box inside the page** may scroll its own content, on
 the two conditions below.
 
 The shell hands the kit that id as its `mainId`, and everything that needs the
@@ -7369,7 +7420,7 @@ table the socket's query errors use.
 
 ---
 
-## Chatlet: a rail, a room, and where you have read to
+## Chatlet: a top bar, a Rooms panel, a room, and where you have read to
 
 The company's own chat (`chat.backend: chatlet`), read AS A SEAT: the engine
 answers every chat question for the seat the session's principal holds, so the
@@ -7379,19 +7430,57 @@ is a vendor's or none there is no Chatlet: its row is hidden and its addresses
 say where the company talks, as every service the company does not run is
 (see [The sidebar](#the-sidebar)).
 
-- **The rail is the row's renderer** (`rail`, `app/nav.ts`). It starts with the
-  three gestures that start a conversation — **New room**, **Message** (a direct
-  conversation) and **Find a room**, the first two held as the change their
-  dialog makes is held (a reader the engine opens no room for is told so on the
-  button) — then the row's other sections as links (Mentions, Search chat), then
-  the seat's own **Rooms**, newest activity first: the room's name (`#` for a
-  room, the people for a direct conversation), the last thing said, how long
-  ago, `muted` and `following` where they hold, and the unread count. The count
-  is the ENGINE'S, against the seat's own read cursor, and it stops at `99+`
-  only where the answer says it stopped counting; when the cursors could not be
-  read the badges are absent and a callout says so, because a zero would claim
-  the reader is caught up. A rail past its bound says so too: it is sorted by
-  activity, which cannot be paged.
+Chatlet runs edge to edge under the page bar (the shell's flush fill), and
+every place in it is an address: a room by its id, or one of the views beside
+the rooms, with at most ONE pane named by the `pane=` parameter (see the
+address table above), so Back closes a pane, a reload keeps it and a thread is
+a link from any place (`routes/chatlet/nav.tsx`). While it is open, a toast
+stands under its top bar at the top right (`app/toastInset.tsx`'s
+`useToastTop`), held off the window's top by where the bar ends: at the
+window's foot it would lie over the room's composer and a thread's, which grow
+as they are typed in.
+
+- **The top bar** holds, on one line and at one height: **Menu**, which slides
+  the Rooms panel in from the start edge of the chat area (or hides it while it
+  is pinned), its badge the sidebar's own figure of what waits on you; the
+  **Rooms** switcher, named after the open room, listing your rooms (Starred,
+  Rooms, Team rooms) with Browse rooms and New room at its foot; the
+  **Messages** switcher, named after the open conversation or Direct messages,
+  listing your conversations and then the people and agents to start one with,
+  with New message at its foot; and the open room's actions: its members (three
+  faces and the count, which open the details' Members), Search this room, the
+  notification choice (Every message, Mentions, the default, or Muted), and
+  **More**, which leads with **Catch up with Ask Crewlet** (or **Summarize**,
+  with nothing unread) and then the details, what was shared, Add people, the
+  description and topic, the star, Mark as read, Copy link and Leave. Each is
+  offered only where the engine would take it, by the room's one reading of its
+  rules. Ask Crewlet itself is the page bar's button, so the bar has none.
+  While the panel is pinned it lists what the switchers do, so they are not
+  drawn; a narrow bar drops Menu's word, and under 480px the search and the
+  notification choice move into More.
+- **The Rooms panel is the row's renderer** (`panel`, `app/nav.ts`): a find row
+  (the filter, a menu for unread rooms only and the order, and the pin), the
+  row's views (Activity, with the accent badge of what waits there; Threads;
+  Drafts and sent; Saved), then the rooms in four collapsible sections
+  (Starred, Channels, Team rooms, Direct messages) in dense rows: a room with
+  unread messages in the primary ink and the medium weight, a muted one dimmed
+  with a bell, one holding a draft with a pencil, and the accent badge of what
+  waits on you in it (in a conversation, every unread message; elsewhere, the
+  unread messages that name you or the whole room). A collapsed section still
+  shows the open room and the unread ones. The counts are the ENGINE'S, and
+  when the cursors could not be read the badges are absent and the panel says
+  so, because a zero would claim the reader is caught up; a list past its bound
+  says so too. Browse rooms and New message stand at its foot. Pinned (a
+  per-browser choice), it is a column beside the conversation; on a chat area
+  under 760px it is never pinned.
+- **Panes** stand beside the conversation, and lie over it on a screen under
+  980px (a whole narrow chat area under 760px); the widths are
+  `app/layout.ts`'s, which keep the transcript to its floor at every step.
+- **Keys** (the legend's "In Chatlet"): `Alt+Up` and `Alt+Down` move between
+  rooms, with `Shift` between rooms with unread messages; `Mod+F` searches the
+  open room; `Escape` marks the open room read when nothing else is listening
+  for it (a pane, the slid-in panel, a peek, a menu); `Mod+/` lists Chatlet's
+  keys.
 - **A room** (`#/chatlet/{id}`) is the transcript, paged back on request, who is
   looking at it, typing in it or working on a reply in it, and the composer
   (`Mod+Enter` sends; `Enter` is a new line). A message's links are drawn under
@@ -7409,10 +7498,8 @@ say where the company talks, as every service the company does not run is
   you — archived, a private room you are outside, a kind this build cannot
   classify — closes the box and says why in it; a browser that cannot send
   (offline, a reader the engine posts nothing for) leaves the box open and holds
-  Send, with the sentence written beside it, as every composer does. Its header
-  holds Join or Leave, Mute and the settings dialog, whose opener is held where
-  the engine would refuse its Save — outside a private room, on a kind this
-  build cannot classify — and not on an archived room, which keeps its topic.
+  Send, with the sentence written beside it, as every composer does. Its
+  membership, notification and settings gestures are the top bar's (above).
   Each of a message's changes (Edit, Delete, a reaction) is held by its own
   tool, because the engine serves each to a person on its own — and by that
   tool's own rule in the room rather than the composer's: an archive closes a
@@ -7438,35 +7525,82 @@ say where the company talks, as every service the company does not run is
   until the answer is a decision: it landed, and the transcript brings it, or it
   was refused, and the row says why. It waits there while you look at another
   room, and is there when you come back.
-- **A thread** is `thread=` on its room, opened beside the transcript, or
-  under it on a screen too narrow for both (see [The frame](#the-frame)). It
-  is one level deep, so a reply offers no thread of its own.
-- **Mentions** (`#/chatlet/mentions`) is every message that named your seat, in
-  every room: the whole away story, because the engine sends no email, push or
-  SMS. Each row is the moment you were named and is dated by it. An edit that
-  still names you leaves the row where it was, with the new words and marked
-  edited; one that names you anew puts it at the top; a delete takes it away.
+- **The panes** draw in the kit's side panel, so opening one moves focus to
+  its heading, Escape inside closes it, and closing gives focus back to what
+  opened it (to a menu's trigger, when a menu item opened it and is gone).
+  **A thread** (`pane=thread:{room}:{root}`), opened beside the conversation
+  or over it, is its root, the reply count, the
+  replies as the room draws them, an agent writing a reply, the reply box
+  where the room takes one, who a reply reaches, and Follow. It is one level
+  deep, so a reply offers no thread of its own, and it pages forwards from its
+  root. Its read place moves to the newest reply on screen. **Details**
+  (`pane=details:{room}:{tab}`) groups the room's facts in cards (its name,
+  which never changes; its topic and description, each with Edit where the
+  engine would take the change; its team, who made it and when, how long it
+  keeps what is said, and Leave where a person may leave), its Members (find,
+  Add people where the engine adds anybody, people before agents, each opening
+  their profile), what it **Shared** (every link said in it, newest first, as
+  the room unfurls it, each opening the message it came in) and its
+  **Notifications**. **A profile** (`pane=profile:{handle}`) is the seat's
+  face, team and what it is doing now, Message, its page in the org chart, and
+  the rooms you share with it (`chat_channels{with}`). **Catch up**
+  (`pane=catchup:{room}`, or `summarize` with nothing unread) is Ask Crewlet's
+  brief of the room: the gist, what waits on you, and what was said, each
+  point opening the message it came from; it reads only what you can read and
+  posts nothing, and goes on in Ask Crewlet.
+- **Activity** (`#/chatlet/activity`) is every message that named your seat, in
+  every room, every reply in a thread you follow and every reaction to what you
+  said (`chat_activity`): the whole away story, because the engine sends no
+  email, push or SMS. It filters to mentions, replies or reactions, and to the
+  unread alone; the row chosen is read beside the list as the room draws it
+  (`chat_message`: the message, and for a reply its root and the replies just
+  before it) with a reply box under it, and choosing an unread row marks it
+  read through its room's cursor. A narrow column draws no reading pane, so a
+  row opens where it was said instead. Each row is the moment it happened and
+  is dated by it.
+- **Threads** (`#/chatlet/threads`) lists the threads you follow, newest reply
+  first (`chat_threads`), each its root and newest replies with Unfollow and
+  Reply; **Drafts and sent** (`#/chatlet/drafts`) lists what you have not sent
+  (a message the engine did not confirm, and the words left in a box, kept in
+  the tab and never in the address or the browser's storage) and what you sent
+  (`chat_sent`); **Saved** (`#/chatlet/saved`) lists what you saved, the newest
+  save first (`chat_saved`). A card there quotes its message read-only: its
+  actions are a press away in the thread or the room.
+- **New message** (`#/chatlet/new`, `to=`) takes people and agents as chips in
+  its To field (`#` there finds one of your rooms instead), shows the
+  conversation you already share with them, and opens one only when you send.
+- **Browse rooms** (`#/chatlet/browse`) lists every room you can read, joined or
+  not, archived ones under their own filter (`chat_rooms`), with each room's
+  topic, size and last message, sorted by activity, name or size; Join where
+  the engine would take one, Open everywhere else.
 - **Search chat** (`#/chatlet/search`, `q=` and `in=`) ranks what was said in every
-  room your seat may READ — wider than your rail — by keyword alone: chat is not
+  room your seat may READ (wider than your own rooms) by keyword alone: chat is not
   in the vector corpus
   ([ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
-  A phrase past the engine's bound is not sent, and the screen says why. It
-  asks for the engine's own page — forty hits, `contract/chat.ts`'s
-  `CHAT_SEARCH_PAGE`, the engine's `search.MaxChatSearchLimit` — and so does
-  **Find a room**, which offers the rooms those hits are in: the ranking has no
-  next page, so a full page says there may be more matches and how to narrow
-  the search, rather than reading as everything that matched.
+  It searches as you type, once the words rest (`lib/useQuiet.ts`), and keeps
+  the settled words in the address by replacement. In and From narrow it at
+  the engine (`channel_id`, `author`); Who (people or agents) narrows the page
+  the engine ranked, and says so. A phrase past the engine's bound is not sent,
+  and the screen says why. It asks for the engine's own page (forty hits,
+  `contract/chat.ts`'s `CHAT_SEARCH_PAGE`, the engine's
+  `search.MaxChatSearchLimit`), and the ranking has no next page, so a full
+  page says there may be more matches and how to narrow the search, rather
+  than reading as everything that matched. Its People tab matches the org
+  chart's seats and its Rooms tab every room you can read, on the words each
+  row draws.
 - **On Home**, Chatlet offers two widgets for the reader's board
   (`routes/chatlet/home.widgets.tsx`; see
   [Home is the reader's board](#home-is-the-readers-board)), each asking what
   its page asks and re-reading on the frames its page re-reads on: **Unread
   rooms**, the rail's rooms with something unread and the engine's count on
-  each — a muted room left out and counted, a rail cut at the engine's bound
+  each (a muted room left out and counted, a rail cut at the engine's bound
   said to count only the reader's most recently active rooms, a room a newer
   engine made counted as left out, a rail that met a record this build cannot
   read said to be incomplete, and where the cursors could not be read a
-  sentence saying so, none of them ever drawn as "caught up" — and **Mentions**, the feed's newest page, a mention in a
-  thread opening the thread. Neither marks anything read. Like every chat page
+  sentence saying so, none of them ever drawn as "caught up"), and **Mentions**,
+  Activity's newest mentions, a mention in a thread opening the thread. The
+  rooms are the frame's one reading of the reader's rooms, the one the
+  sidebar's badge and the Rooms panel draw. Neither marks anything read. Like every chat page
   they are the Chatlet app's: a credential acting as no seat is told so in a line
   and asked nothing, and a company whose chat is a vendor's or none is offered
   neither, as Home offers no widget of a service it does not run.
@@ -9311,10 +9445,10 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 358 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link |
+| The initial load: the entry, its static imports and the linked stylesheet | 374 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link. The Chatlet redesign (uilet 0.82.0) took it to 373.8 KiB: the one sheet carries 9.2 KiB more (the kit's conversation parts and the compact rail), the entry script 3.9 KiB more (the compact rail, the sidebar's reading of the reader's rooms for the Chatlet badge, and the toast stack's top edge), and the kit's shared chunks and SeatAvatar about 4.6 KiB. It moved to 374 KiB, which is 2.04 seconds on that link, past the two seconds every earlier move kept; a follow-up ships the conversation parts' rules as a lazy Chatlet sheet to bring it back under |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load when it was 300 KiB, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
-| The whole of `static/dashboard`, which every binary and image carries | 4913 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB |
+| The whole of `static/dashboard`, which every binary and image carries | 5215 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB, and from there the budget holds the tree to what each change says it costs. Per-seat integration access and its polish took it to 4951.1 KiB, under 4952 KiB. The Chatlet redesign on uilet 0.82.0 took it to 5214.2 KiB (+263.5 KiB): the Chatlet workspace and its lazy sheets +136.6 KiB, the one sheet +93.3 KiB, the kit's shared chunks +24.4 KiB and the entry script +13.0 KiB, less 3.8 KiB elsewhere, so it moved to 5215 KiB |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from

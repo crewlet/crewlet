@@ -530,13 +530,19 @@ func TestTwoPeopleTalkingInOneRoomNeverContend(t *testing.T) {
 	}
 	r.drain()
 
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		room.Channel.ID); got != 2 {
 		t.Fatalf("the room holds %d messages, want 2", got)
 	}
 	// AND THE SEQUENCE IS CONTIGUOUS, which is what lets a browser detect
-	// a dropped live frame and refetch exactly the hole.
-	for seq, id := range map[int]string{1: first.Message.ID, 2: second.Message.ID} {
+	// a dropped live frame and refetch exactly the hole. The room's opening
+	// line (who joined it) took the numbers before them.
+	opening := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event <> ''`,
+		room.Channel.ID)
+	if opening != 1 {
+		t.Fatalf("the room opened with %d event lines, want the one saying who joined", opening)
+	}
+	for seq, id := range map[int]string{opening + 1: first.Message.ID, opening + 2: second.Message.ID} {
 		if got := r.count(
 			`SELECT COUNT(*) FROM chat_messages WHERE id = ? AND channel_seq = ?`,
 			id, seq); got != 1 {
@@ -643,7 +649,7 @@ func TestARetriedPostWritesOneMessage(t *testing.T) {
 				"caller cannot act on", i+1)
 		}
 	}
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		room.Channel.ID); got != 1 {
 		t.Fatalf("the room holds %d copies of one remark, want 1 — a person "+
 			"who pressed send once said it once", got)
@@ -657,7 +663,7 @@ func TestARetriedPostWritesOneMessage(t *testing.T) {
 	case other.Outcome.Collapsed:
 		t.Fatalf("a different remark was answered as another copy: %+v", other.Outcome)
 	}
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		room.Channel.ID); got != 2 {
 		t.Fatalf("the room holds %d messages after two different remarks, want 2", got)
 	}
@@ -701,7 +707,7 @@ func TestARetryTheBrokerCollapsedIsNotAnsweredWithItsOwnDecision(t *testing.T) {
 			"all it can say", retry.Message.Body, retry.Message.Mentions)
 	}
 	r.drain()
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		room.Channel.ID); got != 1 {
 		t.Fatalf("the room holds %d messages after a collapsed retry, want 1", got)
 	}
@@ -941,7 +947,7 @@ func TestASeatPostingTwiceInOneTurnWritesTwoMessages(t *testing.T) {
 	}
 	messages := func() int {
 		t.Helper()
-		return r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+		return r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 			room.Channel.ID)
 	}
 	first := post("post_message", 0, "on it")
@@ -1032,7 +1038,7 @@ func TestOneCountInAnotherPlaceIsAnotherGesture(t *testing.T) {
 		t.Fatalf(`"on it" in #ops answered %s in %s — #launch's message is %s`,
 			elsewhere.Message.ID, elsewhere.Message.ChannelID, first.Message.ID)
 	}
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		ops); got != 1 {
 		t.Fatalf("#ops holds %d messages, want the one said there", got)
 	}
@@ -1303,7 +1309,7 @@ func TestALinkIsAnAddressEveryReaderOpens(t *testing.T) {
 		}
 	}
 	r.drain()
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		room.Channel.ID); got != 1 {
 		t.Fatalf("the room holds %d messages after every refused gesture, want "+
 			"the one said before them", got)
@@ -1714,7 +1720,7 @@ func TestAPostIntoAnArchivedRoomIsRefused(t *testing.T) {
 	if !errors.Is(err, chatlet.ErrArchived) {
 		t.Fatalf("an archived room took a new message: %v", err)
 	}
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		room.Channel.ID); got != 1 {
 		t.Fatalf("the archived room holds %d messages, want the one said "+
 			"before it closed", got)
@@ -1956,7 +1962,7 @@ func TestACredentialActingAsItselfSpeaksInNoRoom(t *testing.T) {
 				"act as", name, chatlet.Sentence(err))
 		}
 	}
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages`); got != 1 {
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE event = ''`); got != 1 {
 		t.Fatalf("a credential's refused gestures left %d messages, want jane's one", got)
 	}
 
@@ -2296,7 +2302,7 @@ func TestARoomOfAnUnknownKindRefusesEveryWrite(t *testing.T) {
 		t.Fatalf("a patch of a room of an unknown kind: %v", err)
 	}
 	r.drain()
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		id); got != 0 {
 		t.Fatalf("%d messages landed in a room this build cannot classify", got)
 	}

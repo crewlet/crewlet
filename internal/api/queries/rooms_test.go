@@ -169,7 +169,7 @@ func (emptyFiles) Files(context.Context, worklet.FileQuery) (worklet.FileListing
 
 // emptyChat is the chat reader and its keyword index with nothing in them, on
 // emptyWork's terms: this sweep is about which NAMES exist.
-type emptyChat struct{}
+type emptyChat struct{ noReaderViews }
 
 func (emptyChat) Channels(context.Context, string, chatlet.ChannelsQuery,
 	statelog.Freshness) (chatlet.ChannelListing, error) {
@@ -201,16 +201,16 @@ func (emptyChat) Thread(context.Context, string, chatlet.ThreadQuery,
 	return chatlet.Thread{}, nil
 }
 
-func (emptyChat) Mentions(context.Context, string, chatlet.MentionQuery,
-	statelog.Freshness) (chatlet.MentionFeed, error) {
-
-	return chatlet.MentionFeed{}, nil
-}
-
 func (emptyChat) RoomNames(context.Context, string,
 	statelog.Freshness) (chatlet.RoomNames, error) {
 
 	return chatlet.RoomNames{}, nil
+}
+
+func (emptyChat) Directory(context.Context, string,
+	statelog.Freshness) (chatlet.Directory, error) {
+
+	return chatlet.Directory{}, nil
 }
 
 func (emptyChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {

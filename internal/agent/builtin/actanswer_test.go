@@ -80,6 +80,7 @@ var everyWriteCall = map[string]map[string]any{
 	chatlet.UpdateChannelTool: {"channel": chatRoomID, "topic": "the launch"},
 	chatlet.SetChannelMembersTool: {"channel": chatRoomID, "members": []any{"jane",
 		map[string]any{"handle": "agent-ceo", "follow_all": true}}},
+	chatlet.AddChannelMembersTool: {"channel": chatRoomID, "members": []any{"agent-ceo"}},
 	chatlet.MarkChatReadTool: {"cursors": map[string]any{chatRoomID: 12.0},
 		"mute": []any{chatRoomID}},
 }
@@ -779,6 +780,12 @@ func (f *ledgerFake) PatchChannel(_ context.Context, actor chatlet.Actor, _ stri
 func (f *ledgerFake) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
 	_ []chatlet.Member) (chatlet.Written, error) {
 	return f.chatWrite("members", actor)
+}
+
+func (f *ledgerFake) AddMembers(_ context.Context, actor chatlet.Actor, _ string,
+	handles []string) (chatlet.Written, []string, error) {
+	written, err := f.chatWrite("add", actor)
+	return written, handles, err
 }
 
 func (f *ledgerFake) Edit(_ context.Context, actor chatlet.Actor, _, _ string,

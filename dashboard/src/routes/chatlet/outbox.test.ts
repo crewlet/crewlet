@@ -24,6 +24,7 @@ const waiting: Outgoing = {
   channelID: "room-1",
   threadRoot: "",
   body: "anyone there?",
+  links: [],
   state: "accepted",
   messageID: "m-said",
   detail: "",

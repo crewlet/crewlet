@@ -61,6 +61,7 @@ import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import {
   ASSISTANT_DEEP_ACTIVITY_LINES,
   type AssistantBriefAction,
+  type AssistantBriefPoint,
   type AssistantBriefCard,
   type AssistantCardEvent,
   type AssistantDeepProgress,
@@ -856,6 +857,25 @@ function briefPress(
 }
 
 /**
+ * A room brief's point's press: the room, opened at the message it came from,
+ * which the room draws flashed (a reply in its thread). The address is the
+ * room screen's own, built from the source the engine read back, never from
+ * the model's words.
+ */
+function pointPress(
+  point: AssistantBriefPoint,
+  on: CardHandlers,
+): { label: string; onSelect: () => void } | undefined {
+  const { channel_id, message_id, thread_root } = point.source;
+  const target = openInApp(hrefOf(["chatlet", channel_id], { message: message_id }));
+  if (!target) return undefined;
+  return {
+    label: thread_root ? "Open the thread" : "Open the message",
+    onSelect: () => on.openHere(target),
+  };
+}
+
+/**
  * A brief, drawn by the design system's `BriefCard`: what it covers (the page,
  * or the one record it was limited to) and when it was read, what the page is
  * about, the ranked rows with their presses, the context line, and the
@@ -883,6 +903,11 @@ function Brief({ brief, on }: { brief: AssistantBriefCard; on: CardHandlers }) {
         ...(need.detail ? { detail: need.detail } : {}),
         tone: need.tone,
         action: briefPress(need.action, on),
+      }))}
+      points={(brief.points ?? []).map((point) => ({
+        key: point.source.message_id,
+        text: point.text,
+        source: pointPress(point, on),
       }))}
       context={brief.context}
       followUps={brief.follow_ups.map((question) => ({

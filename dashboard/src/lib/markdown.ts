@@ -53,7 +53,7 @@ import {
   type MarkdownFence,
 } from "@crewlethq/ui";
 import { ColourCode, InlineToken, LabelledLink, TokenRun } from "~/components/InlineToken.tsx";
-import { codeColour, type LinkMode } from "./inlineTokens.ts";
+import { codeColour, inlineTokens, type LinkMode } from "./inlineTokens.ts";
 import { inlineText, plainText } from "./markdownText.ts";
 
 // --- sectioning ------------------------------------------------------------
@@ -870,6 +870,20 @@ export const ASSISTANT_WORDS: RenderOptions = {
  */
 export const CHECKED_WORDS: RenderOptions = { links: "checked" };
 
+/**
+ * How a chat message is read (`routes/chatlet/Body.tsx`): a model's words,
+ * since people and agents alike write a message a line at a time, whose
+ * links open where the dashboard built them and, beside those, on a page of
+ * the dashboard's own, rebuilt from its path alone (`links: "own"`): the
+ * task, page or room a message is about. A picture is its alt text, never
+ * fetched.
+ */
+export const CHAT_WORDS: RenderOptions = {
+  ...MODEL_WORDS,
+  links: "own",
+  image: () => null,
+};
+
 /** One heading of a document, as an "On this page" entry points at it. */
 export interface Heading {
   /** The markdown level, 1 for `#`. */
@@ -941,6 +955,43 @@ export function imageSources(source: string): string[] {
       else inline(g.label ?? g.strong ?? g.strongUnder ?? g.em ?? g.emUnder ?? g.del ?? "");
     }
   };
+  eachRun(source, inline);
+  return [...out];
+}
+
+/**
+ * Every link target the document names, once each, in order: what a written
+ * `[label](target)` points at and an address written bare, read by the same
+ * walk as [imageSources], so a target inside a code span, which renders as
+ * text, is not one.
+ */
+export function linkTargets(source: string): string[] {
+  const out = new Set<string>();
+  // THE WORDS BETWEEN CONSTRUCTS are read for bare addresses as the renderer
+  // reads them (`inlineTokens`), which is where a pasted address is.
+  const bare = (text: string) => {
+    for (const token of inlineTokens(text)) if (token.kind === "address") out.add(token.text);
+  };
+  const inline = (text: string) => {
+    let at = 0;
+    for (const { index, end, groups: g } of markdownInline(text)) {
+      bare(text.slice(at, index));
+      at = end;
+      if (g.esc !== undefined || g.tick !== undefined) continue;
+      if (g.auto !== undefined) out.add(g.auto);
+      else if (g.href !== undefined) out.add(g.href);
+      else if (g.src === undefined) {
+        inline(g.strong ?? g.strongUnder ?? g.em ?? g.emUnder ?? g.del ?? "");
+      }
+    }
+    bare(text.slice(at));
+  };
+  eachRun(source, inline);
+  return [...out];
+}
+
+/** Hand every run of inline text the renderer draws to `inline`, block by block. */
+function eachRun(source: string, inline: (text: string) => void): void {
   const block = (b: MarkdownBlock) => {
     switch (b.kind) {
       case "heading":
@@ -963,5 +1014,4 @@ export function imageSources(source: string): string[] {
     }
   };
   parseMarkdown(source ?? "").forEach(block);
-  return [...out];
 }

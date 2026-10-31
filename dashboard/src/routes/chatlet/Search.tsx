@@ -1,267 +1,399 @@
 /**
- * Searching the company's conversation.
+ * Searching Chatlet: messages, people and rooms, as the reader types.
  *
- * # It runs over the rooms the reader may READ, which is wider than their rail
+ * # Messages run over the rooms the reader may READ, which is wider than their rail
  *
  * A public room and a unit's room are readable by any seat, joined or not, so
  * a search driven off somebody's membership would answer nothing from exactly
- * the rooms a company does most of its talking in — silently, because an empty
+ * the rooms a company does most of its talking in, silently, because an empty
  * result reads as "nobody said that". The set is computed by the SERVER from
- * the viewer it resolved, and a request may only NARROW it to one room.
+ * the viewer it resolved, and a request may only NARROW it: to one room (In)
+ * and to one author (From), both answered by the engine over its whole index
+ * rather than by filtering a page here.
  *
  * So the answer carries the DENOMINATOR: how many rooms it actually ran over.
  * "Nothing matched" over three rooms and over three hundred are different
  * answers, and this screen says which it got.
  *
+ * # As the reader types, once they pause
+ *
+ * Each question is a real ranking over this node's own index, so it is asked
+ * once the words have rested (`useQuiet`), not on every key: a pause asks and
+ * a word being typed does not. The settled words go into the address by
+ * replacement, so a search is a link somebody can hand on and the back button
+ * is not filled with every prefix of the phrase. A phrase past the engine's
+ * bound is not sent, and the screen says why (`useSearchQuery`).
+ *
+ * # People and rooms are what the reader already holds
+ *
+ * People are the org chart's seats (`people.ts`), and rooms are every room the
+ * reader may read (`chat_rooms`, the list Browse rooms draws): both are
+ * matched here on the words a row draws, so they need no ranking.
+ *
  * # Keyword, and deliberately nothing else
  *
- * Chatlet has its own lexical index and no semantic search at all: a message is a
+ * Chatlet has its own lexical index and no semantic search: a message is a
  * remark about work rather than a statement of it, and mixing the corpora
  * would let one busy conversation outrank every page written on purpose.
- * Ranking here is BM25 tuned for a bimodal corpus — one-line acknowledgements
- * beside pasted blocks — so this box takes words rather than a query language.
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { href, useParam } from "~/app/router.tsx";
+import {
+  Callout,
+  EmptyState,
+  Highlight,
+  Input,
+  SegmentedControl,
+  Select,
+  TabPanel,
+  Tabs,
+  Tag,
+  highlightTerms,
+  Skeleton,
+} from "@crewlethq/ui";
+import { SearchGlyph } from "@crewlethq/icons/glyphs";
+
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Button, Callout, Input, Select, Skeleton } from "@crewlethq/ui";
-import { XGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
-import { useSearchQuery } from "~/lib/useSearchQuery.ts";
-import { fmtDateTime } from "~/lib/format.ts";
-import type { ChatChannelSummary } from "~/protocol/index.ts";
-
 import { CHAT_SEARCH_PAGE } from "~/contract/chat.ts";
+import { useNow } from "~/lib/clock.ts";
+import { relTime } from "~/lib/format.ts";
+import { useQuiet } from "~/lib/useQuiet.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { useSearchQuery } from "~/lib/useSearchQuery.ts";
+import type { ChatHit } from "~/protocol/index.ts";
 
-import { MAX_BROWSE_ROOMS, useRoomDetails } from "./directory.ts";
-import { isDirect, roomTitle } from "./rooms.ts";
+import { BrowseRow, matchesRoom } from "./Browse.tsx";
+import { ChatFace } from "./Face.tsx";
+import { useChatFrame, useChatNav } from "./nav.tsx";
+import { matchesPerson, useChatPeople, type ChatPerson } from "./people.ts";
+import { isDirect } from "~/lib/chatRooms.ts";
+import { roomTitle } from "./rooms.ts";
+import { SuggestedPerson } from "./Dialogs.tsx";
+import { ViewHead } from "./Views.tsx";
 
-export function Search({
-  channels,
-  viewer,
-  nameOf,
-}: {
-  channels: ChatChannelSummary[];
-  viewer: string;
-  nameOf: (handle: string) => string;
-}) {
-  // THE QUERY IS IN THE ADDRESS and the draft is not: a search somebody wants
-  // to hand to a colleague is a URL, and a keystroke is not a place anybody
-  // has been. `filter` rather than `section`, so typing does not fill the back
-  // button with every prefix of the phrase.
-  const [q, setQ] = useParam("q", "");
-  const [room, setRoom] = useParam("in", "");
-  const [draft, setDraft] = useState(q);
-  // `/` SEARCHES WHAT THE READER IS LOOKING AT, which here is this box — the
-  // screen's own search — rather than the palette over it.
-  const searchBox = useRef<HTMLInputElement>(null);
-  useSearchTarget(searchBox);
+type Scope = "messages" | "people" | "rooms";
+type Who = "all" | "people" | "agents";
 
-  // ON SUBMIT rather than on every keystroke: each of these is a real ranking
-  // over this node's own index, and a search-as-you-type would run one per
-  // letter for an answer nobody reads until they stop. A PHRASE PAST THE
-  // ENGINE'S BOUND IS NOT SENT, and the screen says why in place of the
-  // results — see `useSearchQuery`. THE PAGE IS THE ENGINE'S OWN
-  // ([CHAT_SEARCH_PAGE]), so a full one is told from the whole answer.
-  const answer = useSearchQuery(
-    "chat_search",
-    { q, limit: CHAT_SEARCH_PAGE, ...(room ? { channel_id: room } : {}) },
-    { enabled: q.trim().length > 0 },
-  );
+const SCOPE_LABEL: Record<Scope, string> = {
+  messages: "Messages",
+  people: "People",
+  rooms: "Rooms",
+};
 
-  // THE ROOMS THE RAIL DOES NOT HOLD, which on this screen is most of them: a
-  // search runs over every room the viewer may READ, and the public and unit
-  // rooms they have not joined are exactly the ones a rail lookup misses. Left
-  // to the rail alone every hit in one of them was titled "a room" — which is
-  // this screen's own promise failing quietly, since finding something said
-  // somewhere you are not is what it is for. Bounded by [MAX_BROWSE_ROOMS] for
-  // the reason that constant states: one wave of the socket's in-flight
-  // queries (four), so the transcript and the rail never queue behind more
-  // than one of these titles.
-  const outside = useMemo(() => {
-    const rail = new Set(channels.map((summary) => summary.channel.id));
-    const ids = new Set(
-      (answer.data?.hits ?? []).map((hit) => hit.channel_id).filter((id) => !rail.has(id)),
-    );
-    return [...ids].slice(0, MAX_BROWSE_ROOMS);
-  }, [answer.data, channels]);
-  const resolved = useRoomDetails(outside);
+/**
+ * What a full page of hits says beneath them. A RANKING CUT AT ITS PAGE IS NOT
+ * "EVERYTHING THAT MATCHED": the engine answers at most [CHAT_SEARCH_PAGE] hits
+ * and has no next page, so a full one may have more behind it.
+ */
+export const FULL_PAGE = `These are the ${CHAT_SEARCH_PAGE} best matches, and there may be more. Add a word, or pick a room or a person, to narrow it.`;
+
+/** Whether a seat is one the Who filter keeps. */
+export function keptBy(who: Who, person: Pick<ChatPerson, "kind">): boolean {
+  return who === "all" || (who === "agents") === (person.kind === "agent");
+}
+
+export function SearchView() {
+  const nav = useChatNav();
+  const frame = useChatFrame();
+  const people = useChatPeople();
+  const now = useNow();
+  const panel = useId();
+  const box = useRef<HTMLInputElement>(null);
+  // `/` SEARCHES WHAT THE READER IS LOOKING AT, which here is this box.
+  useSearchTarget(box);
   // NOTHING ON THE STATE BAR: a ranking over THIS NODE'S OWN index has no
-  // read level to state, as the work search's has none — and the rail's, which
-  // this screen also holds, describes a list the reader is not looking at.
+  // read level to state.
   usePageCoverage(undefined);
 
-  const titleOf = (id: string) => {
-    const found = channels.find((summary) => summary.channel.id === id);
-    const channel = found?.channel ?? resolved.rooms.get(id)?.channel;
-    // A ROOM NEITHER LIST HOLDS IS STILL A HIT. The read that would name it
-    // may not have come back yet, may have been refused, or may not have
-    // been answered just now — none of which says anything about whether the
-    // message is real: the engine ranked it, so it is.
+  const place = nav.place.kind === "search" ? nav.place : { q: undefined, room: undefined };
+  const [draft, setDraft] = useState(place.q ?? "");
+  const [room, setRoom] = useState(place.room ?? "");
+  const [from, setFrom] = useState("");
+  const [who, setWho] = useState<Who>("all");
+  const [scope, setScope] = useState<Scope>("messages");
+  const q = useQuiet(draft.trim());
+
+  // THE SETTLED SEARCH IS THE ADDRESS, replaced rather than pushed.
+  useEffect(() => {
+    if ((place.q ?? "") === q && (place.room ?? "") === room) return;
+    nav.go({ kind: "search", q: q || undefined, room: room || undefined }, { replace: true });
+  }, [q, room, place.q, place.room, nav]);
+
+  const answer = useSearchQuery(
+    "chat_search",
+    {
+      q,
+      limit: CHAT_SEARCH_PAGE,
+      ...(room ? { channel_id: room } : {}),
+      ...(from ? { author: from } : {}),
+    },
+    { enabled: q.length > 0 },
+  );
+  const terms = highlightTerms(q);
+  // THE WHO FILTER NARROWS THE PAGE THE ENGINE RANKED, by the kind of each
+  // hit's author: the engine takes one author, not a kind, so the page is
+  // said to be the best matches it is (FULL_PAGE) rather than all of them.
+  const hits = (answer.data?.hits ?? []).filter(
+    (hit) => !hit.author || keptBy(who, people.person(hit.author)),
+  );
+
+  // EVERY ROOM THE READER MAY READ, which on this screen is wider than their
+  // rail: a search runs over public and team rooms they have not joined, and
+  // a hit in one of them is named from this list, as the Rooms tab is drawn.
+  const directory = useQuery("chat_rooms", {}, { enabled: q !== "" });
+  const rooms = useMemo(
+    () => new Map((directory.data?.rooms ?? []).map((room) => [room.channel.id, room])),
+    [directory.data],
+  );
+  const whereOf = (id: string) => {
+    const found = frame.channels.find((summary) => summary.channel.id === id);
+    const channel = found?.channel ?? rooms.get(id)?.channel;
+    // A ROOM NEITHER LIST HOLDS IS STILL A HIT: the engine ranked it.
     if (!channel) return "a room";
-    const title = roomTitle(channel, { participants: found?.participants, viewer, nameOf });
+    const title = roomTitle(channel, {
+      participants: found?.participants,
+      viewer: frame.viewer,
+      nameOf: people.nameOf,
+    });
     return isDirect(channel.kind) ? title : `#${title}`;
   };
 
+  const peopleHits = q
+    ? people.everyone.filter((person) => keptBy(who, person) && matchesPerson(person, q))
+    : [];
+  const roomHits = q ? [...rooms.values()].filter((room) => matchesRoom(room, q)) : [];
+  const counts: Record<Scope, number> = {
+    messages: hits.length,
+    people: peopleHits.length,
+    rooms: roomHits.length,
+  };
+  const inRoom = room ? whereOf(room) : "";
+
+  const open = (hit: ChatHit) =>
+    hit.thread_root
+      ? nav.openThread(hit.channel_id, hit.thread_root)
+      : nav.openRoom(hit.channel_id, { message: hit.message_id });
+
   return (
-    <div className="chat-list">
-      <form
-        className="toolbar"
-        onSubmit={(event) => {
-          event.preventDefault();
-          setQ(draft.trim());
-        }}
-      >
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <Input
-            type="search"
-            width="full"
-            ref={searchBox}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            aria-label="Search the company's chat"
-            leading={<SearchGlyph size="sm" />}
-            placeholder="Search what’s been said"
-          />
-        </div>
-        <Select
-          aria-label="Which room"
-          value={room}
-          onChange={(value) => setRoom(String(value))}
-          options={[
-            { value: "", label: "Every room you can read" },
-            ...channels.map((summary) => ({
-              value: summary.channel.id,
-              label: titleOf(summary.channel.id),
-            })),
-          ]}
+    <section className="chat-view">
+      <ViewHead title="Search" />
+      <div className="chat-search-bar">
+        <Input
+          ref={box}
+          type="search"
+          width="full"
+          autoFocus
+          leading={<SearchGlyph size="sm" />}
+          placeholder={room ? `Search in ${inRoom}` : "Search messages, people and rooms"}
+          aria-label="Search Chatlet"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onClear={() => setDraft("")}
         />
-        <Button variant="primary" type="submit" leadingIcon={<SearchGlyph size="sm" />}>
-          Search
-        </Button>
-        {q && (
-          <Button
-            variant="secondary"
-            leadingIcon={<XGlyph size="sm" />}
-            onClick={() => {
-              setDraft("");
-              setQ("");
-            }}
-          >
-            Clear
-          </Button>
-        )}
-      </form>
-
-      <div className="chat-list-body">
-        {!q && (
-          <p className="t-caption muted measure">
-            This searches every room you can read, including public and team rooms you haven&rsquo;t
-            joined. Chatlet is searched apart from the knowledge base, so a busy conversation never
-            outranks a page.
-          </p>
-        )}
-
-        {answer.tooLong && <Callout variant="warning">{answer.tooLong}</Callout>}
-        {answer.withheld && <Callout variant="info">{answer.withheld}</Callout>}
-
-        {q && answer.data?.building && (
-          // A PARTIAL INDEX IS NOT "NOBODY SAID THAT". The answering node's
-          // index had not caught up with its transcript, so the ranking is
-          // over part of it — said once, above whatever it did find.
-          <Callout variant="warning">
-            Still indexing, so these results may be missing some messages. Search again shortly.
-          </Callout>
-        )}
-
-        {answer.loading && !answer.data && <Skeleton variant="text" rows={5} label="Ranking" />}
-
-        {q && answer.data && answer.data.searched === 0 && (
-          // NO ROOMS RAN, which is not "nothing matched": narrowing to a room
-          // this reader may not see answers over nothing at all, and so does a
-          // reader who may genuinely read nothing.
-          <Callout variant="neutral">
-            {room
-              ? "You can’t read the room this search is narrowed to, so nothing was searched."
-              : "There are no rooms you can read, so nothing was searched."}
-          </Callout>
-        )}
-
-        {q && !answer.tooLong && !answer.withheld && (
-          <QueryState
-            error={answer.error}
-            refusal={answer.refusal}
-            detail={answer.detail}
-            loading={answer.loading}
-            empty={
-              answer.data &&
-              answer.data.hits.length === 0 &&
-              answer.data.searched > 0 &&
-              !answer.data.building
-                ? {
-                    title: `Nothing matched “${q}”`,
-                    hint: `Searched ${answer.data.searched} room${answer.data.searched === 1 ? "" : "s"} you can read.`,
-                  }
-                : undefined
-            }
-          >
-            <div className="list">
-              {(answer.data?.hits ?? []).map((hit, index) => (
-                <a
-                  key={hit.message_id}
-                  className="chat-hit"
-                  href={href(
-                    ["chatlet", hit.channel_id],
-                    hit.thread_root ? { thread: hit.thread_root } : undefined,
-                  )}
-                >
-                  <span className="row gap-2">
-                    <span className="rank-place">{index + 1}</span>
-                    <strong className="truncate t-cell">{titleOf(hit.channel_id)}</strong>
-                    <span className="spacer" />
-                    <span className="t-caption muted">{fmtDateTime(hit.at)}</span>
-                  </span>
-                  <span className="t-caption">
-                    {hit.author ? `${nameOf(hit.author)}: ` : ""}
-                    {hit.snippet}
-                  </span>
-                </a>
-              ))}
-            </div>
-            {answer.data && answer.data.hits.length > 0 && (
-              <p className="t-caption muted">
-                Searched {answer.data.searched} room
-                {answer.data.searched === 1 ? "" : "s"}.
-                {answer.data.hits.length >= CHAT_SEARCH_PAGE && ` ${FULL_PAGE}`}
-              </p>
-            )}
-            {resolved.unreadable.size > 0 && (
-              // A NAME THAT COULD NOT BE READ JUST NOW IS SAID, and asked for
-              // again, rather than left as "a room" as if that were the answer.
-              <p className="row wrap gap-2 t-caption muted">
-                {resolved.unreadable.size} room{resolved.unreadable.size === 1 ? "’s" : "s’"} name
-                couldn&rsquo;t be read just now, so{" "}
-                {resolved.unreadable.size === 1 ? "it shows" : "they show"} as “a room”.
-                <Button size="small" variant="ghost" onClick={resolved.retry}>
-                  Ask again
-                </Button>
-              </p>
-            )}
-          </QueryState>
-        )}
+        <div className="chat-search-filters">
+          {scope === "messages" && (
+            <>
+              <Select
+                size="sm"
+                width="auto"
+                ariaLabel="In"
+                value={room}
+                onChange={(value) => setRoom(String(value))}
+                options={[
+                  { value: "", label: "In: any room" },
+                  ...frame.channels.map((summary) => ({
+                    value: summary.channel.id,
+                    label: `In: ${whereOf(summary.channel.id)}`,
+                  })),
+                ]}
+              />
+              <Select
+                size="sm"
+                width="auto"
+                ariaLabel="From"
+                value={from}
+                onChange={(value) => setFrom(String(value))}
+                options={[
+                  { value: "", label: "From: anyone" },
+                  ...people.everyone.map((person) => ({
+                    value: person.handle,
+                    label: `From: ${person.name}`,
+                    leading: <ChatFace person={person} size="xs" status={false} />,
+                  })),
+                ]}
+              />
+            </>
+          )}
+          {scope !== "rooms" && (
+            <SegmentedControl
+              label="Who"
+              semantics="radio"
+              size="sm"
+              value={who}
+              onValueChange={(value) => setWho(value)}
+              options={[
+                { value: "all", label: "Everyone" },
+                { value: "people", label: "People" },
+                { value: "agents", label: "Agents" },
+              ]}
+            />
+          )}
+        </div>
       </div>
-    </div>
+      <Tabs
+        className="chat-view-tabs"
+        variant="underline"
+        size="sm"
+        ariaLabel="Results"
+        panelId={panel}
+        value={scope}
+        onValueChange={(value) => setScope(value as Scope)}
+        items={(["messages", "people", "rooms"] as const).map((value) => ({
+          value,
+          label: SCOPE_LABEL[value],
+          count: q ? counts[value] : null,
+        }))}
+      />
+      <TabPanel id={panel} value={scope}>
+        <div className="chat-view-scroll">
+          {!q ? (
+            <p className="chat-pane-note">
+              Search covers every room you can read, including public and team rooms you
+              haven&rsquo;t joined. Results appear as you type.
+            </p>
+          ) : scope === "messages" ? (
+            <Messages
+              answer={answer}
+              hits={hits}
+              terms={terms}
+              room={room}
+              whereOf={whereOf}
+              open={open}
+              now={now}
+            />
+          ) : counts[scope] === 0 ? (
+            <EmptyState
+              size="compact"
+              icon={<SearchGlyph size="xl" />}
+              title={`No ${SCOPE_LABEL[scope].toLowerCase()} match`}
+              description="Try fewer words, or another spelling."
+            />
+          ) : scope === "people" ? (
+            <ul className="chat-pick-list">
+              {peopleHits.map((person) => (
+                <li key={person.handle}>
+                  <SuggestedPerson
+                    person={person}
+                    onSelect={() => nav.openPane({ kind: "profile", handle: person.handle })}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul className="chat-browse-list">
+              {roomHits.map((found) => (
+                <BrowseRow key={found.channel.id} room={found} />
+              ))}
+            </ul>
+          )}
+        </div>
+      </TabPanel>
+    </section>
   );
 }
 
-/**
- * What a full page of hits says beneath them.
- *
- * A RANKING CUT AT ITS PAGE IS NOT "EVERYTHING THAT MATCHED": the engine
- * answers at most [CHAT_SEARCH_PAGE] hits and has no next page, so a full one
- * may have more behind it, and the move is a narrower question.
- */
-export const FULL_PAGE = `These are the ${CHAT_SEARCH_PAGE} best matches, and there may be more. Add a word, or pick a room, to narrow it.`;
+/** The Messages tab: the engine's ranking, said honestly. */
+function Messages({
+  answer,
+  hits,
+  terms,
+  room,
+  whereOf,
+  open,
+  now,
+}: {
+  answer: ReturnType<typeof useSearchQuery<"chat_search">>;
+  hits: ChatHit[];
+  terms: string[];
+  room: string;
+  whereOf: (id: string) => string;
+  open: (hit: ChatHit) => void;
+  now: number;
+}) {
+  const people = useChatPeople();
+  if (answer.tooLong) return <Callout variant="warning">{answer.tooLong}</Callout>;
+  if (answer.withheld) return <Callout variant="info">{answer.withheld}</Callout>;
+  const data = answer.data;
+  return (
+    <>
+      {data?.building && (
+        // A PARTIAL INDEX IS NOT "NOBODY SAID THAT".
+        <Callout variant="warning">
+          Still indexing, so these results may be missing some messages. Search again shortly.
+        </Callout>
+      )}
+      {answer.loading && !data && <Skeleton variant="text" rows={5} label="Ranking" />}
+      {data && data.searched === 0 && (
+        // NO ROOMS RAN, which is not "nothing matched".
+        <Callout variant="neutral">
+          {room
+            ? "You can’t read the room this search is narrowed to, so nothing was searched."
+            : "There are no rooms you can read, so nothing was searched."}
+        </Callout>
+      )}
+      <QueryState
+        error={answer.error}
+        refusal={answer.refusal}
+        detail={answer.detail}
+        loading={answer.loading}
+        empty={
+          data && hits.length === 0 && data.searched > 0 && !data.building
+            ? {
+                title: "No messages match",
+                hint: `Searched ${data.searched} room${data.searched === 1 ? "" : "s"} you can read. Try fewer words, or widen In and From.`,
+              }
+            : undefined
+        }
+      >
+        {hits.map((hit) => {
+          const author = hit.author ? people.person(hit.author) : null;
+          return (
+            <button
+              key={hit.message_id}
+              type="button"
+              className="chat-hit"
+              onClick={() => open(hit)}
+            >
+              {author ? <ChatFace person={author} size={32} status={false} /> : <span />}
+              <span className="chat-hit__text">
+                <span className="chat-hit__head">
+                  <span className="chat-hit__name">{author?.name ?? "Somebody"}</span>
+                  <span className="chat-muted-text">
+                    {whereOf(hit.channel_id)}
+                    {hit.thread_root ? " · in a thread" : ""} · {relTime(hit.at, now)}
+                  </span>
+                </span>
+                <Highlight className="chat-hit__body" text={hit.snippet ?? ""} terms={terms} />
+              </span>
+            </button>
+          );
+        })}
+        {data && hits.length > 0 && (
+          <p className="chat-pane-note">
+            Searched {data.searched} room{data.searched === 1 ? "" : "s"}.
+            {data.hits.length >= CHAT_SEARCH_PAGE && ` ${FULL_PAGE}`}
+          </p>
+        )}
+      </QueryState>
+      {data && hits.length < data.hits.length && (
+        <p className="chat-pane-note">
+          <Tag size="xs">Filtered</Tag> Showing the {hits.length} of the best {data.hits.length}{" "}
+          matches the Who filter keeps.
+        </p>
+      )}
+    </>
+  );
+}

@@ -106,7 +106,7 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/chatlet/Room.tsx"],
     why: "the room's message box and an open thread's reply box, fields of the room's one draft",
   },
-  "routes/chatlet/Transcript.tsx": {
+  "routes/chatlet/MessageRow.tsx": {
     screen: ["routes/chatlet/Room.tsx"],
     why: "a message open for a rewrite, a field of the room's one draft",
   },
@@ -126,9 +126,10 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/artifacts/FolderDialogs.tsx": "modal: naming a folder",
   "routes/artifacts/HistoryTab.tsx": "modal: a version's note, in its dialog",
   "routes/artifacts/RenameDialog.tsx": "modal: renaming an artifact",
-  "routes/chatlet/RoomSettings.tsx": "modal: a room's topic and purpose, in its dialog",
-  "routes/chatlet/StartDirect.tsx": "modal: opening a direct conversation, in its dialog",
-  "routes/chatlet/StartRoom.tsx": "modal: making a room, in its dialog",
+  "routes/chatlet/Attach.tsx":
+    "modal: a search for a task, page or artifact to link, in its dialog",
+  "routes/chatlet/Dialogs.tsx":
+    "modal: a new room, a room's topic or description, people to add, in their dialogs",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
   "routes/settings/AccessDialogs.tsx": "modal: an access change, in its dialog",
   "routes/worklet/NewProject.tsx": "modal: a new project's owner and key",

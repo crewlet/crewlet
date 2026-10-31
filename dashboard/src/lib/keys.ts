@@ -115,6 +115,15 @@ export interface Chord {
   run: (e: KeyboardEvent) => void;
   /** Require the platform's command modifier (⌘ on a Mac, Ctrl elsewhere). */
   meta?: boolean;
+  /**
+   * Require Alt (Option on a Mac) held, or not held. COMPARED ONLY WHEN SET:
+   * a chord that names no Alt fires whatever the reader holds, as every
+   * bare-letter chord always has. Never on a letter, which Option composes
+   * into another character on a Mac (`app/keymap.ts` refuses that row).
+   */
+  alt?: boolean;
+  /** Require Shift held, or not held. Compared only when set, as [alt] is. */
+  shift?: boolean;
   /** Fire even while the reader is typing. For `escape`, and little else. */
   whileTyping?: boolean;
   /** Skip this binding without changing the shape of the list. */
@@ -225,6 +234,8 @@ export function useKeyChords(chords: (Chord | Sequence)[]): void {
         if (chord.key !== key) continue;
         if ("after" in chord) continue;
         if (Boolean(chord.meta) !== meta) continue;
+        if (chord.alt !== undefined && chord.alt !== e.altKey) continue;
+        if (chord.shift !== undefined && chord.shift !== e.shiftKey) continue;
         if (typing && !chord.whileTyping) continue;
         e.preventDefault();
         chord.run(e);

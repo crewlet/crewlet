@@ -61,7 +61,7 @@ describe("flushing", () => {
 
     vi.advanceTimersByTime(READ_FLUSH_MS);
     expect(flush).toHaveBeenCalledTimes(1);
-    expect(flush).toHaveBeenCalledWith({ "room-1": packPosition(at(1, 40)) });
+    expect(flush).toHaveBeenCalledWith({ "room-1": packPosition(at(1, 40)) }, {});
   });
 
   test("a reader who never stops is still written down, once per interval", () => {
@@ -79,7 +79,7 @@ describe("flushing", () => {
     }
     expect(flush).toHaveBeenCalledTimes(3);
     // And each write carried where the reader had actually reached.
-    expect(flush).toHaveBeenLastCalledWith({ "room-1": packPosition(at(1, 90)) });
+    expect(flush).toHaveBeenLastCalledWith({ "room-1": packPosition(at(1, 90)) }, {});
   });
 
   test("reading back through history never moves the cursor down", () => {
@@ -104,7 +104,7 @@ describe("flushing", () => {
     const cursors = new ReadCursors({ flush });
     cursors.see("room-1", packPosition(at(1, 12)));
     cursors.flushNow();
-    expect(flush).toHaveBeenCalledWith({ "room-1": packPosition(at(1, 12)) });
+    expect(flush).toHaveBeenCalledWith({ "room-1": packPosition(at(1, 12)) }, {});
 
     // And the interval that was already running does not then write again.
     flush.mockClear();
@@ -119,10 +119,13 @@ describe("flushing", () => {
     cursors.see("room-2", packPosition(at(1, 9)));
     vi.advanceTimersByTime(READ_FLUSH_MS);
     expect(flush).toHaveBeenCalledTimes(1);
-    expect(flush).toHaveBeenCalledWith({
-      "room-1": packPosition(at(1, 3)),
-      "room-2": packPosition(at(1, 9)),
-    });
+    expect(flush).toHaveBeenCalledWith(
+      {
+        "room-1": packPosition(at(1, 3)),
+        "room-2": packPosition(at(1, 9)),
+      },
+      {},
+    );
   });
 
   test("a flush that failed is retried rather than lost", async () => {
@@ -140,7 +143,7 @@ describe("flushing", () => {
     fail = false;
     await vi.advanceTimersByTimeAsync(READ_FLUSH_MS);
     expect(flush).toHaveBeenCalledTimes(2);
-    expect(flush).toHaveBeenLastCalledWith({ "room-1": packPosition(at(1, 5)) });
+    expect(flush).toHaveBeenLastCalledWith({ "room-1": packPosition(at(1, 5)) }, {});
   });
 
   test("a room already written is not written again", () => {
@@ -170,7 +173,7 @@ describe("resuming a stopped writer", () => {
     cursors.resume();
     cursors.see("room-1", packPosition(at(1, 21)));
     vi.advanceTimersByTime(READ_FLUSH_MS);
-    expect(flush).toHaveBeenCalledWith({ "room-1": packPosition(at(1, 21)) });
+    expect(flush).toHaveBeenCalledWith({ "room-1": packPosition(at(1, 21)) }, {});
   });
 
   test("a failed flush put back while stopped is scheduled again on resuming", async () => {
@@ -187,7 +190,7 @@ describe("resuming a stopped writer", () => {
     cursors.resume();
     await vi.advanceTimersByTimeAsync(READ_FLUSH_MS);
     expect(flush).toHaveBeenCalledTimes(2);
-    expect(flush).toHaveBeenLastCalledWith({ "room-1": packPosition(at(1, 22)) });
+    expect(flush).toHaveBeenLastCalledWith({ "room-1": packPosition(at(1, 22)) }, {});
   });
 
   test("never brings a forgotten person back", () => {
@@ -391,5 +394,37 @@ describe("the answer to a read-state write", () => {
     await markRead(press({ read: nameless }), store, { mute: ["room-1"] }, { done: "Muted" });
     await markRead(press({ cursors: {} }), store, { mute: ["room-1"] }, { done: "Muted" });
     expect(store.state.chatRead).toBeNull();
+  });
+});
+
+describe("a thread's own place", () => {
+  test("rides the same write as the rooms, advance-only, keyed by its root", async () => {
+    const flush = vi.fn(
+      async (_cursors: Record<string, number>, _threads: Record<string, number>) => undefined,
+    );
+    const cursors = new ReadCursors({ flush });
+    cursors.see("room-1", packPosition(at(1, 4)));
+    cursors.seeThread("root-1", packPosition(at(1, 9)));
+    // Reading back up a thread is no reading at all.
+    cursors.seeThread("root-1", packPosition(at(1, 7)));
+    await vi.advanceTimersByTimeAsync(READ_FLUSH_MS);
+    expect(flush).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledWith(
+      { "room-1": packPosition(at(1, 4)) },
+      { "root-1": packPosition(at(1, 9)) },
+    );
+  });
+
+  test("a thread's place a failed flush carried is written with the next one", async () => {
+    const flush = vi
+      .fn<(c: Record<string, number>, t: Record<string, number>) => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error("unreachable"))
+      .mockResolvedValue(undefined);
+    const cursors = new ReadCursors({ flush });
+    cursors.seeThread("root-1", packPosition(at(1, 9)));
+    await vi.advanceTimersByTimeAsync(READ_FLUSH_MS);
+    await vi.advanceTimersByTimeAsync(READ_FLUSH_MS);
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(flush.mock.calls[1]![1]).toEqual({ "root-1": packPosition(at(1, 9)) });
   });
 });

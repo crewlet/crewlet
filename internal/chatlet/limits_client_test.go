@@ -31,19 +31,20 @@ import (
 // value: the screen's copy is a convenience and this package's constant is the
 // rule.
 //
-// The browse dialog's bound (MAX_BROWSE_ROOMS) is not one of these: it is one
-// wave of the socket's queries, derived from the contract's
-// MAX_IN_FLIGHT_QUERIES, which `internal/api/stream` holds to
-// `stream.MaxInFlightQueries` — the package that owns that number.
+// The link previews' bound is not one of these: it is one wave of the
+// socket's queries, the contract's MAX_IN_FLIGHT_QUERIES, which
+// `internal/api/stream` holds to `stream.MaxInFlightQueries`, the package that
+// owns that number.
 func TestTheDashboardsChatLimitsAreTheEngines(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
 	for name, engine := range map[string]int{
 		"MAX_CHANNEL_NAME":        chatlet.MaxChannelName,
 		"MAX_BODY_BYTES":          chatlet.MaxBody,
-		"MAX_TOPIC_BYTES":         chatlet.MaxTopic,
-		"MAX_PURPOSE_BYTES":       chatlet.MaxPurpose,
+		"MAX_TOPIC_CHARS":         chatlet.MaxTopic,
+		"MAX_PURPOSE_CHARS":       chatlet.MaxPurpose,
 		"MAX_DIRECT_PARTICIPANTS": chatlet.MaxDMParticipants,
+		"MAX_MESSAGE_LINKS":       chatlet.MaxLinks,
 	} {
 		raw, err := clientsource.Scalar(tree, name)
 		if err != nil {

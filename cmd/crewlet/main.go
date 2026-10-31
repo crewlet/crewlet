@@ -2383,7 +2383,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// reads: the address cannot change under a running node, so
 			// unlike the company reads around it this one can never
 			// answer twice.
-			WebhookBase: func() string { return boot.API.WebhookBase() },
+			WebhookBase:   func() string { return boot.API.WebhookBase() },
+			DashboardBase: func() string { return boot.API.ExternalBase() },
 			// What the reconcile loop last found for each surface. The
 			// FLEET's record, not this node's: the loop is a worker duty,
 			// so on a split-role deployment the node answering the

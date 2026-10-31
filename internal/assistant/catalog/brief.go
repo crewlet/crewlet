@@ -85,15 +85,22 @@ var brief = sync.OnceValues(func() (Tool, error) {
 		"question": line("The question an ask action asks, in the person's words.",
 			wire.BriefQuestionMaxRunes),
 	})
+	point := object([]string{"say", "message_id"}, map[string]*schema{
+		"say": line("One point of what was said, in plain words, naming who said or "+
+			"decided it.", wire.BriefPointMaxRunes),
+		"message_id": text("The id of the message this point came from, exactly as a "+
+			"read in this turn returned it.", nameBytes),
+	})
 	t := Tool{
 		Name: AnswerBriefTool, Kind: KindBrief, Tier: TierRead,
 		Phrase: "write the brief",
 		Description: fmt.Sprintf("Answer with the brief, once you have read what it needs. "+
 			"Call it exactly once; it is your whole answer, and you write nothing else. "+
 			"Every line is one line within its cap: about at most %d characters, a need's "+
-			"do at most %d and its why at most %d, context at most %d, a question at most %d.",
+			"do at most %d and its why at most %d, context at most %d, a question at most "+
+			"%d, and a chat room's point at most %d.",
 			wire.BriefAboutMaxRunes, wire.BriefTextMaxRunes, wire.BriefDetailMaxRunes,
-			wire.BriefContextMaxRunes, wire.BriefQuestionMaxRunes),
+			wire.BriefContextMaxRunes, wire.BriefQuestionMaxRunes, wire.BriefPointMaxRunes),
 		schema: object([]string{"about", "needs"}, map[string]*schema{
 			"about": line("What this page or record is about right now, in plain words: "+
 				"the situation, not a list of counts.", wire.BriefAboutMaxRunes),
@@ -102,6 +109,10 @@ var brief = sync.OnceValues(func() (Tool, error) {
 				"Empty when nothing needs them, which is a good answer: never a fact to "+
 				"know, never invented urgency.", wire.BriefMaxNeeds),
 				maxItems: wire.BriefMaxNeeds, items: need},
+			"points": {kind: "array", description: fmt.Sprintf("Only in a brief of a chat "+
+				"room: what was said, at most %d points, oldest first, each citing the "+
+				"message it came from. Leave it out of every other brief.",
+				wire.BriefMaxPoints), maxItems: wire.BriefMaxPoints, items: point},
 			"context": line("Only when it changes what the person should do: one fact from "+
 				"elsewhere that bears on it. Leave it out otherwise.", wire.BriefContextMaxRunes),
 			"follow_ups": {kind: "array", description: fmt.Sprintf("Questions the person "+
@@ -139,6 +150,15 @@ type BriefDraft struct {
 	Needs     []BriefDraftNeed
 	Context   string
 	FollowUps []string
+	// Points are a chat room's summary as written, each naming its message.
+	Points []BriefDraftPoint
+}
+
+// BriefDraftPoint is one point as written: what was said, and the message id
+// the model cites for it, which the orchestrator reads again as the person.
+type BriefDraftPoint struct {
+	Text      string
+	MessageID string
 }
 
 // BriefDraftNeed is one row as written: Text is its do, Detail its why.
@@ -200,6 +220,11 @@ func ParseBrief(args map[string]any) (BriefDraft, error) {
 	for i, q := range list(args["follow_ups"]) {
 		note(briefLine(fmt.Sprintf("follow_ups[%d]", i), q, true))
 	}
+	for i, raw := range list(args["points"]) {
+		p := asObject(raw)
+		path := fmt.Sprintf("points[%d]", i)
+		note(briefLine(path+".say", p["say"], true), refID(path+".message_id", p["message_id"]))
+	}
 	if len(found) > 0 {
 		return BriefDraft{}, refusedFor(found)
 	}
@@ -219,6 +244,11 @@ func ParseBrief(args map[string]any) (BriefDraft, error) {
 	for _, raw := range list(args["follow_ups"]) {
 		q, _ := raw.(string)
 		d.FollowUps = append(d.FollowUps, strings.TrimSpace(q))
+	}
+	for _, raw := range list(args["points"]) {
+		p := Args(asObject(raw))
+		d.Points = append(d.Points, BriefDraftPoint{Text: strings.TrimSpace(p.String("say")),
+			MessageID: strings.TrimSpace(p.String("message_id"))})
 	}
 	return d, nil
 }

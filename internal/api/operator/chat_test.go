@@ -148,6 +148,12 @@ func (d *chatDesk) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
 	return d.wrote(actor)
 }
 
+func (d *chatDesk) AddMembers(_ context.Context, actor chatlet.Actor, _ string,
+	handles []string) (chatlet.Written, []string, error) {
+	written, err := d.wrote(actor)
+	return written, handles, err
+}
+
 func (d *chatDesk) Edit(_ context.Context, actor chatlet.Actor, _, _ string,
 	_ chatlet.EditMessage) (chatlet.Written, error) {
 	return d.wrote(actor)

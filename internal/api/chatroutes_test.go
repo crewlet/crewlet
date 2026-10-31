@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -19,13 +20,19 @@ import (
 // chatReadRoutes are the chat questions as the published API spells them, one
 // path per question.
 var chatReadRoutes = map[string]string{
-	"/chatlet/channels":                    "chat_channels",
-	"/chatlet/channels/room-1":             "chat_channel",
-	"/chatlet/channels/room-1/messages":    "chat_messages",
-	"/chatlet/channels/room-1/threads/m-1": "chat_thread",
-	"/chatlet/mentions":                    "chat_mentions",
-	"/chatlet/search":                      "chat_search",
-	"/chatlet/room-names":                  "chat_room_names",
+	"/chatlet/channels":                     "chat_channels",
+	"/chatlet/channels/room-1":              "chat_channel",
+	"/chatlet/channels/room-1/messages":     "chat_messages",
+	"/chatlet/channels/room-1/threads/m-1":  "chat_thread",
+	"/chatlet/search":                       "chat_search",
+	"/chatlet/room-names":                   "chat_room_names",
+	"/chatlet/activity":                     "chat_activity",
+	"/chatlet/threads":                      "chat_threads",
+	"/chatlet/saved":                        "chat_saved",
+	"/chatlet/sent":                         "chat_sent",
+	"/chatlet/channels/room-1/links":        "chat_links",
+	"/chatlet/channels/room-1/messages/m-2": "chat_message",
+	"/chatlet/rooms":                        "chat_rooms",
 }
 
 // EVERY CHAT READ ROUTE REACHES THE REGISTRY.
@@ -79,9 +86,15 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 		"/chatlet/channels/room-1/threads/m-1?cursor=17": "chat_thread",
 		"/chatlet/channels/room-1":                       "chat_channel",
 		"/chatlet/channels":                              "chat_channels",
-		"/chatlet/mentions?cursor=c":                     "chat_mentions",
 		"/chatlet/search":                                "chat_search",
 		"/chatlet/room-names":                            "chat_room_names",
+		"/chatlet/activity?cursor=c":                     "chat_activity",
+		"/chatlet/threads":                               "chat_threads",
+		"/chatlet/saved":                                 "chat_saved",
+		"/chatlet/sent":                                  "chat_sent",
+		"/chatlet/channels/room-1/links":                 "chat_links",
+		"/chatlet/channels/room-1/messages/m-2":          "chat_message",
+		"/chatlet/rooms":                                 "chat_rooms",
 	} {
 		rec := httptest.NewRecorder()
 		a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, path, nil)))
@@ -98,7 +111,7 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 		}
 		wantRoom, wantRoot := "", ""
 		switch what {
-		case "chat_messages", "chat_channel":
+		case "chat_messages", "chat_channel", "chat_links", "chat_message":
 			wantRoom = "room-1"
 		case "chat_thread":
 			wantRoom, wantRoot = "room-1", "m-1"
@@ -122,7 +135,7 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 
 // quietChat is a chat reader that answers every read empty, for a case about
 // which questions exist rather than what they answer.
-type quietChat struct{}
+type quietChat struct{ noReaderViews }
 
 func (quietChat) Channels(context.Context, string, chatlet.ChannelsQuery,
 	statelog.Freshness) (chatlet.ChannelListing, error) {
@@ -149,14 +162,14 @@ func (quietChat) Thread(context.Context, string, chatlet.ThreadQuery,
 	return chatlet.Thread{}, nil
 }
 
-func (quietChat) Mentions(context.Context, string, chatlet.MentionQuery,
-	statelog.Freshness) (chatlet.MentionFeed, error) {
-	return chatlet.MentionFeed{}, nil
-}
-
 func (quietChat) RoomNames(context.Context, string,
 	statelog.Freshness) (chatlet.RoomNames, error) {
 	return chatlet.RoomNames{}, nil
+}
+
+func (quietChat) Directory(context.Context, string,
+	statelog.Freshness) (chatlet.Directory, error) {
+	return chatlet.Directory{}, nil
 }
 
 func (quietChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {
@@ -209,4 +222,41 @@ func TestTheAppTellsTheChatHubItServesSocketsOnceBuilt(t *testing.T) {
 	if !built.ServesSockets() {
 		t.Error("the app mounted its socket over the hub and never said so")
 	}
+}
+
+// noReaderViews is a chat reader double's reader views when its suite reads
+// none of them: each is refused, so a case that reaches one by mistake fails
+// rather than reading an empty answer as a real one.
+type noReaderViews struct{}
+
+var errNoReaderViews = errors.New("this double answers no reader view")
+
+func (noReaderViews) Activity(context.Context, string, chatlet.ActivityQuery,
+	statelog.Freshness) (chatlet.Activity, error) {
+	return chatlet.Activity{}, errNoReaderViews
+}
+
+func (noReaderViews) Threads(context.Context, string, chatlet.ThreadsQuery,
+	statelog.Freshness) (chatlet.FollowedThreads, error) {
+	return chatlet.FollowedThreads{}, errNoReaderViews
+}
+
+func (noReaderViews) Saved(context.Context, string, chatlet.SavedQuery,
+	statelog.Freshness) (chatlet.SavedMessages, error) {
+	return chatlet.SavedMessages{}, errNoReaderViews
+}
+
+func (noReaderViews) Sent(context.Context, string, chatlet.SentQuery,
+	statelog.Freshness) (chatlet.SentMessages, error) {
+	return chatlet.SentMessages{}, errNoReaderViews
+}
+
+func (noReaderViews) Links(context.Context, string, chatlet.LinksQuery,
+	statelog.Freshness) (chatlet.SharedLinks, error) {
+	return chatlet.SharedLinks{}, errNoReaderViews
+}
+
+func (noReaderViews) Message(context.Context, string, chatlet.MessageQuery,
+	statelog.Freshness) (chatlet.OneMessage, error) {
+	return chatlet.OneMessage{}, errNoReaderViews
 }

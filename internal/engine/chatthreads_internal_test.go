@@ -17,6 +17,8 @@ import (
 // threadAnswerer is a data node's chat reader answering one thread, and
 // recording what it was asked. Every other read is a case's mistake.
 type threadAnswerer struct {
+	noReaderViews
+
 	mu     sync.Mutex
 	thread chatlet.Thread
 	asked  struct {
@@ -56,14 +58,14 @@ func (*threadAnswerer) Messages(context.Context, string, chatlet.TranscriptQuery
 	return chatlet.Transcript{}, errors.New("only the thread is read here")
 }
 
-func (*threadAnswerer) Mentions(context.Context, string, chatlet.MentionQuery,
-	statelog.Freshness) (chatlet.MentionFeed, error) {
-	return chatlet.MentionFeed{}, errors.New("only the thread is read here")
-}
-
 func (*threadAnswerer) RoomNames(context.Context, string,
 	statelog.Freshness) (chatlet.RoomNames, error) {
 	return chatlet.RoomNames{}, errors.New("only the thread is read here")
+}
+
+func (*threadAnswerer) Directory(context.Context, string,
+	statelog.Freshness) (chatlet.Directory, error) {
+	return chatlet.Directory{}, errors.New("only the thread is read here")
 }
 
 func (*threadAnswerer) Readable(context.Context, string,
@@ -145,4 +147,41 @@ func TestANodeHoldingNoDataReadsTheThreadThroughTheRouter(t *testing.T) {
 		t.Errorf("the transcript is %+v, want the root, the seat's own reply and "+
 			"the seven earlier replies counted", got)
 	}
+}
+
+// noReaderViews is a chat reader double's reader views when its suite reads
+// none of them: each is refused, so a case that reaches one by mistake fails
+// rather than reading an empty answer as a real one.
+type noReaderViews struct{}
+
+var errNoReaderViews = errors.New("this double answers no reader view")
+
+func (noReaderViews) Activity(context.Context, string, chatlet.ActivityQuery,
+	statelog.Freshness) (chatlet.Activity, error) {
+	return chatlet.Activity{}, errNoReaderViews
+}
+
+func (noReaderViews) Threads(context.Context, string, chatlet.ThreadsQuery,
+	statelog.Freshness) (chatlet.FollowedThreads, error) {
+	return chatlet.FollowedThreads{}, errNoReaderViews
+}
+
+func (noReaderViews) Saved(context.Context, string, chatlet.SavedQuery,
+	statelog.Freshness) (chatlet.SavedMessages, error) {
+	return chatlet.SavedMessages{}, errNoReaderViews
+}
+
+func (noReaderViews) Sent(context.Context, string, chatlet.SentQuery,
+	statelog.Freshness) (chatlet.SentMessages, error) {
+	return chatlet.SentMessages{}, errNoReaderViews
+}
+
+func (noReaderViews) Links(context.Context, string, chatlet.LinksQuery,
+	statelog.Freshness) (chatlet.SharedLinks, error) {
+	return chatlet.SharedLinks{}, errNoReaderViews
+}
+
+func (noReaderViews) Message(context.Context, string, chatlet.MessageQuery,
+	statelog.Freshness) (chatlet.OneMessage, error) {
+	return chatlet.OneMessage{}, errNoReaderViews
 }

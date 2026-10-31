@@ -100,7 +100,7 @@ export interface ReadCursorOptions {
    * unreachable — and a rejection puts them back, so nothing is lost by a
    * flush that failed.
    */
-  flush: (cursors: Record<string, number>) => Promise<unknown>;
+  flush: (cursors: Record<string, number>, threads: Record<string, number>) => Promise<unknown>;
   /** Overridable for the suite only; every caller takes [READ_FLUSH_MS]. */
   delay?: number;
 }
@@ -127,6 +127,14 @@ export class ReadCursors {
    * was in flight.
    */
   private highest: Record<string, number> = {};
+  /**
+   * The same two maps for a THREAD'S own place, keyed by its root: a thread
+   * pane reads replies the room's cursor does not reach, and the badge on a
+   * thread line is counted against the furthest of the two. One writer for
+   * both, so a reader moving between a room and its thread makes one flush.
+   */
+  private pendingThreads: Record<string, number> = {};
+  private highestThreads: Record<string, number> = {};
   private timer: ReturnType<typeof setTimeout> | 0 = 0;
   private stopped = false;
   /** The seat this writer read for is gone ([forget]). */
@@ -150,6 +158,19 @@ export class ReadCursors {
     if (packed <= (this.highest[channelID] ?? 0)) return;
     this.highest[channelID] = packed;
     this.pending[channelID] = packed;
+    this.schedule();
+  }
+
+  /**
+   * This person has now read a thread as far as `packed`: the newest reply a
+   * thread pane has had on screen. Advance-only, as [see] is, and written in
+   * the same flush.
+   */
+  seeThread(rootID: string, packed: number | null): void {
+    if (this.stopped || !rootID || packed === null) return;
+    if (packed <= (this.highestThreads[rootID] ?? 0)) return;
+    this.highestThreads[rootID] = packed;
+    this.pendingThreads[rootID] = packed;
     this.schedule();
   }
 
@@ -184,7 +205,9 @@ export class ReadCursors {
   resume(): void {
     if (this.forgotten) return;
     this.stopped = false;
-    if (Object.keys(this.pending).length > 0) this.schedule();
+    if (Object.keys(this.pending).length + Object.keys(this.pendingThreads).length > 0) {
+      this.schedule();
+    }
   }
 
   /**
@@ -211,6 +234,8 @@ export class ReadCursors {
     this.stop();
     this.pending = {};
     this.highest = {};
+    this.pendingThreads = {};
+    this.highestThreads = {};
   }
 
   private schedule(): void {
@@ -232,10 +257,12 @@ export class ReadCursors {
 
   private async write(): Promise<void> {
     const cursors = this.pending;
-    if (Object.keys(cursors).length === 0) return;
+    const threads = this.pendingThreads;
+    if (Object.keys(cursors).length === 0 && Object.keys(threads).length === 0) return;
     this.pending = {};
+    this.pendingThreads = {};
     try {
-      await this.opts.flush(cursors);
+      await this.opts.flush(cursors, threads);
     } catch {
       // PUT BACK, NEVER DROPPED. The engine being unreachable is not the
       // reader having un-read the room, and the next flush — or the one the
@@ -246,6 +273,9 @@ export class ReadCursors {
       if (this.forgotten) return;
       for (const [id, packed] of Object.entries(cursors)) {
         if (packed > (this.pending[id] ?? 0)) this.pending[id] = packed;
+      }
+      for (const [id, packed] of Object.entries(threads)) {
+        if (packed > (this.pendingThreads[id] ?? 0)) this.pendingThreads[id] = packed;
       }
       if (!this.stopped) this.schedule();
     }
@@ -376,7 +406,7 @@ function writerFor(
   const madeFor = seat.current;
   let readBy = reader;
   const writer: ReadCursors = new ReadCursors({
-    flush: async (values) => {
+    flush: async (values, threads) => {
       readBy ??= currentReader();
       if (currentReader() !== readBy || seat.current !== madeFor) {
         writer.forget();
@@ -385,7 +415,10 @@ function writerFor(
       const result = await markRead(
         latest.current,
         store,
-        { cursors: values },
+        {
+          ...(Object.keys(values).length > 0 ? { cursors: values } : {}),
+          ...(Object.keys(threads).length > 0 ? { thread_cursors: threads } : {}),
+        },
         { done: "Read", quiet: true },
       );
       if (stillOwed(result, latest.current.access)) {

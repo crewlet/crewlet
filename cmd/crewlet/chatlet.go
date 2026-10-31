@@ -328,6 +328,9 @@ type chatletMessageRow struct {
 		CreatedAt  time.Time  `json:"created_at"`
 		DeletedAt  *time.Time `json:"deleted_at"`
 		EditedAt   *time.Time `json:"edited_at"`
+		// Event marks a room event: the room's own change, which the
+		// transcript carries where it happened and nobody said.
+		Event *chatlet.RoomEvent `json:"event"`
 	} `json:"message"`
 	ChannelSeq int64 `json:"channel_seq"`
 }
@@ -379,11 +382,19 @@ func chatletRead(environ config.Source, args []string, stdout, stderr io.Writer)
 	if err := client.get(context.Background(), path, &answer); err != nil {
 		return chatletUnserved(err, "a room's messages")
 	}
+	// A ROOM EVENT IS NOT A MESSAGE: a room whose page holds only the lines
+	// saying who joined it is a room where nothing has been said, and says
+	// so above them.
+	said := slices.ContainsFunc(answer.Messages, func(row chatletMessageRow) bool {
+		return row.Message.Event == nil
+	})
 	switch {
-	case len(answer.Messages) > 0:
+	case said:
 	case query.Has("cursor"):
-		fmt.Fprintln(stdout, "No older messages. That's the start of the room.")
-	default:
+		if len(answer.Messages) == 0 {
+			fmt.Fprintln(stdout, "No older messages. That's the start of the room.")
+		}
+	case answer.NextCursor == "":
 		fmt.Fprintln(stdout, "No messages. Nothing has been said in this room yet, "+
 			"or it was all deleted.")
 	}
@@ -404,6 +415,29 @@ func chatletRead(environ config.Source, args []string, stdout, stderr io.Writer)
 	return nil
 }
 
+// chatletEventWords is what a room event says happened, after the name of
+// whoever made the change, which the line's own author column carries.
+func chatletEventWords(e chatlet.RoomEvent) string {
+	who := strings.Join(e.Handles, ", ")
+	switch e.Kind {
+	case chatlet.EventJoined:
+		return "joined: " + who
+	case chatlet.EventAdded:
+		return "added " + who
+	case chatlet.EventLeft:
+		return "left: " + who
+	case chatlet.EventRemoved:
+		return "removed " + who
+	case chatlet.EventDescription:
+		return "set the description: " + e.Text
+	case chatlet.EventTopic:
+		return "set the topic: " + e.Text
+	case chatlet.EventTemplate:
+		return "set the room up from the " + e.Text + " template"
+	}
+	return "changed the room"
+}
+
 // chatletTranscriptLine renders one message: its number in the room, when, its
 // id, who, the thread it was said in, what it says and the links it carries.
 //
@@ -415,6 +449,10 @@ func chatletRead(environ config.Source, args []string, stdout, stderr io.Writer)
 func chatletTranscriptLine(row chatletMessageRow) string {
 	body := row.Message.Body
 	switch {
+	case row.Message.Event != nil:
+		// A ROOM EVENT HAS NO WORDS OF ITS AUTHOR'S, so it prints what
+		// happened, in brackets, where a message prints what was said.
+		body = "(" + chatletEventWords(*row.Message.Event) + ")"
 	case row.Message.DeletedAt != nil:
 		// A TOMBSTONE KEEPS ITS ROW so a thread hung off it still has a
 		// root; printing an empty line for it would read as a message with

@@ -3890,6 +3890,11 @@ export interface ChatChannel {
   /** Present on an archived room, which is readable for ever and writable by
    *  nobody. */
   archived_at?: string;
+  /** Every seat that joins the company from now on, agent or person, is put
+   *  in this room by the engine, with a `joined` event authored by `system`.
+   *  Set by an administrator alone (`update_channel`'s `auto_join`); turning
+   *  it on adds nobody already in the company. Absent is off. */
+  auto_join?: boolean;
 }
 
 /** One message, whole. */
@@ -3918,6 +3923,59 @@ export interface ChatMessage {
   deleted_at?: string;
   deleted_by?: string;
   deleted_by_kind?: ChatAuthorKind;
+  /** Present on a ROOM EVENT rather than words somebody wrote: the row is the
+   *  room's own change, drawn as a quiet line in the transcript. Its author is
+   *  who made the change (`system` for the org chart's own membership), its
+   *  body, links and mentions are empty, it is never in a thread, and it takes
+   *  no reply, reaction, edit or delete. It counts toward no unread or mention
+   *  badge, is never a rail preview, and is never a search hit. */
+  event?: ChatRoomEvent;
+}
+
+/** What a room event says happened. OPEN, for the reason [ChatKind] is: a
+ *  line a newer peer wrote renders as a plain room event.
+ *
+ *  - `joined`: `handles` came into the room themselves, or were its founding
+ *    members, or the org chart put them in a unit's room.
+ *  - `added`: the author put `handles` in the room.
+ *  - `left`: `handles` took themselves out, or the org chart took them out of
+ *    a unit's room.
+ *  - `removed`: the author took `handles` out of the room.
+ *  - `description` and `topic`: the author set the room's purpose or topic to
+ *    `text`; an empty `text` cleared it.
+ *  - `template`: the author set the room up from the template named `text`,
+ *    one line in place of a `topic` and a `description` line. */
+export type ChatEventKind =
+  "joined" | "added" | "left" | "removed" | "description" | "topic" | "template" | (string & {});
+
+/** A room's own change, as its transcript row carries it. */
+export interface ChatRoomEvent {
+  kind: ChatEventKind;
+  /** Who joined, was added, left or was taken out, sorted. Absent for the
+   *  three kinds about the room's words. */
+  handles?: string[];
+  /** The new description or topic (empty when it was cleared), or the
+   *  template's name. Words somebody wrote, drawn as text. */
+  text?: string;
+}
+
+/** A root's replies, as the transcript shows them under it. Present only on
+ *  a room post that has at least one reply. */
+export interface ChatThreadSummary {
+  /** Every reply, a deleted one included: its tombstone still sits in the
+   *  thread. */
+  replies: number;
+  /** The newest reply's broker instant. */
+  last_reply_at: string;
+  /** The newest reply's record, PACKED the way a read cursor is, so a screen
+   *  can tell whether the thread moved past what this reader has read. */
+  last_reply_position: LogPosition;
+  /** The first few people and agents who replied, in the order of their first
+   *  reply, at most `chatlet.MaxThreadRepliers` (3). */
+  repliers: string[];
+  /** How many different people and agents replied, for the "+N" past
+   *  `repliers`. */
+  replier_count: number;
 }
 
 /** One emoji on one message, with whether this viewer is among the reactors. */
@@ -3939,6 +3997,9 @@ export interface ChatMessageView {
    *  stores, which is why the position travels rather than the sequence. */
   position: LogPosition;
   reactions?: ChatReaction[];
+  /** The replies under a room post, on a transcript page and on a thread's
+   *  root. Absent on a reply, a room event and a post nobody answered. */
+  thread?: ChatThreadSummary;
 }
 
 /** The newest message in a room, as the rail previews it. */
@@ -3965,12 +4026,20 @@ export interface ChatChannelSummary {
   revision: number;
   /** THIS VIEWER'S membership flag: every message in the room reaches them. */
   follow_all?: boolean;
-  /** Messages above this viewer's cursor, counted to `chatlet.UnreadLimit`
-   *  (100). Their own messages and the tombstones do not count. */
+  /** Room posts above this viewer's cursor, counted to `chatlet.UnreadLimit`
+   *  (100). Their own messages, the tombstones, room events and replies in a
+   *  thread do not count: a reply is read in its thread. */
   unread: number;
   /** The count stopped at the limit — the "99+" case, stated rather than
    *  inferred from the number. */
   unread_capped?: boolean;
+  /** Of `unread`, the room posts that name this viewer or the whole room
+   *  (`@channel`): the accent badge. Counted over the same messages, so it is
+   *  never more than `unread` and it stopped where `unread_capped` says that
+   *  did. A direct conversation is counted the same way; a screen that treats
+   *  every unread message there as addressed to the reader reads `unread`. A
+   *  muted room is counted too: the mute is the screen's to apply. */
+  mentions: number;
   last?: ChatMessagePreview;
   /** Who is in a direct conversation, which is how one is titled. */
   participants?: string[];
@@ -4077,41 +4146,6 @@ export interface ChatThreadAnswer extends ChatServed {
   unreadable?: number;
 }
 
-/** One message that named the viewer. */
-export interface ChatMention {
-  message_id: string;
-  channel_id: string;
-  channel_name?: string;
-  channel_kind: ChatKind;
-  thread_root?: string;
-  author?: string;
-  author_kind?: ChatAuthorKind;
-  /** What the message says NOW, after any edit. A delete takes the mention
-   *  away rather than leaving a tombstone here: a message somebody took back
-   *  no longer names you. */
-  excerpt?: string;
-  /** WHEN YOU WERE NAMED — the instant of `position`'s record: the message's
-   *  own for a post, the edit's for an edit that named you where the words
-   *  before it did not. A row's time never contradicts its place. */
-  at: string;
-  /** The message's last edit, absent where it was never edited: the excerpt
-   *  may not be the words that named you. */
-  edited_at?: string;
-  /** The position of the record that named this handle, and the feed's
-   *  cursor. It never moves: an edit keeps the mention of every handle it
-   *  still names where it was. */
-  position: LogPosition;
-}
-
-/** A page of the viewer's own @-mention feed — `chat_mentions`. */
-export interface ChatMentionsAnswer extends ChatServed {
-  handle: string;
-  mentions: ChatMention[];
-  /** A LOG POSITION where a transcript's cursor is a room's message number.
-   *  The two are not interchangeable; both are opaque here. */
-  next_cursor?: string;
-}
-
 /** One room the viewer may read, as prose names it. */
 export interface ChatRoomName {
   id: string;
@@ -4134,6 +4168,35 @@ export interface ChatRoomNamesAnswer extends ChatServed {
   /** Rooms were left out past `chatlet.MaxRoomNames` (1000), the archived
    *  ones first: a name this answer lacks may still be a room. */
   truncated?: boolean;
+}
+
+/** One room as Browse lists it (`chat_rooms`). */
+export interface ChatDirectoryRoom {
+  channel: ChatChannel;
+  /** How many people and agents are in it. */
+  members: number;
+  /** The reader is in it. A public room and a unit's room are readable
+   *  without it; joining is what Browse offers. */
+  member?: boolean;
+  /** The newest message's broker instant, room events excluded. Absent for a
+   *  room nobody has spoken in. */
+  last_at?: string;
+}
+
+/**
+ * Every NAMED room the reader may read, joined or not, the archived ones
+ * included (`chat_rooms`): what Browse lists, sorts and filters on the client.
+ * A private room is listed to its members alone, and a direct conversation is
+ * never listed. Live rooms in name order, then the archived ones, the most
+ * recently archived first.
+ */
+export interface ChatRoomsAnswer extends ChatServed {
+  rooms: ChatDirectoryRoom[];
+  /** Rooms were left out past `chatlet.MaxRoomNames` (1000), the archived
+   *  ones first. */
+  truncated?: boolean;
+  /** Rooms this build could not present, one a newer peer wrote. */
+  unreadable?: number;
 }
 
 /** One matched message. */
@@ -4304,6 +4367,23 @@ export interface ChatReadState {
   muted?: string[];
   /** When do-not-disturb ends. Absent is not in it. */
   dnd_until?: string;
+  /** Thread root id to the PACKED log position read through in that thread,
+   *  flushed by the thread pane. A reply is new to the reader when it is
+   *  above both this and the room's own cursor. */
+  thread_cursors?: Record<string, number>;
+  /** The rooms this reader set to every message (`notify: "all"`), sorted.
+   *  A room is in at most one of this and `muted`; in neither, it notifies
+   *  the reader of mentions only, the default. */
+  every?: string[];
+  /** The rooms this reader starred, sorted. A star is the reader's own and
+   *  changes nothing for anybody else. */
+  starred?: string[];
+  /** The messages this reader saved for later, the newest save first. */
+  saved?: ChatSavedMark[];
+  /** The threads this reader followed or unfollowed by hand, the newest mark
+   *  first. A thread they started, replied in or were named in is followed
+   *  without one. */
+  threads?: ChatThreadMark[];
   updated_at?: string;
   /** The record's own revision, which ORDERS two states of one seat: its
    *  flushes are taken in one order and their pushes can arrive in another,
@@ -4339,6 +4419,12 @@ export interface ChatReceipt {
    * ordinary answer — the conversation is open, and it is that one.
    */
   created?: boolean;
+  /**
+   * `add_channel_members` only: who this call put in the room, sorted. The
+   * people named who were already in it are left out, and an empty list
+   * beside a landed outcome is everybody named already being a member.
+   */
+  added?: string[];
 }
 
 /**
@@ -4353,6 +4439,284 @@ export interface ChatReadReceipt {
    * state, whichever arrives first.
    */
   read: ChatReadState;
+}
+
+// ---------------------------------------------------------------------------
+// Chat: the reader's own marks and views. What waits for them (Activity), the
+// threads they follow, what they saved, what they sent, a room's shared links,
+// and the marks behind them, kept in the reader's read state
+// (`internal/coord`'s chat read record) and written through `mark_chat_read`.
+// Each answer is the JSON of its `internal/chatlet` type (`reader.go`).
+// ---------------------------------------------------------------------------
+
+/** How a room reaches this reader: every message, mentions only (the
+ *  default), or nothing. A reader's own choice; it wakes nobody and changes
+ *  nothing for anybody else. */
+export type ChatNotifyLevel = "all" | "mentions" | "muted";
+
+/** One message the reader saved for later. */
+export interface ChatSavedMark {
+  channel_id: string;
+  message_id: string;
+  /** When it was saved. */
+  at: string;
+}
+
+/**
+ * One thread the reader followed or unfollowed BY HAND.
+ *
+ * A thread the reader started, replied in or was named in is followed
+ * without a mark. A mark DECIDES: `following: false` keeps a thread they
+ * spoke in out of Threads and Activity, and `following: true` follows one they
+ * never spoke in. Replying again does not undo an unfollow by itself: a screen
+ * that replies in a thread the reader unfollowed sends `follow` with the reply.
+ */
+export interface ChatThreadMark {
+  channel_id: string;
+  root_id: string;
+  following: boolean;
+  /** When the mark was made, which is what the cap drops by. */
+  at: string;
+}
+
+/** A message, as `save` and `unsave` name one. */
+export interface ChatMessageRef {
+  channel_id: string;
+  message_id: string;
+}
+
+/** A thread, as `follow` and `unfollow` name one: its root message. */
+export interface ChatThreadRef {
+  channel_id: string;
+  root_id: string;
+}
+
+/**
+ * Why an Activity row is there. `mention`: a message named the reader, or the
+ * whole room. `reply`: a reply in a thread the reader follows that did not
+ * name them. `reaction`: somebody else reacted to the reader's message.
+ */
+export type ChatActivityKind = "mention" | "reply" | "reaction";
+
+/** One row of the reader's Activity, newest first. */
+export interface ChatActivityItem {
+  /** Unique in the feed and stable across reads: the list's key. */
+  key: string;
+  kind: ChatActivityKind;
+  /** The message the row is about: the one that named the reader, the reply,
+   *  or the reader's own message somebody reacted to. */
+  message_id: string;
+  channel_id: string;
+  /** Absent for a direct conversation, which is titled by its people. */
+  channel_name?: string;
+  channel_kind: ChatKind;
+  /** The thread the message is in, absent on a room post. */
+  thread_root?: string;
+  /** Who did it: the author of a mention or a reply, the reactor of a
+   *  reaction. */
+  actor: string;
+  /** Absent on a reaction, which records only who reacted. */
+  actor_kind?: ChatAuthorKind;
+  /** A mention of the whole room (`@channel`) rather than of the reader. */
+  collective?: boolean;
+  /** What the message says NOW, cut at `chatlet.MaxExcerpt` bytes as a
+   *  mention's excerpt is: the message's own words, which a screen draws as
+   *  plain text with the transcript's own helper. */
+  excerpt?: string;
+  /** A reaction's emoji. */
+  emoji?: string;
+  /** When the reader was named, the reply was said, or the reaction made. */
+  at: string;
+  /** A mention or a reply above the reader's cursor for the room (which
+   *  counts thread replies, as the rail does). ABSENT on a reaction, which
+   *  asks nothing of anybody, and on every row when `read_state` is false. */
+  unread?: boolean;
+  /** The PACKED log position that, sent as the room's cursor through
+   *  `mark_chat_read`, marks this row read. A cursor only moves forward, so
+   *  it also marks what was said before it in that room read, which is what
+   *  the room's own badge means. Absent on a reaction. */
+  read_through?: number;
+}
+
+/** What waits in Activity, for the badges: unread mentions and unread
+ *  replies, each counted over its newest `chatlet.UnreadLimit` (100) rows. */
+export interface ChatActivityCounts {
+  mention: number;
+  reply: number;
+  /** A count stopped at the limit: the "99+" case. */
+  capped?: boolean;
+}
+
+/**
+ * The reader's Activity, newest first: `chat_activity`, asked with
+ * `{ kind?: ChatActivityKind, unread?: true, cursor?, limit? }`. It reads only
+ * rooms the reader may read. `unread` counts are the answer's whatever
+ * `kind`, `unread` and `cursor` asked, so the Rooms panel's badge asks
+ * `{ limit: 1 }`.
+ */
+export interface ChatActivityAnswer extends ChatServed {
+  items: ChatActivityItem[];
+  /** Pass back unchanged for the next older page; absent at the end. */
+  next_cursor?: string;
+  unread: ChatActivityCounts;
+  /** False when the read state could not be read: no row says `unread`,
+   *  the counts are zero and `unread: true` is refused, which is "nobody could
+   *  look", never "all read". */
+  read_state: boolean;
+}
+
+/** Why the reader follows a thread, the strongest reason first. */
+export type ChatFollowReason = "marked" | "started" | "replied" | "named";
+
+/** One thread the reader follows. */
+export interface ChatFollowedThread {
+  channel_id: string;
+  channel_name?: string;
+  channel_kind: ChatKind;
+  reason: ChatFollowReason;
+  /** The root, which carries the thread line (`thread`). */
+  root: ChatMessageView;
+  /** The newest replies, at most two, oldest first. */
+  latest: ChatMessageView[];
+}
+
+/**
+ * The threads the reader follows, newest reply first: `chat_threads`, asked
+ * with `{ cursor?, limit? }` (20 by default, 50 at most).
+ */
+export interface ChatThreadsAnswer extends ChatServed {
+  threads: ChatFollowedThread[];
+  next_cursor?: string;
+  /** False when the read state could not be read: the threads marked by
+   *  hand are then unknown, so one the reader unfollowed may be listed and one
+   *  they followed by hand may not. */
+  read_state: boolean;
+}
+
+/** One saved message as the Saved view lists it. */
+export interface ChatSavedEntry {
+  mark: ChatSavedMark;
+  channel_name?: string;
+  channel_kind?: ChatKind;
+  /** The message, absent when it is gone. */
+  view?: ChatMessageView;
+  /** The message is not there to show: taken back, erased, pruned by the
+   *  room's horizon, or in a room the reader may no longer read (answered
+   *  exactly as one that is gone). The mark stays until `unsave`. */
+  gone?: boolean;
+}
+
+/**
+ * The reader's saved messages, the newest save first: `chat_saved`, asked with
+ * `{ cursor?, limit? }`.
+ */
+export interface ChatSavedAnswer extends ChatServed {
+  saved: ChatSavedEntry[];
+  next_cursor?: string;
+  /** False when the read state could not be read: nothing can be listed. */
+  read_state: boolean;
+}
+
+/** One of the reader's own messages, where it was said. */
+export interface ChatSentMessage {
+  channel_name?: string;
+  channel_kind: ChatKind;
+  view: ChatMessageView;
+}
+
+/**
+ * What the reader said in every room, newest first: `chat_sent`, asked with
+ * `{ cursor?, limit? }`. Taken-back messages are left out.
+ */
+export interface ChatSentAnswer extends ChatServed {
+  messages: ChatSentMessage[];
+  next_cursor?: string;
+}
+
+/**
+ * One link a room shared: each link of each message that carried one, a
+ * taken-back message's left out. The address exactly as it was sent; what it
+ * points at (a task, a page, an artifact, a pull request) is the screen's to
+ * resolve, by the link rules and the reads it already uses for a message's
+ * links.
+ */
+export interface ChatSharedLink {
+  url: string;
+  message_id: string;
+  thread_root?: string;
+  author: string;
+  author_kind: ChatAuthorKind;
+  at: string;
+  /** The message's own number in the room, which a jump opens it at. */
+  channel_seq: number;
+}
+
+/**
+ * One message by its id, with what reading it in place needs: `chat_message`,
+ * asked with `{ channel_id, message_id }`. A room the reader may not read, or
+ * a message that is gone, is not found.
+ */
+export interface ChatMessageAnswer extends ChatServed {
+  channel_name?: string;
+  channel_kind: ChatKind;
+  view: ChatMessageView;
+  /** The thread's root, when the message is a reply. */
+  root?: ChatMessageView;
+  /** Up to two replies said just before it in its thread, oldest first. */
+  before?: ChatMessageView[];
+}
+
+/** What a link points at, as `chat_unfurls` resolved it. */
+export type ChatUnfurlKind = "task" | "page" | "artifact" | "pull_request";
+
+/**
+ * One link resolved for its preview. Only what the reader may read is
+ * resolved: a link to something they may not open, or that is not there, is
+ * absent from the answer and drawn by the link rules alone.
+ */
+export interface ChatUnfurl {
+  /** The address exactly as the message carries it: the key to match the
+   *  preview to the link it is for. */
+  url: string;
+  kind: ChatUnfurlKind;
+  /** Where the preview opens, BUILT by the engine from the record and never
+   *  echoed from the message: the dashboard's own route for a task, a page or
+   *  an artifact, opened in place, or a pull request's canonical address on
+   *  the configured code host, opened in a new tab. */
+  href: string;
+  /** The object's own code: a task's key, a pull request's `owner/repo#14`. */
+  code?: string;
+  title: string;
+  /** The object's status in its own words ("In progress", "Merged"). */
+  status?: string;
+  /** The status's tone, for its dot. */
+  tone?: "neutral" | "info" | "success" | "warning" | "danger";
+  /** Who owns it, as a seat's HANDLE (an assignee, an author, an owner), which
+   *  the screen names and draws through the org chart. Absent when nobody, or
+   *  nobody the company holds a seat for (a pull request's outside author). */
+  owner?: string;
+  /** One quiet line of details ("+120 -14", "Updated 2 days ago"). */
+  meta?: string;
+}
+
+/**
+ * The previews for a message's links, in one read: `chat_unfurls`, asked with
+ * `{ urls: string[] }` (at most `chatlet.MaxLinks`, eight). Resolved as the
+ * reader, by the reads their own screens use.
+ */
+export interface ChatUnfurlsAnswer {
+  unfurls: ChatUnfurl[];
+}
+
+/**
+ * The links one room shared, newest first: `chat_links`, asked with
+ * `{ channel_id, cursor?, limit? }`. A room the reader may not read is not
+ * found.
+ */
+export interface ChatLinksAnswer extends ChatServed {
+  channel_id: string;
+  links: ChatSharedLink[];
+  next_cursor?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -7443,10 +7807,20 @@ export interface QueryMap {
      beside the transcript and paged in the opposite direction, because a
      conversation is read forwards. */
   chat_thread: ChatThreadAnswer;
-  chat_mentions: ChatMentionsAnswer;
+  /* THE READER'S OWN VIEWS, each answered for the seat the caller acts as:
+     what waits for them, the threads they follow, what they saved, what they
+     sent, and a room's shared links. */
+  chat_activity: ChatActivityAnswer;
+  chat_threads: ChatThreadsAnswer;
+  chat_saved: ChatSavedAnswer;
+  chat_sent: ChatSentAnswer;
+  chat_links: ChatLinksAnswer;
+  chat_message: ChatMessageAnswer;
+  chat_unfurls: ChatUnfurlsAnswer;
   /* EVERY ROOM THE CALLER MAY READ, BY NAME, joined or not: what a room
      written in prose is told from a colour or an issue's number by. */
   chat_room_names: ChatRoomNamesAnswer;
+  chat_rooms: ChatRoomsAnswer;
   /* REGISTERED ONLY WHERE THE INDEX EXISTS, so a node with rooms and no index
      answers `unknown_query` rather than a ranking that finds nothing. */
   chat_search: ChatSearchAnswer;

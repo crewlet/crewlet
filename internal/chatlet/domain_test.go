@@ -414,18 +414,20 @@ func classOf(tables map[string]statelog.TableClass, name string) string {
 // from zero can never fill, which is precisely the failure the completeness
 // walk exists for.
 var theWrittenTables = map[chatlet.ObjectKind][]string{
-	// A create is ONE record: the claim, the room and its founding
-	// membership, in one transaction.
+	// A create is ONE record: the claim, the room, its founding
+	// membership and the line saying who joined, in one transaction.
 	chatlet.KindChannelName: {
-		"chat_channel_names", "chat_channels", "chat_members",
+		"chat_channel_names", "chat_channels", "chat_members", "chat_messages",
 	},
-	// A room's own state, and the two ops that REMOVE what was said in
-	// it: an operator's erase, which leaves the marker, and the retention
-	// prune, which takes a room's messages and everything hung off them.
+	// A room's own state and the lines its changes write into the
+	// transcript, the seats an auto-join room accounts for, and the two
+	// ops that REMOVE what was said in it: an operator's erase, which
+	// leaves the marker, and the retention prune, which takes a room's
+	// messages and everything hung off them.
 	chatlet.KindChannel: {
 		"chat_channels", "chat_members", "chat_messages", "chat_mentions",
 		"chat_reactions", "chat_thread_participants", "chat_follows",
-		"chat_deletions",
+		"chat_deletions", "chat_autojoin",
 	},
 	// A post, an edit, a tombstone and a reaction. It touches the channel
 	// row because the per-channel sequence is minted from its counter,

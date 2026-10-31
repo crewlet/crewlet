@@ -60,12 +60,15 @@ export const CHANNEL_NAME_PATTERN = "^[a-z0-9][a-z0-9_-]{0,63}$";
 export const MAX_BODY_BYTES = 32768;
 
 /**
- * A room's topic and purpose, in UTF-8 bytes — `chatlet.MaxTopic` and
- * `chatlet.MaxPurpose`. BYTES, NOT CHARACTERS: the engine bounds the record's own
- * field, and an emoji in a topic is four of these and one of those.
+ * A room's topic and its description (the engine's `purpose`), in CHARACTERS:
+ * `chatlet.MaxTopic` and `chatlet.MaxPurpose`, which count Unicode code points.
+ * One limit for both, because a person edits them in one dialog with one
+ * counter, and a counter has to count what the person sees: an emoji is one
+ * character here and one there. Count with `[...text].length`, never
+ * `text.length`, which counts an emoji twice.
  */
-export const MAX_TOPIC_BYTES = 256;
-export const MAX_PURPOSE_BYTES = 600;
+export const MAX_TOPIC_CHARS = 250;
+export const MAX_PURPOSE_CHARS = 250;
 
 /**
  * The most people one direct conversation may hold — `chatlet.MaxDMParticipants`,
@@ -73,6 +76,15 @@ export const MAX_PURPOSE_BYTES = 600;
  * has a name somebody can join by.
  */
 export const MAX_DIRECT_PARTICIPANTS = 8;
+
+/**
+ * The most links one message carries, `chatlet.MaxLinks`: a message points at
+ * a page's worth of references at most, and there are no attachments beside
+ * them. The composer sends what a message links to that the room previews as
+ * its links (`routes/chatlet/Attach.tsx`'s `previewLinks`), so a body that
+ * links more sends the first of them rather than a message the engine refuses.
+ */
+export const MAX_MESSAGE_LINKS = 8;
 
 /**
  * How often a tab re-asserts that somebody is typing, in ms.
@@ -129,3 +141,17 @@ export const PENDING_REASK_MS = 2_000;
  * `TestTheDashboardAsksForTheChatSearchPageTheEngineServes`.
  */
 export const CHAT_SEARCH_PAGE = 40;
+
+/**
+ * How many rooms one reader may star or set to every message, messages they
+ * may save, and threads they may mark followed or unfollowed, each set
+ * separately: `coord.MaxReaderMarks`, held EQUAL by `internal/coord`'s
+ * `TestTheDashboardsReaderMarkCapIsTheEngines`.
+ *
+ * A star, a level or a save past it is REFUSED rather than dropping an older
+ * one, because each is one deliberate gesture and a silent drop is a saved
+ * message gone with no way to find out. A thread mark past it drops the mark
+ * made longest ago instead: every unfollow leaves one, and a cap that refused
+ * an unfollow would keep somebody in a thread they asked to leave.
+ */
+export const MAX_READER_MARKS = 256;

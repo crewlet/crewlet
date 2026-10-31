@@ -325,9 +325,9 @@ func TestThePagesCountTheNativeToolsTheRegistryHolds(t *testing.T) {
 				spelled(t, len(builtin.WorkWrites())) + " that count as a delivery"},
 		{"docs/getting-started/quickstart.md",
 			readPage(t, "docs/getting-started/quickstart.md"),
-			"tools a seat holds — " + spelled(t, len(tracker)) + " over the tracker, " +
+			"tools a seat holds (" + spelled(t, len(tracker)) + " over the tracker, " +
 				spelled(t, len(pages)) + " over the pages and " +
-				spelled(t, len(chatSeat)) + " in the chat — and " +
+				spelled(t, len(chatSeat)) + " in the chat) and " +
 				spelled(t, len(every)) + " more that no seat is given"},
 		// THE GUIDE COUNTS THE TWO HALVES APART: the tracker's beside the
 		// tables, and the person's decisions about the company after them.

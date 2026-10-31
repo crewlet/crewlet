@@ -11,6 +11,7 @@ import {
   splitSections,
   UnbrokenCode,
   imageSources,
+  linkTargets,
   shownImage,
 } from "./markdown.ts";
 import { plainText } from "./markdownText.ts";
@@ -841,6 +842,26 @@ describe("pictures a host resolves", () => {
     expect(imgs).toHaveLength(1);
     expect(imgs[0]!.getAttribute("src")).toBe("blob:team");
     expect(container.textContent).toContain("Far");
+  });
+});
+
+describe("the links a document names", () => {
+  it("reads every written link once, in order, past emphasis and never in code", () => {
+    // THE SAME WALK AS THE PICTURES: a target inside a code span renders as
+    // text and is no link, a link inside emphasis is one, an address written
+    // bare is one, and a picture's source is a picture rather than a link.
+    const source = [
+      "See [the task](#/worklet/GP-12) and **[the page](#/doclet/pages/p-1)**.",
+      "`[not a link](#/worklet/GP-99)` and ![a picture](img/a.png)",
+      "- [again](#/worklet/GP-12), and https://github.com/acme/api/pull/42 pasted",
+      "> [elsewhere](https://example.com/a) and `https://github.com/acme/api/pull/7`",
+    ].join("\n");
+    expect(linkTargets(source)).toEqual([
+      "#/worklet/GP-12",
+      "#/doclet/pages/p-1",
+      "https://github.com/acme/api/pull/42",
+      "https://example.com/a",
+    ]);
   });
 });
 

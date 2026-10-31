@@ -113,7 +113,8 @@ func TestEveryCapTogetherKeepsTheBriefInItsBudget(t *testing.T) {
 	t.Parallel()
 	worst := wire.BriefAboutMaxRunes +
 		wire.BriefMaxNeeds*(wire.BriefTextMaxRunes+wire.BriefDetailMaxRunes) +
-		wire.BriefContextMaxRunes + wire.BriefMaxFollowUps*wire.BriefQuestionMaxRunes
+		wire.BriefContextMaxRunes + wire.BriefMaxFollowUps*wire.BriefQuestionMaxRunes +
+		wire.BriefMaxPoints*wire.BriefPointMaxRunes
 	if worst != wire.BriefBudgetRunes {
 		t.Errorf("every cap at once draws %d characters, and the budget is %d", worst,
 			wire.BriefBudgetRunes)
@@ -132,10 +133,19 @@ func TestEveryCapTogetherKeepsTheBriefInItsBudget(t *testing.T) {
 		b.Needs = append(b.Needs, n)
 	}
 	b.FollowUps = []string{line(wire.BriefQuestionMaxRunes), line(wire.BriefQuestionMaxRunes)}
+	// A ROOM'S BRIEF, the one kind that summarises with points.
+	b.Scope.Record = &wire.ResourceRef{Kind: wire.ResourceRoom, ID: "room-1"}
+	for i := range wire.BriefMaxPoints {
+		b.Points = append(b.Points, wire.BriefPoint{Text: line(wire.BriefPointMaxRunes),
+			Source: wire.BriefSource{ChannelID: "room-1", MessageID: fmt.Sprintf("m-%d", i)}})
+	}
 	if err := b.Validate(); err != nil {
 		t.Fatalf("a brief at every cap was refused: %v", err)
 	}
 	drawn := utf8.RuneCountInString(b.About) + utf8.RuneCountInString(b.Context)
+	for _, p := range b.Points {
+		drawn += utf8.RuneCountInString(p.Text)
+	}
 	for _, n := range b.Needs {
 		drawn += utf8.RuneCountInString(n.Text) + utf8.RuneCountInString(n.Detail)
 	}
@@ -156,5 +166,35 @@ func TestTheBriefsClosedSets(t *testing.T) {
 	}
 	if !wire.NounDecision.Valid() || wire.RecordNoun("thing").Valid() {
 		t.Error("the record nouns are not a closed set")
+	}
+}
+
+// ONLY A ROOM'S BRIEF SUMMARISES WHAT WAS SAID: points on a brief of anything
+// else are refused, and so is one past the cap or naming no message.
+//
+// Mutation: drop the room check and the first case is accepted.
+func TestOnlyARoomsBriefCarriesPoints(t *testing.T) {
+	t.Parallel()
+	point := wire.BriefPoint{Text: "Ada asks who takes the release.",
+		Source: wire.BriefSource{ChannelID: "room-1", MessageID: "m-1"}}
+	b := validBrief()
+	b.Points = []wire.BriefPoint{point}
+	if err := b.Validate(); !errors.Is(err, wire.ErrInvalid) {
+		t.Errorf("points on a brief of no room answered %v, want invalid", err)
+	}
+	b.Scope.Record = &wire.ResourceRef{Kind: wire.ResourceRoom, ID: "room-1"}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("a room's brief with a point was refused: %v", err)
+	}
+	b.Points = []wire.BriefPoint{{Text: point.Text, Source: wire.BriefSource{ChannelID: "room-1"}}}
+	if err := b.Validate(); !errors.Is(err, wire.ErrInvalid) {
+		t.Errorf("a point naming no message answered %v, want invalid", err)
+	}
+	b.Points = make([]wire.BriefPoint, wire.BriefMaxPoints+1)
+	for i := range b.Points {
+		b.Points[i] = point
+	}
+	if err := b.Validate(); !errors.Is(err, wire.ErrInvalid) {
+		t.Errorf("one point past the cap answered %v, want invalid", err)
 	}
 }

@@ -87,6 +87,10 @@ type NativeReads struct {
 	Chat       queries.ChatReader
 	ChatSearch queries.ChatSearcher
 	ChatReads  queries.ChatReads
+
+	// PullRequests reads a pull request for a chat link's preview through
+	// the company's GitHub wiring.
+	PullRequests queries.PullRequestReader
 }
 
 // NativeSources are this engine's native read sources.
@@ -104,6 +108,9 @@ func NativeSources(e *engine.Engine) NativeReads {
 		// company runs, and which a chat question reads only after it has
 		// read rooms — a company with no Chatlet never asks it.
 		ChatReads: e.Backends().Fleet,
+		// THE ENGINE'S OWN GITHUB WIRING, the one a thread's participants
+		// are read through, rebuilt on every apply.
+		PullRequests: e,
 	}
 }
 
@@ -115,6 +122,7 @@ func (n NativeReads) Into(s *queries.Sources) {
 	s.Work, s.Pages, s.Backlinks, s.WorkSearch, s.Files =
 		n.Work, n.Pages, n.Backlinks, n.WorkSearch, n.Files
 	s.Chat, s.ChatSearch, s.ChatReads = n.Chat, n.ChatSearch, n.ChatReads
+	s.PullRequests = n.PullRequests
 }
 
 // nativeAbsent is why a half is not here: the node has not met its company
@@ -501,15 +509,6 @@ func (l liveChat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQue
 	return r.Thread(ctx, viewer, q, fresh)
 }
 
-func (l liveChat) Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
-	fresh statelog.Freshness) (chatlet.MentionFeed, error) {
-	r, err := l.reader()
-	if err != nil {
-		return chatlet.MentionFeed{}, err
-	}
-	return r.Mentions(ctx, viewer, q, fresh)
-}
-
 func (l liveChat) RoomNames(ctx context.Context, viewer string,
 	fresh statelog.Freshness) (chatlet.RoomNames, error) {
 	r, err := l.reader()
@@ -517,6 +516,15 @@ func (l liveChat) RoomNames(ctx context.Context, viewer string,
 		return chatlet.RoomNames{}, err
 	}
 	return r.RoomNames(ctx, viewer, fresh)
+}
+
+func (l liveChat) Directory(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.Directory, error) {
+	r, err := l.reader()
+	if err != nil {
+		return chatlet.Directory{}, err
+	}
+	return r.Directory(ctx, viewer, fresh)
 }
 
 // liveChatSearch is chat's ranked search, resolved per question: the router's,

@@ -122,9 +122,15 @@ var SESSION_QUERIES = {
 		"chat_channel",
 		"chat_messages",
 		"chat_thread",
-		"chat_mentions",
+		"chat_activity",
+		"chat_threads",
+		"chat_saved",
+		"chat_sent",
+		"chat_links",
+		"chat_message",
 		"chat_search",
-		"chat_room_names"
+		"chat_room_names",
+		"chat_rooms"
 	]
 };
 //#endregion
@@ -4072,7 +4078,11 @@ var ACTIONS = {
 		scope: "person"
 	},
 	post_message: {
-		args: ["channel", "body"],
+		args: [
+			"channel",
+			"body",
+			"links"
+		],
 		domain: "chat",
 		apps: ["chatlet"],
 		refreshes: [],
@@ -4082,7 +4092,8 @@ var ACTIONS = {
 		args: [
 			"channel",
 			"reply_to",
-			"body"
+			"body",
+			"links"
 		],
 		domain: "chat",
 		apps: ["chatlet"],
@@ -4156,8 +4167,17 @@ var ACTIONS = {
 		args: [
 			"channel",
 			"topic",
-			"purpose"
+			"purpose",
+			"template",
+			"auto_join"
 		],
+		domain: "chat",
+		apps: ["chatlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	add_channel_members: {
+		args: ["channel", "members"],
 		domain: "chat",
 		apps: ["chatlet"],
 		refreshes: [],
@@ -4166,8 +4186,17 @@ var ACTIONS = {
 	mark_chat_read: {
 		args: [
 			"cursors",
+			"thread_cursors",
+			"rewind",
 			"mute",
-			"unmute"
+			"unmute",
+			"notify",
+			"star",
+			"unstar",
+			"save",
+			"unsave",
+			"follow",
+			"unfollow"
 		],
 		domain: null,
 		apps: ["chatlet"],

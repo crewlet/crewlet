@@ -419,18 +419,20 @@ func TestABriefRowMayCiteAChatRoom(t *testing.T) {
 			"kind": "public", "name": name}})
 		return exec.Response{Status: http.StatusOK, Body: body}
 	}
-	mentions, _ := json.Marshal(map[string]any{"mentions": []any{
-		map[string]any{"channel_id": launch, "channel_name": "launch", "channel_kind": "public",
-			"author": "ada", "excerpt": "@grace can you approve the launch copy?",
-			"message_id": "m1", "at": "2026-10-26T09:00:00Z"},
-		map[string]any{"channel_id": release, "channel_name": "release",
-			"channel_kind": "public", "author": "ada", "excerpt": "@grace ship Friday or hold?",
-			"message_id": "m2", "at": "2026-10-26T09:05:00Z"},
-		map[string]any{"channel_id": secret, "channel_name": "secret", "channel_kind": "private",
-			"author": "ada", "excerpt": "@grace a word?", "message_id": "m3",
-			"at": "2026-10-26T09:10:00Z"}}})
+	mentions, _ := json.Marshal(map[string]any{"items": []any{
+		map[string]any{"key": "mention:m1", "kind": "mention", "channel_id": launch,
+			"channel_name": "launch", "channel_kind": "public", "actor": "ada",
+			"excerpt": "@grace can you approve the launch copy?", "message_id": "m1",
+			"at": "2026-10-26T09:00:00Z"},
+		map[string]any{"key": "mention:m2", "kind": "mention", "channel_id": release,
+			"channel_name": "release", "channel_kind": "public", "actor": "ada",
+			"excerpt": "@grace ship Friday or hold?", "message_id": "m2",
+			"at": "2026-10-26T09:05:00Z"},
+		map[string]any{"key": "mention:m3", "kind": "mention", "channel_id": secret,
+			"channel_name": "secret", "channel_kind": "private", "actor": "ada",
+			"excerpt": "@grace a word?", "message_id": "m3", "at": "2026-10-26T09:10:00Z"}}})
 	handler := assistanttest.Routes(map[string]exec.Response{
-		"GET /chatlet/mentions":            {Status: http.StatusOK, Body: mentions},
+		"GET /chatlet/activity":            {Status: http.StatusOK, Body: mentions},
 		"GET /chatlet/channels/" + launch:  room(launch, "launch"),
 		"GET /chatlet/channels/%23release": room(release, "release"),
 		"GET /chatlet/channels/" + release: room(release, "release"),
@@ -448,7 +450,7 @@ func TestABriefRowMayCiteAChatRoom(t *testing.T) {
 				"needs": []any{need(launch, "Answer Ada in #launch: approve the launch copy?"),
 					need("#release", "Answer Ada in #release: ship Friday or hold?"),
 					need(secret, "Answer Ada in #secret")}})}})
-	mentionsPage := &wire.PageContext{Screen: "chatlet-mentions", Title: "Chatlet › Mentions",
+	mentionsPage := &wire.PageContext{Screen: "chatlet-activity", Title: "Chatlet › Activity",
 		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
 		SourceRevision: "mentions@1", Accepts: []string{}}
 	accepted, err := f.Brief("rooms", "Brief me on this page", mentionsPage)
@@ -476,5 +478,70 @@ func TestABriefRowMayCiteAChatRoom(t *testing.T) {
 	}
 	if got := brief.Verdict(); got != "2 things need you" {
 		t.Errorf("the brief says %q", got)
+	}
+}
+
+// A ROOM'S BRIEF IS ITS CATCH UP: points of what was said, each kept only for
+// a message this turn read and the person may read now, with the source the
+// engine read back (the room, the message and its thread). A point citing a
+// message no read named, or one the person may not read, is dropped.
+//
+// Mutation: drop the citation check, or the read back, and a point survives
+// that the person was never shown or may not open.
+func TestARoomsBriefSummarisesWithPointsCitingMessages(t *testing.T) {
+	t.Parallel()
+	const room = "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e41"
+	transcript, _ := json.Marshal(map[string]any{"channel_id": room, "messages": []any{
+		map[string]any{"message": map[string]any{"id": "m-reply", "channel_id": room,
+			"thread_root": "m-root", "author": "ada", "body": "GP-3 passed 13 of 14"}},
+		map[string]any{"message": map[string]any{"id": "m-root", "channel_id": room,
+			"author": "sam", "body": "Should 2.4.0 wait for GP-12?"}},
+		map[string]any{"message": map[string]any{"id": "m-gone", "channel_id": room,
+			"author": "sam", "body": "taken back since"}}}})
+	one := func(id, root string) exec.Response {
+		body, _ := json.Marshal(map[string]any{"channel_kind": "public", "view": map[string]any{
+			"message": map[string]any{"id": id, "channel_id": room, "thread_root": root}}})
+		return exec.Response{Status: http.StatusOK, Body: body}
+	}
+	handler := assistanttest.Routes(map[string]exec.Response{
+		"GET /chatlet/channels/" + room + "/messages":         {Status: http.StatusOK, Body: transcript},
+		"GET /chatlet/channels/" + room + "/messages/m-root":  one("m-root", ""),
+		"GET /chatlet/channels/" + room + "/messages/m-reply": one("m-reply", "m-root"),
+		"GET /chatlet/channels/" + room + "/messages/m-gone":  {Status: http.StatusNotFound},
+	})
+	point := func(say, id string) map[string]any {
+		return map[string]any{"say": say, "message_id": id}
+	}
+	f := assistanttest.NewRig(t, evals.RigOptions{
+		Tools:   []catalog.Tool{assistanttest.Tool(t, "read_chat_messages")},
+		Handler: handler, Rounds: []evals.Round{
+			evals.Call("c1", "read_chat_messages", map[string]any{"channel": room}),
+			evals.Call("c2", catalog.AnswerBriefTool, map[string]any{
+				"about": "The 2.4.0 release waits on GP-12.",
+				"needs": []any{},
+				"points": []any{
+					point("Sam asks whether 2.4.0 waits for GP-12.", "m-root"),
+					point("Ada reports GP-3 passed 13 of 14 scenarios.", "m-reply"),
+					point("Sam said something since taken back.", "m-gone"),
+					point("Somebody said something nobody read.", "m-never")}})}})
+	roomPage := &wire.PageContext{Screen: "chatlet", Title: "Chatlet › #engineering",
+		Params: map[string]string{"id": room}, Query: map[string]string{},
+		Resources: []wire.Resource{}, SourceRevision: "room@1", Accepts: []string{},
+		Selection: &wire.ResourceRef{Kind: wire.ResourceRoom, ID: room, Noun: wire.NounRoom}}
+	accepted, err := f.Brief("catch up", "Catch me up", roomPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := evals.Last(f.Follow(accepted.TurnID, 0), wire.EventCard)
+	if card == nil || card.Card.Card.Brief == nil {
+		t.Fatal("no brief card was drawn")
+	}
+	var got []string
+	for _, p := range card.Card.Card.Brief.Points {
+		got = append(got, p.Source.MessageID+"/"+p.Source.ThreadRoot)
+	}
+	if want := []string{"m-root/", "m-reply/m-root"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("the points cite %v, want %v: each read back as the person, the reply "+
+			"with its thread, and none the person was not shown or may not open", got, want)
 	}
 }

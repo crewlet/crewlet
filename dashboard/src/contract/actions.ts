@@ -313,7 +313,7 @@ export const ACTIONS = {
     // what tells a retry from a second remark: the outbox repeats an
     // unanswered message under the key it was first sent with
     // (`routes/chatlet/outbox.ts`).
-    args: ["channel", "body"],
+    args: ["channel", "body", "links"],
     domain: "chat",
     apps: ["chatlet"],
     refreshes: [],
@@ -322,7 +322,7 @@ export const ACTIONS = {
   reply_in_thread: {
     // THE THREAD PANE'S SEND: `reply_to` is the thread's root, and the engine
     // files a reply to a reply under the same one.
-    args: ["channel", "reply_to", "body"],
+    args: ["channel", "reply_to", "body", "links"],
     domain: "chat",
     apps: ["chatlet"],
     refreshes: [],
@@ -391,11 +391,23 @@ export const ACTIONS = {
     scope: "person",
   },
   update_channel: {
-    // A ROOM'S "TOPIC" DIALOG: the topic and the purpose, and only what moved.
-    // Archiving is not offered there — it closes the room for everybody in it
-    // and is its creator's, its unit's lead's or an admin's — and neither is
-    // how long the room keeps what is said, which is an admin's own gesture.
-    args: ["channel", "topic", "purpose"],
+    // A ROOM'S TOPIC AND DESCRIPTION DIALOGS, and only what moved; the
+    // template a person set them from, which the transcript records as one
+    // line; and an administrator's auto-join switch in Add people. Archiving
+    // is not offered there (it closes the room for everybody in it and is its
+    // creator's, its unit's lead's or an admin's), and neither is how long the
+    // room keeps what is said, which is an admin's own gesture.
+    args: ["channel", "topic", "purpose", "template", "auto_join"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  add_channel_members: {
+    // "ADD PEOPLE": the people and agents to put in the room, and nobody
+    // taken out. The engine decides it against the room as it stands, so two
+    // people adding at once both land.
+    args: ["channel", "members"],
     domain: "chat",
     apps: ["chatlet"],
     refreshes: [],
@@ -416,7 +428,28 @@ export const ACTIONS = {
     // moves, whichever of the two arrives first. A `refreshes` here asked a
     // second time whenever the push won the race, and the second ask
     // discarded the first after the engine had counted every room's unread.
-    args: ["cursors", "mute", "unmute"],
+    //
+    // A THREAD'S OWN PLACE rides it too (`thread_cursors`), and "Mark unread"
+    // is `rewind`: the one way a room's place moves back, set exactly.
+    //
+    // AND THE READER'S OTHER MARKS, on the same record and the same push: how
+    // a room reaches them (`notify`), a room starred or unstarred, a message
+    // saved or unsaved, a thread followed or unfollowed, each named alone, so
+    // two tabs marking two things at once both land.
+    args: [
+      "cursors",
+      "thread_cursors",
+      "rewind",
+      "mute",
+      "unmute",
+      "notify",
+      "star",
+      "unstar",
+      "save",
+      "unsave",
+      "follow",
+      "unfollow",
+    ],
     domain: null,
     apps: ["chatlet"],
     refreshes: [],

@@ -130,16 +130,11 @@ export const PEEK_MIN = CANVAS_PEEK_WIDTH;
 export const LIST_FLOOR = 444;
 
 /**
- * The narrowest TRANSCRIPT Chatlet draws beside its rail or an open thread: the
- * width WCAG 2.1's Reflow criterion (1.4.10) asks every page to read at
- * without scrolling sideways. A transcript is text that wraps, and a phone
- * already draws a room about this wide; a column that would leave it less
- * stacks instead ([CHAT_RAIL_FOLD], [CHAT_THREAD_FOLD]).
- *
- * NOT 360, the thread's own width and the assistant's narrowest. That floor
- * stacks a thread under the room on a 1280 window, where the two fit side by
- * side with a 332px transcript, and stacks the rail over the room beside the
- * assistant's column on the same window.
+ * The narrowest TRANSCRIPT Chatlet draws beside its pinned Rooms panel or an
+ * open pane: the width WCAG 2.1's Reflow criterion (1.4.10) asks every page to
+ * read at without scrolling sideways. A transcript is text that wraps, and a
+ * phone already draws a room about this wide; a column that would leave it
+ * less lies over the conversation instead ([CHAT_PANE_FOLD], [CHAT_NARROW]).
  */
 export const TRANSCRIPT_FLOOR = 320;
 
@@ -384,67 +379,53 @@ export function sectionColumnMin(assistant: number): number {
 }
 
 /*
- * # Chatlet: three columns, folded by the screen's own width
+ * # Chatlet: the conversation, the pinned Rooms panel and a pane
  *
- * Chatlet draws up to three columns side by side: its rail, a room's transcript
- * and an open thread (`.chat-frame` and `.chat-room` in `styles/screens.css`).
- * They give way by the SCREEN'S width (`@container page`), never the
- * window's, because the sidebar, a peek column and the assistant's track each
- * take a share of the window that no media query can see. Folded at the
- * phone's window width, all three stood beside the assistant's column on a
- * 1280 window, and the transcript beside an open thread was 0px wide.
+ * Chatlet draws up to three columns side by side: the Rooms panel when it is
+ * pinned, the conversation, and a pane (a thread, a room's details, a
+ * profile, a catch up). They follow the SCREEN'S width, never the window's,
+ * because the sidebar, a peek column and the assistant's track each take a
+ * share of the window that no media query can see: the stylesheet asks the
+ * page container (`@container page`), and the frame measures the chat area
+ * itself for the one decision a stylesheet cannot make, whether the panel may
+ * be pinned at all (`routes/chatlet/Chat.tsx`).
  *
- * The room's track starts at [TRANSCRIPT_FLOOR], so the rail gives way first,
- * from its widest to its narrowest, and stacks above the room only where even
- * that would cut the transcript. Nothing gives way to a thread: its track has
- * a maximum, which a grid fills before a `1fr` track takes anything, so its
- * fold counts the rail at its widest:
+ * The conversation takes what is left, and keeps [TRANSCRIPT_FLOOR] at every
+ * step:
  *
- *       200 or 260  the rail, narrowest or widest  ([CHAT_RAIL_MIN], [CHAT_RAIL_MAX])
- *     +  18.56      the gap (`spacing.4`, at the widest density)
- *     + 320         the transcript, at its floor   ([TRANSCRIPT_FLOOR])
- *     +  18.56      the gap
- *     + 360         the thread                     ([CHAT_THREAD_WIDTH])
+ *       1180 and over   panel 280 + pane 400   leave the transcript 500
+ *       980 to 1180     panel 248 + pane 340   leave it 392 at 980
+ *       760 to 980      panel 248, the pane OVER the conversation, leave 512 at 760
+ *       under 760       the panel slides in and the pane covers the conversation
  *
- * = 539 for the rail beside the room ([CHAT_RAIL_FOLD]: the first three terms,
- * at the rail's narrowest) and 978 for a thread beside it ([CHAT_THREAD_FOLD]:
- * all five, at the rail's widest), each rounded up. The gaps are counted at
- * the widest density, because a container query can no more read the
- * reader's density than a media query can, and a transcript a fraction under
- * its floor is the defect.
- *
- * Below 978 the thread stacks under the room, never in its place: the room is
- * the conversation still going on. Below 539 the rail stacks above it too, as
- * on a phone. Beside the assistant's column at its resting width, a 1280
- * window leaves the screen 556px at the normal density, so the rail narrows
- * to 220 and an open thread goes under the room; at 1168, where the column
- * first fits, the screen is the list's floor of 444 and the rail stacks as
- * well. A column the reader drags wider leaves the screen narrower still, and
- * the folds follow it, because they ask the screen rather than the window.
- * `styles/screenwidth.test.ts` holds the literals the stylesheet writes
- * against these, beside every other screen whose shape follows the screen's
- * width.
+ * so no fold leaves the transcript under its floor beside what stands next
+ * to it. `styles/screenwidth.test.ts` holds the literals the stylesheet writes
+ * against these.
  */
 
-/** Chatlet's rail at its narrowest and its widest: `.chat-frame`'s first track. */
-export const CHAT_RAIL_MIN = 200;
-export const CHAT_RAIL_MAX = 260;
+/** The pinned Rooms panel's column, on a roomy screen. */
+export const CHAT_DOCK_WIDTH = 280;
 
-/** An open thread's track beside the room: `.chat-room.with-thread`'s second. */
-export const CHAT_THREAD_WIDTH = 360;
+/** A pane's column beside the conversation, on a roomy screen. */
+export const CHAT_PANE_WIDTH = 400;
 
-/** The gap between Chatlet's columns (`spacing.4`), at the widest density. */
-const CHAT_GAP =
-  px(spacing["4"]) *
-  Math.max(...(Object.keys(density) as (keyof typeof density)[]).map(densityScale));
+/** Below this screen width the panel and the pane take their snug widths. */
+export const CHAT_ROOMY = 1180;
 
-/** Below this screen width the rail stacks above the room. */
-export const CHAT_RAIL_FOLD = Math.ceil(CHAT_RAIL_MIN + CHAT_GAP + TRANSCRIPT_FLOOR);
+/** The pinned panel below [CHAT_ROOMY]. */
+export const CHAT_DOCK_SNUG = 248;
 
-/** Below this screen width an open thread stacks under the room. */
-export const CHAT_THREAD_FOLD = Math.ceil(
-  CHAT_RAIL_MAX + CHAT_GAP + TRANSCRIPT_FLOOR + CHAT_GAP + CHAT_THREAD_WIDTH,
-);
+/** A pane beside the conversation below [CHAT_ROOMY]. */
+export const CHAT_PANE_SNUG = 340;
+
+/** Below this screen width a pane lies over the conversation, not beside it. */
+export const CHAT_PANE_FOLD = 980;
+
+/**
+ * Below this width of the chat area the Rooms panel is never pinned (it
+ * slides in from Menu) and a pane covers the conversation whole.
+ */
+export const CHAT_NARROW = 760;
 
 /**
  * The window's width, as a value a component re-renders on. For the one

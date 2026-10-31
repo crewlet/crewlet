@@ -399,3 +399,35 @@ describe("whether a modal surface stands over the page", () => {
     expect(covered()).toBe("false");
   });
 });
+
+// ALT AND SHIFT ARE COMPARED WHERE A CHORD NAMES THEM, and only there. A
+// screen that moves between rooms on Alt with an arrow, and between unread
+// rooms on Alt and Shift with the same arrow, holds two chords for one key;
+// compared on the key alone, both fired for either press, and the bare arrow
+// that scrolls a list fired them too.
+describe("a chord that names Alt or Shift", () => {
+  it("fires only with what it names held, and never for the bare key", () => {
+    const step = vi.fn();
+    const unread = vi.fn();
+    bind([
+      { key: "arrowdown", alt: true, shift: false, run: step },
+      { key: "arrowdown", alt: true, shift: true, run: unread },
+    ]);
+    press("ArrowDown");
+    expect(step).not.toHaveBeenCalled();
+    expect(unread).not.toHaveBeenCalled();
+    press("ArrowDown", { altKey: true });
+    expect(step).toHaveBeenCalledTimes(1);
+    expect(unread).not.toHaveBeenCalled();
+    press("ArrowDown", { altKey: true, shiftKey: true });
+    expect(step).toHaveBeenCalledTimes(1);
+    expect(unread).toHaveBeenCalledTimes(1);
+  });
+
+  it("a chord that names neither fires whatever is held, as before", () => {
+    const next = vi.fn();
+    bind([{ key: "j", run: next }]);
+    press("j", { shiftKey: true });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+});

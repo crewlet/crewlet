@@ -2,10 +2,12 @@
  * Chatlet's widgets for Home: the rooms with something the reader has not read,
  * and the newest messages that named them.
  *
- * THE RAIL'S QUESTION AND THE FEED'S. Each widget asks what its page asks —
- * the rooms `chat_channels` lists in the rail, the newest page of
- * `chat_mentions` — and re-reads on the same live signals, so a count on Home
- * and the badge in the rail are one reading. Nothing here marks a room read:
+ * THE RAIL'S READING AND THE ACTIVITY FEED'S. The rooms are the frame's one
+ * reading of the reader's rooms (`lib/chatRooms.ts`), the same answer the
+ * Chatlet screen's list and the sidebar's badge draw, so a count on Home and
+ * the badge in the rail are one reading by construction. The mentions are the
+ * newest page of the reader's Activity narrowed to mentions (`chat_activity`),
+ * re-read on every chat frame as Activity is. Nothing here marks a room read:
  * a cursor moves only where the reader reads (`cursor.ts`).
  *
  * READ AS A SEAT, OR NOT ASKED. Every chat question is answered for the seat
@@ -18,14 +20,13 @@
  * chat row's app.
  */
 
-import { useEffect, useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Count, List, ListItem } from "@crewlethq/ui";
 import { BellGlyph, MessageSquareGlyph } from "@crewlethq/icons/glyphs";
-import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { useClient, useOrg } from "~/lib/store-hooks.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useServicesAsk } from "~/lib/services.ts";
@@ -37,8 +38,11 @@ import {
   defineWidgets,
   gapsOf,
 } from "~/routes/home/board/kit.tsx";
-import { useChatActivity, useChatFrames, useChatRead, useCoalesced } from "./live.ts";
-import { badgesAreMeasured, isDirect, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
+import { useChatActivity, useCoalesced } from "~/lib/chatLive.ts";
+import { badgesAreMeasured, isDirect, useChatRooms } from "~/lib/chatRooms.ts";
+import { bodyExcerpt } from "./Body.tsx";
+import { placeHref } from "./nav.tsx";
+import { roomMark, roomTitle, unreadLabel } from "./rooms.ts";
 
 const ROWS = 5;
 
@@ -87,20 +91,23 @@ function useNameOf(): (handle: string) => string {
  */
 function UnreadRooms() {
   const home = useChatHome();
-  const rail = useQuery("chat_channels", {}, { enabled: home.asks });
+  // THE READING IS CLAIMED ONLY WHERE THE WIDGET ASKS: mounting it claims
+  // the frame's reading, so a reader chat answers nothing for, or a company
+  // the engine has not said runs Chatlet, is asked nothing at all.
+  if (!home.asks) {
+    return (
+      <WidgetCard title="Unread rooms" from="chatlet">
+        {home.note ? <WidgetNote>{home.note}</WidgetNote> : null}
+      </WidgetCard>
+    );
+  }
+  return <UnreadRoomsRead viewer={home.viewer} />;
+}
 
-  // THE RAIL'S OWN LIVE HALF: the answer seeds this tab's read state through
-  // the store's ordering, any chat frame moves the list, and so does the
-  // person's own read state once its revision passes what was drawn.
-  const { store } = useClient();
-  useEffect(() => store.applyChatRead(rail.data?.read), [store, rail.data]);
-  useCoalesced(useChatActivity(), rail.refetch);
-  const readRevision = useChatRead()?.revision ?? 0;
-  const drawnRevision = rail.data?.read?.revision ?? 0;
-  useCoalesced(readRevision, () => {
-    if (readRevision > drawnRevision) rail.refetch();
-  });
-
+function UnreadRoomsRead({ viewer }: { viewer: string }) {
+  // THE FRAME'S ONE READING of the reader's rooms, which re-reads on every
+  // chat frame and on the reader's own read state while it is drawn.
+  const rail = useChatRooms();
   const nameOf = useNameOf();
   const now = useNow();
   const measured = badgesAreMeasured(rail.data);
@@ -123,9 +130,7 @@ function UnreadRooms() {
       title={measured && rooms.length > 0 ? `Unread rooms · ${rooms.length}` : "Unread rooms"}
       from="chatlet"
     >
-      {home.note ? (
-        <WidgetNote>{home.note}</WidgetNote>
-      ) : rail.data && !measured ? (
+      {rail.data && !measured ? (
         <WidgetNote>
           Unread counts couldn&rsquo;t be read, so this can&rsquo;t tell which rooms have something
           new.
@@ -151,7 +156,7 @@ function UnreadRooms() {
               const { channel } = room;
               const title = roomTitle(channel, {
                 participants: room.participants,
-                viewer: home.viewer,
+                viewer,
                 nameOf,
               });
               const said = room.last
@@ -162,7 +167,7 @@ function UnreadRooms() {
               return (
                 <ListItem
                   key={channel.id}
-                  href={href(["chatlet", channel.id])}
+                  href={placeHref({ kind: "room", id: channel.id })}
                   leading={<NamedGlyph name={roomMark(channel.kind)} size="sm" />}
                   trailing={
                     <Count
@@ -186,7 +191,7 @@ function UnreadRooms() {
             })}
           </List>
           {rooms.length > ROWS ? (
-            <a className="home-card-more t-link" href={href(["chatlet"])}>
+            <a className="home-card-more t-link" href={placeHref({ kind: "home" })}>
               {`All ${plural(rooms.length, "unread room")}`}
             </a>
           ) : null}
@@ -196,63 +201,70 @@ function UnreadRooms() {
   );
 }
 
-/** The newest messages that named the reader, as Mentions lists them. */
+/** The newest messages that named the reader, as Activity's Mentions lists them. */
 function NewestMentions() {
   const home = useChatHome();
-  const first = useQuery("chat_mentions", { limit: ROWS }, { enabled: home.asks });
+  const feed = useQuery("chat_activity", { kind: "mention", limit: ROWS }, { enabled: home.asks });
   // A MENTION ANYWHERE IS A FRAME SOMEWHERE, so the newest page re-reads on
-  // every chat frame, coalesced, exactly as the Mentions screen's does.
-  useChatFrames(null, first.refetch);
+  // every chat frame, coalesced, exactly as Activity does.
+  useCoalesced(useChatActivity(), feed.refetch);
   const nameOf = useNameOf();
   const now = useNow();
-  const mentions = first.data?.mentions ?? [];
-  return (
-    <WidgetCard title="Mentions" from="chatlet-mentions">
-      {home.note ? (
-        <WidgetNote>{home.note}</WidgetNote>
-      ) : (
-        <WidgetQuery
-          error={first.error}
-          refusal={first.refusal}
-          detail={first.detail}
-          loading={first.loading && !first.data}
-          gaps={gapsOf([first.data])}
-          empty={
-            first.data && mentions.length === 0
-              ? {
-                  title: "Nobody has named you",
-                  hint: "A message that names your handle lands here.",
-                }
-              : undefined
-          }
-        >
-          <List className="home-tasks">
-            {mentions.map((mention) => (
-              <ListItem
-                key={mention.message_id}
-                // A MENTION IN A THREAD OPENS THE THREAD, as the feed's row does.
-                href={href(
-                  ["chatlet", mention.channel_id],
-                  mention.thread_root ? { thread: mention.thread_root } : undefined,
-                )}
-                leading={<NamedGlyph name={roomMark(mention.channel_kind)} size="sm" />}
-                trailing={<span className="home-tasks-when">{relTime(mention.at, now)}</span>}
-              >
-                <span className="home-tasks-stack">
-                  <span className="home-tasks-title">
-                    {mention.channel_name ? `#${mention.channel_name}` : "A direct conversation"}
-                    {mention.thread_root ? " · in a thread" : ""}
-                  </span>
-                  <span className="home-tasks-meta">
-                    {mention.author ? `${nameOf(mention.author)}: ` : ""}
-                    {mention.excerpt || "…"}
-                  </span>
+  const mentions = feed.data?.items ?? [];
+  let body: ReactNode = null;
+  if (home.note) body = <WidgetNote>{home.note}</WidgetNote>;
+  else if (home.asks) {
+    body = (
+      <WidgetQuery
+        error={feed.error}
+        refusal={feed.refusal}
+        detail={feed.detail}
+        loading={feed.loading && !feed.data}
+        gaps={gapsOf([feed.data])}
+        empty={
+          feed.data && mentions.length === 0
+            ? {
+                title: "Nobody has named you",
+                hint: "A message that names your handle lands here.",
+              }
+            : undefined
+        }
+      >
+        <List className="home-tasks">
+          {mentions.map((mention) => (
+            <ListItem
+              key={mention.key}
+              // A MENTION IN A THREAD OPENS THE THREAD, as Activity's row does.
+              href={
+                mention.thread_root
+                  ? placeHref(
+                      { kind: "room", id: mention.channel_id },
+                      { kind: "thread", room: mention.channel_id, root: mention.thread_root },
+                    )
+                  : placeHref({ kind: "room", id: mention.channel_id, message: mention.message_id })
+              }
+              leading={<NamedGlyph name={roomMark(mention.channel_kind)} size="sm" />}
+              trailing={<span className="home-tasks-when">{relTime(mention.at, now)}</span>}
+            >
+              <span className="home-tasks-stack">
+                <span className="home-tasks-title">
+                  {mention.channel_name ? `#${mention.channel_name}` : "A direct conversation"}
+                  {mention.thread_root ? " · in a thread" : ""}
                 </span>
-              </ListItem>
-            ))}
-          </List>
-        </WidgetQuery>
-      )}
+                <span className="home-tasks-meta">
+                  {`${nameOf(mention.actor)}: `}
+                  {bodyExcerpt(mention.excerpt) || "…"}
+                </span>
+              </span>
+            </ListItem>
+          ))}
+        </List>
+      </WidgetQuery>
+    );
+  }
+  return (
+    <WidgetCard title="Mentions" from="chatlet-activity">
+      {body}
     </WidgetCard>
   );
 }
@@ -271,7 +283,7 @@ export const widgets = defineWidgets([
   },
   {
     key: "chatlet.mentions",
-    from: "chatlet-mentions",
+    from: "chatlet-activity",
     label: "Mentions",
     description: "The newest messages that named you",
     icon: BellGlyph,

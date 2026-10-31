@@ -121,7 +121,7 @@ const DefaultFeedPage = 20
 // contents are decided by its membership, which this question has no viewer
 // to resolve: an unscoped merge of every room's messages would put a private
 // room's words on the screen of everybody who may read the feed. Chat has its
-// own reads, each scoped to who is asking (chat_mentions is the away story).
+// own reads, each scoped to who is asking (chat_activity is the away story).
 const (
 	feedSourceWork     = "work"
 	feedSourcePages    = "pages"

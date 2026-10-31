@@ -19,13 +19,15 @@ page:
 mode: brief
 question: Brief me on this page
 answers:
-  - route: GET /chatlet/mentions
+  - route: GET /chatlet/activity
     body:
-      mentions:
-        - channel_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31
+      items:
+        - key: "mention:0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e41"
+          kind: mention
+          channel_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31
           channel_name: launch
           channel_kind: public
-          author: ada
+          actor: ada
           excerpt: "@grace can you approve the launch copy?"
           message_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e41
           at: "2026-10-26T09:00:00Z"

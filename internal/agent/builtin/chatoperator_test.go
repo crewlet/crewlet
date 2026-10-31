@@ -677,6 +677,68 @@ func TestAMuteNamesOneRoomAndKeepsTheRest(t *testing.T) {
 	}
 }
 
+// THE READER'S MARKS RIDE THE SAME RECORD, each named alone, through the real
+// merge: a room's level, a star, a save, a thread follow and a thread's own
+// place all land in one call and come back in the answer the screen applies,
+// and a later call about one of them leaves the rest as they were.
+//
+// Mutation: drop any of the new arguments from the delta and its field comes
+// back empty.
+func TestTheReadersMarksAreWrittenAsStated(t *testing.T) {
+	t.Parallel()
+	tool := operatorChat(t, newFakeChat(), coordmem.NewFleet(), nil)[chatlet.MarkChatReadTool]
+	type read struct {
+		ThreadCursors map[string]float64 `json:"thread_cursors"`
+		Every         []string           `json:"every"`
+		Starred       []string           `json:"starred"`
+		Saved         []struct {
+			ChannelID string `json:"channel_id"`
+			MessageID string `json:"message_id"`
+		} `json:"saved"`
+		Threads []struct {
+			RootID    string `json:"root_id"`
+			Following bool   `json:"following"`
+		} `json:"threads"`
+	}
+	after := func(args map[string]any) read {
+		t.Helper()
+		got := callOperator(t, tool, args)
+		if got.Failed {
+			t.Fatalf("mark_chat_read %v failed: %s", args, got.Output)
+		}
+		var answer struct {
+			Read read `json:"read"`
+		}
+		if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+			t.Fatalf("the answer is not JSON: %v: %s", err, got.Output)
+		}
+		return answer.Read
+	}
+	got := after(map[string]any{
+		"notify":         map[string]any{"room-a": "all"},
+		"star":           []any{"room-b"},
+		"save":           []any{map[string]any{"channel_id": "room-a", "message_id": "m-1"}},
+		"unfollow":       []any{map[string]any{"channel_id": "room-a", "root_id": "r-1"}},
+		"thread_cursors": map[string]any{"r-2": 40.0},
+	})
+	switch {
+	case len(got.Every) != 1 || got.Every[0] != "room-a":
+		t.Errorf("notify all left every %v", got.Every)
+	case len(got.Starred) != 1 || got.Starred[0] != "room-b":
+		t.Errorf("a star left %v", got.Starred)
+	case len(got.Saved) != 1 || got.Saved[0].MessageID != "m-1":
+		t.Errorf("a save left %+v", got.Saved)
+	case len(got.Threads) != 1 || got.Threads[0].RootID != "r-1" || got.Threads[0].Following:
+		t.Errorf("an unfollow left %+v", got.Threads)
+	case got.ThreadCursors["r-2"] != 40:
+		t.Errorf("a thread cursor left %v", got.ThreadCursors)
+	}
+	got = after(map[string]any{"unstar": []any{"room-b"}})
+	if len(got.Starred) != 0 || len(got.Saved) != 1 || len(got.Every) != 1 || len(got.Threads) != 1 {
+		t.Errorf("an unstar disturbed the other marks: %+v", got)
+	}
+}
+
 // A READ STATE THAT CANNOT BE READ IS REFUSED, and reaches nothing — and a
 // store that could not be written is the node's, never the person's input.
 func TestAReadStateThatCannotBeWrittenIsRefusedWithItsClass(t *testing.T) {
@@ -692,7 +754,17 @@ func TestAReadStateThatCannotBeWrittenIsRefusedWithItsClass(t *testing.T) {
 			"cursors": map[string]any{chatRoomID: -1.0}},
 			"whole, non-negative log position"},
 		"cursors that are not an object": {map[string]any{"cursors": []any{1}},
-			"object of room id"},
+			"`cursors` is an object of id"},
+		"a level this build does not know": {map[string]any{
+			"notify": map[string]any{chatRoomID: "loud"}}, "`all`, `mentions` or `muted`"},
+		"a save that names no message": {map[string]any{
+			"save": []any{map[string]any{"channel_id": chatRoomID}}},
+			"`save` entry 0 needs a `channel_id` and a `message_id`"},
+		"a follow that is no list": {map[string]any{"follow": 3.0},
+			"`follow` is a list"},
+		"a thread cursor below zero": {map[string]any{
+			"thread_cursors": map[string]any{"root-1": -4.0}},
+			"`thread_cursors` entry"},
 		"cursors naming no room": {map[string]any{"cursors": map[string]any{}},
 			"names nothing"},
 		"cursors whose every position is null": {map[string]any{

@@ -374,7 +374,10 @@ func (w filledWork) Search(context.Context, worklet.SearchQuery) (worklet.Search
 
 // filledChat is the company's own chat answering every read filled, and its
 // index as one still building while building is set.
-type filledChat struct{ building *atomic.Bool }
+type filledChat struct {
+	noReaderViews
+	building *atomic.Bool
+}
 
 func (filledChat) Channels(context.Context, string, chatlet.ChannelsQuery, statelog.Freshness) (
 	chatlet.ChannelListing, error) {
@@ -401,14 +404,21 @@ func (filledChat) Thread(context.Context, string, chatlet.ThreadQuery, statelog.
 	return filled[chatlet.Thread](), nil
 }
 
-func (filledChat) Mentions(context.Context, string, chatlet.MentionQuery, statelog.Freshness) (
-	chatlet.MentionFeed, error) {
-	return filled[chatlet.MentionFeed](), nil
-}
-
 func (filledChat) RoomNames(context.Context, string, statelog.Freshness) (
 	chatlet.RoomNames, error) {
 	return filled[chatlet.RoomNames](), nil
+}
+
+// Activity answers filled, which is what the assistant reads where a person
+// was named.
+func (filledChat) Activity(context.Context, string, chatlet.ActivityQuery, statelog.Freshness) (
+	chatlet.Activity, error) {
+	return filled[chatlet.Activity](), nil
+}
+
+func (filledChat) Directory(context.Context, string, statelog.Freshness) (
+	chatlet.Directory, error) {
+	return filled[chatlet.Directory](), nil
 }
 
 // Search answers filled hits, each said in a room the answer names, as the

@@ -53,6 +53,9 @@ export type KeyScope =
   | "canvas"
   | "draft"
   | "compose"
+  | "chat"
+  | "chatbox"
+  | "message"
   | "create"
   | "charter"
   | "search"
@@ -70,6 +73,9 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "canvas", title: "On a chart" },
   { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
   { scope: "compose", title: "Writing a reply or a message" },
+  { scope: "chat", title: "In Chatlet" },
+  { scope: "chatbox", title: "Writing a chat message" },
+  { scope: "message", title: "On a focused chat message" },
   { scope: "create", title: "Making a new artifact" },
   { scope: "charter", title: "Writing the company's principles" },
   { scope: "search", title: "In search" },
@@ -87,17 +93,20 @@ export interface Press {
   /** The platform's command key: Command on a Mac, Control elsewhere. */
   mod?: boolean;
   /**
-   * Shift, for a LETTER only. A symbol that needs Shift to type (`?`, `+`)
-   * is written as the symbol, because that is what `KeyboardEvent.key`
-   * reports and what a reader's keycap says.
+   * Shift, for a LETTER or a key such as an arrow whose shifted press is
+   * another row's. A symbol that needs Shift to type (`?`, `+`) is written as
+   * the symbol, because that is what `KeyboardEvent.key` reports and what a
+   * reader's keycap says. `false` says the row fires only WITHOUT it.
    */
   shift?: boolean;
   /**
-   * Option on a Mac, Alt elsewhere. ONLY for a row a surface reads through
-   * [matchesRow] from inside itself — the palette's accelerators, pressed in
-   * its field, where a bare letter is a letter of the query and Alt is what
-   * turns it into a key. Matched by the physical key, because Option+A on a
-   * Mac types `å`. [useKeymap] refuses one, like Shift.
+   * Option on a Mac, Alt elsewhere. On a LETTER, only for a row a surface
+   * reads through [matchesRow] from inside itself (the palette's
+   * accelerators, pressed in its field, where a bare letter is a letter of
+   * the query and Alt is what turns it into a key), matched by the physical
+   * key because Option+A on a Mac types `å`; [useKeymap] refuses one. On any
+   * other key, such as an arrow, the key is reported as itself and a window
+   * chord compares the Alt.
    */
   alt?: boolean;
   /** The key pressed first, for a two-key sequence: `g` then `h`. */
@@ -197,11 +206,15 @@ const FRAME: KeyRow[] = [
     by: "dashboard",
     whileTyping: true,
   },
+  // ONE PRESS FOR THE SIDEBAR IN EITHER SHAPE OF THE FRAME: it folds the
+  // sidebar to its compact rail and back where the sidebar stands beside the
+  // page, and below the shell breakpoint, where the sidebar is a drawer with
+  // nothing to fold, it opens the drawer (`sidebar/Sidebar.tsx`).
   {
-    id: "drawer",
+    id: "sidebar",
     scope: "frame",
     presses: [{ key: "\\", mod: true }],
-    does: "Open the navigation",
+    does: "Fold or unfold the sidebar, or open it on a narrow window",
     by: "dashboard",
     whileTyping: true,
   },
@@ -375,26 +388,170 @@ const PAGE: KeyRow[] = [
 ];
 
 /**
- * THE SEND KEY FOR WHAT A PERSON SAYS TO SOMEBODY, read from inside the field
- * through [matchesRow] by every box that says it: a reply in the Inbox and a
- * comment on a task (`components/Composer.tsx`), and a message in a chat room
- * or a thread (`routes/chatlet/Composer.tsx`). Enter alone is a new line there,
- * because what is said to somebody is often several lines: a list, a pasted
+ * THE SEND KEYS FOR WHAT A PERSON SAYS TO SOMEBODY, read from inside the field
+ * by every box that says it.
+ *
+ * A LETTER TAKES THE COMMAND KEY: a reply in the Inbox and a comment on a task
+ * (`components/Composer.tsx`, through [matchesRow]), where Enter alone is a new
+ * line, because what is said there is often several lines: a list, a pasted
  * stack trace.
  *
- * THE ASSISTANT'S QUESTION BOX IS THE ONE EXCEPTION, and on purpose: it sends
- * on Enter ([ASSISTANT]'s `assistant.send`), the design system's own rule for
- * a question, which is one line far more often than not. Two kinds of box,
- * two keys, each listed in the legend under its own heading.
+ * A CHAT MESSAGE TAKES ENTER ([CHATBOX]'s `chatbox.send`), with Shift for a
+ * new line: a room is talked in a line at a time, and the box grows for the
+ * message that needs more. The assistant's question box sends the same way
+ * ([ASSISTANT]'s `assistant.send`).
+ *
+ * The chat box's own keys are [CHATBOX]'s.
  */
 const COMPOSE: KeyRow[] = [
   {
     id: "compose.send",
     scope: "compose",
     presses: [{ key: "enter", mod: true }],
-    does: "Send it",
+    does: "Send a reply or a comment",
     by: "dashboard",
     whileTyping: true,
+  },
+];
+
+/**
+ * CHATLET'S KEYS, bound by its screen (`routes/chatlet/shortcuts.ts`) for as
+ * long as it is open. Moving between rooms fires from inside the message box
+ * too, since a reader answering in one room is who moves to the next; marking
+ * a room read does not, because Escape in a box is the box's own.
+ */
+const CHAT: KeyRow[] = [
+  {
+    id: "chat.room",
+    scope: "chat",
+    presses: [
+      { key: "arrowup", alt: true, shift: false },
+      { key: "arrowdown", alt: true, shift: false },
+    ],
+    does: "Previous or next room",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chat.unread",
+    scope: "chat",
+    presses: [
+      { key: "arrowup", alt: true, shift: true },
+      { key: "arrowdown", alt: true, shift: true },
+    ],
+    does: "Previous or next room with unread messages",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chat.search",
+    scope: "chat",
+    presses: [{ key: "f", mod: true, shift: false }],
+    does: "Search the open room, or all of Chatlet",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chat.read",
+    scope: "chat",
+    presses: [{ key: "escape" }],
+    does: "Mark the open room as read",
+    by: "dashboard",
+  },
+  {
+    id: "chat.keys",
+    scope: "chat",
+    presses: [{ key: "/", mod: true }],
+    does: "Show Chatlet's keys",
+    by: "dashboard",
+    whileTyping: true,
+  },
+];
+
+/**
+ * A CHAT BOX'S OWN KEYS, read from inside its field (`routes/chatlet/Composer.tsx`):
+ * Enter sends (the kit's `Composer` with `submitOn="enter"`), Up in an empty
+ * box opens the reader's last message for a rewrite, and the command key with
+ * B or I marks the selection. A field's own keys, so a list's bare keys and a
+ * focused message's never fire beside them ([SCOPES_APART]).
+ */
+const CHATBOX: KeyRow[] = [
+  {
+    id: "chatbox.send",
+    scope: "chatbox",
+    presses: [{ key: "enter" }],
+    does: "Send it; with Shift, a new line",
+    by: "kit",
+    whileTyping: true,
+  },
+  {
+    id: "chatbox.edit-last",
+    scope: "chatbox",
+    presses: [{ key: "arrowup" }],
+    does: "Edit your last message, from an empty box",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chatbox.bold",
+    scope: "chatbox",
+    presses: [{ key: "b", mod: true }],
+    does: "Bold the selection",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chatbox.italic",
+    scope: "chatbox",
+    presses: [{ key: "i", mod: true }],
+    does: "Italicise the selection",
+    by: "dashboard",
+    whileTyping: true,
+  },
+];
+
+/**
+ * A FOCUSED CHAT MESSAGE'S KEYS, answered by the message row itself
+ * (`routes/chatlet/MessageRow.tsx`) through [matchesRow], only while the row
+ * has the focus: Tab or a click puts it there, and Up and Down move it to the
+ * message above and below. A bare letter here is never a key in a field, so
+ * none of these fires while somebody types.
+ */
+const MESSAGE: KeyRow[] = [
+  {
+    id: "message.edit",
+    scope: "message",
+    presses: [{ key: "e" }],
+    does: "Edit your message",
+    by: "dashboard",
+  },
+  {
+    id: "message.thread",
+    scope: "message",
+    presses: [{ key: "t" }],
+    does: "Open its thread",
+    by: "dashboard",
+  },
+  {
+    id: "message.save",
+    scope: "message",
+    presses: [{ key: "s" }],
+    does: "Save it for later, or take it out of Saved",
+    by: "dashboard",
+  },
+  {
+    id: "message.delete",
+    scope: "message",
+    presses: [{ key: "delete" }, { key: "backspace" }],
+    does: "Delete your message",
+    by: "dashboard",
+  },
+  {
+    id: "message.move",
+    scope: "message",
+    presses: [{ key: "arrowup" }, { key: "arrowdown" }],
+    does: "Move to the message above or below",
+    by: "dashboard",
   },
 ];
 
@@ -445,14 +602,29 @@ const CHARTER: KeyRow[] = [
 ];
 
 /**
- * Scopes never live on one screen, which may therefore share a press: a
+ * Scopes whose rows never answer one press together, which may therefore
+ * share it: two never live on one screen, or one whose row stands aside
+ * while the other is live (Chatlet's Escape while a peek is open). A
  * reply's composer is the Inbox's and a task's, and a create page is
  * neither, so Send and a create page's main action are both the command key
  * with Enter. Company › Principles holds no composer, no create page and no
  * peek, so its editor's Save and Escape are free there.
  */
 export const SCOPES_APART: readonly (readonly [KeyScope, KeyScope])[] = [
+  // A chat box's keys fire only inside its field, where a list's bare keys and
+  // a focused message's never do; and a message row is drawn only in Chatlet,
+  // never on an open artifact.
+  ["chatbox", "list"],
+  ["chatbox", "message"],
+  ["artifact", "message"],
   ["compose", "create"],
+  // CHATLET DRAWS NO CREATE PAGE AND NO CHARTER. A PEEK can be open over it
+  // (any address may carry one), and Chatlet's Escape is bound only while
+  // none is (`routes/chatlet/shortcuts.ts`), so the two never answer one
+  // press: Escape with a peek open closes the peek and marks nothing read.
+  ["chat", "peek"],
+  ["chat", "create"],
+  ["chat", "charter"],
   ["charter", "compose"],
   ["charter", "create"],
   ["charter", "peek"],
@@ -546,6 +718,9 @@ export const KEYMAP: readonly KeyRow[] = [
   ...FRAME,
   ...PAGE,
   ...COMPOSE,
+  ...CHAT,
+  ...CHATBOX,
+  ...MESSAGE,
   ...CREATE,
   ...CHARTER,
   ...SEARCH,
@@ -637,20 +812,23 @@ export function useKeymap(handlers: Record<string, KeyHandler>): void {
     const run = typeof handler === "function" ? handler : handler.run;
     const when = typeof handler === "function" ? undefined : handler.when;
     row.presses.forEach((press, index) => {
-      if (press.alt) {
-        // Alt is read from inside a surface by `matchesRow`: a window chord
-        // compares no Alt and would fire for the plain letter.
-        throw new Error(`keymap: "${id}" names Alt and cannot be a window chord`);
-      }
-      if (press.shift) {
-        // A shifted letter is matched by `matchesRow`, never by a window
-        // chord, which compares no Shift and would fire for the plain letter.
-        throw new Error(`keymap: "${id}" names Shift and cannot be a window chord`);
+      if (press.alt && /^[a-z]$/.test(press.key)) {
+        // ALT ON A LETTER is read from inside a surface by `matchesRow`, by
+        // the physical key: Option composes the letter into another
+        // character on a Mac (`å` for A), so a window chord matched by `key`
+        // would never fire there. Alt on any other key (an arrow) reports
+        // the key itself and binds like any press.
+        throw new Error(`keymap: "${id}" names Alt on a letter and cannot be a window chord`);
       }
       const chord: Chord = {
         key: press.key,
         run: (e) => run(e, index),
         meta: press.mod,
+        // EXACT WHERE THE ROW SAYS: a row naming Alt or Shift fires only with
+        // it held, and one naming `shift: false` only without, so Alt with an
+        // arrow and Alt and Shift with the same arrow are two rows.
+        ...(press.alt !== undefined ? { alt: press.alt } : {}),
+        ...(press.shift !== undefined ? { shift: press.shift } : {}),
         whileTyping: row.whileTyping,
         when: typeof when === "function" ? when(index) : when,
       };
@@ -666,6 +844,9 @@ const CAP_NAMES: Record<string, string> = {
   enter: "Enter",
   tab: "Tab",
   backspace: "Backspace",
+  delete: "Delete",
+  arrowup: "ArrowUp",
+  arrowdown: "ArrowDown",
 };
 
 /**

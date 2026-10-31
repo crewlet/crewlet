@@ -80,32 +80,15 @@ func (s Sources) linkHosts(_ context.Context, _ Params) (any, error) {
 	if company == nil {
 		return map[string]any{"hosts": hosts}, nil
 	}
-	lookup := s.Env
-	if lookup == nil {
-		lookup = os.LookupEnv
-	}
-	expand := func(value string) string {
-		out, _ := envref.Expand(value, lookup)
-		return strings.TrimSpace(out)
-	}
+	lookup, expand := s.resolvers()
 	add := func(kind LinkHostKind, raw string, owners []string) {
 		if base := browserBase(raw); base != "" {
 			hosts = append(hosts, LinkHost{Kind: kind, URL: base, Owners: owners})
 		}
 	}
 	in := company.Integrations
-	if in.GitHub != nil {
-		_, web := in.GitHub.Bases(lookup)
-		var orgs, repos []string
-		if p := in.GitHub.Provisioning; p != nil {
-			orgs, repos = []string{p.Org}, p.Repos
-		}
-		for role := range company.EachRole() {
-			if gh := role.Integrations.GitHub; gh != nil {
-				repos = append(repos, gh.Repos...)
-			}
-		}
-		add(LinkHostGitHub, web, codeOwners(orgs, repos, expand))
+	if web, owners, ok := githubHost(company, lookup, expand); ok {
+		add(LinkHostGitHub, web, owners)
 	}
 	if in.GitLab != nil {
 		var groups, projects []string
@@ -127,6 +110,55 @@ func (s Sources) linkHosts(_ context.Context, _ Params) (any, error) {
 		add(LinkHostConfluence, (&config.Confluence{URL: expand(in.Confluence.URL), SiteURL: expand(in.Confluence.SiteURL)}).ShareableBaseURL(), nil)
 	}
 	return map[string]any{"hosts": hosts}, nil
+}
+
+// resolvers are the serving node's chain ([Sources.Env], the process's own
+// environment where none is wired) and the expansion of a `${VAR}` field
+// through it, as every caller that builds a link from the company's
+// integration fields resolves them.
+func (s Sources) resolvers() (func(string) (string, bool), func(string) string) {
+	lookup := s.Env
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	return lookup, func(value string) string {
+		out, _ := envref.Expand(value, lookup)
+		return strings.TrimSpace(out)
+	}
+}
+
+// companyGitHub is [githubHost] for the company this node runs now.
+func (s Sources) companyGitHub() (string, []string, bool) {
+	company := s.company()
+	if company == nil {
+		return "", nil, false
+	}
+	lookup, expand := s.resolvers()
+	return githubHost(company, lookup, expand)
+}
+
+// githubHost is the GitHub configuration's web base and the owners it names
+// (its organization, and the owner of every repository a seat works in): the
+// one reading of which code on GitHub is the company's, for the link hosts a
+// reader links references by and for the pull requests a chat link previews.
+func githubHost(company *config.Company, lookup func(string) (string, bool),
+	expand func(string) string) (string, []string, bool) {
+
+	gh := company.Integrations.GitHub
+	if gh == nil {
+		return "", nil, false
+	}
+	_, web := gh.Bases(lookup)
+	var orgs, repos []string
+	if p := gh.Provisioning; p != nil {
+		orgs, repos = []string{p.Org}, p.Repos
+	}
+	for role := range company.EachRole() {
+		if rg := role.Integrations.GitHub; rg != nil {
+			repos = append(repos, rg.Repos...)
+		}
+	}
+	return web, codeOwners(orgs, repos, expand), true
 }
 
 // browserBase is raw as the address a browser opens, or "" when it is not an

@@ -80,6 +80,9 @@ export interface Outgoing {
   /** What was typed. The handles it names and whether it addresses the room
    *  are the engine's reading of it, never a field this tab resolves. */
   body: string;
+  /** What the words link to that the room previews, sent as the message's
+   *  links (`Attach.tsx`'s `previewLinks`). */
+  links: string[];
   state: SendState;
   /**
    * The id the engine derived, once it has answered. Empty while in flight and
@@ -230,6 +233,7 @@ export interface Draft {
   /** The message being answered, empty for a room post. */
   threadRoot?: string;
   body: string;
+  links?: string[];
 }
 
 export interface OutboxHandle {
@@ -288,13 +292,16 @@ export function useOutbox(): OutboxHandle {
     (row: Outgoing): Promise<ActResult | null> => {
       const label = { done: "Sent", quiet: true };
       const options = { opId: row.opId };
+      // THE LINKS RIDE ONLY WHEN THERE ARE ANY, so a message of words alone
+      // asks exactly what it always did.
+      const links = row.links.length > 0 ? { links: row.links } : {};
       return row.threadRoot
         ? reply.run(
-            { channel: row.channelID, reply_to: row.threadRoot, body: row.body },
+            { channel: row.channelID, reply_to: row.threadRoot, body: row.body, ...links },
             label,
             options,
           )
-        : post.run({ channel: row.channelID, body: row.body }, label, options);
+        : post.run({ channel: row.channelID, body: row.body, ...links }, label, options);
     },
     [post, reply],
   );
@@ -370,6 +377,7 @@ export function useOutbox(): OutboxHandle {
         channelID: draft.channelID,
         threadRoot: draft.threadRoot ?? "",
         body: draft.body,
+        links: draft.links ?? [],
         state: "sending",
         messageID: "",
         detail: "",

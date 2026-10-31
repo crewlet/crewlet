@@ -95,15 +95,21 @@ test("a company on another knowledge base is offered no Doclet", () => {
 // would be refused anyway. Mutation: drop Chatlet's `service` from its row and
 // every expectation here fails.
 test("a company on another chat is offered nothing of Chatlet", () => {
-  const slack = { tracker: true, knowledge: true, chat: false } as const;
-  const rows = WORKSPACES.filter((w) => w.place !== "menu" && serviceShown(w, slack)).map(
+  const elsewhere = { tracker: true, knowledge: true, chat: false } as const;
+  const rows = WORKSPACES.filter((w) => w.place !== "menu" && serviceShown(w, elsewhere)).map(
     (w) => w.key,
   );
   expect(rows).not.toContain("chatlet");
   expect(rows).toContain("worklet");
-  const places = DESTINATIONS.filter((d) => !serviceShown(d, slack)).map((d) => d.key);
-  expect(places.sort()).toEqual(["chatlet", "chatlet-mentions", "chatlet-search"]);
+  const places = DESTINATIONS.filter((d) => !serviceShown(d, elsewhere)).map((d) => d.key);
+  // THE ROW AND EVERY VIEW IT DECLARES, each a place of its own.
+  expect(places.sort()).toEqual([
+    "chatlet",
+    ...["activity", "browse", "drafts", "new", "saved", "search", "threads"].map(
+      (v) => `chatlet-${v}`,
+    ),
+  ]);
   expect(serviceOfPath(["chatlet", "0f0f0f0f-1111-4222-8333-444455556666"])).toBe("chat");
-  expect(pathShown(["chatlet", "mentions"], slack)).toBe(false);
-  expect(pathShown(["doclet"], slack)).toBe(true);
+  expect(pathShown(["chatlet", "activity"], elsewhere)).toBe(false);
+  expect(pathShown(["doclet"], elsewhere)).toBe(true);
 });

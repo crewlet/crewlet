@@ -616,16 +616,16 @@ func (c Chat) Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 	return call(ctx, c.r, opChatThread, nil, chatThreadArgs{Viewer: viewer, Query: q, Fresh: fresh})
 }
 
-// Mentions answers a page of the messages that named a viewer.
-func (c Chat) Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
-	fresh statelog.Freshness) (chatlet.MentionFeed, error) {
-	return call(ctx, c.r, opChatMentions, nil, chatMentionsArgs{Viewer: viewer, Query: q, Fresh: fresh})
-}
-
 // RoomNames answers the names of every room a viewer may read.
 func (c Chat) RoomNames(ctx context.Context, viewer string,
 	fresh statelog.Freshness) (chatlet.RoomNames, error) {
 	return call(ctx, c.r, opChatRoomNames, nil, chatRoomNamesArgs{Viewer: viewer, Fresh: fresh})
+}
+
+// Directory answers every named room a viewer may browse.
+func (c Chat) Directory(ctx context.Context, viewer string,
+	fresh statelog.Freshness) (chatlet.Directory, error) {
+	return call(ctx, c.r, opChatDirectory, nil, chatRoomNamesArgs{Viewer: viewer, Fresh: fresh})
 }
 
 // settled raises the session floor to what a chat write reported.
@@ -671,6 +671,15 @@ func (c Chat) SetMembers(ctx context.Context, actor chatlet.Actor, channelID str
 		chatSetMembersArgs{Actor: actor, ChannelID: channelID, Members: members})
 	c.settled(out)
 	return out, err
+}
+
+// AddMembers puts people in a room, answering who it put there.
+func (c Chat) AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
+	handles []string) (chatlet.Written, []string, error) {
+	out, err := call(ctx, c.r, opChatAddMembers, nil,
+		chatAddMembersArgs{Actor: actor, ChannelID: channelID, Handles: handles})
+	c.settled(out.Written)
+	return out.Written, out.Added, err
 }
 
 // Join puts the actor in a room.

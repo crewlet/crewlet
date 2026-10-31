@@ -43,6 +43,7 @@ const CHAT_ACTS = [
   "create_channel",
   "open_dm",
   "update_channel",
+  "add_channel_members",
   "mark_chat_read",
 ];
 
@@ -211,7 +212,8 @@ export function mountChat(
   }: {
     answers?: Partial<Record<QueryName, unknown>>;
     answer?: Answerer;
-    viewer?: Record<string, unknown>;
+    /** What the viewer read answers, or the error it fails with. */
+    viewer?: Record<string, unknown> | Error;
     connected?: boolean;
     /** Under `StrictMode` at the ROOT, as `main.tsx` renders the dashboard —
      *  the one place React's development-only extra setup and cleanup of
@@ -226,7 +228,10 @@ export function mountChat(
   if (services) store.applyOrg(withDerived({ name: "Acme", roles: [], services }));
   const socket = {
     query: vi.fn(async (what: string, params?: Record<string, unknown>) => {
-      if (what === "viewer") return viewer;
+      if (what === "viewer") {
+        if (viewer instanceof Error) throw viewer;
+        return viewer;
+      }
       if (answer) return answer(what, params);
       return answers[what as QueryName] ?? {};
     }),

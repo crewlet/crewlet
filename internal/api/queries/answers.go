@@ -425,6 +425,19 @@ type Sources struct {
 	// above: a node that cannot read the value must not be the reason a
 	// screen calls a healthy registration stale.
 	WebhookBase func() string
+	// DashboardBase is where a PERSON's browser reaches this deployment,
+	// `api.external_url`: the origin a link in chat must carry to be one of
+	// this dashboard's own addresses, which is what lets a message's link
+	// to a task, a page or an artifact be previewed as that record
+	// (`chat_unfurls`). Nil, or empty, is "cannot say", and then no link is
+	// taken for one of this dashboard's: a preview of the company's task
+	// under somebody else's address would vouch for a link that does not
+	// go there.
+	DashboardBase func() string
+	// PullRequests reads a pull request for a chat link's preview, through
+	// the company's GitHub wiring (`chat_unfurls`). Nil previews none: a
+	// pull request's link is then drawn by the link rules alone.
+	PullRequests PullRequestReader
 	// Retention is this node's answer about the state log's own history:
 	// how far each domain's log may be trimmed, what is stopping it, and
 	// what this node costs to replace.
@@ -907,11 +920,25 @@ func Register(r *Registry, s Sources) {
 		// opened beside the transcript and paged the other way, because a
 		// conversation is read forwards.
 		r.Register("chat_thread", Requires(iam.GrantChatlet), s.chatThread)
-		r.Register("chat_mentions", Requires(iam.GrantChatlet), s.chatMentions)
+		// THE READER'S OWN VIEWS, each across the rooms they may read and
+		// each read with their own record (chatreader.go): what waits for
+		// them, the threads they follow, what they saved and sent, a
+		// room's shared links, and one message read in place.
+		r.Register("chat_activity", Requires(iam.GrantChatlet), s.chatActivity)
+		r.Register("chat_threads", Requires(iam.GrantChatlet), s.chatThreads)
+		r.Register("chat_saved", Requires(iam.GrantChatlet), s.chatSaved)
+		r.Register("chat_sent", Requires(iam.GrantChatlet), s.chatSent)
+		r.Register("chat_links", Requires(iam.GrantChatlet), s.chatLinks)
+		r.Register("chat_message", Requires(iam.GrantChatlet), s.chatMessage)
+		// A MESSAGE'S LINKS PREVIEWED, each asked of the question its
+		// record's own screen asks, through this registry and so as the
+		// caller (chatunfurls.go).
+		r.Register("chat_unfurls", Requires(iam.GrantChatlet), s.chatUnfurls(r))
 		// THE NAMES OF THE ROOMS A SEAT MAY READ, joined or not: how a
 		// reader tells a room written in prose from a colour or an
 		// issue's number spelled the same way.
 		r.Register("chat_room_names", Requires(iam.GrantChatlet), s.chatRoomNames)
+		r.Register("chat_rooms", Requires(iam.GrantChatlet), s.chatRooms)
 		if s.ChatSearch != nil {
 			r.Register("chat_search", Requires(iam.GrantChatlet), s.chatSearch)
 		}

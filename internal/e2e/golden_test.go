@@ -1192,12 +1192,15 @@ func captureChat(t *testing.T, n *node, founder *browser, conn *websocket.Conn,
 			AuthorKind: chatlet.AuthorHuman, ThreadRoot: thread}
 	}
 
-	// A ROOM, made from the tab with the seat in it.
+	// A ROOM, made from the tab with the seat in it. Its frame names the
+	// room's founding line (its members joined), the row the record wrote,
+	// read back below by its kind.
 	made := openRoomAs(t, n, founder, map[string]any{
 		"channel": "launch", "kind": string(chatlet.KindPublic),
 		"topic": "what ships on Thursday", "members": []any{seat},
 	})
 	out.Room = made.Channel
+	created := len(out.Changes)
 	out.Changes = append(out.Changes, by(chatlet.OpCreate, "", ""))
 	// LOOKED AT, as the room's screen does when it opens: the chat room's
 	// `presence` frame, which asks nothing and joins the tab to the room's
@@ -1323,11 +1326,27 @@ func captureChat(t *testing.T, n *node, founder *browser, conn *websocket.Conn,
 		"cursors": map[string]any{made.Channel: out.Cursor},
 	})
 	founder.acted(n, chatlet.LeaveChannelTool, map[string]any{"channel": made.Channel})
+	left := len(out.Changes)
 	out.Changes = append(out.Changes, by(chatlet.OpMembers, "", ""))
 
-	// THE ROOM'S NUMBERING, read back before the prune takes its rows.
+	// THE ROOM'S NUMBERING, read back before the prune takes its rows, and
+	// the two event rows a record above wrote: the founding line the room's
+	// creation wrote and the line the founder's leaving wrote, each the row
+	// its record's frame names. Read by their kind, never by their place.
 	for _, view := range transcript(t, n, who.Handle, made.Channel).Messages {
 		out.Seq = max(out.Seq, view.ChannelSeq)
+		event := view.Message.Event
+		switch {
+		case event == nil:
+		case event.Kind == chatlet.EventJoined && view.ChannelSeq == 1:
+			out.Changes[created].MessageID = view.Message.ID
+		case event.Kind == chatlet.EventLeft && view.Message.Author == who.Handle:
+			out.Changes[left].MessageID = view.Message.ID
+		}
+	}
+	if out.Changes[created].MessageID == "" || out.Changes[left].MessageID == "" {
+		t.Fatalf("the room holds no founding line or no line for the founder "+
+			"leaving: %v", bodies(transcript(t, n, who.Handle, made.Channel)))
 	}
 
 	// AND PRUNED, through the human write surface's destruction route — the

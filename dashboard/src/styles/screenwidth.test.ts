@@ -3,16 +3,16 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { density, spacing } from "@crewlethq/tokens";
 
 import {
-  CHAT_RAIL_FOLD,
-  CHAT_RAIL_MAX,
-  CHAT_RAIL_MIN,
-  CHAT_THREAD_FOLD,
-  CHAT_THREAD_WIDTH,
+  CHAT_DOCK_SNUG,
+  CHAT_DOCK_WIDTH,
+  CHAT_NARROW,
+  CHAT_PANE_FOLD,
+  CHAT_PANE_SNUG,
+  CHAT_PANE_WIDTH,
+  CHAT_ROOMY,
   TRANSCRIPT_FLOOR,
-  densityScale,
 } from "~/app/layout.ts";
 
 /**
@@ -33,6 +33,8 @@ const strip = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 const screens = strip(readFileSync(join(STYLES, "screens.css"), "utf8"));
 /** Company › Integrations' own sheet, which its screen loads with it. */
 const integrations = strip(readFileSync(join(STYLES, "integrations.css"), "utf8"));
+/** Chatlet's frame's own sheet, which its screen loads with it. */
+const chatFrame = strip(readFileSync(join(STYLES, "chatlet-frame.css"), "utf8"));
 
 /** Every top-level block opened by `at` (an at-rule prelude), with its body. */
 function blocks(css: string, at: RegExp): string[] {
@@ -108,66 +110,51 @@ test("the split screens choose their panes by the screen's width", () => {
   expect(page).toMatch(/\.int-back\s*\{[^}]*display:\s*inline-flex/);
 });
 
-// CHATLET'S COLUMNS GIVE WAY BY THE SCREEN'S WIDTH TOO, at the widths
-// `app/layout.ts` derives from the transcript's floor. They folded at the
-// phone's WINDOW width, so beside the assistant's column on a 1280 window the
-// rail, the transcript and an open thread stood side by side in a 556px
-// screen, and the transcript beside the thread was 0px wide.
-test("Chatlet's columns fold by the screen's width, where the transcript keeps its floor", () => {
+// CHATLET'S COLUMNS FOLLOW THE SCREEN'S WIDTH TOO, at the widths
+// `app/layout.ts` holds the transcript to its floor with. Folded at the
+// phone's WINDOW width, they stood side by side beside the assistant's column
+// on a 1280 window, and the transcript beside an open thread was 0px wide.
+test("Chatlet's columns follow the screen's width, where the transcript keeps its floor", () => {
   // NO WINDOW WIDTH LAYS THEM OUT, at any width: a media query cannot see the
-  // sidebar, a peek or the assistant's column.
-  const windowRules = blocks(screens, /@media[^{]*width/g).join("\n");
+  // sidebar, a peek or the assistant's column. The one decision a stylesheet
+  // cannot make (whether the panel may be pinned) is the frame's measurement
+  // of the chat area, drawn as `.is-narrow`.
+  const windowRules = blocks(chatFrame, /@media[^{]*width/g).join("\n");
   expect(windowRules, "Chatlet's columns under a window media query").not.toMatch(
-    /\.chat-(?:frame|room|rail|thread)(?![\w-])/,
+    /\.chat-(?:app|pane|dock|main)(?![\w-])/,
   );
 
-  // THE TRACKS THE ARITHMETIC COUNTS, as the sheet draws them: the rail's
-  // range, the room's track starting at the floor (so the rail gives way
-  // first), the thread's width, and the gap between each.
-  const frame = rule(screens, ".chat-frame");
-  expect(frame).toMatch(
-    new RegExp(
-      `grid-template-columns:\\s*minmax\\(${CHAT_RAIL_MIN}px, ${CHAT_RAIL_MAX}px\\) ` +
-        `minmax\\(${TRANSCRIPT_FLOOR}px, 1fr\\);`,
-    ),
-  );
-  expect(frame).toMatch(/gap:\s*var\(--spacing-4\);/);
-  expect(rule(screens, ".chat-room")).toMatch(/gap:\s*var\(--spacing-4\);/);
-  expect(rule(screens, ".chat-room.with-thread")).toMatch(
-    new RegExp(
-      `grid-template-columns:\\s*minmax\\(0, 1fr\\) minmax\\(0, ${CHAT_THREAD_WIDTH}px\\);`,
-    ),
+  // THE TRACKS THE ARITHMETIC COUNTS, as the sheet draws them.
+  const app = rule(chatFrame, ".chat-app");
+  expect(app).toMatch(new RegExp(`--chat-dock:\\s*${CHAT_DOCK_WIDTH}px;`));
+  expect(app).toMatch(new RegExp(`--chat-pane:\\s*${CHAT_PANE_WIDTH}px;`));
+  expect(rule(chatFrame, ".chat-app.is-docked.has-pane")).toMatch(
+    /grid-template-columns:\s*var\(--chat-dock\) minmax\(0, 1fr\) var\(--chat-pane\);/,
   );
 
-  // THE FOLDS, at the module's widths: the thread under the room, then the
-  // rail above it.
+  // THE FOLDS, at the module's widths: the snug columns, then the pane over
+  // the conversation.
   const below = (width: number) =>
-    blocks(screens, new RegExp(`@container page \\(width < ${width}px\\)`, "g")).join("\n");
-  expect(below(CHAT_THREAD_FOLD)).toMatch(
-    /\.chat-room\.with-thread\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);/,
+    blocks(chatFrame, new RegExp(`@container page \\(width < ${width}px\\)`, "g")).join("\n");
+  expect(below(CHAT_ROOMY)).toMatch(
+    new RegExp(
+      `\\.chat-app\\s*\\{\\s*--chat-dock:\\s*${CHAT_DOCK_SNUG}px;\\s*--chat-pane:\\s*${CHAT_PANE_SNUG}px;`,
+    ),
   );
-  expect(below(CHAT_RAIL_FOLD)).toMatch(
-    /\.chat-frame\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);/,
+  expect(below(CHAT_PANE_FOLD)).toMatch(
+    /\.chat-app\.has-pane > \.chat-pane\s*\{[^}]*position:\s*absolute/,
   );
 
-  // THE NUMBERS. At every density the transcript each fold leaves keeps its
-  // floor, walked term by term from the tokens so that a term the module
-  // dropped is a transcript under the floor here; and at the widest density,
-  // one pixel narrower it would not.
-  expect([CHAT_RAIL_FOLD, CHAT_THREAD_FOLD]).toEqual([539, 978]);
-  const scales = (Object.keys(density) as (keyof typeof density)[]).map(densityScale);
-  for (const scale of scales) {
-    const gap = Number.parseFloat(spacing["4"]) * scale;
-    const besideRail = (screen: number) => screen - CHAT_RAIL_MIN - gap;
-    const besideThread = (screen: number) => screen - CHAT_RAIL_MAX - gap - gap - CHAT_THREAD_WIDTH;
-    expect(besideRail(CHAT_RAIL_FOLD), `density ${scale}`).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
-    expect(besideThread(CHAT_THREAD_FOLD), `density ${scale}`).toBeGreaterThanOrEqual(
-      TRANSCRIPT_FLOOR,
-    );
-    if (scale !== Math.max(...scales)) continue;
-    expect(besideRail(CHAT_RAIL_FOLD - 1)).toBeLessThan(TRANSCRIPT_FLOOR);
-    expect(besideThread(CHAT_THREAD_FOLD - 1)).toBeLessThan(TRANSCRIPT_FLOOR);
-  }
+  // THE NUMBERS: at and above each fold, what stands beside the transcript
+  // leaves it its floor; below the pane's fold the pane lies over it, so only
+  // the pinned panel stands beside it, down to the width where nothing is
+  // pinned. Mutation: raise a column past what its fold leaves and a line
+  // here goes red.
+  expect(CHAT_ROOMY - CHAT_DOCK_WIDTH - CHAT_PANE_WIDTH).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
+  expect(CHAT_PANE_FOLD - CHAT_DOCK_SNUG - CHAT_PANE_SNUG).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
+  expect(CHAT_NARROW - CHAT_DOCK_SNUG).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
+  expect(CHAT_NARROW).toBeLessThan(CHAT_PANE_FOLD);
+  expect(CHAT_PANE_FOLD).toBeLessThan(CHAT_ROOMY);
 });
 
 /**

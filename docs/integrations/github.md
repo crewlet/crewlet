@@ -1012,6 +1012,36 @@ participants and lose every reviewer.
 
 ---
 
+## Pull request previews in chat
+
+A link in a [Chatlet](../concepts/chatlet.md) message to a pull request on
+github.com is drawn with a preview: the repository and number, the title, the
+state (open, draft, merged or closed) and its size in lines added and
+removed. Nothing else is read for it: no description, no comments and nothing
+about its author.
+
+- **Only github.com, and only the company's own code.** A preview is read for
+  `https://github.com/{owner}/{repo}/pull/{number}` (or a tab of that page)
+  and only when `{owner}` is an owner the GitHub configuration names: the
+  provisioning `org`, or the owner of a repository a seat works in. A link to
+  any other pull request, to an Enterprise Server, or to anything else is
+  drawn as a plain link, and nothing is fetched for it. The address in the
+  message is never fetched itself: the engine reads the pull request from
+  GitHub's API by its owner, repository and number.
+- **Read with the company's credential.** The read goes through the agents'
+  own apps, the same walk that reads a thread's participants: the first app
+  installed on the repository answers. With none installed there, the link is
+  drawn plain.
+- **Who sees it.** A preview is answered only to a person who can read the
+  message, and they see the pull request's title and state whether or not
+  they have access to the repository on GitHub. Leave a repository out of the
+  GitHub configuration, or out of every agent's app, to keep its pull
+  requests' titles out of chat.
+- **Briefly cached, gently read.** A node keeps each preview for a minute
+  (failures too), at most 512 at once, and reads at most four from GitHub at
+  a time, so a busy room does not spend an installation's rate limit. A read
+  that fails or times out is a plain link.
+
 ## Provisioning — `crewlet github provision`
 
 ```bash

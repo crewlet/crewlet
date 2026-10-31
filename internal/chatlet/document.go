@@ -3,6 +3,7 @@ package chatlet
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/jsoncarry"
@@ -23,10 +24,12 @@ import (
 //     from a newer peer, and every node that reads the row afterwards, hands
 //     the field back rather than silently dropping it. A row made only of
 //     columns is a row whose width is this build's opinion.
-//   - A FIELD NOTHING FILTERS ON GETS NO COLUMN. Whether a message addressed
-//     the whole room, and who edited or removed one, are read when a message
-//     is rendered and by no predicate anywhere — and a column per such field
-//     is an index-less column on the largest table in the engine.
+//   - A FIELD NOTHING FILTERS ON GETS NO COLUMN. Who edited or removed a
+//     message is read when it is rendered and by no predicate anywhere, and a
+//     column per such field is an index-less column on the largest table in
+//     the engine. A field gains one the day a predicate reads it, as whether
+//     a message addressed the whole room and whether a row is a room event
+//     did (the mention count and every conversational read).
 //   - ONE READ ANSWERS "WHAT IS THIS". A reader that had to assemble a room
 //     or a message from its own columns would be a second definition of the
 //     object, in SQL, that nothing holds against this one.
@@ -126,6 +129,17 @@ type Channel struct {
 	// its own chart.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
+	// AutoJoin puts every seat that joins the company from now on in this
+	// room ([Store.AutoJoin]), with a [EventJoined] line authored by the
+	// engine. An administrator's to set ([ChannelPatch.AutoJoin]), and never
+	// on a unit's room or a direct conversation: the first's membership is
+	// the org chart's, and the second's is its identity.
+	//
+	// WHO WAS ALREADY OFFERED THE ROOM is not here. It is `chat_autojoin`,
+	// a row per seat, because it grows with the company and a room's
+	// document is read on every rail.
+	AutoJoin bool `json:"auto_join,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
@@ -178,9 +192,10 @@ type Message struct {
 	Mentions []string `json:"mentions,omitempty"`
 
 	// Collective says the message addressed the whole room (`@channel`).
-	// THE FIELD WITH NO COLUMN, and the plainest case for this document
-	// existing: nothing filters on it, it is read whenever the message is
-	// rendered, and a routing snapshot is not durable state.
+	// Also the row's `collective` column, which the rail's mention count
+	// filters on: a message that named the whole room is one that named
+	// its reader, and counting it from the document would decode a room's
+	// newest hundred messages on every poll.
 	Collective bool `json:"collective,omitempty"`
 
 	// CreatedAt is the BROKER's own instant. A message's displayed time
@@ -205,7 +220,94 @@ type Message struct {
 	DeletedBy     string     `json:"deleted_by,omitempty"`
 	DeletedByKind AuthorKind `json:"deleted_by_kind,omitempty"`
 
+	// Event marks a ROOM EVENT rather than words somebody wrote: the room's
+	// own change, written by the applier from the record that made it
+	// ([RoomEvent]). Nil on every message somebody said.
+	Event *RoomEvent `json:"event,omitempty"`
+
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// EventKind is what a room event says happened.
+//
+// A NAMED STRING TYPE whose Valid is false for a kind this build has never
+// written, so a line a newer peer wrote is a value rather than a panic, and a
+// reader draws it as a plain room event.
+type EventKind string
+
+// The seven kinds, each written by the applier from the record that made the
+// change, never by a writer: who joined, was added, left or was taken out,
+// and what the room's words were set to.
+const (
+	// EventJoined is seats coming into the room: a room's founding members,
+	// a seat joining by itself, and the org chart or an auto-join room
+	// putting a seat in (authored by the engine).
+	EventJoined EventKind = "joined"
+
+	// EventAdded is the author putting other seats in the room.
+	EventAdded EventKind = "added"
+
+	// EventLeft is seats going: a seat leaving by itself, and the org chart
+	// taking a seat out of its unit's room (authored by the engine).
+	EventLeft EventKind = "left"
+
+	// EventRemoved is the author taking other seats out of the room.
+	EventRemoved EventKind = "removed"
+
+	// EventDescription and EventTopic are the room's purpose and topic set
+	// to [RoomEvent.Text], an empty text being the value cleared.
+	EventDescription EventKind = "description"
+	EventTopic       EventKind = "topic"
+
+	// EventTemplate is the room set up from the template named
+	// [RoomEvent.Text] ([ChannelPatch.Template]): ONE line in place of the
+	// description and topic lines the same patch would otherwise write,
+	// because the person did one thing.
+	EventTemplate EventKind = "template"
+)
+
+// EventKinds is every kind.
+func EventKinds() []EventKind {
+	return []EventKind{EventJoined, EventAdded, EventLeft, EventRemoved,
+		EventDescription, EventTopic, EventTemplate}
+}
+
+// Valid reports whether k is a kind this build writes.
+func (k EventKind) Valid() bool { return slices.Contains(EventKinds(), k) }
+
+// RoomEvent is a room's own change, as the transcript row that records it
+// carries it.
+//
+// # Why a row of the transcript and not a table of its own
+//
+// Because a person reads it WHERE IT HAPPENED: "Ana added Ravi" belongs
+// between the message before it and the one after, and that place is the
+// room's own sequence. As a row of `chat_messages` it takes the next number
+// in that sequence like a post, so a page, a cursor, a live frame's
+// contiguity, the retention prune and the compliance erase all carry it with
+// no second table to merge in order. What keeps it from being CONVERSATION is
+// the `event` column every conversational read filters on: it is never an
+// unread or a mention, never a rail's preview and never a search hit, and the
+// write path refuses a reply, a reaction, an edit or a delete of one.
+//
+// # Why the applier writes it
+//
+// It is derived from the record that made the change, in that record's own
+// transaction: a membership set, a patch or a create. A writer that posted the
+// line as a second record could land one and lose the other, leaving a room
+// whose description changed with no line, or a line for a change the broker
+// refused.
+type RoomEvent struct {
+	Kind EventKind `json:"kind"`
+
+	// Handles are the seats the event is about, sorted: who joined, was
+	// added, left or was taken out. Empty for the three kinds about the
+	// room's words.
+	Handles []string `json:"handles,omitempty"`
+
+	// Text is the new description or topic, empty when it was cleared, or
+	// the template's name. Words somebody wrote, so a reader fences them.
+	Text string `json:"text,omitempty" untrusted:"fence"`
 }
 
 // ErrUnknownVersion reports a document a newer build wrote.

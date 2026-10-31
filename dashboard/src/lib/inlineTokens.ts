@@ -454,6 +454,12 @@ function settle(found: InlineToken[]): InlineToken[] {
  *    nothing else the written address carried. Every other address, an app
  *    route a writer spelled among them, is drawn inert: its words, then the
  *    host it names, readable and copyable and never a control.
+ *  - `own`: as `checked`, and a page of this dashboard's own (a route, or the
+ *    whole address a Copy link writes on its origin) opens too, REBUILT from
+ *    its path alone (`lib/appRoute.ts`), with no query a writer chose. For a
+ *    chat message, where people link the tasks, pages and rooms they talk
+ *    about; never the assistant's answers, whose one way to move the page is
+ *    an Open in app card the engine built.
  *  - `text`: no link at all, inside a control or a link's own label, where a
  *    link is invalid or steals the press.
  *
@@ -468,7 +474,12 @@ function settle(found: InlineToken[]): InlineToken[] {
  * carries (`routes/chatlet/MessageLinks.tsx`, whoever wrote the message) read
  * `checked` (ADR-0061).
  */
-export type LinkMode = "anchor" | "checked" | "text";
+export type LinkMode = "anchor" | "checked" | "own" | "text";
+
+/** Whether a mode opens only what the dashboard built (`checked` and `own`). */
+export function checksLinks(mode: LinkMode): boolean {
+  return mode === "checked" || mode === "own";
+}
 
 /**
  * Where a link points, as a reader checks it: the host and the path of a web

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -275,14 +276,11 @@ func (c ChannelCreate) Validate() error {
 	if err := c.checkAddress(); err != nil {
 		return err
 	}
-	if len(c.Topic) > MaxTopic {
-		return invalid("topic", "a topic is %d bytes against a %d cap",
-			len(c.Topic), MaxTopic)
+	if err := checkTopic(c.Topic); err != nil {
+		return err
 	}
-	if len(c.Purpose) > MaxPurpose {
-		return invalid("purpose", "a purpose is %d bytes against a %d cap — "+
-			"anything longer is describing a project, and a project has a page",
-			len(c.Purpose), MaxPurpose)
+	if err := checkPurpose(c.Purpose); err != nil {
+		return err
 	}
 	if c.CreatedBy == "" {
 		return invalid("created_by", "a room records who made it, and a create "+
@@ -395,21 +393,71 @@ type ChannelPatch struct {
 	// of it readable — its creator's, its unit's lead's or an admin's to
 	// move, never any member's ([ChannelAuthority]).
 	Archived *bool `json:"archived,omitempty"`
+
+	// Template is the name of the template this patch sets the room up
+	// from, and the room's transcript records it as ONE line
+	// ([EventTemplate]) in place of the topic and description lines the
+	// same patch would otherwise write.
+	//
+	// A NAME AND NOTHING ELSE. A template is the client's preset: the words
+	// it sets are this patch's own Topic and Purpose, carried and applied
+	// like any other, and the server keeps no catalogue of templates to
+	// check the name against. So a template patch must set at least one of
+	// the two, or it would be a line saying the room was set up when
+	// nothing about it changed.
+	Template *string `json:"template,omitempty"`
+
+	// AutoJoin turns the room's auto-join on or off ([Channel.AutoJoin]):
+	// an administrator's to move, never any member's ([ChannelAuthority]).
+	AutoJoin *bool `json:"auto_join,omitempty"`
+
+	// AutoJoinSeats is the company's seats when the setting is turned ON,
+	// carried WHOLE and sorted: the seats the room accounts for from the
+	// start, so the setting adds the people the company takes on from now
+	// and nobody already in it. Decided by the writer from the org chart it
+	// holds, because the applier holds no chart, and refused on any other
+	// patch.
+	AutoJoinSeats []string `json:"auto_join_seats,omitempty"`
 }
 
 // Validate refuses a patch this build will not write.
 func (p ChannelPatch) Validate() error {
-	if p.Topic == nil && p.Purpose == nil && p.Archived == nil {
+	if p.Topic == nil && p.Purpose == nil && p.Archived == nil && p.AutoJoin == nil {
 		return invalid("patch", "a patch sets no field — an empty patch is a "+
 			"record on the log and a live frame for a change nobody made")
 	}
-	if p.Topic != nil && len(*p.Topic) > MaxTopic {
-		return invalid("topic", "a topic is %d bytes against a %d cap",
-			len(*p.Topic), MaxTopic)
+	if len(p.AutoJoinSeats) > 0 && (p.AutoJoin == nil || !*p.AutoJoin) {
+		return invalid("auto_join_seats", "a patch that does not turn auto-join "+
+			"on accounts for no seats: the seats are the company as it stood "+
+			"when the setting was turned on")
 	}
-	if p.Purpose != nil && len(*p.Purpose) > MaxPurpose {
-		return invalid("purpose", "a purpose is %d bytes against a %d cap",
-			len(*p.Purpose), MaxPurpose)
+	if err := checkHandles("auto_join_seats", p.AutoJoinSeats, MaxMembers); err != nil {
+		return err
+	}
+	if p.Topic != nil {
+		if err := checkTopic(*p.Topic); err != nil {
+			return err
+		}
+	}
+	if p.Purpose != nil {
+		if err := checkPurpose(*p.Purpose); err != nil {
+			return err
+		}
+	}
+	if p.Template != nil {
+		name := *p.Template
+		switch {
+		case p.Topic == nil && p.Purpose == nil:
+			return invalid("template", "a template sets a room's topic and "+
+				"description, and this patch sets neither. Send the template's "+
+				"topic and purpose with its name")
+		case strings.TrimSpace(name) == "" || name != strings.TrimSpace(name):
+			return invalid("template", "%q is not a template's name: name the "+
+				"template the room was set up from, without surrounding space", name)
+		case textChars(name) > MaxTemplateName:
+			return invalid("template", "a template's name is %d characters "+
+				"against a %d cap", textChars(name), MaxTemplateName)
+		}
 	}
 	return nil
 }
@@ -469,10 +517,25 @@ type MemberSet struct {
 	// same activation, and an older activation moves it back no more than
 	// it moves the members back.
 	Unit string `json:"unit,omitempty"`
+
+	// AutoJoined is the seats this write puts in an auto-join room as
+	// newcomers to the company ([Store.AutoJoin]), which the room accounts
+	// for from this record on, sorted. Every one of them is in Members.
+	// Empty on every other membership write.
+	AutoJoined []string `json:"auto_joined,omitempty"`
 }
 
 // Validate refuses a membership this build will not write.
 func (m MemberSet) Validate() error {
+	if err := checkHandles("auto_joined", m.AutoJoined, MaxMembers); err != nil {
+		return err
+	}
+	for _, handle := range m.AutoJoined {
+		if !slices.ContainsFunc(m.Members, func(x Member) bool { return x.Handle == handle }) {
+			return invalid("auto_joined", "%q is put in the room by auto-join "+
+				"and is not in the membership this record states", handle)
+		}
+	}
 	if m.ChartEpoch < 0 {
 		return invalid("chart_epoch", "a membership names activation %d — an "+
 			"activation is an instant, and zero is how a write says it is not "+
@@ -1061,6 +1124,47 @@ func checkMembers(ms []Member, max int) error {
 				"record claim a set it did not derive", m.Handle)
 		}
 		seen[m.Handle] = true
+	}
+	return nil
+}
+
+// checkHandles holds a list of seat handles to its cap and to one spelling
+// of each: sorted, distinct and none empty, so a record's bytes say one thing
+// whichever order a writer gathered the set in.
+func checkHandles(field string, handles []string, max int) error {
+	if len(handles) > max {
+		return invalid(field, "%d seats against a %d cap", len(handles), max)
+	}
+	for i, h := range handles {
+		if strings.TrimSpace(h) == "" || h != strings.TrimSpace(h) {
+			return invalid(field, "%q is not a seat handle", h)
+		}
+		if i > 0 && handles[i-1] >= h {
+			return invalid(field, "the seats are not sorted and distinct at %q", h)
+		}
+	}
+	return nil
+}
+
+// textChars is how long a person's text is as they see it: its Unicode code
+// points. It is what [MaxTopic], [MaxPurpose] and [MaxTemplateName] count.
+func textChars(s string) int { return utf8.RuneCountInString(s) }
+
+// checkTopic and checkPurpose hold a room's two words to their caps, one
+// rule for the create and the patch alike.
+func checkTopic(topic string) error {
+	if n := textChars(topic); n > MaxTopic {
+		return invalid("topic", "a topic is %d characters against a %d cap",
+			n, MaxTopic)
+	}
+	return nil
+}
+
+func checkPurpose(purpose string) error {
+	if n := textChars(purpose); n > MaxPurpose {
+		return invalid("purpose", "a purpose is %d characters against a %d cap. "+
+			"Anything longer is describing a project, and a project has a page",
+			n, MaxPurpose)
 	}
 	return nil
 }

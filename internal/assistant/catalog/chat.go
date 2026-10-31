@@ -89,8 +89,8 @@ const (
 // ([chatLinkShape]).
 const (
 	chatBodyBytes    = 32 << 10 // chatlet.MaxBody
-	chatTopicBytes   = 256      // chatlet.MaxTopic
-	chatPurposeBytes = 600      // chatlet.MaxPurpose
+	chatTopicChars   = 250      // chatlet.MaxTopic, in characters
+	chatPurposeChars = 250      // chatlet.MaxPurpose, in characters
 	chatLinks        = 8        // chatlet.MaxLinks
 	chatLinkBytes    = 2 << 10  // chatlet.MaxLinkBytes
 	chatMembers      = 1000     // chatlet.MaxMembers
@@ -283,20 +283,23 @@ func chatReads() []Tool {
 			schema: object(nil, map[string]*schema{
 				"limit": positive("How many, at most.", 50),
 			}),
-			Routes: []string{"GET /chatlet/mentions"}, Apps: chatApp, Fence: true,
+			// ACTIVITY'S MENTIONS, the away story the dashboard reads: one
+			// feed of where a person was named, read as the Activity view
+			// reads it rather than through a second question beside it.
+			Routes: []string{"GET /chatlet/activity"}, Apps: chatApp, Fence: true,
 			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /chatlet/mentions", nil,
-					query(a).num("limit", "limit", 20).values())
+				return get("GET /chatlet/activity", nil,
+					query(a).fixed("kind", "mention").num("limit", "limit", 20).values())
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Where you were named",
-				Rows: "mentions", Brief: []string{"room", "by", "said", "at"},
+				Rows: "items", Brief: []string{"room", "by", "said", "at"},
 				Columns: []cards.Column{roomColumn("room", "channel_name"),
-					seat("by", "By", "author"), prose("said", "Message", "excerpt"),
+					seat("by", "By", "actor"), prose("said", "Message", "excerpt"),
 					col("at", "When", "at", tDatetime),
 					col("kind", "Room kind", "channel_kind", tLabel),
 					col("room_id", "Room ID", "channel_id", tText),
 					col("id", "Message ID", "message_id", tText)},
-				More: "next_cursor", Open: &cards.Open{Screen: "chatlet-mentions"}}}),
+				More: "next_cursor", Open: &cards.Open{Screen: "chatlet-activity"}}}),
 			Label: func(map[string]any) string { return "Reading where you were named" },
 		},
 		{
@@ -504,10 +507,10 @@ func chatWrites() []Tool {
 				"lead or an administrator.",
 			object([]string{"channel"}, map[string]*schema{
 				"channel": room,
-				"topic": text("What is being discussed now. An empty string clears it.",
-					chatTopicBytes),
-				"purpose": text("What the room is for. An empty string clears it.",
-					chatPurposeBytes),
+				"topic": chars("What is being discussed now. An empty string clears it.",
+					chatTopicChars),
+				"purpose": chars("What the room is for. An empty string clears it.",
+					chatPurposeChars),
 				"archived": flag("True closes the room to new messages; false opens it again."),
 			})),
 		members,

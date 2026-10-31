@@ -627,6 +627,15 @@ func annotationsFor(name string) tools.Annotations {
 			ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.No,
 		}
+	case chatlet.AddChannelMembersTool:
+		// PEOPLE PUT IN A ROOM THE OTHERS SEE, so OpenWorld is Yes. Not
+		// destructive: it takes nobody out and replaces nothing. IDEMPOTENT,
+		// because it states who is in the room after it: adding somebody
+		// already there leaves them there.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
 	case chatlet.CreateChannelTool:
 		// A ROOM THE COMPANY SEES and its founding members are put in, so
 		// OpenWorld is Yes. Not destructive — a room is additive — and NOT

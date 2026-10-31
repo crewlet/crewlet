@@ -80,6 +80,7 @@ import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts"
 import { LinkHostsProvider } from "~/lib/linkHosts.ts";
 import { ProjectKeysProvider } from "~/lib/projectKeys.ts";
 import { RoomNamesProvider } from "~/lib/roomNames.ts";
+import { ChatRoomsProvider } from "~/lib/chatRooms.ts";
 import { ViewerProvider, useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
@@ -122,12 +123,13 @@ import { useToastInset } from "./toastInset.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
-import { useKeymap } from "./keymap.ts";
+import { capsOf, keyRow, useKeymap } from "./keymap.ts";
+import { setRailShape, useRailShape } from "./sidebar/railShape.ts";
 import { useModalLayerOpen } from "~/lib/keys.ts";
 import { runningTarget } from "~/lib/turns.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
-import { FillRequest } from "./fill.tsx";
+import { FillRequest, type FillShape } from "./fill.tsx";
 import { OwnHeaderRequest, OwnHeaderSlot } from "./frame/OwnHeader.tsx";
 import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 
@@ -412,7 +414,9 @@ function PageCover({ over, children }: { over: boolean; children: ReactNode }) {
  * how much is waiting on them, how much open work is on them, and where the
  * company's apps live, which project keys are real and which rooms a `#name`
  * may be, which every rendered link, key and room reads (`lib/linkHosts.ts`,
- * `lib/projectKeys.ts`, `lib/roomNames.ts`).
+ * `lib/projectKeys.ts`, `lib/roomNames.ts`), and the reader's own rooms, which
+ * the sidebar's Chatlet badge and the Chatlet screen both draw
+ * (`lib/chatRooms.ts`).
  *
  * All three are standing reads, and the first two used to be made per caller
  * — the viewer by the frame, the sidebar and the Inbox count, the count by the
@@ -432,7 +436,9 @@ export function FrameReadings({ children }: { children: ReactNode }) {
         <QueueCountProvider>
           <LinkHostsProvider>
             <ProjectKeysProvider>
-              <RoomNamesProvider>{children}</RoomNamesProvider>
+              <RoomNamesProvider>
+                <ChatRoomsProvider>{children}</ChatRoomsProvider>
+              </RoomNamesProvider>
             </ProjectKeysProvider>
           </LinkHostsProvider>
         </QueueCountProvider>
@@ -513,6 +519,9 @@ function Frame({ children }: { children: ReactNode }) {
   // the frame subscribes and re-renders; the screen is a child of this render
   // and re-renders with it.
   const prefs = useViewerPrefs();
+  // THE SIDEBAR'S SHAPE, as this reader left it (`sidebar/railShape.ts`). The
+  // kit draws it above the shell breakpoint and the drawer below it.
+  const railShape = useRailShape();
 
   // OPEN OR NOT: ⌘K opens it on All, and so does every other way in.
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -520,7 +529,7 @@ function Frame({ children }: { children: ReactNode }) {
   // `app/fill.tsx` for why this is a request and not a selector. The kit's
   // `fill` is what honours it: the scroller stops scrolling and the content
   // column takes the height that is left.
-  const [filling, setFilling] = useState(false);
+  const [filling, setFilling] = useState<FillShape>(false);
   // AND ONE THAT ASKED FOR A NARROWER PEEK — a canvas, which the rail shrinks
   // rather than narrows. See `app/frame/peekWidth.ts`.
   const [restingPeek, setRestingPeek] = useState<number | null>(null);
@@ -858,6 +867,13 @@ function Frame({ children }: { children: ReactNode }) {
             fill={filling}
             navigationKey={route.hash}
             toggleLabel="Navigation"
+            // THE SIDEBAR FOLDS TO THE KIT'S COMPACT RAIL. The kit draws the
+            // one fold control, pinned in the same place in both shapes, and
+            // names the table's key in its tip; the key itself is bound by
+            // the sidebar, which opens the drawer with it on a narrow window.
+            rail={railShape}
+            onRailChange={setRailShape}
+            railFoldKeys={RAIL_FOLD_KEYS}
             sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} />}
             topbar={
               ownHeader ? (
@@ -931,6 +947,9 @@ function Frame({ children }: { children: ReactNode }) {
     </NewTaskOpener.Provider>
   );
 }
+
+/** The sidebar's key as the fold control's tip draws it, off the key table. */
+const RAIL_FOLD_KEYS = capsOf(keyRow("sidebar").presses[0]!);
 
 /** The New task sheet, out of the Worklet chunk. See [LayerBoundary]. */
 const NewTaskSheet = lazyScreen("worklet", (module) => module.NewTaskSheet);

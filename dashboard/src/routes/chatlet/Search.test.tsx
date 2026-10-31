@@ -1,36 +1,52 @@
 /**
- * Searching the company's conversation, and the one bound the screen keeps.
+ * Searching Chatlet: messages, people and rooms, as the reader types.
  *
- * CHATLET'S SEARCH IS A RANKED SEARCH, so it takes the bound the other two take
- * (`SEARCH_QUERY_MAX`, the engine's `knowledge.MaxQueryBytes`): the engine
- * refuses a longer phrase as `bad_params` rather than cutting it, and a refusal
- * this screen drew as its results read as "Nothing matched" — a company that
- * never said the thing, rather than a phrase too long to ask about. So a phrase
- * past the bound is not sent at all, and the screen says why in place of the
- * results, exactly as the work search and the knowledge screen do.
+ * THE INVARIANTS: messages are the engine's ranking over every room the reader
+ * may read, narrowed only by the engine (In, From), and said with their
+ * denominator; a partial index is never "nothing matched"; a phrase past the
+ * engine's bound is never sent; a full page says there may be more; the Who
+ * filter narrows the page the engine ranked and says so; a refusal is said in
+ * the engine's own words.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { focusSearchTarget } from "~/app/searchTarget.ts";
 import { CHAT_SEARCH_PAGE } from "~/contract/chat.ts";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
-import { mountChat } from "~/test/chat.tsx";
-import { FULL_PAGE, Search } from "./Search.tsx";
+import { QueryError } from "~/protocol/index.ts";
+import { pick } from "~/testing.tsx";
+import { CHAT_ORG, SERVED } from "~/test/chatAccess.ts";
 
-const position = { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 9 };
+import { mountInFrame } from "./frameKit.tsx";
+import { FULL_PAGE, SearchView } from "./Search.tsx";
 
-const general = {
-  channel: { v: 1, id: "room-1", kind: "public", name: "general", created_at: "" },
-  participants: [],
-  unread: 0,
-  mentions: 0,
-};
-
-beforeEach(() => {
-  location.hash = "#/chatlet/search";
+const hit = (id: string, author: string, snippet: string) => ({
+  message_id: id,
+  channel_id: "room-1",
+  author,
+  snippet,
+  at: "2026-10-30T09:00:00Z",
+  score: 1,
 });
+
+const ANSWER = (hits: unknown[], extra: Record<string, unknown> = {}) => ({
+  hits,
+  searched: 3,
+  read_level: "session",
+  position: SERVED.position,
+  ...extra,
+});
+
+const ROOMS = {
+  ...SERVED,
+  rooms: [
+    {
+      channel: { v: 1, id: "room-1", kind: "public", name: "launch", created_at: "" },
+      members: 4,
+    },
+  ],
+};
 
 afterEach(() => {
   cleanup();
@@ -38,247 +54,96 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-function mount(q: string) {
-  location.hash = `#/chatlet/search?q=${encodeURIComponent(q)}`;
-  const { socket } = mountChat(
-    <Search channels={[general as never]} viewer="ada" nameOf={(handle) => handle} />,
-    {
-      answer: async (what) =>
-        what === "chat_search"
-          ? {
-              hits: [
-                {
-                  message_id: "m-1",
-                  channel_id: "room-1",
-                  author: "bo",
-                  snippet: "the launch moved to Thursday",
-                  at: "2026-01-01T00:00:00Z",
-                  score: 1,
-                },
-              ],
-              searched: 3,
-              read_level: "session",
-              position,
-            }
-          : {},
+function mount(q: string, answer?: (what: string, params?: Record<string, unknown>) => unknown) {
+  const asked: Record<string, unknown>[] = [];
+  const mounted = mountInFrame(<SearchView />, {
+    hash: `#/chatlet/search?q=${encodeURIComponent(q)}`,
+    answer: async (what, params) => {
+      if (what === "chat_search") asked.push(params ?? {});
+      if (answer) return answer(what, params);
+      if (what === "chat_search") return ANSWER([hit("m-1", "bo", "the date moved to Thursday")]);
+      if (what === "chat_rooms") return ROOMS;
+      if (what === "chat_channels") return { ...SERVED, read_state: true, channels: [] };
+      return {};
     },
-  );
-  const asked = () =>
-    socket.query.mock.calls
-      .filter(([what]) => what === "chat_search")
-      .map(([, params]) => String((params as Record<string, unknown> | undefined)?.q));
-  return { asked };
+  });
+  act(() => mounted.store.applyOrg(CHAT_ORG as never));
+  return { ...mounted, asked };
 }
 
-test("a hit whose room could not be read just now says so, and asks again", async () => {
-  // A ROOM OUTSIDE THE RAIL IS NAMED BY ITS OWN READ, and one that could not
-  // be read just now is said rather than titled "a room" as if that were the
-  // answer — and asked for again, rather than never.
-  location.hash = `#/chatlet/search?q=${encodeURIComponent("launch")}`;
-  let fails = true;
-  mountChat(<Search channels={[]} viewer="ada" nameOf={(handle) => handle} />, {
-    answer: async (what) => {
-      if (what === "chat_search") {
-        return {
-          hits: [
-            {
-              message_id: "m-9",
-              channel_id: "room-9",
-              author: "bo",
-              snippet: "the launch moved",
-              at: "2026-01-01T00:00:00Z",
-              score: 1,
-            },
-          ],
-          searched: 3,
-          read_level: "session",
-          position,
-        };
-      }
-      if (what === "chat_channel") {
-        if (fails) {
-          fails = false;
-          throw new Error("query_failed");
-        }
-        return {
-          channel: { v: 1, id: "room-9", kind: "public", name: "launch", created_at: "" },
-          member: false,
-          members: [],
-          read_level: "session",
-          position,
-        };
-      }
-      return {};
-    },
+describe("messages", () => {
+  test("a search is the engine's ranking, said with how many rooms it ran over", async () => {
+    const { asked } = mount("launch");
+    expect(await screen.findByText(/the date moved to Thursday/)).toBeTruthy();
+    expect(asked[0]).toMatchObject({ q: "launch", limit: CHAT_SEARCH_PAGE });
+    expect(screen.getByText(/Searched 3 rooms\./)).toBeTruthy();
+    // A HIT IN A ROOM THE READER IS NOT IN IS NAMED from the rooms they may read.
+    expect(screen.getByText(/#launch/)).toBeTruthy();
   });
-  expect(await screen.findByText(/couldn’t be read just now/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: /ask again/i }));
-  await waitFor(() => expect(screen.getByText("#launch")).toBeTruthy());
-  expect(screen.queryByText(/couldn’t be read just now/)).toBeNull();
-});
 
-test("a re-search that keeps a room still being read names it when the read lands", async () => {
-  // ONE READ PER ROOM, AND IT OUTLIVES THE SEARCH THAT ASKED IT. The second
-  // search keeps room-9, whose name the first one is still reading, so it is
-  // not asked about again — which makes that first read the only one it gets.
-  // Its answer used to be filed and drawn by nothing, and the hit stayed
-  // titled "a room" with no word that its name could not be read.
-  location.hash = `#/chatlet/search?q=${encodeURIComponent("launch")}`;
-  const hit = (id: string) => ({
-    message_id: `m-${id}`,
-    channel_id: id,
-    author: "bo",
-    snippet: `said in ${id}`,
-    at: "2026-01-01T00:00:00Z",
-    score: 1,
+  test("From narrows the search at the engine, never by filtering a page here", async () => {
+    const { asked } = mount("launch");
+    await screen.findByText(/the date moved to Thursday/);
+    pick(screen.getByRole("combobox", { name: /^from$/i }), /From: Bo Chen/);
+    await waitFor(() => expect(asked.some((p) => p.author === "bo")).toBe(true));
   });
-  // THE NAMES ARE HELD until the second search has been drawn, so the reads
-  // the first one started are still out when it lands.
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => (release = resolve));
-  const { socket } = mountChat(<Search channels={[]} viewer="ada" nameOf={(handle) => handle} />, {
-    answer: async (what, params) => {
-      if (what === "chat_search") {
-        return {
-          hits: params?.q === "launch" ? [hit("room-9"), hit("room-8")] : [hit("room-9")],
-          searched: 3,
-          read_level: "session",
-          position,
-        };
-      }
-      if (what === "chat_channel") {
-        const id = String(params?.channel_id);
-        await held;
-        return {
-          channel: {
-            v: 1,
-            id,
-            kind: "public",
-            name: id === "room-9" ? "launch" : "ops",
-            created_at: "",
-          },
-          member: false,
-          members: [],
-          read_level: "session",
-          position,
-        };
-      }
-      return {};
-    },
-  });
-  // THE FIRST SEARCH'S READS ARE OUT before the second search replaces it.
-  await waitFor(() =>
-    expect(socket.query.mock.calls.filter(([what]) => what === "chat_channel")).toHaveLength(2),
-  );
-  fireEvent.change(screen.getByRole("searchbox", { name: /search the company's chat/i }), {
-    target: { value: "moved" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: /^search$/i }));
-  await waitFor(() => expect(screen.queryByText(/said in room-8/)).toBeNull());
-  expect(screen.getByText(/said in room-9/)).toBeTruthy();
-  await act(async () => release());
-  await waitFor(() => expect(screen.getByText("#launch")).toBeTruthy());
-  expect(screen.queryByText("a room")).toBeNull();
-  expect(socket.query.mock.calls.filter(([what]) => what === "chat_channel")).toHaveLength(2);
-});
 
-test("a phrase at the search bound is asked, and its hits are drawn", async () => {
-  const phrase = "l".repeat(SEARCH_QUERY_MAX);
-  const { asked } = mount(phrase);
-  await waitFor(() => expect(asked()).toEqual([phrase]));
-  expect(await screen.findByText(/the launch moved to Thursday/)).toBeTruthy();
-});
-
-test("a phrase past the search bound is not asked, and the screen says why", async () => {
-  // SENT, IT IS REFUSED, and the refusal is not a verdict on the company's
-  // conversation: "Nothing matched" here would be a claim about a search that
-  // never ran.
-  const { asked } = mount("l".repeat(SEARCH_QUERY_MAX + 1));
-  expect(
-    await screen.findByText(
-      `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`,
-    ),
-  ).toBeTruthy();
-  expect(asked()).toEqual([]);
-  expect(screen.queryByText(/Nothing matched/)).toBeNull();
-  expect(screen.queryByText(/the launch moved to Thursday/)).toBeNull();
-});
-
-test("the bound is the engine's measure — bytes, not characters", async () => {
-  // A MULTI-BYTE PHRASE UNDER THE BOUND IN CHARACTERS AND OVER IT IN BYTES is
-  // exactly the one a screen counting `length` would send and have refused.
-  const phrase = "é".repeat(SEARCH_QUERY_MAX / 2 + 1);
-  expect(phrase.length).toBeLessThanOrEqual(SEARCH_QUERY_MAX);
-  const { asked } = mount(phrase);
-  expect(await screen.findByText(/a search takes at most/)).toBeTruthy();
-  expect(asked()).toEqual([]);
-});
-
-test("`/` focuses this screen's search rather than opening the palette", async () => {
-  // THE KEY SEARCHES WHAT THE READER IS LOOKING AT (`app/searchTarget.ts`):
-  // on chat's search screen that is its own box, with the phrase selected to
-  // type over.
-  mount("launch");
-  const box = (await screen.findByRole("searchbox", {
-    name: /search the company's chat/i,
-  })) as HTMLInputElement;
-  expect(focusSearchTarget()).toBe(true);
-  expect(document.activeElement).toBe(box);
-  expect(box.selectionStart).toBe(0);
-  expect(box.selectionEnd).toBe("launch".length);
-});
-
-// A PARTIAL INDEX IS NOT "NOBODY SAID THAT": the answering node's chat index
-// had not caught up with its transcript (`building`), so an empty ranking is
-// one over part of what was said — said so, and never drawn as "Nothing
-// matched". Mutation: drop the `building` guard on the empty verdict and the
-// second assertion goes red; drop the callout and the first does.
-test("an empty ranking from an index still building says so, not that nothing matched", async () => {
-  location.hash = `#/chatlet/search?q=${encodeURIComponent("launch")}`;
-  mountChat(<Search channels={[general as never]} viewer="ada" nameOf={(handle) => handle} />, {
-    answer: async (what) =>
+  test("the Who filter narrows the engine's page and says so", async () => {
+    mount("launch", async (what) =>
       what === "chat_search"
-        ? { hits: [], searched: 3, building: true, read_level: "session", position }
-        : {},
+        ? ANSWER([hit("m-1", "bo", "from a person"), hit("m-2", "ops", "from an agent")])
+        : what === "chat_rooms"
+          ? ROOMS
+          : {},
+    );
+    await screen.findByText("from an agent");
+    fireEvent.click(screen.getByRole("radio", { name: /^agents$/i }));
+    await waitFor(() => expect(screen.queryByText("from a person")).toBeNull());
+    expect(screen.getByText(/Showing the 1 of the best 2 matches/)).toBeTruthy();
   });
-  expect(await screen.findByText(/Still indexing/)).toBeTruthy();
-  expect(screen.queryByText(/Nothing matched/)).toBeNull();
+
+  test("a full page says there may be more", async () => {
+    const hits = Array.from({ length: CHAT_SEARCH_PAGE }, (_, i) =>
+      hit(`m-${i}`, "bo", `hit ${i}`),
+    );
+    mount("launch", async (what) => (what === "chat_search" ? ANSWER(hits) : {}));
+    expect(await screen.findByText(new RegExp(FULL_PAGE.slice(0, 30)))).toBeTruthy();
+  });
+
+  test("an empty ranking from an index still building says so, not that nothing matched", async () => {
+    mount("launch", async (what) => (what === "chat_search" ? ANSWER([], { building: true }) : {}));
+    expect(await screen.findByText(/Still indexing/)).toBeTruthy();
+    expect(screen.queryByText("No messages match")).toBeNull();
+  });
+
+  test("a phrase past the search bound is not asked, and the screen says why", async () => {
+    const { asked } = mount("l".repeat(SEARCH_QUERY_MAX + 1));
+    expect(await screen.findByText(/a search takes at most/)).toBeTruthy();
+    expect(asked).toEqual([]);
+    expect(screen.queryByText("No messages match")).toBeNull();
+  });
+
+  test("a refusal is said in the engine's own words", async () => {
+    const sentence = "q is too short to rank";
+    mount("launch", async (what) => {
+      if (what === "chat_search") throw new QueryError("bad_params", null, sentence);
+      return {};
+    });
+    expect(await screen.findByText(new RegExp(sentence))).toBeTruthy();
+  });
 });
 
-// THE PAGE IS THE ENGINE'S, AND A FULL ONE SAYS SO. The engine answers at most
-// `CHAT_SEARCH_PAGE` hits and has no next page; asked for more, it clamped
-// without a word, and a full page read as everything that matched. So the
-// screen asks for exactly that page, and under a full one says there may be
-// more and how to narrow it — and under a page that is not full, says nothing
-// of the kind. Mutation: ask with the transcript's PAGE again and the first
-// assertion goes red; drop the full-page sentence and the second does.
-test("a search asks for the engine's page, and a full page says there may be more", async () => {
-  const full = Array.from({ length: CHAT_SEARCH_PAGE }, (_, i) => ({
-    message_id: `m-${i}`,
-    channel_id: "room-1",
-    author: "bo",
-    snippet: `launch note ${i}`,
-    at: "2026-01-01T00:00:00Z",
-    score: 1,
-  }));
-  location.hash = `#/chatlet/search?q=${encodeURIComponent("launch")}`;
-  const { socket } = mountChat(
-    <Search channels={[general as never]} viewer="ada" nameOf={(handle) => handle} />,
-    {
-      answer: async (what) =>
-        what === "chat_search" ? { hits: full, searched: 3, read_level: "session", position } : {},
-    },
-  );
-  await screen.findByText(/launch note 0$/);
-  const limits = socket.query.mock.calls
-    .filter(([what]) => what === "chat_search")
-    .map(([, params]) => (params as Record<string, unknown> | undefined)?.limit);
-  expect(limits).toEqual([CHAT_SEARCH_PAGE]);
-  expect(screen.getByText(new RegExp(FULL_PAGE.slice(0, 30)))).toBeTruthy();
-});
+describe("people and rooms", () => {
+  test("People lists the seats whose words match, and a person opens their profile", async () => {
+    mount("bo");
+    fireEvent.click(await screen.findByRole("tab", { name: /^people/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /Bo Chen/ }));
+    await waitFor(() => expect(decodeURIComponent(location.hash)).toContain("pane=profile:bo"));
+  });
 
-test("a page that is not full says nothing of more matches", async () => {
-  mount("launch");
-  await screen.findByText(/the launch moved to Thursday/);
-  expect(screen.queryByText(new RegExp(FULL_PAGE.slice(0, 30)))).toBeNull();
+  test("Rooms lists the rooms the reader may read whose name or topic matches", async () => {
+    mount("laun");
+    fireEvent.click(await screen.findByRole("tab", { name: /^rooms/i }));
+    expect(await screen.findByText("launch")).toBeTruthy();
+  });
 });

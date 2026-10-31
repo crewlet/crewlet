@@ -208,6 +208,7 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&openDM{deps: talk}, talk.Writer != nil},
 		{&updateChannel{deps: talk}, talk.Writer != nil && talk.Reader != nil},
 		{&setChannelMembers{deps: talk}, talk.Writer != nil},
+		{&addChannelMembers{deps: talk}, talk.Writer != nil},
 		{&markChatRead{deps: talk}, talk.Cursors != nil},
 	}
 	candidates = slices.Concat(candidates,

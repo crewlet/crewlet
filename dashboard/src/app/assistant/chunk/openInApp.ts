@@ -11,8 +11,7 @@
  * somewhere the engine never meant.
  */
 
-import { parseHash } from "../../router.tsx";
-import { resolve } from "../../routes.ts";
+import { appRoute } from "~/lib/appRoute.ts";
 
 /** Where an address goes, as the router moves to it. */
 export interface InAppTarget {
@@ -20,21 +19,14 @@ export interface InAppTarget {
   query: Record<string, string>;
 }
 
-/** The longest address followed; an engine-built route is a few segments and filters. */
-const MAX_ADDRESS = 2048;
-
-/** The page `href` names, or null where it is not one of this dashboard's own. */
+/**
+ * The page `href` names, or null where it is not one of this dashboard's own:
+ * a hash route and nothing else, by the dashboard's one rule for its own
+ * pages (`lib/appRoute.ts`). An engine-built card never carries a whole
+ * address, so one is refused here even on this origin.
+ */
 export function openInApp(href: string): InAppTarget | null {
-  if (href.length > MAX_ADDRESS) return null;
-  // A HASH ROUTE AND NOTHING ELSE: `#/` then a path. A backslash or a control
-  // character is refused before parsing, because those are what a browser
-  // rewrites, and `#//` is the shape of a protocol-relative address.
-  if (!href.startsWith("#/") || href.startsWith("#//")) return null;
-  if (/[\\\u0000-\u001f\u007f]/.test(href)) return null;
-  const route = parseHash(href);
-  // A PAGE OF THE FRAME: a sign-in screen (an invitation, a reset link) is
-  // never somewhere the assistant sends anybody.
-  const where = resolve(route.path);
-  if (route.path.length === 0 || !where.resolved || where.workspace === "") return null;
-  return { path: route.path, query: Object.fromEntries(route.query) };
+  if (!href.startsWith("#")) return null;
+  const target = appRoute(href);
+  return target && { path: target.path, query: target.query };
 }

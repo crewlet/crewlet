@@ -144,6 +144,8 @@ const LITERAL_BOUND: Record<string, string> = {
     "the manifest inside the integration setup Modal, which is portaled outside the page",
   "screens.css .design-opened--actual":
     "a board at its own size inside the opened-board Modal, which is portaled outside the page",
+  "chatlet-panes.css .chat-suggest__list":
+    "the suggestions inside Add people's Modal, which is portaled outside the page",
   "integrations.css .int-subjects":
     "9rem of chips on a finding — shorter than any view it can sit in, so once scrolled to it is wholly on screen",
 };
@@ -153,7 +155,6 @@ const VIEW_BOUNDED: Record<string, string> = {
   "screens.css .tail-scroll.tailing": "a running phase's transcript",
   "screens.css .thread-split .thread-list": "a seat's thread list, beside the sticky detail",
   "screens.css .work-col-body": "a board lane's body",
-  "screens.css .chat-rail": "chat's rail, stacked above the room on a narrow screen",
 };
 
 /**
@@ -161,17 +162,19 @@ const VIEW_BOUNDED: Record<string, string> = {
  *
  * Under the fill (`app/fill.tsx`) the shell's own scroller stops being one, so
  * a view whose list has no block scroller of its own is clipped at its foot
- * with nothing to scroll it — the mention feed's older rows and Search chat's
- * lower hits were, on any company with more than a screenful. Each of these
- * FILLS rather than being bounded (no height of its own: it is the rest of a
- * column the shell sized), so the bound rule below does not reach it; this
- * does. jsdom computes no layout, which is why it is held in the sheets.
+ * with nothing to scroll it, as the retired mention feed's older rows and
+ * Search chat's lower hits were on any company with more than a screenful. A
+ * room's transcript and a thread are the kit's `ChatThread`, which scrolls
+ * itself. Each of these FILLS rather than being bounded (no height of its
+ * own: it is the rest of a column the shell sized), so the bound rule below
+ * does not reach it; this does. jsdom computes no layout, which is why it is
+ * held in the sheets.
  */
 const FILLS_AND_SCROLLS: Record<string, string> = {
-  "screens.css .chat-rail": "chat's rail",
-  "screens.css .chat-scroller": "a room's transcript",
-  "screens.css .chat-thread-body": "an open thread",
-  "screens.css .chat-list-body": "the mention feed and Search chat",
+  "chatlet-frame.css .chat-rooms-scroll": "chat's Rooms panel, slid in or pinned",
+  "chatlet-panes.css .chat-view-scroll":
+    "a Chatlet view's list: Activity, Threads, Drafts and sent, Saved, Search and Browse rooms",
+  "chatlet-panes.css .chat-pane-scroll": "a pane's body, a room's details",
 };
 
 describe("a list on a screen that fills the shell", () => {
@@ -185,22 +188,26 @@ describe("a list on a screen that fills the shell", () => {
     }
   });
 
-  test("is what every chat list view draws its body in", () => {
-    // A LIST VIEW IS A `.chat-list`, and one whose body is not the scroller
-    // above is the clipped list again — so every view that draws one draws its
-    // body as `.chat-list-body`.
+  test("is what every chat view draws its list in", () => {
+    // A VIEW IS A `.chat-view`, and one whose list is not the scroller above
+    // is the clipped list again, so every module that draws one draws its list
+    // in `.chat-view-scroll`.
     const views = modules().filter(
-      (m) => m.path.startsWith("routes/chatlet/") && /className="chat-list"/.test(m.text),
+      (m) => m.path.startsWith("routes/chatlet/") && /className="chat-view"/.test(m.text),
     );
-    // THE CONTROL: the mention feed and the search are both list views.
+    // THE CONTROL: the search, Browse rooms and the reader's views are views.
     expect(views.map((m) => m.path)).toEqual(
-      expect.arrayContaining(["routes/chatlet/Mentions.tsx", "routes/chatlet/Search.tsx"]),
+      expect.arrayContaining([
+        "routes/chatlet/Search.tsx",
+        "routes/chatlet/Browse.tsx",
+        "routes/chatlet/Views.tsx",
+      ]),
     );
     for (const view of views) {
       expect(
         view.text,
-        `${view.path} draws a .chat-list with no .chat-list-body to scroll it`,
-      ).toMatch(/className="chat-list-body"/);
+        `${view.path} draws a .chat-view with no .chat-view-scroll to scroll it`,
+      ).toMatch(/className="chat-view-scroll"/);
     }
   });
 });

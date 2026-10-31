@@ -9,9 +9,10 @@
  */
 
 import { act, cleanup, render } from "@testing-library/react";
+import { useRef } from "react";
 import { afterEach, expect, test } from "vitest";
 import { toasterInsetStyle, useToast } from "@crewlethq/ui";
-import { InsetToastProvider, useToastInset, type InsetOwner } from "./toastInset.tsx";
+import { InsetToastProvider, useToastInset, useToastTop, type InsetOwner } from "./toastInset.tsx";
 
 afterEach(cleanup);
 
@@ -75,4 +76,51 @@ test("with nobody asking, the stack keeps only its own window inset", () => {
   );
   act(() => view.getByRole("button", { name: "raise" }).click());
   expect(published()).toEqual({});
+});
+
+/** A bar whose bottom edge stands `bottom` px down the window. */
+function Bar({ bottom }: { bottom: number }) {
+  const bar = useRef<HTMLDivElement | null>(null);
+  useToastTop(bar);
+  return (
+    <div
+      ref={(el) => {
+        if (el) el.getBoundingClientRect = () => ({ bottom }) as DOMRect;
+        bar.current = el;
+      }}
+    />
+  );
+}
+
+/** The edge the stack stands on, as its class says. */
+const edge = () =>
+  document
+    .querySelector<HTMLElement>("[class*='crewlet-toaster--']")
+    ?.className.match(/crewlet-toaster--(\S+)/)?.[1];
+
+test("a screen's bar stands the stack under it, and lets go with it", () => {
+  // THE BAR'S BOTTOM HOLDS THE STACK OFF THE TOP; a panel's width still keeps
+  // it beside the panel, and a foot's height, the other edge's, no longer
+  // applies. Unmounted, the stack goes back to the foot with the foot's room.
+  const view = render(
+    <InsetToastProvider>
+      <Ask owner="frame" inline={428} />
+      <Ask owner="panel" block={120} />
+      <Bar bottom={56} />
+      <Toast />
+    </InsetToastProvider>,
+  );
+  act(() => view.getByRole("button", { name: "raise" }).click());
+  expect(edge()).toBe("top-right");
+  expect(Object.values(published()).sort()).toEqual(["428px", "56px"].sort());
+
+  view.rerender(
+    <InsetToastProvider>
+      <Ask owner="frame" inline={428} />
+      <Ask owner="panel" block={120} />
+      <Toast />
+    </InsetToastProvider>,
+  );
+  expect(edge()).toBe("bottom-right");
+  expect(Object.values(published()).sort()).toEqual(["120px", "428px"].sort());
 });

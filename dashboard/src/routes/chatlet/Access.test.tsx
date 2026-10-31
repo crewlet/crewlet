@@ -2,7 +2,7 @@
  * EVERY CHAT WRITE IS DRAWN FOR A READER WHO CANNOT MAKE IT, AND SAYS WHY.
  *
  * A chat change is a press through the act transport, made as the principal
- * the session resolves to, as the seat it holds (ADR-0024) — so nobody signed
+ * the session resolves to, as the seat it holds (ADR-0024), so nobody signed
  * in, a person without the Chatlet app, a person the engine does not make the
  * change for, or a credential acting as no seat can say nothing, join nothing
  * and make no room. The controls are DRAWN for all four and held with the
@@ -10,68 +10,35 @@
  * composer that vanished would teach somebody the product cannot do it, and
  * one that said nothing would teach them it is broken.
  *
- * This is the suite `app/writeGate.test.tsx` names for every chat module that
- * makes a change: it renders each of their controls for each of the four, and
- * holds the one write with no control — the read cursor's background flush —
- * to sending nothing at all.
+ * This is the suite `app/writeGate.test.tsx` names for the room, the outbox,
+ * the read cursor and a room's message scope: it renders each of their
+ * controls for each of the four, and holds the one write with no control (the
+ * read cursor's background flush) to sending nothing at all. The room's own
+ * gestures on the top bar and in its details are the top bar's and the
+ * details' suites', and the openers' are the dialogs' and the views'.
  */
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ToastProvider } from "@crewlethq/ui";
 
-import { pick } from "~/testing.tsx";
-import { noAccessReason, WRITE_REASONS } from "~/lib/useWriteAccess.ts";
-import { needsWords } from "~/lib/access.ts";
+import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { Store } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ADA, actEngine, mountChat, type Pressed } from "~/test/chat.tsx";
+import { WRITE_READERS, heldWith, holdOf } from "~/test/chatAccess.ts";
 import { LoneRoom } from "./testkit.tsx";
 
-import { Browse } from "./Browse.tsx";
-import { Chat } from "./Chat.tsx";
 import { packPosition, ReadCursors, useReadCursors } from "./cursor.ts";
-import { RoomSettings } from "./RoomSettings.tsx";
-import { StartDirect } from "./StartDirect.tsx";
-import { StartRoom } from "./StartRoom.tsx";
+import { mountInFrame } from "./frameKit.tsx";
+import { ThreadPane } from "./Thread.tsx";
 
-/** The four readers who may not make a chat change, and the sentence each is told. */
-const READERS = [
-  {
-    who: "nobody signed in",
-    viewer: { login: "", owner: "", handle: "", name: "", kind: "", grants: [], acts: [] },
-    reason: WRITE_REASONS.anonymous,
-  },
-  {
-    // THE APP FIRST: a remedy they can ask an admin for, where "this engine
-    // does not make this change for you" would send them nowhere.
-    who: "a person without the Chatlet app",
-    viewer: { ...ADA, grants: ["worklet"], acts: [] },
-    reason: noAccessReason(["chatlet"]),
-  },
-  {
-    who: "a person the engine makes no chat change for",
-    viewer: { ...ADA, acts: [] },
-    reason: WRITE_REASONS.not_served,
-  },
-  {
-    // HOLDING CHATLET AND NO SEAT: the engine offers a seated verb to nobody
-    // acting as themselves, so `acts` names none and every control says so.
-    who: "a credential acting as no seat",
-    viewer: {
-      ...ADA,
-      login: "ci:deploy",
-      owner: "ci:deploy",
-      handle: "",
-      name: "",
-      kind: "",
-      acts: [],
-    },
-    reason: WRITE_REASONS.not_served,
-  },
-];
+const READERS = WRITE_READERS;
+
+/** A room's address is its uuid (`app/routes.ts`). */
+const ROOM = "0b0e9a8e-2f4c-4f7e-9d8a-5d1f0c6b7a10";
 
 const served = {
   read_level: "session",
@@ -81,18 +48,27 @@ const served = {
 
 const channel = {
   v: 1,
-  id: "room-1",
+  id: ROOM,
   kind: "public",
   name: "general",
   topic: "Shipping",
   created_at: "2026-01-01T00:00:00Z",
 };
 
+const detail = {
+  ...served,
+  channel,
+  revision: 1,
+  message_seq: 1,
+  member: true,
+  members: [],
+};
+
 const said = {
   message: {
     v: 1,
     id: "m-1",
-    channel_id: "room-1",
+    channel_id: ROOM,
     author: "ada",
     author_kind: "human",
     body: "morning",
@@ -116,104 +92,148 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-/** A control held with `reason`: drawn, refusing the press, and saying why. */
-async function heldWith(control: HTMLElement, reason: string) {
-  await waitFor(() => expect(control.getAttribute("title")).toBe(reason));
-  expect(
-    control.getAttribute("aria-disabled") === "true" || (control as HTMLButtonElement).disabled,
-  ).toBe(true);
-}
-
-test.each(READERS)("a room's every write is drawn for $who, held with why", async (reader) => {
+/** The room alone, read as `viewer`, its one message the reader's own. */
+async function mountRoom(viewer: Record<string, unknown>): Promise<HTMLElement> {
   const cursors = new ReadCursors({ flush: async () => undefined });
   mountChat(
-    <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
+    <LoneRoom channelID={ROOM} viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
     {
-      viewer: reader.viewer,
+      viewer,
       answers: {
-        chat_channel: {
-          ...served,
-          channel,
-          revision: 1,
-          message_seq: 1,
-          member: true,
-          members: [],
-        },
-        chat_messages: { ...served, channel_id: "room-1", messages: [said] },
+        chat_channel: detail,
+        chat_messages: { ...served, channel_id: ROOM, messages: [said] },
       },
     },
   );
   await screen.findByText("morning");
+  return document.querySelector<HTMLElement>('article[data-message-id="m-1"]')!;
+}
 
-  // THE COMPOSER: the box stays open — it is the browser that cannot send,
-  // not the room that takes nothing — and Send is held with the sentence.
-  const box = screen.getByLabelText(/^Message/) as HTMLTextAreaElement;
-  fireEvent.change(box, { target: { value: "morning again" } });
-  await heldWith(screen.getByRole("button", { name: /^send$/i }), reader.reason);
-  expect(box.disabled).toBe(false);
-  fireEvent.submit(box.closest("form")!);
-
-  // THE ROOM'S OWN GESTURES — leaving it, muting it, and opening what it is
-  // for, whose Save could never be pressed.
-  await heldWith(screen.getByRole("button", { name: /^leave$/i }), reader.reason);
-  await heldWith(screen.getByRole("button", { name: /^mute$/i }), reader.reason);
-  await heldWith(screen.getByRole("button", { name: /^topic$/i }), reader.reason);
-
-  // AND A MESSAGE'S: its edit, its delete and its reactions.
-  const row = document.querySelector('[data-message-id="m-1"]') as HTMLElement;
-  await heldWith(within(row).getByRole("button", { name: /^edit$/i }), reader.reason);
-  await heldWith(within(row).getByRole("button", { name: /^delete$/i }), reader.reason);
-  await heldWith(within(row).getByRole("button", { name: /:eyes:/ }), reader.reason);
-
-  fireEvent.click(screen.getByRole("button", { name: /^leave$/i }));
-  fireEvent.click(within(row).getByRole("button", { name: /^delete$/i }));
-  await new Promise((r) => setTimeout(r, 20));
-  expect(presses).toHaveLength(0);
-});
-
-test.each(READERS)("a thread's reply is drawn for $who, held with why", async (reader) => {
-  // THE THREAD'S COMPOSER IS A COMPOSER LIKE THE ROOM'S: the box stays open —
-  // it is the browser that cannot send — and Reply is held with the sentence
-  // `reply_in_thread` is held with for this reader. Nothing is sent.
+test.each(READERS)("a room's Join is drawn for $who, held with why", async (reader) => {
+  // A ROOM THE READER MAY READ AND IS NOT IN draws a Join bar in the box's
+  // place, held as every write here is, and pressing it sends nothing.
   const cursors = new ReadCursors({ flush: async () => undefined });
-  location.hash = "#/chatlet/room-1?thread=m-1";
   mountChat(
-    <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
+    <LoneRoom channelID={ROOM} viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
     {
       viewer: reader.viewer,
       answers: {
-        chat_channel: {
-          ...served,
-          channel,
-          revision: 1,
-          message_seq: 1,
-          member: true,
-          members: [],
-        },
-        chat_messages: { ...served, channel_id: "room-1", messages: [said] },
-        chat_thread: { ...served, channel_id: "room-1", root: said, replies: [] },
+        chat_channel: { ...detail, member: false },
+        chat_messages: { ...served, channel_id: ROOM, messages: [said] },
       },
     },
   );
-  const pane = await waitFor(() => {
-    const found = document.querySelector<HTMLElement>(".chat-thread");
-    if (!found) throw new Error("no thread pane");
-    return found;
-  });
-  const box = within(pane).getByLabelText(/^Reply/) as HTMLTextAreaElement;
-  fireEvent.change(box, { target: { value: "and in the thread" } });
-  await heldWith(within(pane).getByRole("button", { name: /^reply$/i }), reader.reason);
-  expect(box.disabled).toBe(false);
-  fireEvent.submit(box.closest("form")!);
+  const join = await screen.findByRole("button", { name: /^join room$/i });
+  await saysHeld(join, reader.reason);
+  fireEvent.click(join);
   await new Promise((r) => setTimeout(r, 20));
   expect(presses).toHaveLength(0);
 });
 
-/** A message's three changes, and the control each is pressed through. */
-const MESSAGE_CHANGES = [
-  { tool: "edit_message", control: /^edit$/i },
-  { tool: "delete_message", control: /^delete$/i },
-  { tool: "react_to_message", control: /:eyes:/ },
+/** A message's More menu item, its menu left open to press it. */
+function moreItem(row: HTMLElement, name: RegExp): HTMLElement {
+  fireEvent.click(within(row).getByRole("button", { name: "More actions" }));
+  const menus = screen.getAllByRole("menu");
+  return within(menus[menus.length - 1]!).getByRole("menuitem", { name });
+}
+
+/**
+ * A control held with `reason`, wherever the kit says it: a title, a menu
+ * item's description, or a reaction's hint, which opens on the pointer.
+ */
+async function saysHeld(control: HTMLElement, reason: string) {
+  fireEvent.pointerEnter(control);
+  await vi.waitFor(() => expect(holdOf(control) ?? "").toContain(reason));
+}
+
+/** Close every open menu, so the next one read is the only one open. */
+function closeMenus() {
+  for (const menu of screen.queryAllByRole("menu")) fireEvent.keyDown(menu, { key: "Escape" });
+}
+
+test.each(READERS)("a room's every write is drawn for $who, held with why", async (reader) => {
+  const row = await mountRoom(reader.viewer);
+
+  // THE COMPOSER: the box stays open (it is the browser that cannot send,
+  // not the room that takes nothing) and Send is held with the sentence.
+  const box = screen.getByRole("textbox", { name: /^Message/ }) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "morning again" } });
+  await heldWith(screen.getByRole("button", { name: /^send$/i }), reader.reason);
+  expect(box.disabled).toBe(false);
+  fireEvent.keyDown(box, { key: "Enter" });
+
+  // A MESSAGE'S CHANGES: its reaction, and its edit and delete in More.
+  await saysHeld(within(row).getByRole("button", { name: /:eyes:/ }), reader.reason);
+  await saysHeld(moreItem(row, /^edit message/i), reader.reason);
+  closeMenus();
+  const remove = moreItem(row, /^delete message/i);
+  await saysHeld(remove, reader.reason);
+
+  fireEvent.click(remove);
+  fireEvent.click(within(row).getByRole("button", { name: /:eyes:/ }));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(presses).toHaveLength(0);
+});
+
+/**
+ * The readers a thread pane is ever drawn for. A credential acting as no seat
+ * gets no chat screen at all, only the sentence that it holds no seat
+ * (`Chat.test.tsx`), so no room it reads is ever open to reply in.
+ */
+const SEATED = READERS.filter(({ viewer }) => !(viewer.login !== "" && viewer.handle === ""));
+
+test.each(SEATED)("a thread's reply is drawn for $who, held with why", async (reader) => {
+  // THE THREAD'S COMPOSER IS A COMPOSER LIKE THE ROOM'S: the box stays open,
+  // since it is the browser that cannot send, and Send is held with the
+  // sentence `reply_in_thread` is held with for this reader. Nothing is sent.
+  mountInFrame(<ThreadPane room={ROOM} root="m-1" onClose={() => {}} />, {
+    hash: `#/chatlet/${ROOM}?pane=thread:${ROOM}:m-1`,
+    viewer: reader.viewer,
+    answers: {
+      chat_channels: { ...served, read_state: true, channels: [] },
+      chat_channel: detail,
+      chat_thread: { ...served, channel_id: ROOM, root: said, replies: [] },
+    } as never,
+  });
+  const box = (await screen.findByRole("textbox", {
+    name: "Reply in the thread",
+  })) as HTMLTextAreaElement;
+  const form = box.closest<HTMLElement>(".chat-pane-foot")!;
+  fireEvent.change(box, { target: { value: "and in the thread" } });
+  await heldWith(within(form).getByRole("button", { name: /^send$/i }), reader.reason);
+  expect(box.disabled).toBe(false);
+  fireEvent.keyDown(box, { key: "Enter" });
+  await new Promise((r) => setTimeout(r, 20));
+  expect(presses).toHaveLength(0);
+});
+
+test("a reader who cannot react gets the tray's reactions held, the reason in each hint", async () => {
+  // THE TRAY'S REACTIONS ARE HELD AS THE CHIPS ARE: drawn, refusing the
+  // press, and saying why in the hint, never left pressable for a reaction
+  // the engine would refuse.
+  const row = await mountRoom({ ...ADA, acts: ADA.acts.filter((t) => t !== "react_to_message") });
+  const quick = within(row).getAllByRole("button", { name: /^React with/ });
+  expect(quick.length).toBeGreaterThan(0);
+  // THE TRAY'S AND THE REACTION BAR'S Add a reaction, both drawn and held.
+  const add = within(row).getAllByRole("button", { name: "Add a reaction" });
+  expect(add).toHaveLength(2);
+  for (const control of [...quick, ...add]) {
+    await saysHeld(control, WRITE_REASONS.not_served);
+  }
+  fireEvent.click(quick[0]!);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(presses).toHaveLength(0);
+});
+
+/** A message's three changes, and how each control is found on its row. */
+const MESSAGE_CHANGES: { tool: string; control: (row: HTMLElement) => HTMLElement }[] = [
+  { tool: "edit_message", control: (row) => moreItem(row, /^edit message/i) },
+  { tool: "delete_message", control: (row) => moreItem(row, /^delete message/i) },
+  {
+    tool: "react_to_message",
+    control: (row) => within(row).getByRole("button", { name: /:eyes:/ }),
+  },
 ];
 
 test.each(MESSAGE_CHANGES)(
@@ -221,152 +241,25 @@ test.each(MESSAGE_CHANGES)(
   async ({ tool, control }) => {
     // THE ENGINE SERVES EACH CHANGE TO A PERSON ON ITS OWN (`viewer.acts`),
     // so a person it posts for and does not make THIS change for is told so
-    // on this control alone — and the others, the composer included, stay
+    // on this control alone, and the others, the composer included, stay
     // theirs to press. Held by the composer's access, every control here
     // would be pressable for this person and refused by the engine.
-    const cursors = new ReadCursors({ flush: async () => undefined });
-    mountChat(
-      <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
-      {
-        viewer: { ...ADA, acts: ADA.acts.filter((t) => t !== tool) },
-        answers: {
-          chat_channel: {
-            ...served,
-            channel,
-            revision: 1,
-            message_seq: 1,
-            member: true,
-            members: [],
-          },
-          chat_messages: { ...served, channel_id: "room-1", messages: [said] },
-        },
-      },
-    );
-    await screen.findByText("morning");
-    const row = document.querySelector('[data-message-id="m-1"]') as HTMLElement;
-    await heldWith(within(row).getByRole("button", { name: control }), WRITE_REASONS.not_served);
+    const row = await mountRoom({ ...ADA, acts: ADA.acts.filter((t) => t !== tool) });
+    await saysHeld(control(row), WRITE_REASONS.not_served);
+    closeMenus();
     for (const other of MESSAGE_CHANGES.filter((change) => change.tool !== tool)) {
-      const button = within(row).getByRole("button", { name: other.control });
-      expect(button.getAttribute("aria-disabled"), other.tool).not.toBe("true");
+      expect(holdOf(other.control(row)), other.tool).toBeNull();
+      closeMenus();
     }
-    const box = screen.getByLabelText(/^Message/) as HTMLTextAreaElement;
-    await waitFor(() => expect(box.disabled).toBe(false));
+    const send = screen.getByRole("button", { name: /^send$/i });
+    fireEvent.change(screen.getByRole("textbox", { name: /^Message/ }), {
+      target: { value: "still mine to say" },
+    });
+    await vi.waitFor(() => expect(holdOf(send)).toBeNull());
 
-    fireEvent.click(within(row).getByRole("button", { name: control }));
+    fireEvent.click(control(row));
     await new Promise((r) => setTimeout(r, 20));
     expect(presses).toHaveLength(0);
-  },
-);
-
-/** The rail's two gestures that open a change, and the tool each dialog presses. */
-const OPENERS = [
-  { tool: "create_channel", control: /^new room$/i },
-  { tool: "open_dm", control: /^message$/i },
-];
-
-test.each(OPENERS)(
-  "the rail's $tool opener is held by its own tool, and finding a room by none",
-  async ({ tool, control }) => {
-    // A DIALOG WHOSE CHANGE COULD NEVER BE MADE is not opened to find that
-    // out: the opener is held as its change is (`viewer.acts`), drawn for
-    // everybody, and the other opener stays theirs. Finding a room is a read,
-    // and is never held.
-    mountChat(<Chat />, {
-      viewer: { ...ADA, acts: ADA.acts.filter((t) => t !== tool) },
-      answers: { chat_channels: { ...served, read_state: true, channels: [] } },
-    });
-    const rail = await screen.findByRole("navigation", { name: "Your rooms" });
-    await heldWith(within(rail).getByRole("button", { name: control }), WRITE_REASONS.not_served);
-    for (const other of OPENERS.filter((opener) => opener.tool !== tool)) {
-      const button = within(rail).getByRole("button", { name: other.control });
-      expect(button.getAttribute("aria-disabled"), other.tool).not.toBe("true");
-    }
-    const find = within(rail).getByRole("button", { name: /^find a room$/i });
-    expect(find.getAttribute("aria-disabled")).not.toBe("true");
-
-    fireEvent.click(within(rail).getByRole("button", { name: control }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-  },
-);
-
-test.each(READERS)("a new room is drawn for $who, held with why", async (reader) => {
-  mountChat(<StartRoom people={[]} onClose={() => {}} />, { viewer: reader.viewer });
-  fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: "launch" } });
-  await heldWith(screen.getByRole("button", { name: /create/i }), reader.reason);
-});
-
-test.each(READERS)("a direct conversation is drawn for $who, held with why", async (reader) => {
-  const people = [{ value: "bo", label: "Bo Chen", description: "bo", group: "People" }];
-  mountChat(<StartDirect people={people} onClose={() => {}} />, { viewer: reader.viewer });
-  pick(screen.getByRole("combobox", { name: /people in this conversation/i }), /Bo Chen/);
-  await heldWith(screen.getByRole("button", { name: /^open$/i }), reader.reason);
-});
-
-test.each(READERS)("what a room is for is drawn for $who, held with why", async (reader) => {
-  mountChat(<RoomSettings channel={channel as never} member onClose={() => {}} />, {
-    viewer: reader.viewer,
-  });
-  fireEvent.change(screen.getByLabelText(/^Topic/), { target: { value: "Shipping October" } });
-  await heldWith(screen.getByRole("button", { name: /^save$/i }), reader.reason);
-});
-
-// THE ROOM SEARCH IS CHATLET'S, so a reader who does not hold Chatlet — nobody
-// signed in among them — is not asked for at all (`useSearchQuery`): no room
-// comes back for a Join to be held on, and the dialog says what the search
-// needs instead. Everybody else finds the room, and its Join is held with
-// their reason.
-const holdsChat = (reader: (typeof READERS)[number]) =>
-  (reader.viewer.grants as readonly string[]).includes("chatlet");
-
-/** The Find a room dialog, searched for "launch", answering one room. */
-function browse(viewer: Record<string, unknown>) {
-  const view = mountChat(<Browse onClose={() => {}} />, {
-    viewer,
-    answer: async (what) => {
-      if (what === "chat_search") {
-        return {
-          hits: [{ message_id: "m-9", channel_id: "open-1", at: "", score: 1 }],
-          searched: 1,
-          read_level: "session",
-          position: served.position,
-        };
-      }
-      if (what === "chat_channel") {
-        return {
-          ...served,
-          channel: { ...channel, id: "open-1", name: "launch" },
-          revision: 1,
-          message_seq: 1,
-          member: false,
-          members: [],
-        };
-      }
-      return {};
-    },
-  });
-  fireEvent.change(screen.getByRole("searchbox", { name: /find a room/i }), {
-    target: { value: "launch" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: /^search$/i }));
-  return view;
-}
-
-test.each(READERS.filter(holdsChat))(
-  "a room to join is drawn for $who, held with why",
-  async (reader) => {
-    browse(reader.viewer);
-    await screen.findByText("#launch");
-    await heldWith(screen.getByRole("button", { name: /^join$/i }), reader.reason);
-  },
-);
-
-test.each(READERS.filter((reader) => !holdsChat(reader)))(
-  "the room search is not asked for $who, and says what it needs",
-  async (reader) => {
-    const { socket } = browse(reader.viewer);
-    expect(await screen.findByText(needsWords("Search", ["chatlet"]))).toBeTruthy();
-    expect(socket.query.mock.calls.some(([what]) => what === "chat_search")).toBe(false);
-    expect(screen.queryByRole("button", { name: /^join$/i })).toBeNull();
   },
 );
 

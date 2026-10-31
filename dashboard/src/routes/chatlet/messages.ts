@@ -335,6 +335,19 @@ export function threadPagesTouched(
   };
 }
 
+/**
+ * How much of a room one JUMP reads per page: a jump to a date, to the very
+ * beginning, to the New line or to a linked message further back than what
+ * is held.
+ *
+ * FIVE HUNDRED, the engine's own ceiling (`chatlet.MaxLimit`, what it clamps a
+ * larger ask to). Opening a room reads the screen's page (`page.ts`'s fifty),
+ * because nobody asked to read further; a jump is the reader asking to go
+ * somewhere further back, and reading there fifty rows at a time would be ten
+ * round trips for every five hundred messages crossed.
+ */
+export const JUMP_PAGE = 500;
+
 /** Which rows a scroller is actually over, and what stands in for the rest. */
 export interface RowWindow {
   /** First index to render. */

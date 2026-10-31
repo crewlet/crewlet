@@ -50,6 +50,11 @@ type readHarness struct {
 	gen          uint32
 	seq          uint64
 	maxVariables int
+
+	// stamped counts every record the broker stamped, across reanchors: a
+	// rebuilt estate starts its sequence again, and the broker's clock does
+	// not.
+	stamped int64
 }
 
 func newReadHarness(t *testing.T) *readHarness {
@@ -68,9 +73,10 @@ func newReadHarness(t *testing.T) *readHarness {
 	}
 }
 
-// storedAt is the broker's instant for the record at this position.
+// storedAt is the broker's instant for the record last applied, a second
+// after the one before it whatever generation either is in.
 func (h *readHarness) storedAt() time.Time {
-	return readBrokerAt.Add(time.Duration(h.seq) * time.Second)
+	return readBrokerAt.Add(time.Duration(h.stamped) * time.Second)
 }
 
 // apply runs one record at the next position and commits it, exactly as the
@@ -79,6 +85,7 @@ func (h *readHarness) storedAt() time.Time {
 func (h *readHarness) apply(rec chatlet.MutationRecord) statelog.Position {
 	h.t.Helper()
 	h.seq++
+	h.stamped++
 	rec.Gen = h.gen
 	rec.Writer = "node-a"
 	body, err := chatlet.Encode(rec)
@@ -257,6 +264,19 @@ func readPost(channelID, messageID, author, body string,
 		}, chatlet.ScopeSet{Subject: true}, author)
 }
 
+// said is a page's messages without its room events: what people said, which
+// is what a case about messages counts. A named room's create writes a
+// `joined` line, and every room here is made by one.
+func said(views []chatlet.MessageView) []chatlet.MessageView {
+	out := make([]chatlet.MessageView, 0, len(views))
+	for _, view := range views {
+		if view.Message.Event == nil {
+			out = append(out, view)
+		}
+	}
+	return out
+}
+
 // session is a read that names this node's own applied position as its floor,
 // which is what every case here wants: the rows it has just applied.
 func (h *readHarness) session() statelog.Freshness {
@@ -360,13 +380,10 @@ func TestAPrivateRoomIsNotFoundToANonMember(t *testing.T) {
 			"room is readable by any seat of the company", err)
 	}
 
-	feed, err := reader.Mentions(t.Context(), "ada", chatlet.MentionQuery{}, h.session())
-	if err != nil {
-		t.Fatalf("ada's mention feed: %v", err)
-	}
-	if len(feed.Mentions) != 1 || feed.Mentions[0].MessageID != "msg-open" {
-		t.Fatalf("ada's mention feed is %v, want the public room's mention "+
-			"alone — a mention in a room she cannot open discloses the room",
+	feed := mentionsOf(t, reader, "ada", "", 0, h.session())
+	if len(feed.Items) != 1 || feed.Items[0].MessageID != "msg-open" {
+		t.Fatalf("ada's mentions are %v, want the public room's mention "+
+			"alone: a mention in a room she cannot open discloses the room",
 			mentionIDs(feed))
 	}
 }
@@ -456,79 +473,60 @@ func TestAnEditLeavesAMentionWhereItWas(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
 	h.apply(readCreateRoom("room-1", "eng", chatlet.KindPublic, "ada", "bob"))
-	posted := h.apply(readPost("room-1", "msg-1", "bob", "@ada @carol look",
+	h.apply(readPost("room-1", "msg-1", "bob", "@ada @carol look",
 		"ada", "carol"))
 	postedAt := h.storedAt()
 	h.apply(readPost("room-1", "msg-2", "bob", "and this @ada", "ada"))
-	edited := h.apply(readEdit("room-1", "msg-1", "op-edit-1",
+	h.apply(readEdit("room-1", "msg-1", "op-edit-1",
 		"@ada @dan look again", "ada", "dan"))
 	editedAt := h.storedAt()
 	reader := h.reader()
 
-	feedOf := func(who string) chatlet.MentionFeed {
+	feedOf := func(who string) chatlet.Activity {
 		t.Helper()
-		feed, err := reader.Mentions(t.Context(), who, chatlet.MentionQuery{}, h.session())
-		if err != nil {
-			t.Fatalf("%s's mention feed: %v", who, err)
-		}
-		return feed
+		return mentionsOf(t, reader, who, "", 0, h.session())
 	}
 	ada := feedOf("ada")
 	if got, want := mentionIDs(ada), []string{"msg-2", "msg-1"}; !slices.Equal(got, want) {
 		t.Fatalf("ada's feed after an edit that still names her reads %v, "+
 			"want %v — the edit moved her mention to the top", got, want)
 	}
-	if got := ada.Mentions[1].Position; got != posted {
-		t.Errorf("ada's kept mention sits at %s, want %s where the post "+
-			"first named her", got, posted)
-	}
-	if got := ada.Mentions[1].Excerpt; got != "@ada @dan look again" {
+	if got := ada.Items[1].Excerpt; got != "@ada @dan look again" {
 		t.Errorf("ada's kept mention reads %q, want the edited words", got)
 	}
 	// DATED WHERE IT SITS: when she was named, which the edit did not
-	// change — and marked edited, because the words shown are not the words
-	// that named her.
-	if got := ada.Mentions[1].At; !got.Equal(postedAt) {
+	// change.
+	if got := ada.Items[1].At; !got.Equal(postedAt) {
 		t.Errorf("ada's kept mention is dated %s, want %s when the post named "+
 			"her", got, postedAt)
-	}
-	if got := ada.Mentions[1].EditedAt; got == nil || !got.Equal(editedAt) {
-		t.Errorf("ada's kept mention carries edited_at %v, want %s — the "+
-			"excerpt is the edited words and nothing says so", got, editedAt)
-	}
-	if got := ada.Mentions[0].EditedAt; got != nil {
-		t.Errorf("a mention on a message nobody edited carries edited_at %s",
-			got)
 	}
 	if got := mentionIDs(feedOf("carol")); len(got) != 0 {
 		t.Errorf("carol's feed reads %v after an edit that no longer names "+
 			"her, want nothing", got)
 	}
 	dan := feedOf("dan")
-	if len(dan.Mentions) != 1 || dan.Mentions[0].Position != edited {
-		t.Fatalf("dan's feed reads %+v, want msg-1 at %s — the edit is the "+
-			"record that named him", dan.Mentions, edited)
+	if got := mentionIDs(dan); !slices.Equal(got, []string{"msg-1"}) {
+		t.Fatalf("dan's feed reads %v, want msg-1: the edit is the record "+
+			"that named him", got)
 	}
-	if got := dan.Mentions[0].At; !got.Equal(editedAt) {
-		t.Errorf("dan's mention is dated %s, want %s — he was named by the "+
+	if got := dan.Items[0].At; !got.Equal(editedAt) {
+		t.Errorf("dan's mention is dated %s, want %s: he was named by the "+
 			"edit, and a row at the top of the feed dated when the words were "+
 			"first said reads as a feed out of order", got, editedAt)
 	}
 
 	// A REANCHOR, AND THE MESSAGE EDITED AGAIN IN THE NEW GENERATION: its
-	// own position columns now name generation two, and ada's mention is
-	// still the post's, generation one, sequence and all.
+	// own position columns now name generation two, and ada's mention still
+	// sits where the post named her.
 	h.reanchor()
 	h.apply(readEdit("room-1", "msg-1", "op-edit-2", "@ada once more", "ada"))
 	ada = feedOf("ada")
 	if got, want := mentionIDs(ada), []string{"msg-2", "msg-1"}; !slices.Equal(got, want) {
 		t.Fatalf("ada's feed after a second edit reads %v, want %v", got, want)
 	}
-	if got := ada.Mentions[1].Position; got != posted {
-		t.Errorf("ada's kept mention reads %s after an edit in the next "+
-			"generation, want %s — a generation from the message beside a "+
-			"sequence from the mention names a place neither record holds",
-			got, posted)
+	if got := ada.Items[1].At; !got.Equal(postedAt) {
+		t.Errorf("ada's kept mention is dated %s after an edit in the next "+
+			"generation, want %s when the post named her", got, postedAt)
 	}
 
 	// AN EDIT THAT NAMES NOBODY CLEARS EVERY ROW, rather than reading an
@@ -541,15 +539,15 @@ func TestAnEditLeavesAMentionWhereItWas(t *testing.T) {
 
 	// AND NAMING HER AGAIN IS A NAMING: the words before this edit did not
 	// name her, so it is the record that did, and she finds it at the top.
-	renamed := h.apply(readEdit("room-1", "msg-1", "op-edit-4", "@ada back",
-		"ada"))
+	h.apply(readEdit("room-1", "msg-1", "op-edit-4", "@ada back", "ada"))
+	renamedAt := h.storedAt()
 	ada = feedOf("ada")
 	if got, want := mentionIDs(ada), []string{"msg-1", "msg-2"}; !slices.Equal(got, want) {
 		t.Fatalf("ada's feed after an edit named her again reads %v, want %v",
 			got, want)
 	}
-	if got := ada.Mentions[0].Position; got != renamed {
-		t.Errorf("ada's renewed mention sits at %s, want %s", got, renamed)
+	if got := ada.Items[0].At; !got.Equal(renamedAt) {
+		t.Errorf("ada's renewed mention is dated %s, want %s", got, renamedAt)
 	}
 }
 
@@ -564,7 +562,7 @@ func TestADeleteTakesTheMentionOutOfTheFeed(t *testing.T) {
 	h := newReadHarness(t)
 	h.apply(readCreateRoom("room-1", "eng", chatlet.KindPublic, "ada", "bob"))
 	h.apply(readPost("room-1", "msg-1", "bob", "first @ada", "ada"))
-	kept := h.apply(readPost("room-1", "msg-2", "bob", "second @ada", "ada"))
+	h.apply(readPost("room-1", "msg-2", "bob", "second @ada", "ada"))
 	h.apply(readPost("room-1", "msg-3", "bob", "third @ada", "ada"))
 	h.apply(readRecord(chatlet.MessageSubject("room-1"), chatlet.OpDelete,
 		"op-delete-3", chatlet.MessageDelete{
@@ -572,18 +570,10 @@ func TestADeleteTakesTheMentionOutOfTheFeed(t *testing.T) {
 			DeletedByKind: chatlet.AuthorHuman,
 		}, chatlet.ScopeSet{Subject: true}, "bob"))
 
-	feed, err := h.reader().Mentions(t.Context(), "ada", chatlet.MentionQuery{},
-		h.session())
-	if err != nil {
-		t.Fatalf("ada's mention feed: %v", err)
-	}
+	feed := mentionsOf(t, h.reader(), "ada", "", 0, h.session())
 	if got, want := mentionIDs(feed), []string{"msg-2", "msg-1"}; !slices.Equal(got, want) {
-		t.Fatalf("ada's feed after a delete reads %v, want %v — a message "+
+		t.Fatalf("ada's feed after a delete reads %v, want %v: a message "+
 			"taken back still names her", got, want)
-	}
-	if got := feed.Mentions[0].Position; got != kept {
-		t.Errorf("the mention below the deleted one moved to %s, want %s",
-			got, kept)
 	}
 }
 
@@ -594,8 +584,8 @@ func TestADeleteTakesTheMentionOutOfTheFeed(t *testing.T) {
 // the two of them survive it for DIFFERENT reasons — which is why both halves
 // are here:
 //
-//   - THE FEED pages on the COMPOSED position, where the generation is IN the
-//     ordering. A bare sequence would page the second half of this case
+//   - THE MENTIONS in Activity page on the COMPOSED position, where the
+//     generation is IN the ordering. A bare sequence would page the second half of this case
 //     against `seq < 1` and return nothing, losing every message written
 //     before the rebuild.
 //   - THE TRANSCRIPT pages on `channel_seq`, which the applier mints from log
@@ -624,7 +614,7 @@ func TestACursorSpansAReanchor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("transcript page %d: %v", page, err)
 		}
-		for _, view := range got.Messages {
+		for _, view := range said(got.Messages) {
 			seen = append(seen, view.Message.ID)
 		}
 		if cursor = got.NextCursor; cursor == "" {
@@ -640,15 +630,8 @@ func TestACursorSpansAReanchor(t *testing.T) {
 	seen = seen[:0]
 	cursor = ""
 	for page := 0; page < 4; page++ {
-		got, err := reader.Mentions(t.Context(), "ada", chatlet.MentionQuery{
-			Cursor: cursor, Limit: 2,
-		}, h.session())
-		if err != nil {
-			t.Fatalf("mention page %d: %v", page, err)
-		}
-		for _, mention := range got.Mentions {
-			seen = append(seen, mention.MessageID)
-		}
+		got := mentionsOf(t, reader, "ada", cursor, 2, h.session())
+		seen = append(seen, mentionIDs(got)...)
 		if cursor = got.NextCursor; cursor == "" {
 			break
 		}
@@ -749,9 +732,9 @@ func TestAReadNamesItsOwnWritePositionAsAFloor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a read floored at its own write: %v", err)
 	}
-	if len(got.Messages) != 1 || got.Messages[0].Message.ID != "msg-1" {
+	if msgs := said(got.Messages); len(msgs) != 1 || msgs[0].Message.ID != "msg-1" {
 		t.Fatalf("a read floored at its own write answered %d messages, want "+
-			"the one it just wrote", len(got.Messages))
+			"the one it just wrote", len(msgs))
 	}
 	if got.Position.Packed() < at.Packed() {
 		t.Errorf("the answer reports position %s, which is before the floor "+
@@ -810,9 +793,9 @@ func TestABehindNodeSaysSoRatherThanAnsweringEmpty(t *testing.T) {
 		t.Fatalf("an unbounded stale read on a behind node: %v — a node that "+
 			"is behind is still a node that can answer", err)
 	}
-	if len(got.Messages) != 1 {
+	if msgs := said(got.Messages); len(msgs) != 1 {
 		t.Fatalf("an unbounded stale read answered %d messages, want the one "+
-			"this node has", len(got.Messages))
+			"this node has", len(msgs))
 	}
 	if got.LogLag == nil || *got.LogLag != 500 {
 		t.Errorf("the answer reports lag %v, want 500 — an answer that does "+
@@ -842,11 +825,24 @@ func (h *readHarness) readRail(reader *chatlet.Reader,
 	return listing.Channels[0]
 }
 
-// mentionIDs is a feed as the messages it names.
-func mentionIDs(feed chatlet.MentionFeed) []string {
-	out := make([]string, 0, len(feed.Mentions))
-	for _, mention := range feed.Mentions {
-		out = append(out, mention.MessageID)
+// mentionsOf is a page of who's mentions, as Activity's Mentions reads them.
+func mentionsOf(t *testing.T, reader *chatlet.Reader, who, cursor string, limit int,
+	fresh statelog.Freshness) chatlet.Activity {
+	t.Helper()
+	feed, err := reader.Activity(t.Context(), who, chatlet.ActivityQuery{
+		Kind: chatlet.ActivityMention, Cursor: cursor, Limit: limit,
+	}, fresh)
+	if err != nil {
+		t.Fatalf("%s's mentions: %v", who, err)
+	}
+	return feed
+}
+
+// mentionIDs is a page of mentions as the messages it names.
+func mentionIDs(feed chatlet.Activity) []string {
+	out := make([]string, 0, len(feed.Items))
+	for _, item := range feed.Items {
+		out = append(out, item.MessageID)
 	}
 	return out
 }
@@ -897,7 +893,7 @@ func TestAPageOfLongMessagesFitsOneReplyAndPagesOn(t *testing.T) {
 				"the rest of the reply rides with it", pages, len(wire),
 				len(got.Messages))
 		}
-		for _, view := range got.Messages {
+		for _, view := range said(got.Messages) {
 			seen = append(seen, view.Message.ID)
 		}
 		if cursor = got.NextCursor; cursor == "" {

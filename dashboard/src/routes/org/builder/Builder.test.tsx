@@ -15,7 +15,7 @@ import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
 import { href } from "~/app/router.tsx";
 import { seatPath } from "~/lib/seats.ts";
-import { FillRequest } from "~/app/fill.tsx";
+import { FillRequest, type FillShape } from "~/app/fill.tsx";
 import {
   company,
   Engine,
@@ -988,8 +988,8 @@ describe("a step-up the person declined", () => {
  * does, and still stops saying it on the outline.
  */
 describe("the builder that fills the window", () => {
-  function asked(hash: string): boolean[] {
-    const calls: boolean[] = [];
+  function asked(hash: string): FillShape[] {
+    const calls: FillShape[] = [];
     mountBuilder({
       engine: new Engine(company()),
       hash,

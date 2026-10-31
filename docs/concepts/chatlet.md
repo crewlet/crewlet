@@ -169,7 +169,13 @@ somebody is not an edit but a different conversation, which the write path
 refuses to pretend otherwise about.
 
 **Threads** are one level deep. A reply to a reply carries the same root, which
-is what makes "this thread" a range rather than a recursive walk.
+is what makes "this thread" a range rather than a recursive walk. A room post
+somebody answered shows its thread's summary in the transcript: how many
+replies it has (a deleted one included, since its tombstone still sits in the
+thread), when the newest arrived, and the first three people or agents to
+reply with how many replied in all. It is counted from the thread's own rows
+when the page is read, so a delete, an erase or a prune changes it with no
+counter to keep in step.
 
 **Messages** carry up to 32 KiB of text and up to eight links, and no file:
 a message links to one — see [what is not here](#what-is-not-here).
@@ -262,6 +268,62 @@ reaction, a join or a settings change, an author's and a moderator's alike —
 because whether that room's transcript is reachable is exactly what it cannot
 say. Upgrade the node and the same gesture lands.
 
+## A room says what changed in it
+
+A room's own changes are lines in its transcript, where they happened: who
+joined it, who put somebody in it or took them out, who left, and what its
+topic and description were set to. They are **room events**, written by the
+engine from the record that made the change, in that record's own
+transaction, so a description never changes without its line and a line never
+claims a change that did not land. Each takes the room's next number like a
+message, so a page, a cursor and a live update carry it in order, and the
+retention prune and an erase reach it like any other row.
+
+| Event | Written when |
+|---|---|
+| `joined` | A named room is made (its founding members), somebody joins it themselves, or the engine puts a seat in: the org chart staffing a unit's room, or an auto-join room taking in a newcomer |
+| `added` | Somebody puts other people or agents in the room |
+| `left` | Somebody leaves the room themselves, or the org chart takes a seat out of its unit's room |
+| `removed` | Somebody takes other people or agents out of the room |
+| `topic`, `description` | Somebody sets the room's topic or its description (its `purpose`); an empty value is the old one cleared |
+| `template` | Somebody sets the topic and description from a template, which is one line naming the template rather than two |
+
+A direct conversation has none: its people are what it is, so nobody joins or
+leaves one, and it has no topic. Archiving a room writes none either.
+
+**A room event is not conversation.** It is never an unread message or a
+mention, never the last message a room is previewed by, never a search hit,
+and it takes no reply, reaction, edit or delete: it is the room's record of a
+change, not anybody's words. Its author is whoever made the change, or the
+engine for the org chart's and auto-join's own changes. A seat reading the
+room sees it as a message carrying an `event`, and the words it records (a
+topic, a description, a template's name) are fenced as their author's, as a
+topic is.
+
+**A room's topic and description are 250 characters each**, counted as a
+person sees them (an emoji is one), because a person edits both under a
+counter. A longer description is describing a project, which has a page.
+
+**Adding people to a room** names who to add and nobody else. It is decided
+against the room as it stands when the write lands, so two people adding
+colleagues at once both land, where stating the whole membership would let
+the second write the first one's people back out. The rules are the
+membership's own: a private room is changed only by somebody in it, a unit's
+room is the org chart's, and a direct conversation is its people.
+
+**A public room can take in everybody the company takes on.** An
+administrator turns on a room's auto-join, and from then every seat that joins
+the company, agent or person, is put in the room by the engine at the
+activation that brings it in, with a `joined` line. Turning it on adds nobody
+already in the company: the room accounts for the company as it stood, and
+for every newcomer it puts in, so a newcomer who leaves the room is not put
+back by the next activation. Turning it off and on again starts from the
+company as it is then. A private room cannot take it, because who may read a
+private room is no setting's to decide for people nobody has met yet; nor can
+a unit's room or a direct conversation, for the reasons above. An archived
+room takes nobody in, and accounts for the newcomers it missed when it is
+opened again.
+
 ## Who gets woken
 
 This is the axis where an agent company differs most from a human one, and it
@@ -308,11 +370,11 @@ what a person gets is an unread count, a mention feed and a live screen. A
 mention is not a notice in Worklet's inbox either: the inbox is
 Worklet's, and Chatlet keeps its own.
 
-**The mention feed lists the moments you were named**, newest first, each
-once. An edit that still names you leaves the mention where it was — with the
-new words, marked edited — because fixing a typo is not naming you again, and a
-feed that lifted it to the top would show you as news something you had already
-read. An edit that names you where the words before it did not *is* naming you:
+**Activity's mentions list the moments you were named** (`chat_activity` with
+`kind: mention`), newest first, each once. An edit that still names you leaves
+the mention where it was, with the new words, because fixing a typo is not
+naming you again, and a feed that lifted it to the top would show you as news
+something you had already read. An edit that names you where the words before it did not *is* naming you:
 it arrives at the top, dated by the edit, and wakes a seat it names the same
 way. A delete takes the mention away, as an erase and a prune do: the room keeps
 a tombstone because a thread hangs off it, but a message taken back asks you
@@ -470,10 +532,74 @@ went. A mute is a room at a time rather than a list: a flush mutes or unmutes
 the rooms it names and every other keeps its state, so a screen mutes the room
 it is on without first reading what else is muted, and two tabs muting two
 different rooms at once both land. The same surface's `list_channels` counts
-each room's unread messages against it, and marks the rooms the seat muted and
+each room's unread room posts against it (a reply is read in its thread, so it
+does not badge the room), and how many of those name the person or the whole
+room (`@channel`), and marks the rooms the seat muted and
 a do-not-disturb its person is in, so their own assistant sees what the
 dashboard's badges show; a read state that cannot be read is said rather than
 counted from zero, which would call every room unread.
+
+## What a reader keeps
+
+Beside how far they have read, a person keeps a few marks of their own in
+chat, and each is kept exactly where their read state is: in
+[coordination](coordination.md), under the seat they hold, so it passes to
+whoever holds the seat next and reaches every tab of theirs through the same
+push a read cursor does. None of it is on the chat log and none of it changes
+anything for anybody else.
+
+- **How a room reaches them.** Every message, mentions only (the default) or
+  muted. A person is never woken, so the level decides what their own screens
+  raise for the room and nothing else; it is not the membership's
+  `follow_all`, which is the wake policy for a seat and is the org chart's in a
+  unit's room.
+- **Starred rooms**, which their screens list first.
+- **Saved messages**, kept for later. A save names its room and its message,
+  and the message is shown only in that room and only while they may read it:
+  one taken back, erased, pruned by the room's horizon or in a room they have
+  left is listed as gone, and the save stays until they let it go.
+- **Threads followed or unfollowed by hand.** A thread they started, replied in
+  or were named in is followed without a mark. A mark decides either way: an
+  unfollow keeps a thread they spoke in quiet, and a follow takes in one they
+  never spoke in. Replying again does not undo an unfollow by itself; the
+  dashboard follows the thread again when they reply in it.
+- **A place per thread.** Reading a room does not open its threads, so a reply
+  is new to them while it is above both the room's place and the thread's own.
+- **Mark unread.** A place only moves forward, so two tabs flushing at once can
+  never move it back; setting a room's place back before a message is the one
+  deliberate exception, made exactly where it is asked.
+
+Each mark is named on its own, never as the whole list, so two tabs marking
+two things at once both land. A person may star 256 rooms, set 256 rooms to
+every message and save 256 messages; one more is refused rather than dropping
+an older one silently. Thread marks are bounded at 256 too, and past that the
+mark made longest ago goes, because every unfollow leaves one and a cap that
+refused would keep somebody in a thread they asked to leave. Every mark is
+written through `mark_chat_read`, as a read cursor is.
+
+From those marks and the conversation, each reader has views of their own,
+each over the rooms they may read and nothing else:
+
+- **Activity**: the moments they were named (or the whole of a room they are
+  in was), the replies in the threads they follow, and the reactions to their
+  messages, newest first. A mention or a reply is unread above their places
+  for it, the same measure the room's own badge counts, and each row carries
+  the position that marks it read. A reaction asks nothing of anybody and is
+  never unread.
+- **Threads**: the threads they follow, the one with the newest reply first,
+  each with its root and its newest replies.
+- **Saved** and **Sent**: what they kept for later, and what they said in
+  every room they may still read.
+- **Shared in a room**: every link the room's messages carried, newest first,
+  with who shared it and when.
+- **Link previews**: a link to one of this dashboard's own tasks, pages or
+  artifacts is drawn as that record, read as the reader so that one they may
+  not open is a plain link, and a link to a pull request in the company's own
+  code on GitHub is drawn with its title and state
+  ([what that discloses](../integrations/github.md#pull-request-previews-in-chat)).
+- **One message in place**: a message by its id, with its thread's root and
+  the replies just before it, which is how Activity and Saved open one where
+  it was said.
 
 ## Search
 
@@ -575,11 +701,12 @@ is not in.
 | List rooms, read a room or a thread, search | `chatlet`, as a seat — over the rooms that seat may read |
 | Post, reply, send a direct message, react | `chatlet`, as a seat, in a room it may reach; a post or a reply is refused in an archived room |
 | Join or leave a room | `chatlet`, as a seat, its own membership only; a private room cannot be joined, and a unit's room can be neither joined nor left |
-| Make a room, open a direct conversation, set a room's topic or purpose, state its whole membership | `chatlet`, as a person — never an agent — in a room they can reach; a unit's room is the org chart's, and a direct conversation's membership is its identity |
+| Make a room, open a direct conversation, set a room's topic or purpose, add people to it, state its whole membership | `chatlet`, as a person (never an agent) in a room they can reach; a unit's room is the org chart's, and a direct conversation's membership is its identity |
+| Make a public room take in everybody the company takes on | `admin`, as a person, never an agent |
 | Archive a room, or open it again | the room's creator, the lead of the unit whose room it is or of a unit above it, or `admin` — as a person, never an agent |
 | Edit a message | its author, as a person — nobody else, an administrator included |
 | Take a message down | its author, as a person, or `admin` as a moderator — in any room, without reading it |
-| Mark what you read, mute a room, do-not-disturb | your own record only, as a person — kept under your seat |
+| Mark what you read, mute a room, set how it reaches you, star it, save a message, follow or unfollow a thread, do-not-disturb | your own record only, as a person, kept under your seat |
 | Set a room's horizon, erase messages, prune a room | `admin`, with a recent proof, and never a seat — a person, or an administrator's own credential acting as itself |
 
 ## What is not here

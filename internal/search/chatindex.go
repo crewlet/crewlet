@@ -325,10 +325,14 @@ const (
 		     WHERE version > ? ORDER BY version LIMIT ?)`
 
 	// chatChangedRowsStatement reads that batch WHOLE: every row past the
-	// watermark up to the position it reaches.
+	// watermark up to the position it reaches. A ROOM EVENT is read as a
+	// row the index holds no document for, as a tombstone is: it is the
+	// room's own change rather than anything said there, and an empty
+	// document would count toward its room's statistics with no word to
+	// match.
 	chatChangedRowsStatement = `
 		SELECT id, channel_id, author_handle, body, created_at, version,
-		       deleted_at IS NOT NULL
+		       deleted_at IS NOT NULL OR event <> ''
 		  FROM chat_messages
 		 WHERE version > ? AND version <= ?
 		 ORDER BY version`

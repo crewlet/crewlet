@@ -550,6 +550,48 @@ test("a brief of one record names it, and nothing waiting is said once, in its h
   expect(screen.getByText("QA asked which build to test, and you answered.")).toBeDefined();
 });
 
+test("a room's brief draws what was said, each point opening its message in the room", () => {
+  const openHere = vi.fn();
+  draw(
+    {
+      type: "brief",
+      brief: {
+        scope: {
+          screen: "chatlet",
+          title: "Chatlet",
+          record: { kind: "room", id: "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e41" },
+        },
+        about: "The release waits on GP-12.",
+        needs: [],
+        points: [
+          {
+            text: "Sam asks whether 2.4.0 waits for GP-12.",
+            source: { channel_id: "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e41", message_id: "m1" },
+          },
+          {
+            text: "Ada reports GP-3 passed 13 of 14 scenarios.",
+            source: {
+              channel_id: "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e41",
+              message_id: "m2",
+              thread_root: "m1",
+            },
+          },
+        ],
+        follow_ups: [],
+        as_of: "2026-10-26T09:00:00Z",
+      },
+    },
+    { ...on, openHere },
+  );
+  expect(screen.getByText("Sam asks whether 2.4.0 waits for GP-12.")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Open the thread" }));
+  expect(openHere).toHaveBeenCalledWith({
+    path: ["chatlet", "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e41"],
+    query: { message: "m2" },
+  });
+  expect(screen.getByRole("button", { name: "Open the message" })).toBeDefined();
+});
+
 test("a brief's open whose address is not this dashboard's draws no press", () => {
   draw({
     type: "brief",

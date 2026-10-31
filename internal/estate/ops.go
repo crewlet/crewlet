@@ -223,10 +223,13 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.Transcript, error)
 	Thread(ctx context.Context, viewer string, q chatlet.ThreadQuery,
 		fresh statelog.Freshness) (chatlet.Thread, error)
-	Mentions(ctx context.Context, viewer string, q chatlet.MentionQuery,
-		fresh statelog.Freshness) (chatlet.MentionFeed, error)
 	RoomNames(ctx context.Context, viewer string,
 		fresh statelog.Freshness) (chatlet.RoomNames, error)
+	Directory(ctx context.Context, viewer string,
+		fresh statelog.Freshness) (chatlet.Directory, error)
+
+	// The reader's own views ([ChatReaderViews], chatreader.go).
+	ChatReaderViews
 
 	// Readable is every room the viewer may READ, which is wider than the
 	// rooms it is in. It is no operation of its own: it is the
@@ -269,6 +272,8 @@ type ChatWriter interface {
 		authority chatlet.ChannelAuthority) (chatlet.Written, error)
 	SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
 		members []chatlet.Member) (chatlet.Written, error)
+	AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
+		handles []string) (chatlet.Written, []string, error)
 	Join(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error)
 	Leave(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error)
 	Post(ctx context.Context, actor chatlet.Actor, channelID string,
@@ -1775,20 +1780,6 @@ var opChatThread = define("chat.thread", opRead, chatDomain, false,
 		return b.Chat.Thread(ctx, a.Viewer, a.Query, a.Fresh)
 	})
 
-type chatMentionsArgs struct {
-	Viewer string
-	Query  chatlet.MentionQuery
-	Fresh  statelog.Freshness
-}
-
-var opChatMentions = define("chat.mentions", opRead, chatDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a chatMentionsArgs) (chatlet.MentionFeed, error) {
-		if b.Chat == nil {
-			return chatlet.MentionFeed{}, errNoHalf
-		}
-		return b.Chat.Mentions(ctx, a.Viewer, a.Query, a.Fresh)
-	})
-
 type chatRoomNamesArgs struct {
 	Viewer string
 	Fresh  statelog.Freshness
@@ -1803,6 +1794,17 @@ var opChatRoomNames = define("chat.room_names", opRead, chatDomain, false,
 			return chatlet.RoomNames{}, errNoHalf
 		}
 		return b.Chat.RoomNames(ctx, a.Viewer, a.Fresh)
+	})
+
+// EVERY ROOM A VIEWER MAY BROWSE, resolved by the serving reader from the
+// viewer that crossed, for [opChatRoomNames]' reason. Its arguments are that
+// read's own.
+var opChatDirectory = define("chat.directory", opRead, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatRoomNamesArgs) (chatlet.Directory, error) {
+		if b.Chat == nil {
+			return chatlet.Directory{}, errNoHalf
+		}
+		return b.Chat.Directory(ctx, a.Viewer, a.Fresh)
 	})
 
 // ChatQuery is one ranked search of the company's chat, as it crosses: the
@@ -2030,6 +2032,27 @@ var opChatSetMembers = define("chat.set_members", opOnceWrite, chatDomain, false
 		}
 		return b.ChatWriter.SetMembers(ctx, a.Actor, a.ChannelID, a.Members)
 	}).repeatableWhen(func(a chatSetMembersArgs) bool { return chatKeyed(a.Actor) })
+
+type chatAddMembersArgs struct {
+	Actor     chatlet.Actor
+	ChannelID string
+	Handles   []string
+}
+
+// addedMembers is [ChatWriter.AddMembers]' two answers, named.
+type addedMembers struct {
+	Written chatlet.Written
+	Added   []string
+}
+
+var opChatAddMembers = define("chat.add_members", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatAddMembersArgs) (addedMembers, error) {
+		if b.ChatWriter == nil {
+			return addedMembers{}, errNoHalf
+		}
+		w, added, err := b.ChatWriter.AddMembers(ctx, a.Actor, a.ChannelID, a.Handles)
+		return addedMembers{Written: w, Added: added}, err
+	}).repeatableWhen(func(a chatAddMembersArgs) bool { return chatKeyed(a.Actor) })
 
 type chatMembershipArgs struct {
 	Actor     chatlet.Actor

@@ -210,6 +210,17 @@ fixed shape rather than in prose. What a person sees is on the
 - **It is scoped by the page context.** The page context's `selection` (the
   row a screen has open, the peeked row, or the record a record's screen is
   of) limits the brief to that record; with none, the brief is of the page.
+- **A room's brief is its catch up.** A brief of a chat room (Chatlet's
+  **Catch up**, or **Summarize** when nothing is unread) also summarises what
+  was said there: at most five `points` of at most 140 characters each, the
+  messages the person has not read, or the latest when nothing is unread, each
+  citing the message it came from. A point survives only when that message
+  appears in what this turn's own reads answered and the message's own read
+  (`GET /chatlet/channels/{channel_id}/messages/{message_id}`), sent again as
+  the person, answers it; its source is that read's room, message and thread,
+  so a reply opens in its thread. A point the engine cannot check is dropped
+  and counted with the rows. Its needs are what waits on the person in the
+  room, as any brief's are.
 - **Its spend is its own.** Its rounds are recorded under the aux purpose
   `assistant_brief`, charged to the person's and the company's windows like
   any turn's, and its own cap below stops a brief that sets out to read the

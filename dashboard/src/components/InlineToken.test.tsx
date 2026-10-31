@@ -18,6 +18,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { TokenScope } from "~/components/InlineToken.tsx";
 import {
   ASSISTANT_WORDS,
+  CHAT_WORDS,
   CHECKED_WORDS,
   renderMarkdown,
   renderTokens,
@@ -679,5 +680,30 @@ describe("bare numbers", () => {
     expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
       "https://github.com/gophrase/backend",
     ]);
+  });
+});
+
+// A CHAT MESSAGE READS `own` (CHAT_WORDS): a page of the dashboard's own opens
+// in place, rebuilt from its path alone, so a record a message links to is
+// reachable and no query a writer chose (a filter, a pane, a prefilled field)
+// rides along. Everything `checked` refuses stays refused.
+//
+// Mutation: open `own.hash` instead of `own.canonical` and the query comes
+// back; drop the `appRoute` branch and both are words again.
+describe("links in a chat message", () => {
+  const hrefs = (el: Element) => [...el.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+
+  test("a link to one of the dashboard's own pages opens there, with nothing its writer added", async () => {
+    const room = "0b9a3f2e-5c1d-4e7a-9b2c-1d2e3f4a5b6c";
+    const whole = `${location.origin}${location.pathname}#/chatlet/${room}?message=m-1`;
+    const el = await draw(
+      md(`[the inbox](#/inbox?filter=all) and ${whole} and [x](#/signin)`, CHAT_WORDS),
+    );
+    expect(hrefs(el)).toEqual(["#/inbox", `#/chatlet/${room}`]);
+  });
+
+  test("an address that would carry what it read is still its words", async () => {
+    const el = await draw(md("Open https://evil.example.net/c?q=the%20secret now.", CHAT_WORDS));
+    expect(el.querySelector("a")).toBeNull();
   });
 });

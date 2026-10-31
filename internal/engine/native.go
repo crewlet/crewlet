@@ -1671,7 +1671,7 @@ func (c liveChannels) UnitChannels() []string {
 	return out
 }
 
-// liveRoster is chat's two-method view of the company, resolved against the
+// liveRoster is chat's three-method view of the company, resolved against the
 // epoch current when the WRITE runs.
 //
 // PER CALL, for every other live seam's reason here: a chat store is built
@@ -1679,9 +1679,9 @@ func (c liveChannels) UnitChannels() []string {
 // admitting a colleague who has left — and in chat that is not a stale label
 // but a wake published to a seat nothing runs.
 //
-// NEITHER METHOD BLOCKS, which [chatlet.Roster] requires rather than prefers:
-// both are called from inside the decide's own read transaction, where the
-// framework forbids anything that can wait. Both are a walk of the chart this
+// NO METHOD BLOCKS, which [chatlet.Roster] requires rather than prefers:
+// each is called from inside the decide's own read transaction, where the
+// framework forbids anything that can wait. Each is a walk of the chart this
 // process already holds in memory, and nothing here reaches the broker, the
 // coordination store or a model.
 type liveRoster struct{ engine *Engine }
@@ -1720,6 +1720,25 @@ func (l liveRoster) Lead(unit, room string) string {
 		return ""
 	}
 	return unitRoomLead(company.Org, unit, room)
+}
+
+// Seats is every seat handle of the CURRENT epoch's chart, people and agents
+// alike: the company an auto-join room accounts for when it is turned on.
+func (l liveRoster) Seats() []string {
+	company := l.engine.Company()
+	if company == nil || company.Org == nil {
+		return nil
+	}
+	return chartSeats(company.Org)
+}
+
+// chartSeats is every seat handle an org chart holds.
+func chartSeats(o *org.Organization) []string {
+	var out []string
+	for role := range o.AllRoles() {
+		out = append(out, role.Handle())
+	}
+	return out
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.

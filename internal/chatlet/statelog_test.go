@@ -75,6 +75,7 @@ type suiteRoster struct{}
 
 func (suiteRoster) Seat(handle string) (exists, human bool) { return handle == "suite", true }
 func (suiteRoster) Lead(string, string) string              { return "" }
+func (suiteRoster) Seats() []string                         { return []string{"suite"} }
 
 // encodeSuiteGate is the eviction record a peer's store publishes onto this
 // log — or, with readmit, the inverse commit that takes the node back.

@@ -103,13 +103,15 @@ export const QUERY_TIMEOUT_MS = 10_000;
 /**
  * How many queries one socket runs at once.
  *
- * EXACTLY THE ENGINE'S OWN (`stream.MaxInFlightQueries` — four, the size of
+ * EXACTLY THE ENGINE'S OWN (`stream.MaxInFlightQueries`: four, the size of
  * the node's reader pool), held there by `internal/api/stream`'s
  * `TestTheDashboardAsksNoMoreAtOnceThanTheSocketRuns`. Past it the engine stops
  * reading the socket until a query finishes, so a burst a screen asks of its
- * own — the chat screen's room lookups — is bounded to one wave of these: the
- * reads around it then wait behind one read rather than behind several, which
- * is the delay a bound past the socket's would bring back.
+ * own (Chatlet's link previews, one `chat_unfurls` per message in a
+ * transcript and per link in a room's Shared list, `lib/wave.ts`) is bounded
+ * to one wave of these: the reads around it then wait behind one read rather
+ * than behind several, which is the delay a bound past the socket's would
+ * bring back.
  */
 export const MAX_IN_FLIGHT_QUERIES = 4;
 

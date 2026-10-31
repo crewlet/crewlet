@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -470,6 +471,67 @@ func TestAKeyedKindNeedsItsKeyAndNoOtherHasOne(t *testing.T) {
 		e := tc.e
 		if err := (cards.Spec{Entity: &e}).Validate(); (err == nil) != tc.ok {
 			t.Errorf("%s: Validate = %v", tc.name, err)
+		}
+	}
+}
+
+// AN ADDRESS THE TABLE READS IS ONE IT BUILDS: a record address ScreenOf
+// accepts, built again from what it read, is the same address. A chat link's
+// preview reads an address with ScreenOf and builds its href with Link, and
+// treats a refusal there as the node's own fault, which holds only while the
+// two directions agree.
+//
+// Mutation: give Link a grammar ScreenOf does not share, and an address it
+// read is refused.
+func TestAnAddressTheTableReadsIsOneItBuilds(t *testing.T) {
+	t.Parallel()
+	for _, address := range []string{"#/worklet/ENG-12",
+		"#/doclet/pages/0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31",
+		"#/artifacts/0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e32"} {
+		screen, params, ok := cards.ScreenOf(address)
+		if !ok {
+			t.Fatalf("%s reads as no record", address)
+		}
+		link, err := cards.Link(screen, params, "")
+		if err != nil {
+			t.Errorf("%s read as %s %v, which the table refuses to build: %v",
+				address, screen, params, err)
+			continue
+		}
+		if link.Href != address {
+			t.Errorf("%s read and built again is %s", address, link.Href)
+		}
+	}
+}
+
+// AN ADDRESS READ BACK IS THE RECORD THE TABLE BUILT IT FOR: every record
+// screen's link, read back, names that screen and those parameters, and an
+// address naming no record, or a value outside its grammar, names none.
+//
+// Mutation: drop the grammar check and "#/worklet/ENG" reads as a task.
+func TestAnAddressReadsBackAsTheRecordItOpens(t *testing.T) {
+	t.Parallel()
+	for screen, params := range map[string]map[string]string{
+		"item":     {"id": "ENG-12"},
+		"page":     {"id": "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31"},
+		"artifact": {"id": "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e32"},
+		"project":  {"key": "ENG"},
+		"seat":     {"handle": "pm"},
+	} {
+		link, err := cards.Link(screen, params, "")
+		if err != nil {
+			t.Fatalf("link %s: %v", screen, err)
+		}
+		got, read, ok := cards.ScreenOf(link.Href)
+		if !ok || got != screen || !maps.Equal(read, params) {
+			t.Errorf("%s read back as %q %v (%v), want %s %v", link.Href, got, read, ok,
+				screen, params)
+		}
+	}
+	for _, address := range []string{"#/worklet/tasks", "#/worklet/eng-12x", "#/nowhere/1",
+		"#/doclet/pages/not-a-uuid"} {
+		if screen, _, ok := cards.ScreenOf(address); ok {
+			t.Errorf("%s read back as %s, want no record", address, screen)
 		}
 	}
 }

@@ -118,6 +118,7 @@ type fakeChat struct {
 	patches     []chatlet.ChannelPatch
 	authorities []chatlet.ChannelAuthority
 	memberSets  [][]chatlet.Member
+	added       [][]string
 	edits       []chatlet.EditMessage
 	deleted     []string
 	moderations []chatlet.MessageAuthority
@@ -348,6 +349,18 @@ func (f *fakeChat) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
 	f.memberSets = append(f.memberSets, members)
 	f.actors = append(f.actors, actor)
 	return f.wrote(43), nil
+}
+
+func (f *fakeChat) AddMembers(_ context.Context, actor chatlet.Actor, _ string,
+	handles []string) (chatlet.Written, []string, error) {
+
+	if f.writeErr != nil {
+		return chatlet.Written{}, nil, f.writeErr
+	}
+	f.keys = append(f.keys, actor.OpKey)
+	f.added = append(f.added, handles)
+	f.actors = append(f.actors, actor)
+	return f.wrote(44), handles, nil
 }
 
 func (f *fakeChat) Edit(_ context.Context, actor chatlet.Actor, _, _ string,
@@ -1255,6 +1268,7 @@ func TestEveryChatToolCarriesItsOwnAnnotations(t *testing.T) {
 		chatlet.OpenDMTool:            stated,
 		chatlet.UpdateChannelTool:     restated,
 		chatlet.SetChannelMembersTool: restated,
+		chatlet.AddChannelMembersTool: stated,
 		chatlet.EditMessageTool:       restated,
 		chatlet.DeleteMessageTool:     restated,
 		chatlet.MarkChatReadTool:      own,
@@ -1792,6 +1806,9 @@ var operatorChatWrites = map[string]map[string]any{
 	chatlet.OpenDMTool:        {"to": []any{"bob"}},
 	chatlet.UpdateChannelTool: {"channel": chatRoomID, "topic": "the launch"},
 	chatlet.SetChannelMembersTool: {
+		"channel": chatRoomID, "members": []any{"jane"},
+	},
+	chatlet.AddChannelMembersTool: {
 		"channel": chatRoomID, "members": []any{"jane"},
 	},
 	chatlet.EditMessageTool:   {"channel": chatRoomID, "message_id": "m1", "body": "fixed"},

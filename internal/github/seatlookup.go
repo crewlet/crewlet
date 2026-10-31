@@ -45,8 +45,9 @@ type SeatLookup struct {
 
 // ErrNoSeatCanRead reports a company whose agents can answer nothing yet.
 var ErrNoSeatCanRead = errors.New(
-	"github: no agent's app could read this thread, so its other participants " +
-		"are not looked up")
+	"github: no agent's app could read this repository: install an agent's app " +
+		"on it, or a thread's other participants and a pull request's preview are " +
+		"not read")
 
 // issuer is the [Issuer] this lookup reads tokens through.
 func (l *SeatLookup) issuer() *Issuer {
@@ -78,6 +79,22 @@ func (l *SeatLookup) token(ctx context.Context, seat SeatApp) (string, error) {
 func (l *SeatLookup) Of(
 	ctx context.Context, owner, repo, kind string, number int,
 ) ([]string, error) {
+	var people []string
+	err := l.read(ctx, func(client *Client) error {
+		var err error
+		people, err = client.ParticipantsOf(ctx, owner, repo, kind, number)
+		return err
+	})
+	return people, err
+}
+
+// read runs one read through the first agent's app that answers it: each
+// installed seat's token in turn, the next asked when one cannot mint or its
+// app does not cover the repository. THE ONE WALK, for every read the agents'
+// apps make on the company's behalf (a thread's participants, a pull
+// request's preview), so they cannot come to disagree about whose credential
+// answers.
+func (l *SeatLookup) read(ctx context.Context, fn func(*Client) error) error {
 	var last error
 	for _, seat := range l.Opts.Seats {
 		if !Issuable(seat) {
@@ -95,8 +112,7 @@ func (l *SeatLookup) Of(
 			last = err
 			continue
 		}
-		people, err := client.ParticipantsOf(ctx, owner, repo, kind, number)
-		if err != nil {
+		if err := fn(client); err != nil {
 			// A SEAT WHOSE APP DOES NOT COVER THIS REPOSITORY answers
 			// 404, which is indistinguishable from one that is not
 			// there: a company can scope each agent to its own
@@ -104,10 +120,10 @@ func (l *SeatLookup) Of(
 			last = err
 			continue
 		}
-		return people, nil
+		return nil
 	}
 	if last != nil {
-		return nil, fmt.Errorf("%w: %w", ErrNoSeatCanRead, last)
+		return fmt.Errorf("%w: %w", ErrNoSeatCanRead, last)
 	}
-	return nil, ErrNoSeatCanRead
+	return ErrNoSeatCanRead
 }

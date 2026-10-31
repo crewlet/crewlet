@@ -97,6 +97,11 @@ type Engine struct {
 	// per wait of the seats' restart schedule ([Engine.seatRetryDelay],
 	// set in [New]). See githubtoken.go.
 	githubIssuer github.Issuer
+	// githubPulls reads a pull request for a chat link's preview through
+	// the same agents' apps the participant lookup reads with, rebuilt
+	// with it on every wiring and emptied when GitHub is retired. See
+	// githubpulls.go.
+	githubPulls githubPullReader
 	// tokenWaits is what this node's polls have said of the running jobs
 	// whose seat's app issues no token, so each wait is said once per job
 	// rather than on every pass. See githubtoken.go.

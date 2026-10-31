@@ -199,7 +199,19 @@ var namedRoutes = []struct {
 	// the room it belongs to are read together or not at all. The WRITE
 	// half is the `mark_chat_read` tool, which the dashboard calls through
 	// /operator/act like every other write.
-	{method: "GET", pattern: "/chatlet/mentions", what: "chat_mentions"},
+	// THE READER'S OWN VIEWS, each about the caller rather than a room
+	// (Activity, the threads they follow, what they saved and what they
+	// sent), and a room's shared links and one of its messages, which are
+	// under the room they read.
+	{method: "GET", pattern: "/chatlet/activity", what: "chat_activity"},
+	{method: "GET", pattern: "/chatlet/threads", what: "chat_threads"},
+	{method: "GET", pattern: "/chatlet/saved", what: "chat_saved"},
+	{method: "GET", pattern: "/chatlet/sent", what: "chat_sent"},
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/links", what: "chat_links",
+		path: map[string]string{"channel_id": "channel_id"}},
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/messages/{message_id}",
+		what: "chat_message",
+		path: map[string]string{"channel_id": "channel_id", "message_id": "message_id"}},
 	// RANKED, over every room the caller may read. Its own route beside
 	// the transcript for the reason the board's search is one beside the
 	// board: a transcript is a position in one room and keeps that room's
@@ -209,6 +221,9 @@ var namedRoutes = []struct {
 	// names a room by, which a reader cannot tell from a colour or an
 	// issue's number without knowing the rooms.
 	{method: "GET", pattern: "/chatlet/room-names", what: "chat_room_names"},
+	// EVERY ROOM THE CALLER MAY BROWSE, with what a person chooses one by:
+	// its member count, whether they are in it and when it was last active.
+	{method: "GET", pattern: "/chatlet/rooms", what: "chat_rooms"},
 	// WHO IS ASKING. Not under /worklet/: the answer is the caller's own
 	// identity rather than anything the tracker holds, and a node with no
 	// Worklet still has a viewer.

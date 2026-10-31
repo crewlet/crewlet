@@ -121,13 +121,15 @@ var contract = []Entry{
 	// chat.ts
 	{"MAX_CHANNEL_NAME", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"MAX_BODY_BYTES", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
-	{"MAX_TOPIC_BYTES", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
-	{"MAX_PURPOSE_BYTES", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_TOPIC_CHARS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_PURPOSE_CHARS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"MAX_DIRECT_PARTICIPANTS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_MESSAGE_LINKS", ReadScalar, "internal/chatlet.TestTheDashboardsChatLimitsAreTheEngines"},
 	{"CHANNEL_NAME_PATTERN", ReadScalar, "internal/chatlet.TestTheDashboardsChannelNameGrammarIsTheEngines"},
 	{"TYPING_THROTTLE_MS", ReadScalar, "internal/presence.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
 	{"PENDING_REASK_MS", ReadScalar, "internal/chatlet.TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait"},
 	{"CHAT_SEARCH_PAGE", ReadScalar, "internal/search.TestTheDashboardAsksForTheChatSearchPageTheEngineServes"},
+	{"MAX_READER_MARKS", ReadScalar, "internal/coord.TestTheDashboardsReaderMarkCapIsTheEngines"},
 
 	// presence.ts
 	{"PRESENCE_ROOMS", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
@@ -457,6 +459,8 @@ var contract = []Entry{
 	{"AssistantBriefScope", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantBriefNeed", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantBriefAction", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
+	{"AssistantBriefPoint", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
+	{"AssistantBriefSource", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantFileStored", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	// assistant.ts (page actions)
 	{"ASSISTANT_PAGE_ACTIONS", ReadLiteral, "internal/assistant/catalog.TestEveryPageActionIsTheDashboardsToo"},

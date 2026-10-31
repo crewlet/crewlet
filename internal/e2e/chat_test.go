@@ -153,14 +153,32 @@ func transcript(t *testing.T, n *node, viewer, channelID string) chatlet.Transcr
 
 // bodies is the transcript rendered as "seq author: body", oldest first, which
 // is what a failure has to print: a message id names nothing a reader can act
-// on, and the SEQUENCE is half of what these cases are about.
+// on, and the SEQUENCE is half of what these cases are about. A room event is
+// rendered as what it records ("seq author [joined]"), since it says nothing
+// anybody wrote.
 func bodies(page chatlet.Transcript) []string {
 	out := make([]string, 0, len(page.Messages))
 	for _, view := range slices.Backward(page.Messages) {
+		if event := view.Message.Event; event != nil {
+			out = append(out, fmt.Sprintf("%d %s [%s]",
+				view.ChannelSeq, view.Message.Author, event.Kind))
+			continue
+		}
 		out = append(out, fmt.Sprintf("%d %s: %s",
 			view.ChannelSeq, view.Message.Author, view.Message.Body))
 	}
 	return out
+}
+
+// posts is what was said in a transcript, newest first: its messages without
+// the room's events (who joined, was added or left, and what its words were
+// set to), which share the room's sequence and say nothing anybody wrote.
+// Every case that counts or picks a room's messages reads them through this,
+// by the message's kind and never by its place.
+func posts(page chatlet.Transcript) []chatlet.MessageView {
+	return slices.DeleteFunc(slices.Clone(page.Messages), func(v chatlet.MessageView) bool {
+		return v.Message.Event != nil
+	})
 }
 
 // ---- a message written on one node, and a fleet that agrees about it --- //
@@ -358,7 +376,7 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 		}
 	}
 	want := transcript(t, c.nodes[0], "founder", made.ID)
-	if len(want.Messages) != 3 {
+	if len(posts(want)) != 3 {
 		t.Fatalf("member 0 holds %v for a room three messages were said in",
 			bodies(want))
 	}
@@ -373,11 +391,20 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 	// write's outcome, and the answer's is its [chatlet.MessageView.Position],
 	// which names the record that LAST changed the row — the post itself
 	// only because nothing in this claim edits, reacts to or deletes it.
+	//
+	// THE ROOM'S FOUNDING LINE IS ONE: its members joined, written by the
+	// record that made it, before anybody said anything, so the first
+	// message is two.
 	seqs := map[string]int64{}
 	for _, view := range want.Messages {
 		seqs[view.Message.ID] = view.ChannelSeq
 	}
-	if got := seqs[first.Message.ID]; got != 1 {
+	oldest := want.Messages[len(want.Messages)-1]
+	if oldest.ChannelSeq != 1 || oldest.Message.Event == nil ||
+		oldest.Message.Event.Kind != chatlet.EventJoined {
+		t.Errorf("the room's first row is not its founding line: %v", bodies(want))
+	}
+	if got := seqs[first.Message.ID]; got != 2 {
 		t.Errorf("the first message sits at channel_seq %d: %v", got, bodies(want))
 	}
 	later := []string{second.Message.ID, answered.Message.ID}
@@ -385,9 +412,9 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 		slices.Reverse(later)
 	}
 	for i, id := range later {
-		if got := seqs[id]; got != int64(i+2) {
+		if got := seqs[id]; got != int64(i+3) {
 			t.Errorf("message %s is number %d on the log and sits at channel_seq "+
-				"%d: %v", id, i+2, got, bodies(want))
+				"%d: %v", id, i+3, got, bodies(want))
 		}
 	}
 	for i, n := range c.nodes[1:] {
@@ -637,7 +664,7 @@ func TestAPrivateRoomIsNotServedToANonMemberOverTheSocket(t *testing.T) {
 		if err := json.Unmarshal(data, &page); err != nil {
 			t.Fatalf("decode the transcript: %v", err)
 		}
-		if len(page.Messages) != 1 || page.Messages[0].Message.Body != want {
+		if said := posts(page); len(said) != 1 || said[0].Message.Body != want {
 			t.Fatalf("%s was served %v", who, bodies(page))
 		}
 	}
@@ -926,7 +953,7 @@ func TestASeatAnswersWhereItWasAsked(t *testing.T) {
 		return fmt.Sprintf("room holds %v; the model saw %v",
 			bodies(page), n.model.seen())
 	})
-	said := page.Messages[0]
+	said := posts(page)[0]
 	if said.Message.Body != answer {
 		t.Errorf("the seat said %q", said.Message.Body)
 	}
@@ -937,7 +964,8 @@ func TestASeatAnswersWhereItWasAsked(t *testing.T) {
 	// AND THE REACTION LANDED, which is what makes the refusal below
 	// evidence rather than an accident: an engine that refused a turn for
 	// having called nothing at all would say the same words.
-	oldest := page.Messages[len(page.Messages)-1]
+	written := posts(page)
+	oldest := written[len(written)-1]
 	if oldest.Message.ID != earlier.Message.ID {
 		t.Fatalf("the oldest message in the room is %s, not the one the seat "+
 			"was scripted to acknowledge", oldest.Message.ID)
@@ -1088,7 +1116,7 @@ func TestANodeThatWasNotRunningCatchesUpOnTheRoom(t *testing.T) {
 	want := transcript(t, wrote, "founder", made.ID)
 	wantRows := digestTable(t, wrote, "chat_messages")
 	wantAt := wrote.engine.Chat().At()
-	if len(want.Messages) != 3 {
+	if len(posts(want)) != 3 {
 		t.Fatalf("the writing node holds %v for a room three messages were "+
 			"said in", bodies(want))
 	}

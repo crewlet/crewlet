@@ -65,6 +65,11 @@ export const STORAGE_KEYS = {
    */
   homeBoard: "crewlet_home_board/",
   /**
+   * The PREFIX of each reader's sidebar shape, `full` or `compact`
+   * (`app/sidebar/railShape.ts`): the reader's id follows it.
+   */
+  railShape: "crewlet_rail_shape/",
+  /**
    * Which principal this TAB was last read by, in `sessionStorage` rather
    * than `localStorage` — it describes one tab, and goes with everything else
    * the tab holds (`lib/reader.ts`).
@@ -86,6 +91,16 @@ export const STORAGE_KEYS = {
   orgDraft: "crewlet_org_draft",
   /** How the Artifacts gallery is drawn, `grid` or `list` (`routes/artifacts/Gallery.tsx`). */
   artifactsShape: "crewlet.artifacts.shape",
+  /**
+   * Whether Chatlet's Rooms panel is pinned beside the conversation rather
+   * than slid in from Menu (`routes/chatlet/nav.tsx`).
+   */
+  chatletRoomsDocked: "crewlet.chatlet.rooms-docked",
+  /**
+   * Whether Chatlet's message boxes show their formatting row, one choice for
+   * every box (`routes/chatlet/Composer.tsx`).
+   */
+  chatletFormatting: "crewlet.chatlet.formatting",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

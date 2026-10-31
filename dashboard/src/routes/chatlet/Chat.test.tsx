@@ -1,78 +1,49 @@
 /**
- * What the chat screen says before it says anything about a conversation.
+ * The chat screen's frame: who it is for, the Rooms panel, the top bar, the
+ * keys, and what the screen holds above every room.
  *
  * The three shapes a reader can arrive in are not degrees of the same thing: a
  * reader without the Chatlet app, a credential acting as no seat, and a person.
- * The first is the frame's — the chat row names its app, so `app/App.test.tsx`
+ * The first is the frame's: the chat row names its app, so `app/App.test.tsx`
  * holds a room to the one refusal. The middle one is this screen's: an
  * ordinary state with a one-binding remedy, and the case this screen exists
- * to be clear about — the engine refuses every chat read to it, and if this
- * screen does not say what would change that nothing does.
+ * to be clear about. The engine refuses every chat read to it, and if this
+ * screen does not say what would change that, nothing does.
  */
 
-import {
-  act as flush,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import { useState } from "react";
-import { afterEach, describe, expect, test, vi } from "vitest";
-import { ToastProvider } from "@crewlethq/ui";
+import { act as flush, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { Chat } from "./Chat.tsx";
-import { READ_FLUSH_MS, useReadCursors, type ReadCursors } from "./cursor.ts";
-import { LIVE_REFETCH_MS } from "./live.ts";
 import { workspaceRow } from "~/app/nav.ts";
-import { Router, href, samePath } from "~/app/router.tsx";
-import { SessionReading } from "~/lib/frameSession.ts";
+import { MAX_READER_MARKS } from "~/contract/chat.ts";
+import { href, samePath } from "~/app/router.tsx";
 import { currentReader, noteReader } from "~/lib/reader.ts";
-import { ClientContext } from "~/lib/store-hooks.ts";
-import { ViewerProvider } from "~/lib/viewer.ts";
-import { QueryError, Store, type QueryName } from "~/protocol/index.ts";
-import { MAX_CHAT_LIVE } from "~/protocol/store.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { QueryError, type QueryName } from "~/protocol/index.ts";
 import { ADA, ADA_SESSION, actEngine, applied, mountChat, unknown } from "~/test/chat.tsx";
-import { healthFrame } from "~/test/health.ts";
-import { withDerived } from "~/test/org.ts";
+
+import { READ_FLUSH_MS, useReadCursors, type ReadCursors } from "./cursor.ts";
+import { mountScreen } from "./frameKit.tsx";
+import { resetDockForTest } from "./nav.tsx";
+
+const GENERAL = "0b0e9a8e-2f4c-4f7e-9d8a-5d1f0c6b7a10";
+const LAUNCH = "6a3c1e2b-8d4f-4a9e-b7c6-1f2e3d4c5b6a";
+const PLATFORM = "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f";
+const WITH_BO = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+
+beforeEach(() => {
+  localStorage.clear();
+  resetDockForTest();
+});
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   sessionStorage.clear();
+  localStorage.clear();
   location.hash = "#/";
 });
-
-/**
- * A socket that answers each question with a fixture and never pushes. A
- * fixture that is an Error is a read that FAILED, rejected with it.
- */
-function mount(answers: Partial<Record<QueryName, unknown>>) {
-  const store = new Store();
-  const query = vi.fn(async (what: string) => {
-    const answer = answers[what as QueryName];
-    if (answer instanceof Error) throw answer;
-    return answer ?? {};
-  });
-  const socket = { query, focus: vi.fn() };
-  const view = render(
-    <ClientContext.Provider value={{ store, socket } as never}>
-      {/* THE FRAME'S ONE SESSION AND VIEWER READS, which the screen takes
-          rather than asking for itself — the frame mounts them, so a suite
-          mounting the screen alone mounts them around it. */}
-      <SessionReading>
-        <ViewerProvider>
-          <Router>
-            <Chat />
-          </Router>
-        </ViewerProvider>
-      </SessionReading>
-    </ClientContext.Provider>,
-  );
-  return { store, query, socket, view };
-}
 
 const served = {
   read_level: "session",
@@ -80,22 +51,81 @@ const served = {
   position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 12 },
 };
 
-function room(over: Record<string, unknown> = {}) {
+/** One of the reader's rooms, as `chat_channels` answers it. */
+function room(id: string, name: string, over: Record<string, unknown> = {}) {
+  const { channel, ...rest } = over as { channel?: Record<string, unknown> };
   return {
     channel: {
       v: 1,
-      id: "room-1",
+      id,
       kind: "public",
-      name: "general",
+      name,
       created_at: "2026-01-01T00:00:00Z",
+      ...channel,
     },
     revision: 3,
     unread: 0,
+    mentions: 0,
+    last: {
+      message_id: `${id}-last`,
+      channel_seq: 4,
+      at: "2026-01-01T00:04:00Z",
+      position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 40 },
+    },
+    ...rest,
+  };
+}
+
+/** The reader's rooms, measured, with these rows. */
+function rail(channels: unknown[], read: Record<string, unknown> = {}) {
+  return {
+    ...served,
+    read_state: true,
+    read: { handle: "ada", revision: 1, cursors: {}, ...read },
+    channels,
+  };
+}
+
+/** One room's detail, as `chat_channel` answers it. */
+function detail(id: string, name: string, over: Record<string, unknown> = {}) {
+  return {
+    ...served,
+    channel: { v: 1, id, kind: "public", name, created_at: "2026-01-01T00:00:00Z" },
+    revision: 3,
+    message_seq: 4,
+    member: true,
+    members: [
+      { handle: "ada", joined_at: "2026-01-01T00:00:00Z" },
+      { handle: "bo", joined_at: "2026-01-01T00:00:00Z" },
+    ],
     ...over,
   };
 }
 
-const bound = ADA;
+/** A socket answering the rail, each room's detail and an empty transcript. */
+function chatAnswers(channels: unknown[], read: Record<string, unknown> = {}) {
+  return async (what: string, params?: Record<string, unknown>) => {
+    const id = String(params?.channel_id ?? "");
+    const row = (channels as { channel: { id: string; name: string; kind: string } }[]).find(
+      (r) => r.channel.id === id,
+    );
+    switch (what) {
+      case "chat_channels":
+        return rail(channels, read);
+      case "chat_channel":
+        return detail(id, row?.channel.name ?? id, {
+          channel: { ...row?.channel, v: 1, created_at: "2026-01-01T00:00:00Z" },
+        });
+      case "chat_messages":
+        return { ...served, channel_id: id, messages: [] };
+      default:
+        // A QUESTION THIS SUITE DOES NOT ANSWER, as a node that serves no such
+        // question answers it: never an empty object a view would read as an
+        // answer of its shape.
+        throw new QueryError("unknown_query");
+    }
+  };
+}
 
 /** A machine credential holding Chatlet, which the directory binds to no seat. */
 const seatless = {
@@ -108,388 +138,417 @@ const seatless = {
   acts: [],
 };
 
-test("a credential bound to no seat is told how a binding is made, not that chat is empty", async () => {
-  // THE STRICTEST READ RULE IN THE TREE, and the one a person can actually
-  // fix. The engine refuses every chat read to a credential acting as no
-  // seat; the screen says so from the one fact it holds independently — a
-  // login with no seat — and names the binding that changes it.
-  mount({ viewer: seatless });
-  await waitFor(() => expect(screen.getByText(/read as the seat you hold/i)).toBeTruthy());
-  // NAMED in the command that binds it, as what opens CHATLET: the shared remedy's
-  // own words are about work, which is not what a binding opens here.
-  // Mutation: draw the remedy with no `to` and the last two lines fail.
-  const command = screen.getByText("crewlet iam bind ID SEAT");
-  const said = command.parentElement?.textContent ?? "";
-  expect(said).toMatch(/To read and write here, bind this account to an open seat/);
-  expect(said).not.toMatch(/get work here/);
-});
+/** How many times a question was asked. */
+const asks = (query: ReturnType<typeof vi.fn>, what: QueryName) =>
+  query.mock.calls.filter(([asked]) => asked === what).length;
 
-// A REFUSAL THE ENGINE WROTE FOR THE READER IS DRAWN IN ITS OWN WORDS. A chat
-// question the engine refuses with a sentence for the caller — `bad_params`,
-// the one class whose sentence survives to it — is drawn in that sentence,
-// and a screen that dropped it drew "this is the screen's bug to fix" instead
-// of the binding to make.
-test("a refused rail says the engine's own sentence, not the generic one", async () => {
-  mount({
-    viewer: bound,
-    chat_channels: new QueryError(
-      "bad_params",
-      null,
-      "chat is read as a human seat: bind this credential with crewlet iam bind",
-    ),
-  });
-  await waitFor(() => expect(screen.getByText(/crewlet iam bind/)).toBeTruthy());
-  expect(screen.queryByText(/the screen.s bug to fix/)).toBeNull();
-});
-
-test("a credential bound to no seat is not asked for its rooms at all", async () => {
-  // The engine would refuse it, so asking is a round trip whose only possible
-  // answer is a refusal the screen has already rendered.
-  const { query } = mount({ viewer: seatless });
-  await waitFor(() => expect(screen.getByText(/read as the seat you hold/i)).toBeTruthy());
-  expect(query.mock.calls.map(([what]) => what)).not.toContain("chat_channels");
-});
-
-// A VIEWER READ THAT FAILED IS NO ANSWER, and holding the screen on it held
-// it for the five minutes until the viewer's next poll — "Working out who you
-// are" over a rail nobody asked for, while every other screen worked. The
-// rail is asked, and its own answer says what is true.
-test("a viewer read that failed still asks for the rail, and draws it", async () => {
-  const { query } = mount({
-    viewer: new QueryError("timeout"),
-    chat_channels: { ...served, read_state: true, channels: [room()] },
-  });
-  const rail = await screen.findByRole("navigation", { name: "Your rooms" });
-  await waitFor(() => expect(within(rail).getByText("#general")).toBeTruthy());
-  expect(query.mock.calls.map(([what]) => what)).toContain("chat_channels");
-  expect(screen.queryByText(/working out who you are/i)).toBeNull();
-  // AND NAMES NOBODY it does not know: no reader is drawn as the empty name.
-  expect(screen.queryByText(/you are reading as/i)).toBeNull();
-});
-
-// …and when that rail is REFUSED, the refusal is the engine's own sentence
-// rather than an empty list: a credential that is nobody's seat is refused
-// by name, with the field to change.
-test("a refused rail after a failed viewer read says the engine's own words", async () => {
-  mount({
-    viewer: new QueryError("timeout"),
-    chat_channels: new QueryError("bad_params", null, "this credential is not bound to a seat"),
-  });
-  await waitFor(() => expect(screen.getByText(/not bound to a seat/i)).toBeTruthy());
-  expect(screen.queryByText(/in no rooms yet/i)).toBeNull();
-});
-
-// TWO NAMES, NEVER ONE: the seat's is the chart's name for a place, and the
-// reader is named as the session names them — here, before the session read
-// has answered, by their login.
-test("a person is told who they are and whose rooms these are", async () => {
-  mount({ viewer: bound, chat_channels: { ...served, read_state: true, channels: [room()] } });
-  await waitFor(() => expect(screen.getByText(/reading as the seat/i)).toBeTruthy());
-  expect(screen.getByText("Ada")).toBeTruthy();
-  expect(screen.getByText("ada.lovelace")).toBeTruthy();
-});
-
-test("an unread badge stops at 99+ when the engine says it stopped counting", async () => {
-  // The cap is `chatlet.UnreadLimit` and the answer SAYS when it was reached, so
-  // "99+" renders a stated fact. Inferred from the number instead, a room with
-  // exactly a hundred unread and one with four thousand would draw the same
-  // badge and neither would be true.
-  mount({
-    viewer: bound,
-    chat_channels: {
-      ...served,
-      read_state: true,
-      channels: [room({ unread: 100, unread_capped: true })],
-    },
-  });
-  await waitFor(() => expect(screen.getByText("99+")).toBeTruthy());
-});
-
-test("an exact unread count is drawn as itself", async () => {
-  mount({
-    viewer: bound,
-    chat_channels: { ...served, read_state: true, channels: [room({ unread: 7 })] },
-  });
-  await waitFor(() => expect(screen.getByText("7")).toBeTruthy());
-});
-
-test("a count with no read state behind it is not drawn as nothing unread", async () => {
-  // The engine zeroes every count when the coordination record could not be
-  // read and says so. Drawing that as a quiet rail is indistinguishable from
-  // being caught up — so the screen says which one this is, and draws no
-  // badge rather than a zero.
-  mount({
-    viewer: bound,
-    chat_channels: {
-      ...served,
-      read_state: false,
-      channels: [room({ unread: 0 })],
-    },
-  });
-  await waitFor(() => expect(screen.getByText(/couldn’t be read/i)).toBeTruthy());
-});
-
-test("a muted room says so in the rail", async () => {
-  mount({
-    viewer: bound,
-    chat_channels: {
-      ...served,
-      read_state: true,
-      channels: [room({ unread: 3, muted: true })],
-    },
-  });
-  await waitFor(() => expect(screen.getByText("muted")).toBeTruthy());
-  // AND IT IS STILL BADGED. A mute suppresses NOTICE, never delivery: the
-  // messages are there, and a room that hid its own count would make "muted"
-  // mean "ignored".
-  expect(screen.getByText("3")).toBeTruthy();
-});
-
-test("a reader in no rooms is told how a room comes to exist", async () => {
-  mount({ viewer: bound, chat_channels: { ...served, read_state: true, channels: [] } });
-  await waitFor(() => expect(screen.getByText(/in no rooms yet/i)).toBeTruthy());
-});
-
-// THE RAIL IS THE CHATLET ROW'S ONE SECTION RENDERER: `nav.ts` gives the row no
-// header strip, so a list the row declares and the rail does not draw is a
-// section nobody can reach from a room, and a name the rail spells its own way
-// is a list the trail, the tab title and the palette call something else.
-test("the rail draws every list the chat row declares, under the row's own names", async () => {
-  location.hash = "#/chatlet/mentions";
-  mount({
-    viewer: bound,
-    chat_channels: { ...served, read_state: true, channels: [room()] },
-  });
-  const rail = await screen.findByRole("navigation", { name: "Your rooms" });
-  await waitFor(() => expect(within(rail).getByText("#general")).toBeTruthy());
-  const row = workspaceRow("chatlet");
-  const landing = row?.sections.find((s) => samePath(s.path, row.path));
-  const lists = row?.sections.filter((s) => !samePath(s.path, row.path)) ?? [];
-  // NOT VACUOUS: the row has lists to hold, and a landing that names the rooms.
-  expect(lists.length).toBeGreaterThan(0);
-  expect(within(rail).getByText(landing?.label ?? "(no landing section)")).toBeTruthy();
-  for (const section of lists) {
-    const link = within(rail).getByRole("link", { name: section.label });
-    expect(link.getAttribute("href"), section.key).toBe(href(section.path));
-    // CURRENT BY THE ADDRESS, as the header's tabs are.
-    expect(link.getAttribute("aria-current"), section.key).toBe(
-      samePath(section.path, ["chatlet", "mentions"]) ? "page" : null,
+/** Press a key at the window, as the screen's keys hear it. */
+function press(key: string, init: KeyboardEventInit = {}): void {
+  flush(() => {
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }),
     );
-  }
-  // AND NOTHING ELSE: every other link in the rail is a room.
-  expect(within(rail).getAllByRole("link")).toHaveLength(lists.length + 1);
-  // A READER HOLDING CHATLET HOLDS WHAT EVERY LIST NEEDS, so no list draws the
-  // lock the sidebar draws for a section the reader cannot open.
-  for (const section of lists) {
-    const link = within(rail).getByRole("link", { name: section.label });
-    expect(link.getAttribute("title"), section.key).toBeNull();
-    expect(link.textContent, section.key).not.toMatch(/needs .+ access/);
-  }
+  });
+}
+
+/** Open the Rooms panel from Menu, and hand it back. */
+async function openPanel(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole("button", { name: /^Menu/ }));
+  return screen.findByRole("dialog", { name: "Rooms" });
+}
+
+describe("who the screen is for", () => {
+  test("a credential bound to no seat is told how a binding is made, not that chat is empty", async () => {
+    // THE STRICTEST READ RULE IN THE TREE, and the one a person can actually
+    // fix. Mutation: draw the remedy with no `to` and the last two lines fail.
+    mountScreen({ viewer: seatless });
+    await waitFor(() => expect(screen.getByText(/read as the seat you hold/i)).toBeTruthy());
+    const command = screen.getByText("crewlet iam bind ID SEAT");
+    const said = command.parentElement?.textContent ?? "";
+    expect(said).toMatch(/To read and write here, bind this account to an open seat/);
+    expect(said).not.toMatch(/get work here/);
+  });
+
+  test("a credential bound to no seat is not asked for its rooms at all", async () => {
+    const { socket } = mountScreen({ viewer: seatless });
+    await waitFor(() => expect(screen.getByText(/read as the seat you hold/i)).toBeTruthy());
+    expect(asks(socket.query, "chat_channels")).toBe(0);
+  });
+
+  // A REFUSAL THE ENGINE WROTE FOR THE READER IS DRAWN IN ITS OWN WORDS, where
+  // the reader would otherwise pick a room: never "pick a room" over a list
+  // that could not be read.
+  test("a refused rail says the engine's own sentence, not the generic one", async () => {
+    mountScreen({
+      answer: async (what) => {
+        if (what === "chat_channels") {
+          throw new QueryError(
+            "bad_params",
+            null,
+            "chat is read as a human seat: bind this credential with crewlet iam bind",
+          );
+        }
+        return {};
+      },
+    });
+    await waitFor(() => expect(screen.getByText(/crewlet iam bind/)).toBeTruthy());
+    expect(screen.queryByText(/the screen.s bug to fix/)).toBeNull();
+    expect(screen.queryByText("Pick a room")).toBeNull();
+  });
+
+  // A VIEWER READ THAT FAILED IS NO ANSWER, and holding the screen on it held
+  // it for the minutes until the viewer's next poll. The rooms are asked, and
+  // their own answer says what is true.
+  test("a viewer read that failed still asks for the rooms, and draws them", async () => {
+    const { socket } = mountScreen({
+      viewer: new QueryError("timeout"),
+      answer: chatAnswers([room(GENERAL, "general")]),
+    });
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("general")).toBeTruthy());
+    expect(asks(socket.query, "chat_channels")).toBeGreaterThan(0);
+    expect(screen.queryByText(/working out who you are/i)).toBeNull();
+  });
+
+  test("a reader in no rooms is told how a room comes to exist", async () => {
+    mountScreen({ answer: chatAnswers([]) });
+    await waitFor(() => expect(screen.getByText(/in no rooms yet/i)).toBeTruthy());
+  });
 });
 
-// THE RAIL'S COUNTS AND MUTES ARE ANSWERED FROM THIS PERSON'S READ STATE, so
-// whatever moves that record moves the rail: a flush or a mute this tab made,
-// and another tab's, which arrives as the `chat_cursor_moved` push. Before,
-// the badge and the "muted" label stayed as they were until some unrelated
-// frame landed or the page was reloaded.
-describe("the rail follows the reader's own read state", () => {
-  const unread = {
-    ...served,
-    read_state: true,
-    read: { handle: "ada", revision: 1, cursors: {} },
-    channels: [room({ unread: 3 })],
-  };
+describe("the Rooms panel", () => {
+  const row = workspaceRow("chatlet");
+  const views = (row?.sections ?? []).filter((s) => s.tab !== false && s.path.length > 1);
 
-  /** How many times the rail has been asked for. */
-  const railAsks = (query: ReturnType<typeof vi.fn>) =>
-    query.mock.calls.filter(([what]) => what === "chat_channels").length;
-
-  test("a newer read state pushed from another tab re-reads the rail", async () => {
-    const { query, store } = mount({ viewer: bound, chat_channels: unread });
-    await waitFor(() => expect(screen.getByText("3")).toBeTruthy());
-    // THE RAIL'S OWN ANSWER SEEDS THE STATE, and that costs no second read.
-    await new Promise((r) => setTimeout(r, 50));
-    const before = railAsks(query);
-    expect(before).toBe(1);
-    flush(() => store.applyChatRead({ handle: "ada", revision: 2, cursors: { "room-1": 99 } }));
-    await waitFor(() => expect(railAsks(query)).toBe(before + 1));
-  });
-
-  test("a frame past the bound on what the tab holds still re-reads the rail", async () => {
-    // THE RAIL RE-READS ON THE TAB'S FRAME COUNT. A sum of what the rooms hold
-    // stands still once a room is at its bound — the new frame and the one it
-    // pushes out cancel — so the rail stopped moving exactly when the company
-    // got busy.
-    const { query, store } = mount({ viewer: bound, chat_channels: unread });
-    await waitFor(() => expect(screen.getByText("3")).toBeTruthy());
-    const frame = (seq: number) =>
-      store.applyChatChange({
-        channel_id: "room-9",
-        op: "post",
-        op_id: `op-${seq}`,
-        message_id: `m-${seq}`,
-        channel_seq: seq,
-        at: "2026-01-01T00:01:00Z",
-        position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq },
-      } as never);
-    flush(() => {
-      for (let seq = 1; seq <= MAX_CHAT_LIVE; seq++) frame(seq);
-    });
-    await new Promise((r) => setTimeout(r, LIVE_REFETCH_MS + 50));
-    const before = railAsks(query);
-    flush(() => frame(MAX_CHAT_LIVE + 1));
-    await waitFor(() => expect(railAsks(query)).toBe(before + 1));
-  });
-
-  test("a read state at the revision the rail already drew asks nothing", async () => {
-    const { query, store } = mount({ viewer: bound, chat_channels: unread });
-    await waitFor(() => expect(screen.getByText("3")).toBeTruthy());
-    await new Promise((r) => setTimeout(r, 50));
-    const before = railAsks(query);
-    flush(() => store.applyChatRead({ handle: "ada", revision: 1, cursors: {} }));
-    await new Promise((r) => setTimeout(r, 50));
-    expect(railAsks(query)).toBe(before);
-  });
-
-  // A WRITE THIS TAB MADE MOVES THE RAIL ONCE. Its answer is the person's
-  // new state, and the push the same write raises reaches this tab too; the
-  // revision makes the two one move, whichever lands first. Asked again on
-  // the answer AND on the push, the rail was counted twice per flush — every
-  // fifteen seconds of reading — and the second ask threw the first away.
-  describe("a write this tab made", () => {
-    /** The muted state the write leaves, as the engine answers and pushes it. */
-    const after = { handle: "ada", revision: 2, cursors: {}, muted: ["room-1"] };
-
-    /** The room open beside the rail, its Mute pressable. */
-    async function openRoom(answerAct: Parameters<typeof actEngine>[0]) {
-      actEngine(answerAct);
-      const { socket, store } = mountChat(<Chat channel="room-1" />, {
-        answers: {
-          chat_channels: unread,
-          chat_channel: {
-            ...served,
-            channel: room().channel,
-            revision: 3,
-            message_seq: 0,
-            member: true,
-            members: [],
-          },
-          chat_messages: { ...served, channel_id: "room-1", messages: [] },
-        },
-      });
-      const mute = await screen.findByRole("button", { name: "Mute" });
-      await waitFor(() => expect(mute.getAttribute("aria-disabled")).not.toBe("true"));
-      await new Promise((r) => setTimeout(r, 50));
-      return { query: socket.query, store, mute, before: railAsks(socket.query) };
+  // THE PANEL IS THE CHATLET ROW'S ONE SECTION RENDERER: `nav.ts` gives the
+  // row no header strip, so a view the row declares as a tab and the panel
+  // does not draw is a view nobody can reach from a room, and a name the panel
+  // spells its own way is a view the trail and the palette call something else.
+  test("draws every view the chat row declares, under the row's names, current by address", async () => {
+    mountScreen({ hash: "#/chatlet/threads", answer: chatAnswers([room(GENERAL, "general")]) });
+    const panel = await openPanel();
+    // NOT VACUOUS: the row has views to hold.
+    expect(views.length).toBeGreaterThanOrEqual(4);
+    for (const section of views) {
+      const link = within(panel).getByRole("link", { name: new RegExp(`^${section.label}`) });
+      expect(link.getAttribute("href"), section.key).toBe(href(section.path));
+      expect(link.getAttribute("aria-current"), section.key).toBe(
+        samePath(section.path, ["chatlet", "threads"]) ? "page" : null,
+      );
     }
-
-    test("its answer re-reads the rail once, and the push it raises adds nothing", async () => {
-      const { query, store, mute, before } = await openRoom((tool) =>
-        applied(tool, { read: after }),
-      );
-      fireEvent.click(mute);
-      await waitFor(() => expect(railAsks(query)).toBe(before + 1));
-      flush(() => store.applyChatRead(after));
-      await new Promise((r) => setTimeout(r, 100));
-      expect(railAsks(query)).toBe(before + 1);
-      expect(store.state.chatRead?.muted).toEqual(["room-1"]);
-    });
-
-    test("a push that lands before the answer is the same one read", async () => {
-      let answer: (reply: Response) => void = () => undefined;
-      const { query, store, mute, before } = await openRoom((tool) => applied(tool));
-      // THE ANSWER IS HELD until the push has landed, which is the order the
-      // double ask happened in.
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(
-          () =>
-            new Promise<Response>((resolve) => {
-              answer = resolve;
-            }),
-        ),
-      );
-      fireEvent.click(mute);
-      flush(() => store.applyChatRead(after));
-      await waitFor(() => expect(railAsks(query)).toBe(before + 1));
-      await flush(async () => {
-        answer(
-          new Response(
-            JSON.stringify({
-              tool: "mark_chat_read",
-              outcome: "applied",
-              receipt: { read: after },
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          ),
-        );
-        await new Promise((r) => setTimeout(r, 100));
-      });
-      expect(railAsks(query)).toBe(before + 1);
-    });
   });
+
+  test("lists the rooms under Starred, Channels, Team rooms and Direct messages", async () => {
+    mountScreen({
+      answer: chatAnswers(
+        [
+          room(GENERAL, "general"),
+          room(LAUNCH, "launch"),
+          room(PLATFORM, "platform", { channel: { kind: "unit", unit: "platform" } }),
+          room(WITH_BO, "", { channel: { kind: "dm", name: "" }, participants: ["ada", "bo"] }),
+        ],
+        { starred: [LAUNCH] },
+      ),
+    });
+    const panel = await openPanel();
+    const section = (name: string) => {
+      const heading = within(panel).getByRole("button", { name: new RegExp(`^${name}`) });
+      return heading.closest("[role='group'], section, div")?.parentElement ?? panel;
+    };
+    await waitFor(() => expect(within(panel).getByText("launch")).toBeTruthy());
+    // A STARRED ROOM IS LISTED ONCE, under Starred, whatever its kind.
+    expect(within(panel).getAllByText("launch")).toHaveLength(1);
+    expect(within(section("Starred")).getByText("launch")).toBeTruthy();
+    expect(within(section("Channels")).getByText("general")).toBeTruthy();
+    expect(within(section("Team rooms")).getByText("platform")).toBeTruthy();
+    expect(within(section("Direct messages")).getByText("bo")).toBeTruthy();
+  });
+
+  test("badges what waits on the reader: a room's mentions, stopping at 99+ where the engine stopped", async () => {
+    // The cap is `chatlet.UnreadLimit` and the answer SAYS when it was reached,
+    // so "99+" renders a stated fact.
+    mountScreen({
+      answer: chatAnswers([
+        room(GENERAL, "general", { unread: 100, unread_capped: true, mentions: 100 }),
+        room(LAUNCH, "launch", { unread: 9, mentions: 7 }),
+      ]),
+    });
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("99+")).toBeTruthy());
+    expect(within(panel).getByText("7")).toBeTruthy();
+  });
+
+  test("a direct conversation's every unread message waits on the reader", async () => {
+    mountScreen({
+      answer: chatAnswers([
+        room(WITH_BO, "", {
+          channel: { kind: "dm", name: "" },
+          participants: ["ada", "bo"],
+          unread: 3,
+          mentions: 0,
+        }),
+      ]),
+    });
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("3")).toBeTruthy());
+  });
+
+  test("a muted room is dimmed and badged with nothing, its messages still unread", async () => {
+    // A MUTE SUPPRESSES NOTICE, never delivery: the badge is notice, so it
+    // goes, and the row still says it is muted rather than looking caught up.
+    mountScreen({
+      answer: chatAnswers([room(GENERAL, "general", { unread: 3, mentions: 2, muted: true })]),
+    });
+    const panel = await openPanel();
+    // THE ROW SAYS IT IS MUTED, to a screen reader as to the eye.
+    const row = await within(panel).findByRole("link", { name: /general.*muted/i });
+    expect(row.textContent).not.toMatch(/2/);
+  });
+
+  test("a count with no read state behind it is not drawn as nothing unread", async () => {
+    // The engine zeroes every count when the coordination record could not be
+    // read and says so. Drawing that as a quiet panel is indistinguishable
+    // from being caught up, so the panel says which one this is.
+    mountScreen({
+      answer: async (what) =>
+        what === "chat_channels"
+          ? { ...served, read_state: false, channels: [room(GENERAL, "general", { mentions: 0 })] }
+          : {},
+    });
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText(/couldn’t be read/i)).toBeTruthy());
+  });
+
+  test("a filter that matches nothing says so, and a match opens every section", async () => {
+    mountScreen({ answer: chatAnswers([room(GENERAL, "general"), room(LAUNCH, "launch")]) });
+    const panel = await openPanel();
+    await waitFor(() => expect(within(panel).getByText("general")).toBeTruthy());
+    const find = within(panel).getByRole("textbox", { name: "Find a room or person" });
+    fireEvent.change(find, { target: { value: "laun" } });
+    expect(within(panel).getByText("launch")).toBeTruthy();
+    expect(within(panel).queryByText("general")).toBeNull();
+    fireEvent.change(find, { target: { value: "nothing-like-it" } });
+    expect(within(panel).getByText("No matches")).toBeTruthy();
+  });
+
+  test("picking a room closes the slid-in panel and opens the room", async () => {
+    mountScreen({ answer: chatAnswers([room(GENERAL, "general"), room(LAUNCH, "launch")]) });
+    const panel = await openPanel();
+    fireEvent.click(await within(panel).findByRole("link", { name: /^launch/ }));
+    await waitFor(() => expect(location.hash).toBe(`#/chatlet/${LAUNCH}`));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Rooms" })).toBeNull());
+  });
+
+  // PINNED IS A PER-BROWSER CHOICE: the panel becomes a column beside the
+  // conversation, the switchers it repeats leave the top bar, and a reload
+  // keeps it. Mutation: drop the write to storage and the remount case fails.
+  test("the pin docks the panel beside the conversation, and the browser keeps it", async () => {
+    mountScreen({ answer: chatAnswers([room(GENERAL, "general")]) });
+    const panel = await openPanel();
+    fireEvent.click(within(panel).getByRole("button", { name: "Pin the panel" }));
+    const dock = await screen.findByRole("navigation", { name: "Rooms" });
+    // ONE LANDMARK NAMED ROOMS: the pinned column holds the panel's own
+    // navigation and is no second landmark of that name.
+    expect(screen.getAllByRole("navigation", { name: "Rooms" })).toHaveLength(1);
+    expect(dock.closest(".chat-dock")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Rooms" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Rooms|Switch room/ })).toBeNull();
+    expect(localStorage.getItem(STORAGE_KEYS.chatletRoomsDocked)).toBe("1");
+
+    cleanup();
+    mountScreen({ answer: chatAnswers([room(GENERAL, "general")]) });
+    expect(await screen.findByRole("navigation", { name: "Rooms" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Unpin the panel" }));
+    await waitFor(() => expect(localStorage.getItem(STORAGE_KEYS.chatletRoomsDocked)).toBe("0"));
+  });
+});
+
+describe("the top bar", () => {
+  test("names the open room on the Rooms switcher, and Direct messages on the other", async () => {
+    mountScreen({ hash: `#/chatlet/${GENERAL}`, answer: chatAnswers([room(GENERAL, "general")]) });
+    expect(await screen.findByRole("button", { name: /#general/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Direct messages/ })).toBeTruthy();
+  });
+
+  test("Menu carries the sidebar's figure of what waits on the reader", async () => {
+    mountScreen({
+      answer: chatAnswers([
+        room(GENERAL, "general", { unread: 5, mentions: 2 }),
+        room(WITH_BO, "", {
+          channel: { kind: "dm", name: "" },
+          participants: ["ada", "bo"],
+          unread: 3,
+        }),
+      ]),
+    });
+    expect(await screen.findByRole("button", { name: "Menu, 5 waiting for you" })).toBeTruthy();
+  });
+
+  // CATCH UP LEADS THE ROOM'S MORE MENU, and only the room's: Ask Crewlet is
+  // the page bar's own button. With nothing unread it summarizes the room.
+  test("More leads with Catch up while something is unread, and opens it as the room's pane", async () => {
+    mountScreen({
+      hash: `#/chatlet/${GENERAL}`,
+      answer: chatAnswers([room(GENERAL, "general", { unread: 4 })]),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "More" }));
+    const items = await screen.findAllByRole("menuitem");
+    expect(items[0]?.textContent).toMatch(/Catch up with Ask Crewlet/);
+    fireEvent.click(items[0]!);
+    await waitFor(() =>
+      expect(new URLSearchParams(location.hash.split("?")[1]).get("pane")).toBe(
+        `catchup:${GENERAL}`,
+      ),
+    );
+  });
+
+  test("More summarizes a room read through", async () => {
+    mountScreen({ hash: `#/chatlet/${GENERAL}`, answer: chatAnswers([room(GENERAL, "general")]) });
+    fireEvent.click(await screen.findByRole("button", { name: "More" }));
+    const items = await screen.findAllByRole("menuitem");
+    expect(items[0]?.textContent).toMatch(/Summarize with Ask Crewlet/);
+  });
+
+  test("the members chip counts the room and opens its members", async () => {
+    mountScreen({ hash: `#/chatlet/${GENERAL}`, answer: chatAnswers([room(GENERAL, "general")]) });
+    fireEvent.click(await screen.findByRole("button", { name: "2 members" }));
+    await waitFor(() =>
+      expect(new URLSearchParams(location.hash.split("?")[1]).get("pane")).toBe(
+        `details:${GENERAL}:members`,
+      ),
+    );
+  });
+
+  // A STAR PAST THE ENGINE'S CAP IS REFUSED rather than dropping an older one,
+  // so the menu says so before the press. Mutation: drop the cap check and the
+  // item is pressable with nothing said.
+  test("Add to Starred is held, with why, once the reader keeps the engine's cap of stars", async () => {
+    const full = Array.from({ length: MAX_READER_MARKS }, (_, i) => `starred-${i}`);
+    mountScreen({
+      hash: `#/chatlet/${GENERAL}`,
+      answer: chatAnswers([room(GENERAL, "general")], { starred: full }),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "More" }));
+    const star = await screen.findByRole("menuitem", { name: /Add to Starred/ });
+    expect(star.getAttribute("aria-disabled")).toBe("true");
+    expect(star.textContent).toMatch(new RegExp(`starred ${MAX_READER_MARKS} rooms`));
+  });
+
+  // A UNIT'S ROOM IS THE ORG CHART'S: no leave is offered, since the next
+  // apply would put the reader back. A public room offers one.
+  test("Leave is offered on a public room, and never on a team's room", async () => {
+    mountScreen({ hash: `#/chatlet/${GENERAL}`, answer: chatAnswers([room(GENERAL, "general")]) });
+    fireEvent.click(await screen.findByRole("button", { name: "More" }));
+    expect(await screen.findByRole("menuitem", { name: /Leave #general/ })).toBeTruthy();
+    cleanup();
+    mountScreen({
+      hash: `#/chatlet/${PLATFORM}`,
+      answer: chatAnswers([
+        room(PLATFORM, "platform", { channel: { kind: "unit", unit: "platform" } }),
+      ]),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "More" }));
+    await screen.findByRole("menuitem", { name: /Room details/ });
+    expect(screen.queryByRole("menuitem", { name: /Leave/ })).toBeNull();
+  });
+});
+
+describe("the keys", () => {
+  const three = [
+    room(GENERAL, "general"),
+    room(LAUNCH, "launch", { unread: 2 }),
+    room(PLATFORM, "platform"),
+  ];
+
+  test("Alt with an arrow moves between rooms, and with Shift between rooms with unread messages", async () => {
+    mountScreen({ hash: `#/chatlet/${GENERAL}`, answer: chatAnswers(three) });
+    await screen.findByRole("button", { name: /#general/ });
+    press("ArrowDown", { altKey: true });
+    await waitFor(() => expect(location.hash).toBe(`#/chatlet/${LAUNCH}`));
+    press("ArrowDown", { altKey: true });
+    await waitFor(() => expect(location.hash).toBe(`#/chatlet/${PLATFORM}`));
+    // Only LAUNCH is unread, so from PLATFORM the step lands there.
+    press("ArrowDown", { altKey: true, shiftKey: true });
+    await waitFor(() => expect(location.hash).toBe(`#/chatlet/${LAUNCH}`));
+    // AND THE BARE ARROW IS NOBODY'S KEY HERE.
+    press("ArrowDown");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(location.hash).toBe(`#/chatlet/${LAUNCH}`);
+  });
+
+  test("Escape marks the open room read through its newest message, written at once", async () => {
+    const presses = actEngine((tool) => applied(tool));
+    mountScreen({
+      hash: `#/chatlet/${GENERAL}`,
+      answer: chatAnswers([room(GENERAL, "general", { unread: 4 })]),
+    });
+    await screen.findByRole("button", { name: /#general/ });
+    await new Promise((r) => setTimeout(r, 50));
+    press("Escape");
+    await waitFor(() =>
+      expect(presses.filter((p) => p.tool === "mark_chat_read").map((p) => p.args)).toContainEqual({
+        cursors: { [GENERAL]: expect.any(Number) },
+      }),
+    );
+  });
+
+  test("Escape with a pane open closes nothing of the room's read state", async () => {
+    // A PANE LISTENS FOR ESCAPE ITSELF, and closing it is just closing it.
+    const presses = actEngine((tool) => applied(tool));
+    mountScreen({
+      hash: `#/chatlet/${GENERAL}?pane=details:${GENERAL}:about`,
+      answer: chatAnswers([room(GENERAL, "general", { unread: 4 })]),
+    });
+    await screen.findByRole("button", { name: /#general/ });
+    press("Escape");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(presses.filter((p) => p.tool === "mark_chat_read")).toEqual([]);
+  });
+
+  test("the command key with F searches the open room", async () => {
+    mountScreen({ hash: `#/chatlet/${GENERAL}`, answer: chatAnswers([room(GENERAL, "general")]) });
+    await screen.findByRole("button", { name: /#general/ });
+    press("f", { ctrlKey: true });
+    await waitFor(() => expect(location.hash).toBe(`#/chatlet/search?in=${GENERAL}`));
+  });
+});
+
+// A DIRECT MESSAGE ASKED FOR BY ADDRESS (`#/chatlet?dm=<handle>`), which is the
+// seat page's and the seat peek's door: it is New message with that seat
+// chosen, and the address is replaced so a reload or Back does not ask again.
+test("a direct message asked for by address is New message, with the address replaced", async () => {
+  mountScreen({ hash: "#/chatlet?dm=bo", answer: chatAnswers([]) });
+  await waitFor(() => expect(location.hash).toBe("#/chatlet/new?to=bo"));
 });
 
 // THE OUTBOX OUTLIVES THE ROOM. A room is remounted for every room opened, and
-// an outbox kept inside it threw the unanswered rows away with it — an
+// an outbox kept inside it threw the unanswered rows away with it, an
 // `unknown` row's Retry under its own operation key included, which is the only
 // safe move for that message: typed again, it is said twice.
 test("an unanswered message and its same-id retry survive a look at another room", async () => {
   const presses = actEngine((tool) => (tool === "post_message" ? unknown(tool) : applied(tool)));
-  const detail = (id: string, name: string) => ({
-    ...served,
-    channel: { ...room().channel, id, name },
-    revision: 3,
-    message_seq: 0,
-    member: true,
-    members: [],
-  });
-  function Switcher() {
-    const [channel, setChannel] = useState("room-1");
-    return (
-      <>
-        <button
-          type="button"
-          onClick={() => setChannel((c) => (c === "room-1" ? "room-2" : "room-1"))}
-        >
-          switch rooms
-        </button>
-        <Chat channel={channel} />
-      </>
-    );
-  }
-  mountChat(<Switcher />, {
-    answer: async (what, params) => {
-      const id = String(params?.channel_id ?? "");
-      if (what === "chat_channels") {
-        return {
-          ...served,
-          read_state: true,
-          channels: [room(), room({ channel: detail("room-2", "launch").channel })],
-        };
-      }
-      if (what === "chat_channel") return detail(id, id === "room-1" ? "general" : "launch");
-      if (what === "chat_messages") return { ...served, channel_id: id, messages: [] };
-      return {};
-    },
+  mountScreen({
+    hash: `#/chatlet/${GENERAL}`,
+    answer: chatAnswers([room(GENERAL, "general"), room(LAUNCH, "launch")]),
   });
   const box = (await screen.findByLabelText(/^Message #general/)) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "did that land?" } });
   const send = screen.getByRole("button", { name: /^send$/i });
   await waitFor(() => expect(send.getAttribute("aria-disabled")).not.toBe("true"));
-  fireEvent.submit(box.closest("form")!);
+  fireEvent.click(send);
   await screen.findByRole("button", { name: /send again/i });
 
-  fireEvent.click(screen.getByRole("button", { name: /switch rooms/i }));
+  flush(() => {
+    location.hash = `#/chatlet/${LAUNCH}`;
+  });
   await screen.findByLabelText(/^Message #launch/);
   // NOT DRAWN IN A ROOM IT WAS NOT SAID IN.
   expect(screen.queryByText("did that land?")).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: /switch rooms/i }));
+  flush(() => {
+    location.hash = `#/chatlet/${GENERAL}`;
+  });
   await screen.findByLabelText(/^Message #general/);
-  // WAITED FOR, not read in the same breath: the room's composer and its
-  // unanswered message are drawn on separate commits, and a loaded runner
-  // put a task between them.
   expect(await screen.findByText("did that land?")).toBeTruthy();
   const retry = await screen.findByRole("button", { name: /send again/i });
   await waitFor(() => expect(retry.getAttribute("aria-disabled")).not.toBe("true"));
@@ -501,18 +560,12 @@ test("an unanswered message and its same-id retry survive a look at another room
 
 // A TAB HANDED TO ANOTHER READER, OR READING AS ANOTHER SEAT, WRITES NOTHING
 // OF THE LAST ONE. A different person signing in hands the whole tab over by
-// a reload (`lib/session.ts`) — its storage emptied and the new reader noted
+// a reload (`lib/session.ts`): its storage emptied and the new reader noted
 // first, then the page goes, which fires the `pagehide` the cursor writer
-// flushes on. A seat that moves under the same person remounts the screen
-// (`Chat.tsx`), whose cleanup flushes too. Every write goes out as whoever
-// the session is when it is sent, under the seat the engine resolves them to
-// then — so either flush, sent, would write the last one's reading as the
-// next one's.
+// flushes on. A seat that moves under the same person remounts the screen,
+// whose cleanup flushes too. Either flush, sent, would write the last one's
+// reading as the next one's.
 describe("a tab handed to another reader, or a seat that moves", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   /** The tab's cursor writer, as the screen's own hook holds it, for `seat`. */
   function Reader({
     seat,
@@ -525,11 +578,6 @@ describe("a tab handed to another reader, or a seat that moves", () => {
     return null;
   }
 
-  /**
-   * Mount the hook reading as `ada`, on a clock the case drives — for the
-   * person the frame's session read names ([ADA_SESSION]), since a tab noted
-   * for anybody else is handed over to them the moment that read lands.
-   */
   async function mountReader(strict = false) {
     const reader = ADA_SESSION.person;
     vi.useFakeTimers();
@@ -544,15 +592,12 @@ describe("a tab handed to another reader, or a seat that moves", () => {
     return { presses, seat, current: () => cursors! };
   }
 
-  /** The cursor writes the engine was sent, as `[tool, args]`. */
   const marks = (presses: { tool: string; args: unknown }[]) =>
     presses.filter(({ tool }) => tool === "mark_chat_read").map(({ args }) => args);
 
   test("a hand-over writes nothing of the last reader, not even on the way out", async () => {
     const { presses, current } = await mountReader();
     current().see("room-1", 900);
-    // THE HAND-OVER'S OWN ORDER: the tab's storage goes, the new reader is
-    // noted, and the page goes — `pagehide` is the last thing this tab does.
     sessionStorage.clear();
     noteReader("person-bo");
     flush(() => {
@@ -568,7 +613,6 @@ describe("a tab handed to another reader, or a seat that moves", () => {
   test("the same reader keeps what they read, and it is written", async () => {
     const { presses, current } = await mountReader();
     current().see("room-1", 900);
-    // A SIGN-IN AS THE SAME PERSON notes nobody new, and moves nothing.
     noteReader(ADA_SESSION.person);
     flush(() => {
       window.dispatchEvent(new Event("pagehide"));
@@ -580,12 +624,6 @@ describe("a tab handed to another reader, or a seat that moves", () => {
   });
 
   test("a tab that learns its reader after the writer was made still writes", async () => {
-    // A TAB OPENED WITH A SESSION ALREADY IN THE BROWSER records nobody until
-    // the frame's session read lands and adopts the session's principal
-    // (`lib/session.ts`'s `takeSession`), and the frame may draw the screen
-    // before that — the viewer can answer over the socket first. The writer
-    // is then made for nobody, and the reader the tab learns is the one every
-    // press it sent was already made as, not somebody else.
     vi.useFakeTimers();
     const presses = actEngine();
     const seat = { current: "ada" };
@@ -606,15 +644,11 @@ describe("a tab handed to another reader, or a seat that moves", () => {
   test("a seat that moved under the writer drops its reading rather than write it", async () => {
     const { presses, seat, current } = await mountReader();
     current().see("room-1", 900);
-    // THE SEAT THE TAB READS AS NOW, written by the screen in the render
-    // that moves it — before the old writer's cleanup or its timer.
     seat.current = "ada-2";
     await flush(async () => {
       await vi.advanceTimersByTimeAsync(READ_FLUSH_MS * 2);
     });
     expect(marks(presses)).toEqual([]);
-    // AND IT IS DONE: a writer whose seat went takes nothing more, even were
-    // the seat to come back under it.
     seat.current = "ada";
     current().see("room-1", 950);
     await flush(async () => {
@@ -624,10 +658,6 @@ describe("a tab handed to another reader, or a seat that moves", () => {
   });
 
   test("under StrictMode the writer set up again still takes what is read", async () => {
-    // REACT SETS AN EFFECT UP, TEARS IT DOWN AND SETS IT UP AGAIN over one
-    // component's state in development, which `main.tsx` renders under. The
-    // teardown stops the writer, and the second setup keeps using it: stopped
-    // for good, the read cursor never moved under `npm run dev`.
     const { presses, current } = await mountReader(true);
     current().see("room-1", 700);
     await flush(async () => {
@@ -637,112 +667,30 @@ describe("a tab handed to another reader, or a seat that moves", () => {
   });
 
   test("a seat that moves remounts the screen: its unsent message and draft go", async () => {
-    // AN ANSWER NOBODY CAN VOUCH FOR keeps the row on screen with a Retry —
-    // which, pressed as the next seat, would say the words as it.
     actEngine((tool) => (tool === "post_message" ? unknown(tool) : applied(tool)));
-    const answers: Partial<Record<QueryName, unknown>> = {
-      viewer: bound,
-      chat_channels: { ...served, read_state: true, channels: [room()] },
-      chat_channel: {
-        ...served,
-        channel: room().channel,
-        revision: 3,
-        message_seq: 0,
-        member: true,
-        members: [],
-      },
-      chat_messages: { ...served, channel_id: "room-1", messages: [] },
-    };
-    const { store } = mountRoom(answers);
-    const box = (await screen.findByLabelText(/^Message/)) as HTMLTextAreaElement;
+    // THE VIEWER THE SOCKET ANSWERS, moved in place below.
+    const viewer: Record<string, unknown> = { ...ADA };
+    const { store } = mountScreen({
+      hash: `#/chatlet/${GENERAL}`,
+      viewer,
+      answer: chatAnswers([room(GENERAL, "general")]),
+    });
+    const box = (await screen.findByLabelText(/^Message #general/)) as HTMLTextAreaElement;
     fireEvent.change(box, { target: { value: "said as ada" } });
     const send = screen.getByRole("button", { name: /^send$/i });
     await waitFor(() => expect(send.getAttribute("aria-disabled")).not.toBe("true"));
-    fireEvent.submit(box.closest("form")!);
+    fireEvent.click(send);
     await screen.findByRole("button", { name: /send again/i });
     fireEvent.change(box, { target: { value: "half a thought of ada's" } });
 
     // THE DIRECTORY BINDS THE PERSON ELSEWHERE: the engine closes the socket,
     // and the reconnect asks the viewer again.
-    answers.viewer = { ...bound, owner: "ada-2", handle: "ada-2" };
+    Object.assign(viewer, { owner: "ada-2", handle: "ada-2" });
     flush(() => store.setConnected(false));
     flush(() => store.setConnected(true));
     await waitFor(() => expect(screen.queryByText("said as ada")).toBeNull());
     expect(screen.queryByRole("button", { name: /send again/i })).toBeNull();
-    const fresh = (await screen.findByLabelText(/^Message/)) as HTMLTextAreaElement;
+    const fresh = (await screen.findByLabelText(/^Message #general/)) as HTMLTextAreaElement;
     expect(fresh.value).toBe("");
-  });
-});
-
-/** A room on [mount]'s socket, with the toast host and act route a press needs. */
-function mountRoom(answers: Partial<Record<QueryName, unknown>>) {
-  const store = new Store();
-  store.applyHealth(healthFrame({ nodes: 1 }));
-  const query = vi.fn(async (what: string) => {
-    const answer = answers[what as QueryName];
-    if (answer instanceof Error) throw answer;
-    return answer ?? {};
-  });
-  const socket = { query, focus: vi.fn() };
-  render(
-    <ToastProvider>
-      <ClientContext.Provider value={{ store, socket } as never}>
-        <SessionReading>
-          <ViewerProvider>
-            <Router>
-              <Chat channel="room-1" />
-            </Router>
-          </ViewerProvider>
-        </SessionReading>
-      </ClientContext.Provider>
-    </ToastProvider>,
-  );
-  return { store, query };
-}
-
-// A DIRECT MESSAGE ASKED FOR BY ADDRESS (`#/chatlet?dm=<handle>`), which is the
-// seat page's and the seat peek's door: the dialog opens ONCE with that seat
-// chosen, and the address is left at once so a reload or Back does not open
-// it again. It waits for the chart, since who may be named is the chart's.
-// Mutation: drop the `nav.filter({ dm: null })` and the address case goes
-// red; choose the handle whether or not the chart answers to it and the
-// stranger case does.
-describe("a direct message asked for by address", () => {
-  const ORG = withDerived({
-    name: "Acme",
-    roles: [
-      { name: "Ada", handle: "ada", kind: "human", goal: "Run it" },
-      { name: "Bo Chen", handle: "bo", goal: "Ship it" },
-    ],
-    units: [],
-  });
-  const rail = { ...served, read_state: true, channels: [] };
-
-  async function arrive(hash: string) {
-    location.hash = hash;
-    const presses = actEngine((tool) => applied(tool, { channel: "dm-1", kind: "dm" }));
-    const { store } = mountChat(<Chat />, { answers: { chat_channels: rail } });
-    flush(() => store.applyOrg(ORG as never));
-    return presses;
-  }
-
-  test("opens New direct message once, with the seat chosen, and leaves the address", async () => {
-    const presses = await arrive("#/chatlet?dm=bo");
-    const dialog = await screen.findByRole("dialog", { name: /new direct message/i });
-    await waitFor(() => expect(location.hash).toBe("#/chatlet"));
-    const press = within(dialog).getByRole("button", { name: /^open$/i });
-    await waitFor(() => expect(press.getAttribute("aria-disabled")).not.toBe("true"));
-    fireEvent.click(press);
-    await waitFor(() => expect(presses).toHaveLength(1));
-    expect(presses[0]).toMatchObject({ tool: "open_dm", args: { to: ["bo"] } });
-  });
-
-  test("a handle nobody in the chart answers to opens it with nobody chosen", async () => {
-    await arrive("#/chatlet?dm=stranger");
-    const dialog = await screen.findByRole("dialog", { name: /new direct message/i });
-    await waitFor(() => expect(location.hash).toBe("#/chatlet"));
-    const press = within(dialog).getByRole("button", { name: /^open$/i });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(press.getAttribute("aria-disabled")).toBe("true");
   });
 });

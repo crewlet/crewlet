@@ -480,7 +480,7 @@ func (noCodingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, erro
 // reads the room, the person's own seat and the seats' names through its grant
 // before the read itself, and the walk holds each of those to the person's own
 // request as well. Any other room is one nobody holds.
-type parityChat struct{}
+type parityChat struct{ noReaderViews }
 
 // parityDirect is parityChat's one room, which has no name: who is in it is
 // all it is said by.
@@ -529,6 +529,11 @@ func (parityChat) RoomNames(context.Context, string, statelog.Freshness) (
 	return chatlet.RoomNames{}, nil
 }
 
+func (parityChat) Directory(context.Context, string, statelog.Freshness) (
+	chatlet.Directory, error) {
+	return chatlet.Directory{}, nil
+}
+
 func (parityChat) Messages(_ context.Context, viewer string, q chatlet.TranscriptQuery,
 	_ statelog.Freshness) (chatlet.Transcript, error) {
 	if q.ChannelID != assistanttest.RecordID {
@@ -546,13 +551,16 @@ func (parityChat) Thread(_ context.Context, viewer string, q chatlet.ThreadQuery
 	return chatlet.Thread{ChannelID: q.ChannelID, Root: parityAsked(viewer)}, nil
 }
 
-func (parityChat) Mentions(_ context.Context, viewer string, _ chatlet.MentionQuery,
-	_ statelog.Freshness) (chatlet.MentionFeed, error) {
+// Activity answers the one message as the place the viewer was named, which
+// is how the assistant reads where a person was named.
+func (parityChat) Activity(_ context.Context, viewer string, _ chatlet.ActivityQuery,
+	_ statelog.Freshness) (chatlet.Activity, error) {
 	asked := parityAsked(viewer)
-	return chatlet.MentionFeed{Handle: viewer, Mentions: []chatlet.Mention{{
+	return chatlet.Activity{Items: []chatlet.ActivityItem{{
+		Key: "mention:" + asked.Message.ID, Kind: chatlet.ActivityMention,
 		MessageID: asked.Message.ID, ChannelID: asked.Message.ChannelID,
-		ChannelKind: chatlet.KindDM, Author: asked.Message.Author,
-		AuthorKind: asked.Message.AuthorKind, Excerpt: asked.Message.Body,
+		ChannelKind: chatlet.KindDM, Actor: asked.Message.Author,
+		ActorKind: asked.Message.AuthorKind, Excerpt: asked.Message.Body,
 		At: asked.Message.CreatedAt}}}, nil
 }
 
