@@ -426,11 +426,13 @@ const PARTIAL: Record<string, unknown> = {
     read_state: true,
     member: true,
   },
-  chat_mentions: {
+  chat_activity: {
     read_level: "local",
     complete: false,
     position: { stream: "CREWLET_CHAT_LOG", generation: 1, seq: 1 },
-    mentions: [],
+    items: [],
+    unread: { mention: 0, reply: 0 },
+    read_state: true,
   },
 };
 
