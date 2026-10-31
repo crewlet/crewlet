@@ -49,6 +49,7 @@ import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { AnswerChoices } from "./AnswerChoices.tsx";
+import { Recommendation } from "./Recommendation.tsx";
 import { useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
@@ -671,14 +672,18 @@ const DECISION_REPLY_MAX = 2000;
  * THE OPEN STATE IS THE CALLER'S, so a card that lists several asks keeps one
  * open at a time: opening one closes whichever was.
  *
- * TWO LAYOUTS OF ONE ANSWER. `line` is the one above, for a list where an ask
- * is one row among others. `buttons` is for a screen where the question is
- * the whole of what is open (the Inbox's pane): every option is a button that
+ * THREE LAYOUTS OF ONE ANSWER. `line` is the one above, for a thread where
+ * an ask is one entry among others. `row` is for a list of decisions, where
+ * the row already says the recommendation beside the ask's key
+ * ([Recommendation]): at rest it draws only Accept and Change, Change as a
+ * quiet button so Accept is the one filled control on the row, and open it is
+ * `line`'s open state. `buttons` is for a screen where the question is the
+ * whole of what is open (the Inbox's pane): every option is a button that
  * sends it with one press (`AnswerChoices`, which a coding run's options are
  * drawn with too), the recommended one first and filled, and
  * "Something else" opens the field in their place. An ask with no options is
- * answered in that field from the start. Either way the answer goes through
- * this one write, so the rules above hold for both.
+ * answered in that field from the start. Whichever the layout, the answer
+ * goes through this one write, so the rules above hold for all three.
  */
 export function AnswerAsk({
   item,
@@ -712,7 +717,7 @@ export function AnswerAsk({
   /** Called once the engine has the answer. */
   onAnswered: (answer: AskAnswer) => void;
   /** How the answer is laid out; see above. */
-  layout?: "line" | "buttons";
+  layout?: "line" | "row" | "buttons";
 }) {
   const write = useAct("comment_on_work_item");
   const named = label || item;
@@ -854,19 +859,10 @@ export function AnswerAsk({
   }
 
   if (!open) {
+    const row = layout === "row";
     return (
-      <div className="decision-answer">
-        <span className="decision-rec">
-          {rec ? (
-            <>
-              Recommended: <strong>{rec.label}</strong>
-            </>
-          ) : words ? (
-            "Answered in words"
-          ) : (
-            "No recommendation"
-          )}
-        </span>
+      <div className={row ? "decision-answer decision-answer--row" : "decision-answer"}>
+        {!row && <Recommendation options={options} recommended={recommended} />}
         <span className="decision-answer-actions">
           {rec && (
             <WriteButton
@@ -882,7 +878,7 @@ export function AnswerAsk({
           <WriteButton
             write={write}
             size="small"
-            variant={rec ? "secondary" : "primary"}
+            variant={rec ? (row ? "ghost" : "secondary") : "primary"}
             showRefusal={false}
             pressing={false}
             blocked={write.busy ? "Your answer to this ask is being sent" : undefined}

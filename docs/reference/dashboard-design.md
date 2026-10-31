@@ -2837,13 +2837,15 @@ company did.** That is Home until its reader arranges it (see
   figure waits for its own answer and says so; one whose answer has not
   arrived is never a `0`.
 - **Needs your decision**, the first three, newest first, each answerable IN
-  PLACE (`DecisionList`). Asks are GROUPED BY WHO IS ASKING: one head names the
-  asker (the seat they asked as, never a credential) with their badge, and
-  what every one of their asks shares (the item, the role the reader is asked
-  in, how long ago); what differs between two asks is said on the ask, and so
-  is the channel an ask promised to post its answer to ("answer posted to
-  #releases"). Under each question one line reads "Recommended: Hold release"
-  with **Accept**, which sends that option, and **Change**, which opens every
+  PLACE (`DecisionList`). Asks are GROUPED BY WHO IS ASKING: one head, a quiet
+  band, names the asker (the seat they asked as, never a credential) with
+  their small face and badge, and what every one of their asks shares (the
+  item, the role the reader is asked in, how long ago); what differs between
+  two asks is said on the ask, and so is the channel an ask promised to post
+  its answer to ("answer posted to #releases"). Each question is ONE ROW: the
+  question (two lines at most on Home), and under it its key and "Recommended:
+  Hold release", with **Accept**, which sends that option, and a quiet
+  **Change** at the row's end, centred on the words. **Change** opens every
   option as a choice with its detail line and the recommended one tagged
   (the kit's `ChoiceList`), plus **Something else**, whose field (the kit's
   `Composer`, up to 2,000 characters, Command+Enter to send) sends a reply
@@ -2866,8 +2868,11 @@ company did.** That is Home until its reader arranges it (see
   answered in words in place: **Reply** opens the field under the question
   and sends `comment_on_work_item{answers, body}`. Every
   control is drawn for every reader and disabled with its reason where this
-  browser cannot act. **Open inbox** and **Review** both land on
-  `#/inbox`, whose list opens with every one of them under Needs you.
+  browser cannot act. A parked run and a stopped seat sit under the same head
+  as an ask, the seat's name said there and not again in the row's title. The
+  card's foot, **Show 4 more in Inbox** (**Open inbox** where it lists them
+  all), and **Review** both land on `#/inbox`, whose list opens with every one
+  of them under Needs you.
 - **Live now**: how many seats the engine says are working, and for the
   longest-running four whose turn has an id — the very rows the sidebar's
   Running group names, in its order — what each is on (the item the turn is

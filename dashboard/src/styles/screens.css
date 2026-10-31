@@ -7035,9 +7035,11 @@ a.work-cal-chip {
 }
 
 /* A CARD'S COUNT sits beside its title, in the state it counts. */
-.home-card-count {
-  margin-inline-start: var(--spacing-2);
-  vertical-align: middle;
+/* THE COUNT ON THE TITLE'S CENTRE LINE, not its baseline, a step after it. */
+.crewlet-card__title:has(> .home-card-count) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
 }
 .home-card-caption {
   font-size: var(--font-size-xs);
@@ -7480,26 +7482,32 @@ a.work-cal-chip {
   padding: 0;
   list-style: none;
 }
-.decision-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
+/* ONE ROW A DECISION: its words on the left (the title over one line of what
+   it is about) and its controls on the right, centred on the words. An
+   asker's questions, a parked run and a stopped seat are all drawn this way,
+   each block under its head ([.decision-group-head]). */
+.decision-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  padding: 10px var(--spacing-4);
 }
-.decision-body {
+.decision-item + .decision-item {
+  border-top: 1px solid var(--color-edge-hairline);
+}
+.decision-text {
   display: flex;
-  flex: 1 1 auto;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 .decision-title {
   font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
   overflow-wrap: anywhere;
 }
+
 .decision-sub,
 .decision-line {
   font-size: var(--font-size-xs);
@@ -7533,47 +7541,45 @@ a.work-cal-chip {
 }
 .decision-actions {
   display: flex;
-  flex: none;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
-  max-width: 50%;
 }
-/* THE ASKS ONE PERSON PUT, under one head: their badge, their name, and what
-   every ask shares (the item, the role, how long ago). The questions sit under
-   it, indented to the name, each with its answer in place. */
+/* A BLOCK UNDER ONE HEAD: a quiet band with the seat's small face, its name,
+   and what every row under it shares (the item, the role, how long ago). */
 .decision-group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-3) var(--spacing-4) var(--spacing-2);
   border-top: 1px solid var(--color-border-default);
 }
 .decision-group-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-1) var(--spacing-3);
+  gap: 2px var(--spacing-2);
   min-width: 0;
+  padding: 6px var(--spacing-4);
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-surface-inset);
 }
 .decision-group-who {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
 }
 .decision-questions {
   margin: 0;
-  padding: 0 0 0 calc(32px + var(--spacing-3));
+  padding: 0;
   list-style: none;
 }
-.decision-question {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3) 0;
+/* THE OPEN ANSWER, the answered line and a refusal take the row's whole
+   width under its words. At rest the row layout's wrapper draws nothing of
+   its own, so Accept and Change are the row's second column. */
+.decision-item > .decision-answer.is-open,
+.decision-item > .decision-answered,
+.decision-answer--row > :not(.decision-answer-actions) {
+  grid-column: 1 / -1;
 }
-.decision-question + .decision-question {
-  border-top: 1px solid var(--color-border-default);
+.decision-answer--row {
+  display: contents;
 }
 /* AT REST, ONE LINE: the recommendation, then Accept and Change at its end. */
 .decision-answer {
@@ -7646,20 +7652,11 @@ a.work-cal-chip {
   container: decision-list / inline-size;
 }
 @container decision-list (width < 480px) {
-  .decision-row {
-    flex-wrap: wrap;
-  }
-  .decision-body {
-    flex-basis: calc(100% - 3rem);
+  .decision-item {
+    grid-template-columns: minmax(0, 1fr);
   }
   .decision-actions {
-    flex: 1 1 100%;
-    max-width: none;
     justify-content: flex-start;
-    padding-inline-start: calc(32px + var(--spacing-3));
-  }
-  .decision-questions {
-    padding-inline-start: 0;
   }
 }
 
