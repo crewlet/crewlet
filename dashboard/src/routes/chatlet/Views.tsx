@@ -47,6 +47,7 @@ import { AtSignGlyph, MessagesSquareGlyph, SendGlyph } from "@crewlethq/icons/gl
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
 import { usePageCoverage } from "~/app/Shell.tsx";
+import { MAX_DIRECT_PARTICIPANTS } from "~/contract/chat.ts";
 import { QueryState } from "~/components/common.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -917,8 +918,18 @@ export function NewMessageView() {
   const others = people.everyone.filter(
     (person) => person.handle !== frame.viewer && !to.includes(person.handle),
   );
+  // THE AUTHOR IS ADDED BY THE ENGINE, so the cap here is one short of its
+  // own: seven others and the reader are the eight a conversation holds. At
+  // the cap nobody more is offered; past it (an address that names more) the
+  // message is held, and both say why.
+  const full = to.length >= MAX_DIRECT_PARTICIPANTS - 1;
+  const crowded =
+    to.length > MAX_DIRECT_PARTICIPANTS - 1
+      ? `That’s ${to.length + 1} people counting you, and a conversation holds at most ${MAX_DIRECT_PARTICIPANTS}. For more, start a room.`
+      : "";
   const roomQuery = q.startsWith("#") ? q.slice(1).toLowerCase() : null;
-  const matches = roomQuery === null ? others.filter((person) => matchesPerson(person, q)) : [];
+  const matches =
+    roomQuery === null && !full ? others.filter((person) => matchesPerson(person, q)) : [];
   const rooms =
     roomQuery === null
       ? []
@@ -940,9 +951,11 @@ export function NewMessageView() {
   const blocked =
     to.length === 0
       ? "Choose who it is to first"
-      : body.trim() === ""
-        ? "Write a message first"
-        : undefined;
+      : crowded
+        ? crowded
+        : body.trim() === ""
+          ? "Write a message first"
+          : undefined;
 
   async function send() {
     if (blocked) return;
@@ -1023,6 +1036,12 @@ export function NewMessageView() {
               </li>
             ))}
           </ul>
+        )}
+        {full && (
+          <p className="chat-pane-note">
+            {crowded ||
+              `A conversation holds at most ${MAX_DIRECT_PARTICIPANTS} people, you included. For more, start a room.`}
+          </p>
         )}
         {to.length > 0 && q === "" && (
           <div className="chat-new-preview">

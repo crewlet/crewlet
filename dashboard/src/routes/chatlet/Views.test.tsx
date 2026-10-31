@@ -14,6 +14,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { ADA, actEngine, applied, type Pressed } from "~/test/chat.tsx";
+import { MAX_DIRECT_PARTICIPANTS } from "~/contract/chat.ts";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
 import { mountInFrame } from "./frameKit.tsx";
@@ -229,5 +230,26 @@ describe("New message", () => {
     expect(presses[0]!.args).toEqual({ to: ["bo"] });
     expect(presses[1]!.args).toMatchObject({ channel: "dm-1", body: "hello" });
     await waitFor(() => expect(location.hash).toContain("/chatlet/dm-1"));
+  });
+
+  test("holds a conversation to the engine's direct limit, the reader included", async () => {
+    // EIGHT OTHERS ARE NINE PEOPLE, one past `MAX_DIRECT_PARTICIPANTS`: the
+    // engine would refuse the conversation, so the message is held with why
+    // and nobody more is offered.
+    const crowd = Array.from({ length: MAX_DIRECT_PARTICIPANTS }, (_, n) => `p${n}`);
+    mount(<NewMessageView />, `#/chatlet/new?to=${crowd.join(",")}`, {});
+    expect(await screen.findByText(/That’s 9 people counting you/, { selector: "p" })).toBeTruthy();
+    fireEvent.change(screen.getByRole("textbox", { name: /^message$/i }), {
+      target: { value: "hello" },
+    });
+    await heldWith(
+      screen.getByRole("button", { name: /^send$/i }),
+      `That’s 9 people counting you, and a conversation holds at most ${MAX_DIRECT_PARTICIPANTS}. For more, start a room.`,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: /who the message is to/i }), {
+      target: { value: "b" },
+    });
+    expect(screen.queryByText("Bo Chen")).toBeNull();
+    expect(presses).toHaveLength(0);
   });
 });

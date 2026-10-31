@@ -66,7 +66,9 @@ export function holdOf(control: HTMLElement): string | null {
     .map((id) => (id ? document.getElementById(id)?.textContent : ""))
     .join(" ")
     .trim();
-  return control.getAttribute("title") ?? (said || control.textContent);
+  // THE WORDS IT IS DESCRIBED BY COME FIRST: the kit's icon button titles
+  // itself with its label and says its reason in a described-by node.
+  return said || (control.getAttribute("title") ?? control.textContent);
 }
 
 /** A control held with `reason`: drawn, refusing the press, and saying why. */
