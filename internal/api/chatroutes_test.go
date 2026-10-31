@@ -20,14 +20,20 @@ import (
 // chatReadRoutes are the chat questions as the published API spells them, one
 // path per question.
 var chatReadRoutes = map[string]string{
-	"/chatlet/channels":                    "chat_channels",
-	"/chatlet/channels/room-1":             "chat_channel",
-	"/chatlet/channels/room-1/messages":    "chat_messages",
-	"/chatlet/channels/room-1/threads/m-1": "chat_thread",
-	"/chatlet/mentions":                    "chat_mentions",
-	"/chatlet/search":                      "chat_search",
-	"/chatlet/room-names":                  "chat_room_names",
-	"/chatlet/rooms":                       "chat_rooms",
+	"/chatlet/channels":                     "chat_channels",
+	"/chatlet/channels/room-1":              "chat_channel",
+	"/chatlet/channels/room-1/messages":     "chat_messages",
+	"/chatlet/channels/room-1/threads/m-1":  "chat_thread",
+	"/chatlet/mentions":                     "chat_mentions",
+	"/chatlet/search":                       "chat_search",
+	"/chatlet/room-names":                   "chat_room_names",
+	"/chatlet/activity":                     "chat_activity",
+	"/chatlet/threads":                      "chat_threads",
+	"/chatlet/saved":                        "chat_saved",
+	"/chatlet/sent":                         "chat_sent",
+	"/chatlet/channels/room-1/links":        "chat_links",
+	"/chatlet/channels/room-1/messages/m-2": "chat_message",
+	"/chatlet/rooms":                        "chat_rooms",
 }
 
 // EVERY CHAT READ ROUTE REACHES THE REGISTRY.
@@ -84,6 +90,12 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 		"/chatlet/mentions?cursor=c":                     "chat_mentions",
 		"/chatlet/search":                                "chat_search",
 		"/chatlet/room-names":                            "chat_room_names",
+		"/chatlet/activity?cursor=c":                     "chat_activity",
+		"/chatlet/threads":                               "chat_threads",
+		"/chatlet/saved":                                 "chat_saved",
+		"/chatlet/sent":                                  "chat_sent",
+		"/chatlet/channels/room-1/links":                 "chat_links",
+		"/chatlet/channels/room-1/messages/m-2":          "chat_message",
 		"/chatlet/rooms":                                 "chat_rooms",
 	} {
 		rec := httptest.NewRecorder()
@@ -101,7 +113,7 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 		}
 		wantRoom, wantRoot := "", ""
 		switch what {
-		case "chat_messages", "chat_channel":
+		case "chat_messages", "chat_channel", "chat_links", "chat_message":
 			wantRoom = "room-1"
 		case "chat_thread":
 			wantRoom, wantRoot = "room-1", "m-1"
@@ -218,7 +230,6 @@ func TestTheAppTellsTheChatHubItServesSocketsOnceBuilt(t *testing.T) {
 		t.Error("the app mounted its socket over the hub and never said so")
 	}
 }
-
 
 // noReaderViews is a chat reader double's reader views when its suite reads
 // none of them: each is refused, so a case that reaches one by mistake fails

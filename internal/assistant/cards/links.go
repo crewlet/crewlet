@@ -182,6 +182,51 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 	return wire.Link{Label: label, Screen: name, Href: strings.Join(segments, "/")}, nil
 }
 
+// ScreenOf is the record screen a dashboard address opens and the parameters
+// it names: the link table read backwards, so "#/worklet/ENG-12" is the item
+// screen with id ENG-12. False for an address no screen of the table resolves,
+// and for one that only a screen naming no record does: what reads an address
+// back asks about the record it names.
+//
+// THE SAME TABLE AND THE SAME GRAMMARS [Link] writes with, so an address read
+// back is one this table would build, and a value outside a placeholder's
+// grammar (a project key where a task's goes) names no screen.
+func ScreenOf(address string) (string, map[string]string, bool) {
+	segments := strings.Split(address, "/")
+	for _, name := range Screens() {
+		template := strings.Split(links[name].address, "/")
+		if len(template) != len(segments) {
+			continue
+		}
+		params := map[string]string{}
+		matched := true
+		for i, part := range template {
+			p, placeholder := placeholders[part]
+			if !placeholder {
+				if part != segments[i] {
+					matched = false
+					break
+				}
+				continue
+			}
+			value, err := url.PathUnescape(segments[i])
+			grammar := p.value
+			if part == "{id}" && links[name].id != nil {
+				grammar = links[name].id
+			}
+			if err != nil || !grammar.MatchString(value) {
+				matched = false
+				break
+			}
+			params[p.param] = value
+		}
+		if matched && len(params) > 0 {
+			return name, params, true
+		}
+	}
+	return "", nil, false
+}
+
 // checkOpen reports a spec's link naming a screen the table does not hold, or
 // parameters that screen does not take.
 func checkOpen(o *Open) error {

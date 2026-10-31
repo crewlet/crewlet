@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 	"testing"
@@ -470,6 +471,38 @@ func TestAKeyedKindNeedsItsKeyAndNoOtherHasOne(t *testing.T) {
 		e := tc.e
 		if err := (cards.Spec{Entity: &e}).Validate(); (err == nil) != tc.ok {
 			t.Errorf("%s: Validate = %v", tc.name, err)
+		}
+	}
+}
+
+// AN ADDRESS READ BACK IS THE RECORD THE TABLE BUILT IT FOR: every record
+// screen's link, read back, names that screen and those parameters, and an
+// address naming no record, or a value outside its grammar, names none.
+//
+// Mutation: drop the grammar check and "#/worklet/ENG" reads as a task.
+func TestAnAddressReadsBackAsTheRecordItOpens(t *testing.T) {
+	t.Parallel()
+	for screen, params := range map[string]map[string]string{
+		"item":     {"id": "ENG-12"},
+		"page":     {"id": "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31"},
+		"artifact": {"id": "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e32"},
+		"project":  {"key": "ENG"},
+		"seat":     {"handle": "pm"},
+	} {
+		link, err := cards.Link(screen, params, "")
+		if err != nil {
+			t.Fatalf("link %s: %v", screen, err)
+		}
+		got, read, ok := cards.ScreenOf(link.Href)
+		if !ok || got != screen || !maps.Equal(read, params) {
+			t.Errorf("%s read back as %q %v (%v), want %s %v", link.Href, got, read, ok,
+				screen, params)
+		}
+	}
+	for _, address := range []string{"#/worklet/tasks", "#/worklet/eng-12x", "#/nowhere/1",
+		"#/doclet/pages/not-a-uuid"} {
+		if screen, _, ok := cards.ScreenOf(address); ok {
+			t.Errorf("%s read back as %s, want no record", address, screen)
 		}
 	}
 }
