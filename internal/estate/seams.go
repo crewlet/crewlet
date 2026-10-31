@@ -673,6 +673,15 @@ func (c Chat) SetMembers(ctx context.Context, actor chatlet.Actor, channelID str
 	return out, err
 }
 
+// AddMembers puts people in a room, answering who it put there.
+func (c Chat) AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
+	handles []string) (chatlet.Written, []string, error) {
+	out, err := call(ctx, c.r, opChatAddMembers, nil,
+		chatAddMembersArgs{Actor: actor, ChannelID: channelID, Handles: handles})
+	c.settled(out.Written)
+	return out.Written, out.Added, err
+}
+
 // Join puts the actor in a room.
 func (c Chat) Join(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error) {
 	out, err := call(ctx, c.r, opChatJoin, nil, chatMembershipArgs{Actor: actor, ChannelID: channelID})

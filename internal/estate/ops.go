@@ -269,6 +269,8 @@ type ChatWriter interface {
 		authority chatlet.ChannelAuthority) (chatlet.Written, error)
 	SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
 		members []chatlet.Member) (chatlet.Written, error)
+	AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
+		handles []string) (chatlet.Written, []string, error)
 	Join(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error)
 	Leave(ctx context.Context, actor chatlet.Actor, channelID string) (chatlet.Written, error)
 	Post(ctx context.Context, actor chatlet.Actor, channelID string,
@@ -2030,6 +2032,27 @@ var opChatSetMembers = define("chat.set_members", opOnceWrite, chatDomain, false
 		}
 		return b.ChatWriter.SetMembers(ctx, a.Actor, a.ChannelID, a.Members)
 	}).repeatableWhen(func(a chatSetMembersArgs) bool { return chatKeyed(a.Actor) })
+
+type chatAddMembersArgs struct {
+	Actor     chatlet.Actor
+	ChannelID string
+	Handles   []string
+}
+
+// addedMembers is [ChatWriter.AddMembers]' two answers, named.
+type addedMembers struct {
+	Written chatlet.Written
+	Added   []string
+}
+
+var opChatAddMembers = define("chat.add_members", opOnceWrite, chatDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a chatAddMembersArgs) (addedMembers, error) {
+		if b.ChatWriter == nil {
+			return addedMembers{}, errNoHalf
+		}
+		w, added, err := b.ChatWriter.AddMembers(ctx, a.Actor, a.ChannelID, a.Handles)
+		return addedMembers{Written: w, Added: added}, err
+	}).repeatableWhen(func(a chatAddMembersArgs) bool { return chatKeyed(a.Actor) })
 
 type chatMembershipArgs struct {
 	Actor     chatlet.Actor

@@ -146,6 +146,13 @@ const (
 	// its own membership ([JoinChannelTool], [LeaveChannelTool]).
 	SetChannelMembersTool = "set_channel_members"
 
+	// AddChannelMembersTool puts people in a room, and nobody out: what a
+	// person adding a colleague means, decided against the room as it
+	// stands when it lands ([Store.AddMembers]), so a membership somebody
+	// else moved a moment before is never stated back over. A person's for
+	// [SetChannelMembersTool]'s reason.
+	AddChannelMembersTool = "add_channel_members"
+
 	// MarkChatReadTool records how far a person has read, what they muted and
 	// whether they are in do-not-disturb. A read cursor is a person's
 	// attention; a seat is woken rather than browsing, and has none.
@@ -156,7 +163,8 @@ const (
 func OperatorOnlyTools() []string {
 	return []string{
 		EditMessageTool, DeleteMessageTool, CreateChannelTool, OpenDMTool,
-		UpdateChannelTool, SetChannelMembersTool, MarkChatReadTool,
+		UpdateChannelTool, SetChannelMembersTool, AddChannelMembersTool,
+		MarkChatReadTool,
 	}
 }
 
@@ -220,7 +228,8 @@ func WriteTools() []string {
 // no seat holds it today, a family is drawn by what a tool WRITES, and a tool
 // that undoes another and is left out is the hole this closes.
 func MembershipTools() []string {
-	return []string{JoinChannelTool, LeaveChannelTool, SetChannelMembersTool}
+	return []string{JoinChannelTool, LeaveChannelTool, SetChannelMembersTool,
+		AddChannelMembersTool}
 }
 
 // CallFamily is the tools a call to tool is COUNTED AMONG when a turn derives

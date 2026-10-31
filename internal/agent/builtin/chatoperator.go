@@ -231,9 +231,12 @@ func (t *updateChannel) Name() string { return chatlet.UpdateChannelTool }
 
 func (t *updateChannel) Description() string {
 	return "Change a room's settings: its topic, its purpose, whether it is " +
-		"archived. Only what you name changes. An archived room is still read " +
-		"and searched and takes no new messages; archiving it, or opening it " +
-		"again, is its creator's, its unit's lead's or an admin's."
+		"archived, and whether it takes in everybody who joins the company. Only " +
+		"what you name changes, and the room's transcript records a new topic " +
+		"or purpose as a line. An archived room is still read and searched and " +
+		"takes no new messages; archiving it, or opening it again, is its " +
+		"creator's, its unit's lead's or an admin's. Auto-join is an admin's, " +
+		"and a public room's only."
 }
 
 func (t *updateChannel) Parameters() map[string]any {
@@ -255,6 +258,20 @@ func (t *updateChannel) Parameters() map[string]any {
 			"archived": map[string]any{
 				"type":        "boolean",
 				"description": "True closes the room to new messages; false reopens it.",
+			},
+			"template": map[string]any{
+				"type": "string",
+				"description": fmt.Sprintf("The name of the template the topic "+
+					"and purpose are set from, at most %d characters: the "+
+					"transcript records one line naming it in place of a topic "+
+					"line and a purpose line. Send it with the template's topic "+
+					"or purpose.", chatlet.MaxTemplateName),
+			},
+			"auto_join": map[string]any{
+				"type": "boolean",
+				"description": "True puts everybody who joins the company from " +
+					"now on in this public room; false stops it. Nobody already " +
+					"in the company is added. An administrator's setting.",
 			},
 		},
 		"required": []any{"channel"},
@@ -295,9 +312,21 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		patch.Archived = &archived
 	}
-	if patch.Topic == nil && patch.Purpose == nil && patch.Archived == nil {
-		return failed(chatlet.UpdateChannelTool + " names no change — set at least one of " +
-			"`topic`, `purpose` and `archived`."), nil
+	if args["template"] != nil {
+		template := strings.TrimSpace(argString(args, "template"))
+		patch.Template = &template
+	}
+	if raw := args["auto_join"]; raw != nil {
+		on, ok := argval.Bool(raw)
+		if !ok {
+			return failed(chatlet.UpdateChannelTool + "'s `auto_join` is true or false."), nil
+		}
+		patch.AutoJoin = &on
+	}
+	if patch.Topic == nil && patch.Purpose == nil && patch.Archived == nil &&
+		patch.AutoJoin == nil {
+		return failed(chatlet.UpdateChannelTool + " names no change. Set at least one of " +
+			"`topic`, `purpose`, `archived` and `auto_join`."), nil
 	}
 	actor, id, refusal := t.deps.resolved(ctx, turn, name, args)
 	if refusal != nil {
@@ -310,6 +339,18 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return *refusal, nil
 		}
 		authority = decided
+	}
+	if patch.AutoJoin != nil {
+		// AN ADMINISTRATOR'S, asked of the authority table here and carried
+		// to the store as the decision, as the archive's is: the room's
+		// kind, which only a public room passes, is the store's to judge
+		// against its own snapshot.
+		if refused := t.deps.mayWrite(ctx, authz.ActionChatAutoJoin, authz.Object{
+			Kind: authz.KindChannel, ID: id,
+		}); refused != nil {
+			return *refused, nil
+		}
+		authority.AutoJoin = true
 	}
 	const look = "Read the room's settings with " + ListChannelsTool
 	written, err := t.deps.Writer.PatchChannel(ctx, actor, id, patch, authority)
@@ -330,7 +371,8 @@ func (t *updateChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return read.answer(ctx, name, statedReceipt(written, map[string]any{
 		"channel": id, "name": written.Channel.Name,
 		"topic": written.Channel.Topic, "purpose": written.Channel.Purpose,
-		"archived": written.Channel.ArchivedAt != nil,
+		"archived":  written.Channel.ArchivedAt != nil,
+		"auto_join": written.Channel.AutoJoin,
 	}), "")
 }
 
@@ -460,6 +502,70 @@ func (t *setChannelMembers) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	return stated(name, written, look, map[string]any{
 		"channel": id, "name": written.Channel.Name, "members": handles,
+	})
+}
+
+// ---- add_channel_members ----------------------------------------------- //
+
+type addChannelMembers struct{ deps ChatDeps }
+
+var _ tools.SeatCallable = (*addChannelMembers)(nil)
+
+func (t *addChannelMembers) Name() string { return chatlet.AddChannelMembersTool }
+
+func (t *addChannelMembers) Description() string {
+	return "Put people and agents in a room, taking nobody out. The room's " +
+		"transcript records who you added. A unit's own room and a direct " +
+		"conversation cannot be changed this way, and a private room only by " +
+		"somebody in it."
+}
+
+func (t *addChannelMembers) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"channel": map[string]any{
+				"type":        "string",
+				"description": "The room: its id, or its name.",
+			},
+			"members": map[string]any{
+				"type": "array", "items": map[string]any{"type": "string"},
+				"description": "The handles of the people and agents to add. " +
+					"Anybody already in the room stays as they are.",
+			},
+		},
+		"required": []any{"channel", "members"},
+	}
+}
+
+func (t *addChannelMembers) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *addChannelMembers) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	const name = chatlet.AddChannelMembersTool
+	if t.deps.Writer == nil {
+		return unconfiguredChat(name), nil
+	}
+	handles := argStrings(args, "members")
+	if len(handles) == 0 {
+		return failed(name + " needs `members`: the handles of the people and " +
+			"agents to add."), nil
+	}
+	actor, id, refusal := t.deps.resolved(ctx, turn, name, args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	const look = "Look at the room's members"
+	written, added, err := t.deps.Writer.AddMembers(ctx, actor, id, handles)
+	if err != nil {
+		return chatWriteFailure(ctx, name, err, restateNext(look)), nil
+	}
+	t.deps.settle(ctx, written.Outcome.Position)
+	return stated(name, written, look, map[string]any{
+		"channel": id, "name": written.Channel.Name, "added": added,
 	})
 }
 

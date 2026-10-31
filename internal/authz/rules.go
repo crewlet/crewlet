@@ -218,6 +218,7 @@ const (
 	ActionChatOpenDM  Action = "open_dm"
 	ActionChatUpdate  Action = "update_channel"
 	ActionChatMembers Action = "set_channel_members"
+	ActionChatAdd     Action = "add_channel_members"
 	ActionChatEdit    Action = "edit_message"
 	ActionChatDelete  Action = "delete_message"
 	ActionChatMark    Action = "mark_chat_read"
@@ -227,6 +228,10 @@ const (
 	// halves of that are on the row, never in the arguments. DOTTED, because
 	// no tool is named for it.
 	ActionChatArchive Action = "chat.channel.archive"
+	// ActionChatAutoJoin is a public room's auto-join setting: every seat the
+	// company takes on from then is put in it. Asked from inside
+	// `update_channel`, DOTTED for the archive's reason.
+	ActionChatAutoJoin Action = "chat.channel.autojoin"
 
 	// --- the company's own controls --------------------------------- //
 	ActionConfigRead  Action = "config.read"
@@ -1007,6 +1012,8 @@ var rules = map[Action]rule{
 		recency: iam.RecencyAny, assist: AssistApprove},
 	ActionChatMembers: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionChatAdd: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
 	// A MESSAGE IS ITS AUTHOR'S, or admin's — the comment precedent: the
 	// class answers "may you touch this remark", and the WRITER refuses
 	// anybody but the author an EDIT, because an edit puts words in
@@ -1028,6 +1035,11 @@ var rules = map[Action]rule{
 	// a unit's room belongs to or of a unit above it, or admin. Never an
 	// agent's, as no room setting is.
 	ActionChatArchive: {class: ClassTidy, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	// A ROOM THAT TAKES IN EVERYBODY THE COMPANY TAKES ON is a decision
+	// about the whole company's rooms, not about one conversation, so it is
+	// an administrator's, as a person, and never an agent's.
+	ActionChatAutoJoin: {class: ClassAdmin, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
 
 	// --- everybody's overview ---------------------------------------- //

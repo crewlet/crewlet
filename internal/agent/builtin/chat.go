@@ -118,6 +118,8 @@ type ChatWriter interface {
 		patch chatlet.ChannelPatch, authority chatlet.ChannelAuthority) (chatlet.Written, error)
 	SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
 		members []chatlet.Member) (chatlet.Written, error)
+	AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
+		handles []string) (chatlet.Written, []string, error)
 	Edit(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
 		in chatlet.EditMessage) (chatlet.Written, error)
 	Delete(ctx context.Context, actor chatlet.Actor, channelID, messageID string,
