@@ -53,6 +53,23 @@
 // An [Environment] entry is only checked in the unlisted direction, since
 // whether it fires is a fact about the machine.
 //
+// # Stale means its test ran, never that its package did
+//
+// An entry is judged only where this run says something about ITS TEST, and
+// that is decided by [coverage], from three facts: which tests STARTED (each
+// one's test2json `run` record), which packages PASSED, and whether the
+// command NARROWED the tests of the packages it named (a non-empty -run or
+// -skip). A test that started and did not skip is stale, whatever the command.
+// A test that never started is stale only on an unnarrowed run of its package
+// that passed, where every test started, so one that did not is a test that
+// was renamed or deleted. On a narrowed run it is a test the filter left out,
+// and in a package that failed it may be one a panic, -failfast or the timeout
+// never reached: neither says anything about the entry, and a failed package
+// fails the run already. Judging
+// by the package alone, as this gate first did, failed every
+// `go test -run X ./internal/store` with every test that ran green, because a
+// package that ran was taken to have run every entry declared in it.
+//
 // # The timings a run leaves behind
 //
 //	go run ./internal/skipgate -timings FILE -- go test -json <packages>
@@ -139,28 +156,51 @@ type report struct {
 	// run containing only such packages has a non-empty `ran` and would have
 	// satisfied a guard written on it — reporting success with not one test
 	// executed, which is the exact shape this program exists to refuse. `ran`
-	// answers "which packages did this run cover", which is what the stale
-	// check needs; this answers "did anything actually run".
+	// answers "which packages did this run cover"; this answers "did anything
+	// actually run".
 	tests int
 
 	// measuredSeen is which declared measurements actually reported, so a
 	// renamed one is caught rather than silently stopping.
 	measuredSeen map[string]bool
 
-	// ran is every package the stream carried a record for.
+	// ran is every package the stream carried a record for: what the verdict
+	// counts, and where a truncated stream's held output is flushed from.
 	//
-	// Load-bearing for the staleness half: BOTH test targets run a SUBSET of
-	// the tree — `make test` the shared partition, `make test-solo` the rest —
-	// so without this, every Always entry belonging to the other run reads as
-	// "declared and did not skip" and each run fails on the other's entries.
-	// Staleness is only a question about a package that ran.
+	// NOT what the staleness half judges by. BOTH test targets run a SUBSET
+	// of the tree — `make test` the shared partition, `make test-solo` the
+	// rest — and a -run covers part of one package, so an entry is judged by
+	// its own test ([coverage]: the tests that started, and the packages that
+	// passed), never by its package having a record here.
 	ran map[string]bool
+
+	// started is every test the stream said began — its `run` record — keyed
+	// as the short package, NUL, and the test's full name, subtests included.
+	//
+	// It is what lets a narrowed run be judged. `go test -run X` runs part of
+	// a package, so ran says the package ran while most of its tests never
+	// did; an entry is judged there only if its own test started. See
+	// [coverage].
+	started map[string]bool
 
 	// finished is every package whose binary reported its own result, by
 	// FULL import path — the form `go test` was handed and the partition
 	// prints, which is what the -timings file is read against. Narrower than
 	// ran: a stream cut off mid-package has records for it and no result.
 	finished map[string]finish
+}
+
+// passed is every package, by its short path, whose binary reported pass:
+// read from finished, because a package-level `pass` is the one record that
+// says the binary went through every test it selected to its end.
+func (r report) passed() map[string]bool {
+	out := map[string]bool{}
+	for pkg, f := range r.finished {
+		if f.action == "pass" {
+			out[short(pkg)] = true
+		}
+	}
+	return out
 }
 
 // read consumes a test2json stream and renders it back as PLAIN `go test`
@@ -178,7 +218,8 @@ type report struct {
 // writes build errors and toolchain chatter around the stream, and a gate that
 // swallowed those would hide the one failure nobody can debug without them.
 func read(in *bufio.Scanner, out *os.File) report {
-	r := report{ran: map[string]bool{}, measuredSeen: map[string]bool{}, finished: map[string]finish{}}
+	r := report{ran: map[string]bool{}, started: map[string]bool{},
+		measuredSeen: map[string]bool{}, finished: map[string]finish{}}
 	buffered := map[string][]string{}
 
 	for in.Scan() {
@@ -236,6 +277,8 @@ func read(in *bufio.Scanner, out *os.File) report {
 
 		key := e.Package + "\x00" + e.Test
 		switch e.Action {
+		case "run":
+			r.started[short(e.Package)+"\x00"+e.Test] = true
 		case "output":
 			buffered[key] = append(buffered[key], e.Output)
 		case "pass", "fail", "skip":
@@ -412,8 +455,10 @@ func main() {
 		exit(1)
 	}
 
-	unlisted, stale := Judge(r.skipped, r.ran)
-	staleMeasured := JudgeMeasured(r.measuredSeen, r.ran)
+	cov := coverage{passed: r.passed(), started: r.started,
+		narrowed: narrows(argv[1:], os.Getenv("GOFLAGS"))}
+	unlisted, stale := Judge(r.skipped, cov)
+	staleMeasured := JudgeMeasured(r.measuredSeen, cov)
 
 	for _, s := range unlisted {
 		fmt.Fprintf(os.Stderr, "\nskipgate: %s %s SKIPPED and nothing says it may.\n"+
@@ -423,6 +468,16 @@ func main() {
 			s.Package, s.Test)
 	}
 	for _, s := range stale {
+		if !cov.started[s.Package+"\x00"+s.Test] {
+			// Judged without starting: an unnarrowed run of its package that
+			// passed, so the test is not there to skip. "Did not skip" would
+			// send the reader looking for a capability that arrived.
+			fmt.Fprintf(os.Stderr, "\nskipgate: %s %s is allowed as When: Always and NEVER RAN,\n"+
+				"on a passing run of every test of its package: the test was renamed or\n"+
+				"deleted. Rename or drop the entry in internal/skipgate/allowed.go.\n",
+				s.Package, s.Test)
+			continue
+		}
 		fmt.Fprintf(os.Stderr, "\nskipgate: %s %s is allowed as When: Always and did NOT skip.\n"+
 			"A structural skip that stopped skipping means the thing it described\n"+
 			"changed — the capability arrived, or the case was rewritten. Drop the\n"+
@@ -526,22 +581,96 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 	}
 }
 
+// coverage is what one run says about a declared test: whether it was among
+// the tests the run ran, which is the only case in which an entry's not firing
+// (or a measurement's not reporting) means anything.
+type coverage struct {
+	// passed is the packages whose binary reported pass ([report.passed]):
+	// the only ones certain to have started every test the command selected.
+	passed map[string]bool
+	// started is the tests that began ([report.started]).
+	started map[string]bool
+	// narrowed is whether the command chose a subset of its packages' tests
+	// (see [narrows]). Without it, a test that never started in a package
+	// that passed is a test that is not there.
+	narrowed bool
+}
+
+// judges reports whether this run says anything about one declared test.
+//
+// A test that STARTED is judged whatever the command. One that never started
+// is judged only on an unnarrowed run of its package that passed: there every
+// test started, so a declared test that did not was renamed or deleted, and
+// saying so is the half of the gate that keeps the table from describing tests
+// that no longer exist. On a narrowed run it is a test the filter left out —
+// the run says nothing about it, and judging it anyway failed every targeted
+// run of a package that declares one. In a package that FAILED it may be a
+// test the binary never reached — a panic, the race detector, -failfast or the
+// timeout stopped it first — so calling it renamed or deleted would send the
+// reader after the wrong defect; that run fails already, and the next one
+// that passes judges it.
+func (c coverage) judges(pkg, test string) bool {
+	if c.started[pkg+"\x00"+test] {
+		return true
+	}
+	return !c.narrowed && c.passed[pkg]
+}
+
+// narrows reports whether a `go test` command line — its arguments after the
+// program, and the GOFLAGS it runs under — runs a SUBSET of the tests in the
+// packages it names: a non-empty -run or -skip.
+//
+// Read from the command because the stream cannot say it: test2json reports
+// the tests that ran and never the ones a filter left out, and an unnarrowed
+// run is the only one on which a test's absence is a fact about the test.
+// Every spelling `go test` accepts is read — -run X, -run=X, --run, the
+// binary's own -test.run (which follows -args) — and GOFLAGS' -run=X, since
+// `go test` takes its test flags from there too. An empty pattern selects
+// every test, so it narrows nothing. GOFLAGS written with `go env -w` is not
+// read: a filter set there narrows every run on the machine, and missing it
+// errs LOUD — the entries it left out are reported stale — never silent.
+func narrows(args []string, goflags string) bool {
+	filters := func(list []string, valueMayFollow bool) bool {
+		for i, a := range list {
+			if !strings.HasPrefix(a, "-") {
+				continue
+			}
+			name := strings.TrimPrefix(strings.TrimPrefix(a, "-"), "-")
+			name, value, hasValue := strings.Cut(strings.TrimPrefix(name, "test."), "=")
+			if name != "run" && name != "skip" {
+				continue
+			}
+			if !hasValue && valueMayFollow && i+1 < len(list) {
+				value = list[i+1]
+			}
+			if value != "" {
+				return true
+			}
+		}
+		return false
+	}
+	// GOFLAGS takes a flag's value only after an `=`, so a following word is
+	// another flag there, never a value.
+	return filters(args, true) || filters(strings.Fields(goflags), false)
+}
+
 // Judge splits observed skips into the ones nothing declared, and the [Always]
-// entries that did not fire in a package this run actually covered.
+// entries that did not fire where this run judges their test ([coverage]).
 //
 // Pure over values, so the arithmetic of the gate is testable without running
 // a suite — the same reason internal/textindex and internal/solo/partition
 // keep theirs out of the I/O.
-func Judge(observed []Skip, ran map[string]bool) (unlisted, stale []Skip) {
+func Judge(observed []Skip, cov coverage) (unlisted, stale []Skip) {
 	for _, s := range observed {
 		if entry(s) == nil {
 			unlisted = append(unlisted, s)
 		}
 	}
 	for _, a := range allowed {
-		// Not run here says nothing about the entry. See [report.ran]: each
-		// test target covers one half of the tree.
-		if a.When != Always || !ran[a.Package] {
+		// Not run here says nothing about the entry: each test target covers
+		// one half of the tree, a -run covers part of a package, and a
+		// package that failed may have stopped before it ([coverage]).
+		if a.When != Always || !cov.judges(a.Package, a.Test) {
 			continue
 		}
 		if !slices.ContainsFunc(observed, func(s Skip) bool {
