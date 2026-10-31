@@ -60,6 +60,21 @@ export const ITEM_KEY_SHAPE = /^[A-Z][A-Z0-9_]*-\d+$/;
  */
 export const ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /**
+ * The places under `#/chatlet` that are not a room, each a reserved word. A
+ * room is addressed by its uuid ([ID_SHAPE]), so no word here can ever be
+ * read as a room, and no room can be shadowed by one.
+ */
+export const CHAT_VIEWS = [
+  "activity",
+  "threads",
+  "drafts",
+  "saved",
+  "search",
+  "browse",
+  "new",
+] as const;
+export type ChatView = (typeof CHAT_VIEWS)[number];
+/**
  * A Doclet container key: whatever the engine keeps, which is UPPERCASED on
  * every path that writes one (`doclet.Store` uppercases the key a page is
  * created in and the key `EnsureContainer` makes), so it never holds a

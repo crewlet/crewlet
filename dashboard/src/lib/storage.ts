@@ -91,6 +91,11 @@ export const STORAGE_KEYS = {
   orgDraft: "crewlet_org_draft",
   /** How the Artifacts gallery is drawn, `grid` or `list` (`routes/artifacts/Gallery.tsx`). */
   artifactsShape: "crewlet.artifacts.shape",
+  /**
+   * Whether Chatlet's Rooms panel is pinned beside the conversation rather
+   * than slid in from Menu (`routes/chatlet/nav.tsx`).
+   */
+  chatletRoomsDocked: "crewlet.chatlet.rooms-docked",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
