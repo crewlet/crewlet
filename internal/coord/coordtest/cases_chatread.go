@@ -24,6 +24,38 @@ import (
 // would pass a naive round-trip test and fail every one of these.
 
 var chatReadCases = []fleetCase{
+	{"a reader's marks come back from the store as they were merged", func(h *fleetHarness) {
+		at := h.now()
+		if _, err := h.f.AdvanceChatRead(h.ctx, "founder", coord.ChatReadDelta{
+			ThreadCursors: map[string]int64{"root-1": 77},
+			Notify:        map[string]coord.NotifyLevel{"eng": coord.NotifyAll},
+			Star:          []string{"ops"},
+			Save:          []coord.MessageRef{{ChannelID: "eng", MessageID: "m-1"}},
+			Unfollow:      []coord.ThreadRef{{ChannelID: "eng", RootID: "root-2"}},
+			At:            at,
+		}); err != nil {
+			h.t.Fatalf("AdvanceChatRead: %v", err)
+		}
+		// READ BACK, NOT THE WRITE'S ANSWER: a field the backend does not
+		// persist is one the merge set and the store dropped.
+		got, err := h.f.ChatRead(h.ctx, "founder")
+		if err != nil {
+			h.t.Fatalf("ChatRead: %v", err)
+		}
+		switch {
+		case got.ThreadCursors["root-1"] != 77:
+			h.t.Errorf("the thread cursor read back as %v", got.ThreadCursors)
+		case !slices.Equal(got.Every, []string{"eng"}):
+			h.t.Errorf("the every-message rooms read back as %v", got.Every)
+		case !slices.Equal(got.Starred, []string{"ops"}):
+			h.t.Errorf("the starred rooms read back as %v", got.Starred)
+		case len(got.Saved) != 1 || got.Saved[0].MessageID != "m-1" || !got.Saved[0].At.Equal(at):
+			h.t.Errorf("the saved messages read back as %+v", got.Saved)
+		case len(got.Threads) != 1 || got.Threads[0].RootID != "root-2" || got.Threads[0].Following:
+			h.t.Errorf("the thread marks read back as %+v", got.Threads)
+		}
+	}},
+
 	{"a person who has read nothing is a zero state and not an error", func(h *fleetHarness) {
 		state, err := h.f.ChatRead(h.ctx, "founder")
 		if err != nil {

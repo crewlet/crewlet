@@ -191,11 +191,39 @@ type ChatReadState struct {
 	// with a message's own version is not a cursor.
 	Cursors map[string]int64 `json:"cursors,omitempty"`
 
+	// ThreadCursors maps a thread's root message id to the PACKED log
+	// position that person has read through IN THAT THREAD, which the
+	// thread pane flushes. A reply is new to them when it is above both
+	// this and the room's own cursor: reading the room's transcript does
+	// not open a thread, so the room's cursor alone would call a reply
+	// read that nobody saw. The same forward rule and the same discarding
+	// cap as [ChatReadState.Cursors].
+	ThreadCursors map[string]int64 `json:"thread_cursors,omitempty"`
+
 	// Muted are the channels that raise no badge and no push. A mute
 	// suppresses NOTICE, never delivery: the messages are still there and
 	// still searchable, and a seat's wake is not affected by anybody's
 	// mute at all.
 	Muted []string `json:"muted,omitempty"`
+
+	// Every are the channels whose every message reaches this reader
+	// ([NotifyAll]), sorted. A channel is in at most one of this and
+	// [ChatReadState.Muted]; in neither, only what names them does
+	// ([NotifyMentions]).
+	Every []string `json:"every,omitempty"`
+
+	// Starred are the channels this reader starred, sorted. A star is the
+	// reader's own: it changes where the room sits on their screens and
+	// nothing for anybody else.
+	Starred []string `json:"starred,omitempty"`
+
+	// Saved are the messages this reader saved for later, the newest save
+	// first. See chatmarks.go.
+	Saved []SavedMessage `json:"saved,omitempty"`
+
+	// Threads are the threads this reader followed or unfollowed by hand,
+	// the newest mark first ([ThreadMark]).
+	Threads []ThreadMark `json:"threads,omitempty"`
 
 	// DNDUntil is when do-not-disturb ends. The ZERO INSTANT means not in
 	// do-not-disturb, and an instant in the past means it is already over
@@ -322,6 +350,35 @@ type ChatReadDelta struct {
 	// opposite facts about it and no order between them is the caller's.
 	Mute   []string
 	Unmute []string
+
+	// ThreadCursors are advanced, never set, as [ChatReadDelta.Cursors] are,
+	// keyed by a thread's root message id.
+	ThreadCursors map[string]int64
+
+	// Rewind SETS a room's cursor to exactly the position named, the one
+	// way a cursor moves back: "mark unread", a deliberate gesture about
+	// one room rather than a flush racing another tab's. Zero forgets the
+	// room's cursor, so the whole room reads as unread. A room named both
+	// here and in Cursors is refused, as two facts about one place.
+	Rewind map[string]int64
+
+	// Notify sets how each named room reaches the reader ([NotifyLevel]),
+	// moving it between [ChatReadState.Every] and [ChatReadState.Muted].
+	// A room named here and in Mute or Unmute is refused.
+	Notify map[string]NotifyLevel
+
+	// Star and Unstar mark rooms starred or not, a room at a time.
+	Star   []string
+	Unstar []string
+
+	// Save and Unsave keep messages for later or let them go, a message at
+	// a time. A save of a message already saved keeps its first instant.
+	Save   []MessageRef
+	Unsave []MessageRef
+
+	// Follow and Unfollow mark threads by hand ([ThreadMark]).
+	Follow   []ThreadRef
+	Unfollow []ThreadRef
 
 	// DNDUntil replaces when non-nil, including with the zero instant,
 	// which is how do-not-disturb is cleared.
@@ -459,106 +516,84 @@ type ChatReadUpdate struct {
 // landed.
 func MergeChatRead(state ChatReadState, delta ChatReadDelta) (ChatReadState, error) {
 	out := ChatReadState{
-		Cursors:     make(map[string]int64, len(state.Cursors)+len(delta.Cursors)),
 		DNDUntil:    state.DNDUntil,
 		UpdatedAt:   state.UpdatedAt,
 		AbsentSince: state.AbsentSince,
 	}
-	maps.Copy(out.Cursors, state.Cursors)
-
-	for channel, at := range delta.Cursors {
-		if channel == "" {
-			return ChatReadState{}, fmt.Errorf("%w: a read cursor needs a "+
-				"channel; the flush named one with no id, which is a client "+
-				"that lost the value on the way here", ErrInvalidReadState)
-		}
-		// FORWARD ONLY. A cursor that could move backwards would make an
-		// unread badge flicker as two tabs disagree about which is
-		// further along — and the loser would be whichever flush the
-		// network happened to deliver second.
-		if at > out.Cursors[channel] {
-			out.Cursors[channel] = at
-		}
-	}
-	evictStaleCursors(out.Cursors)
-
-	muted, err := mergeMutes(state.Muted, delta.Mute, delta.Unmute)
+	cursors, err := advanceCursors(state.Cursors, delta.Cursors,
+		"a read cursor needs a channel")
 	if err != nil {
 		return ChatReadState{}, err
 	}
-	out.Muted = muted
+	// A REWIND SETS, after every advance: it is the one deliberate move
+	// back, and an advance of the same room in the same flush would be a
+	// second fact about one place, so that is refused rather than ordered.
+	for _, channel := range slices.Sorted(maps.Keys(delta.Rewind)) {
+		at := delta.Rewind[channel]
+		_, advanced := delta.Cursors[channel]
+		switch {
+		case channel == "":
+			return ChatReadState{}, fmt.Errorf("%w: a rewind needs a channel; "+
+				"the flush named one with no id, which is a client that lost "+
+				"the value on the way here", ErrInvalidReadState)
+		case at < 0:
+			return ChatReadState{}, fmt.Errorf("%w: %s is rewound to %d, and a "+
+				"position is never below zero", ErrInvalidReadState, channel, at)
+		case advanced:
+			return ChatReadState{}, fmt.Errorf("%w: %s is both advanced and "+
+				"rewound in one flush; send the one that is meant",
+				ErrInvalidReadState, channel)
+		case at == 0:
+			delete(cursors, channel)
+		default:
+			cursors[channel] = at
+		}
+	}
+	evictStaleCursors(cursors)
+	out.Cursors = nonEmptyCursors(cursors)
+
+	threadCursors, err := advanceCursors(state.ThreadCursors, delta.ThreadCursors,
+		"a thread cursor needs a thread")
+	if err != nil {
+		return ChatReadState{}, err
+	}
+	evictStaleCursors(threadCursors)
+	out.ThreadCursors = nonEmptyCursors(threadCursors)
+
+	if out.Muted, out.Every, err = mergeLevels(state.Muted, state.Every,
+		delta.Mute, delta.Unmute, delta.Notify); err != nil {
+		return ChatReadState{}, err
+	}
+	if out.Starred, err = mergeRoomSet(state.Starred, delta.Star, delta.Unstar,
+		MaxReaderMarks, starWords); err != nil {
+		return ChatReadState{}, err
+	}
+	if out.Saved, err = mergeSaved(state.Saved, delta.Save, delta.Unsave,
+		delta.At); err != nil {
+		return ChatReadState{}, err
+	}
+	if out.Threads, err = mergeThreadMarks(state.Threads, delta.Follow,
+		delta.Unfollow, delta.At); err != nil {
+		return ChatReadState{}, err
+	}
 	if delta.DNDUntil != nil {
 		out.DNDUntil = delta.DNDUntil.UTC()
 	}
 	if !delta.At.IsZero() {
 		out.UpdatedAt = delta.At.UTC()
 	}
-	if len(out.Cursors) == 0 {
-		// An empty map and a nil one encode differently, and the record
-		// is compared by the suite: one shape, so a person who has muted
-		// a room and read nothing round-trips identically on both
-		// backends.
-		out.Cursors = nil
-	}
 	return out, nil
 }
 
-// mergeMutes is the muted set after one flush: stored, plus every room mute
-// names, less every room unmute names — sorted, so a set two backends hold is
-// one value.
-//
-// THE CAP IS CHECKED AGAINST THE SET THE FLUSH LEAVES, and only when the flush
-// grows it. A mute is ONE deliberate edit by one person, so a set past
-// [MaxReadCursors] is REFUSED rather than cut — the opposite of what the
-// cursors do, and deliberately: a silent truncation is a room they muted that
-// keeps notifying them and no way to find out, where a cursor is machinery and
-// losing the stalest one costs a stale badge. A flush that does not grow the
-// set is never refused for its size, so an unmute, or a flush about something
-// else entirely, always lands on whatever the record holds.
-func mergeMutes(stored, mute, unmute []string) ([]string, error) {
-	if len(mute) == 0 && len(unmute) == 0 {
-		return slices.Clone(stored), nil
+// nonEmptyCursors is a cursor map in its one shape for "none": an empty map
+// and a nil one encode differently, and the record is compared by the suite,
+// so a person who has muted a room and read nothing round-trips identically on
+// both backends.
+func nonEmptyCursors(cursors map[string]int64) map[string]int64 {
+	if len(cursors) == 0 {
+		return nil
 	}
-	set := make(map[string]bool, len(stored)+len(mute))
-	for _, channel := range stored {
-		set[channel] = true
-	}
-	lifted := make(map[string]bool, len(unmute))
-	for _, channel := range unmute {
-		if channel == "" {
-			return nil, fmt.Errorf("%w: an unmute needs a channel; the flush "+
-				"named one with no id, which is a client that lost the value "+
-				"on the way here", ErrInvalidReadState)
-		}
-		lifted[channel] = true
-	}
-	for _, channel := range mute {
-		switch {
-		case channel == "":
-			return nil, fmt.Errorf("%w: a mute needs a channel; the flush "+
-				"named one with no id, which is a client that lost the value "+
-				"on the way here", ErrInvalidReadState)
-		case lifted[channel]:
-			return nil, fmt.Errorf("%w: %s is both muted and unmuted in one "+
-				"flush; send the one that is meant", ErrInvalidReadState, channel)
-		}
-		set[channel] = true
-	}
-	for channel := range lifted {
-		delete(set, channel)
-	}
-	if len(set) > MaxReadCursors && len(set) > len(stored) {
-		return nil, fmt.Errorf("%w: muting that would hold %d channels and "+
-			"the cap is %d; unmute something first", ErrInvalidReadState,
-			len(set), MaxReadCursors)
-	}
-	if len(set) == 0 {
-		// ONE SHAPE FOR "NOTHING MUTED", for the cursors' reason below:
-		// the record is compared by the suite, and an empty list and a
-		// nil one encode differently.
-		return nil, nil
-	}
-	return slices.Sorted(maps.Keys(set)), nil
+	return cursors
 }
 
 // evictStaleCursors bounds the map at [MaxReadCursors].

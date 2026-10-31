@@ -753,10 +753,30 @@ var _ tools.SeatCallable = (*markChatRead)(nil)
 func (t *markChatRead) Name() string { return chatlet.MarkChatReadTool }
 
 func (t *markChatRead) Description() string {
-	return "Record how far you have read in your rooms, which rooms you mute " +
-		"or unmute, and whether you are in do-not-disturb. Only what you name " +
-		"changes: a room's place only moves forward, a room you mute or unmute " +
-		"changes alone, and an empty do-not-disturb ends it."
+	return "Record your own place and marks in chat: how far you have read in " +
+		"your rooms and threads, a room set back to unread, how each room reaches " +
+		"you (every message, mentions or muted), rooms you star, messages you " +
+		"save for later, threads you follow or unfollow, and whether you are in " +
+		"do-not-disturb. Only what you name changes: a place only moves forward " +
+		"unless you rewind it, every room, message or thread you do not name " +
+		"keeps its state, and an empty do-not-disturb ends it."
+}
+
+// markRefSchema is one entry of a list that names a message or a thread by its
+// room and its id, as save, unsave, follow and unfollow take one.
+func markRefSchema(idKey, what string) map[string]any {
+	return map[string]any{
+		"type": "array",
+		"items": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"channel_id": map[string]any{"type": "string"},
+				idKey:        map[string]any{"type": "string"},
+			},
+			"required": []any{"channel_id", idKey},
+		},
+		"description": what,
+	}
 }
 
 func (t *markChatRead) Parameters() map[string]any {
@@ -785,8 +805,57 @@ func (t *markChatRead) Parameters() map[string]any {
 				"description": "When do-not-disturb ends, RFC 3339. An empty " +
 					"string ends it now.",
 			},
+			"thread_cursors": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "integer", "minimum": 0},
+				"description": "Thread root message id → the packed log position " +
+					"read through in that thread. Only moves forward.",
+			},
+			"rewind": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "integer", "minimum": 0},
+				"description": "Room id → the packed log position to set its place " +
+					"back to exactly (mark unread from there); 0 marks the whole " +
+					"room unread. A room named here is not named in `cursors`.",
+			},
+			"notify": map[string]any{
+				"type": "object",
+				"additionalProperties": map[string]any{
+					"type": "string", "enum": notifyLevelNames(),
+				},
+				"description": "Room id → how the room reaches you: `all` (every " +
+					"message), `mentions` (only what names you, the default) or " +
+					"`muted` (nothing). A room named here is not named in `mute` " +
+					"or `unmute`.",
+			},
+			"star": map[string]any{
+				"type": "array", "items": map[string]any{"type": "string"},
+				"description": "Room ids to star.",
+			},
+			"unstar": map[string]any{
+				"type": "array", "items": map[string]any{"type": "string"},
+				"description": "Room ids to unstar.",
+			},
+			"save": markRefSchema("message_id", "Messages to save for later, "+
+				"each by its room and its id."),
+			"unsave": markRefSchema("message_id", "Saved messages to let go, "+
+				"each by its room and its id."),
+			"follow": markRefSchema("root_id", "Threads to follow, each by its "+
+				"room and its root message's id."),
+			"unfollow": markRefSchema("root_id", "Threads to stop following, "+
+				"each by its room and its root message's id. A thread you "+
+				"started, replied in or were named in is followed until you do."),
 		},
 	}
+}
+
+// notifyLevelNames are the notify levels as the schema's enum lists them.
+func notifyLevelNames() []any {
+	out := make([]any, 0, len(coord.NotifyLevels))
+	for _, l := range coord.NotifyLevels {
+		out = append(out, string(l))
+	}
+	return out
 }
 
 func (t *markChatRead) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -803,12 +872,57 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// A NULL IS NOTHING SENT, as the check at the surface reads it (ADR-0059):
 	// a null do-not-disturb read as named was the empty one, which ends it.
 	delta := coord.ChatReadDelta{At: t.deps.now()}
-	if raw := args["cursors"]; raw != nil {
-		cursors, refusal := argCursors(raw)
+	// IN A FIXED ORDER, so a call wrong in two places is told the same one
+	// every time it is sent.
+	for _, places := range []struct {
+		key  string
+		into *map[string]int64
+	}{
+		{"cursors", &delta.Cursors}, {"thread_cursors", &delta.ThreadCursors},
+		{"rewind", &delta.Rewind},
+	} {
+		if raw := args[places.key]; raw != nil {
+			positions, refusal := argCursors(places.key, raw)
+			if refusal != nil {
+				return *refusal, nil
+			}
+			*places.into = positions
+		}
+	}
+	if raw := args["notify"]; raw != nil {
+		levels, refusal := argNotifyLevels(raw)
 		if refusal != nil {
 			return *refusal, nil
 		}
-		delta.Cursors = cursors
+		delta.Notify = levels
+	}
+	delta.Star = argStrings(args, "star")
+	delta.Unstar = argStrings(args, "unstar")
+	for _, messages := range []struct {
+		key  string
+		into *[]coord.MessageRef
+	}{{"save", &delta.Save}, {"unsave", &delta.Unsave}} {
+		refs, refusal := argMarkRefs(args, messages.key, "message_id")
+		if refusal != nil {
+			return *refusal, nil
+		}
+		for _, ref := range refs {
+			*messages.into = append(*messages.into,
+				coord.MessageRef{ChannelID: ref[0], MessageID: ref[1]})
+		}
+	}
+	for _, threads := range []struct {
+		key  string
+		into *[]coord.ThreadRef
+	}{{"follow", &delta.Follow}, {"unfollow", &delta.Unfollow}} {
+		refs, refusal := argMarkRefs(args, threads.key, "root_id")
+		if refusal != nil {
+			return *refusal, nil
+		}
+		for _, ref := range refs {
+			*threads.into = append(*threads.into,
+				coord.ThreadRef{ChannelID: ref[0], RootID: ref[1]})
+		}
 	}
 	// A ROOM AT A TIME, never the list: the person names the rooms whose
 	// state changes and every other keeps its own, so muting one room needs
@@ -829,10 +943,14 @@ func (t *markChatRead) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		delta.DNDUntil = &until
 	}
-	if delta.Cursors == nil && delta.Mute == nil && delta.Unmute == nil &&
+	if delta.Cursors == nil && delta.ThreadCursors == nil && delta.Rewind == nil &&
+		delta.Mute == nil && delta.Unmute == nil && delta.Notify == nil &&
+		delta.Star == nil && delta.Unstar == nil && delta.Save == nil &&
+		delta.Unsave == nil && delta.Follow == nil && delta.Unfollow == nil &&
 		delta.DNDUntil == nil {
 		return failed(chatlet.MarkChatReadTool + " names nothing to record — send `cursors`, " +
-			"`mute`, `unmute` or `dnd_until`."), nil
+			"`thread_cursors`, `rewind`, `mute`, `unmute`, `notify`, `star`, `unstar`, " +
+			"`save`, `unsave`, `follow`, `unfollow` or `dnd_until`."), nil
 	}
 	actor, refusal := t.deps.actor(ctx, turn, name, args)
 	if refusal != nil {
@@ -1027,28 +1145,100 @@ func argMembers(tool string, args map[string]any, key string) ([]chatlet.Member,
 // A POSITION THAT IS NOT A WHOLE, NON-NEGATIVE NUMBER IS REFUSED, never read
 // as zero: a zero cursor is ignored by the merge, so a cursor that failed to
 // parse would answer `applied` and leave the badge where it was.
-func argCursors(raw any) (map[string]int64, *tools.Result) {
+//
+// ONE READER FOR THE THREE MAPS OF PLACES — `cursors` and `rewind` keyed by a
+// room, `thread_cursors` by a thread's root — named by key in a refusal, so a
+// call is told which of them it sent wrong.
+func argCursors(key string, raw any) (map[string]int64, *tools.Result) {
 	given, ok := argval.Object(raw)
 	if !ok {
-		out := failed(chatlet.MarkChatReadTool + "'s `cursors` is an object of room id to " +
-			"the position read through.")
+		out := failed(fmt.Sprintf("%s's `%s` is an object of id to a packed log "+
+			"position.", chatlet.MarkChatReadTool, key))
 		return nil, &out
 	}
-	if len(given) == 0 {
-		return nil, nil
-	}
 	cursors := make(map[string]int64, len(given))
-	for room, value := range given {
-		room = strings.TrimSpace(room)
+	for id, value := range given {
+		if value == nil {
+			continue
+		}
+		id = strings.TrimSpace(id)
 		at, whole := argPositionValue(value)
-		if room == "" || !whole || at < 0 {
-			out := failed(fmt.Sprintf(chatlet.MarkChatReadTool+"'s cursor for %q is %v — a "+
-				"room id and a whole, non-negative log position.", clip(room), value))
+		if id == "" || !whole || at < 0 {
+			out := failed(fmt.Sprintf("%s's `%s` entry for %q is %v — an id and a "+
+				"whole, non-negative log position.", chatlet.MarkChatReadTool, key,
+				clip(id), value))
 			return nil, &out
 		}
-		cursors[room] = at
+		cursors[id] = at
+	}
+	if len(cursors) == 0 {
+		return nil, nil
 	}
 	return cursors, nil
+}
+
+// argNotifyLevels reads `notify`: room id to how the room reaches the caller.
+// A null is a room not named, as for the cursors; a level this build does not
+// know is refused naming the room, never read as the default.
+func argNotifyLevels(raw any) (map[string]coord.NotifyLevel, *tools.Result) {
+	given, ok := argval.Object(raw)
+	if !ok {
+		out := failed(chatlet.MarkChatReadTool + "'s `notify` is an object of room id " +
+			"to `all`, `mentions` or `muted`.")
+		return nil, &out
+	}
+	levels := make(map[string]coord.NotifyLevel, len(given))
+	for room, value := range given {
+		if value == nil {
+			continue
+		}
+		room = strings.TrimSpace(room)
+		word, _ := argval.String(value)
+		level := coord.NotifyLevel(strings.TrimSpace(word))
+		if room == "" || !level.Valid() {
+			out := failed(fmt.Sprintf("%s's `notify` entry for %q is %v — a room id "+
+				"and one of `all`, `mentions` or `muted`.", chatlet.MarkChatReadTool,
+				clip(room), value))
+			return nil, &out
+		}
+		levels[room] = level
+	}
+	if len(levels) == 0 {
+		return nil, nil
+	}
+	return levels, nil
+}
+
+// argMarkRefs reads a list that names messages or threads, each as
+// `{channel_id, <idKey>}`, as the pair [room, id]. A null entry is one not
+// named; an entry without both is refused naming its place in the list, since
+// a mark nobody can find again is one the reader can never take back.
+func argMarkRefs(args map[string]any, key, idKey string) ([][2]string, *tools.Result) {
+	if args[key] == nil {
+		return nil, nil
+	}
+	raw, ok := argval.StringItems(args[key])
+	if !ok {
+		out := failed(fmt.Sprintf("%s's `%s` is a list of {\"channel_id\": …, "+
+			"\"%s\": …}.", chatlet.MarkChatReadTool, key, idKey))
+		return nil, &out
+	}
+	refs := make([][2]string, 0, len(raw))
+	for i, entry := range raw {
+		if entry == nil {
+			continue
+		}
+		object, isObject := argval.Object(entry)
+		channel := strings.TrimSpace(argString(object, "channel_id"))
+		id := strings.TrimSpace(argString(object, idKey))
+		if !isObject || channel == "" || id == "" {
+			out := failed(fmt.Sprintf("%s's `%s` entry %d needs a `channel_id` and "+
+				"a `%s`.", chatlet.MarkChatReadTool, key, i, idKey))
+			return nil, &out
+		}
+		refs = append(refs, [2]string{channel, id})
+	}
+	return refs, nil
 }
 
 // argPositionValue reads a packed log position, reporting whether it could.
