@@ -730,7 +730,15 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 // the box's, an operator token as the password, a token another fleet signed
 // or another of this fleet's per-run edges did — is answered the code host's
 // own challenge, the box admission's credential step, in the same bytes
-// whatever the reason: it learns nothing of the deployment's state.
+// whatever the reason, so no reason reaches it.
+//
+// WHAT THIS DOES NOT HOLD: the unserved reasons are compared with each other,
+// not with a node that serves the code host. That node answers a request git
+// never sends — no ?service=, a wrong Content-Type, a name off the grammar —
+// by its shape before the credential step (the host's entry points run it
+// first), and its 503 while it stops, so such a request still tells a serving
+// node from one serving none. Git's own first request is well-formed and is
+// challenged alike by both.
 //
 // Mutations: answer the reason before the credential (boxGitRoute calling
 // unservedGit first, as gitRoute does) — the first row's request without a
