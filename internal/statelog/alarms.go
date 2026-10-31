@@ -775,7 +775,7 @@ type Reading struct {
 	// hold them, set refs so fast that they reach the most live refs a
 	// repository may hold within the ref lifecycle's window unless refs are
 	// deleted: their live refs and the refs of those set within the window
-	// together pass the bound (internal/code's NearLimit and
+	// together reach the bound (internal/code's NearLimit and
 	// Reader.RefsNearLimit). CodeRefsNearLimitRepo is the one with the most
 	// of the two together, by name, CodeRefsNearLimitLive its live refs and
 	// CodeRefsNearLimitRecent those of them set within the window.
@@ -1698,13 +1698,13 @@ var table = []rule{
 	},
 	{
 		// THE THRESHOLD IS TWO OTHER DECISIONS' (ADR-0015): the most live
-		// refs a repository may hold, past which the push decide refuses a
+		// refs a repository may hold, at which the push decide refuses a
 		// create repo_refs, and the ref lifecycle's window, after which it
 		// deletes a seat's idle branch. A repository whose live refs and the
-		// refs it set within the window together pass the bound sets refs
-		// fast enough to reach it within the window, and nothing set within
-		// the window is the lifecycle's to delete, so the lifecycle is not
-		// what makes the room. This framework imports no code-host package,
+		// refs it set within the window together reach the bound sets refs
+		// fast enough to reach it within the window, or holds it already,
+		// and nothing set within the window is the lifecycle's to delete, so
+		// the lifecycle is not what makes the room. This framework imports no code-host package,
 		// so every data node's reader judges each repository at both and the
 		// rule fires at any count — never at a number of its own. A node's
 		// condition, raised by every data node from its own rows, before the
@@ -1714,7 +1714,7 @@ var table = []rule{
 			window := spokenDays(r.CodeRefsWindow)
 			return fmt.Sprintf("%d repository(ies) set refs so fast that they reach the %d-ref bound within "+
 					"%s unless refs are deleted (the most: %s, %d live and %d set in the last %s); a create "+
-					"past the bound is refused repo_refs",
+					"at the bound is refused repo_refs",
 					r.CodeRefsNearLimit, r.CodeRefsLimit, window, r.CodeRefsNearLimitRepo,
 					r.CodeRefsNearLimitLive, r.CodeRefsNearLimitRecent, window),
 				r.CodeRefsNearLimit > 0
@@ -1722,7 +1722,7 @@ var table = []rule{
 		remedy: "Delete what the repository no longer needs — branches (`git " +
 			"push origin --delete <branch>`, or a seat's `code_delete_branch`) " +
 			"and tags. A seat's idle branches are deleted by themselves 14 days " +
-			"after their last push (the ref lifecycle), so a repository past " +
+			"after their last push (the ref lifecycle), so a repository at " +
 			"this point is one whose refs are set faster than they go idle, or " +
 			"whose refs are persons' branches and tags, which never expire. A " +
 			"seat outside the repository's owners is held to half the bound, " +

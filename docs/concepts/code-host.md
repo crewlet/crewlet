@@ -2380,16 +2380,17 @@ room only from branches nobody set for 14 days, so a repository setting refs
 faster than they go idle — or holding persons' branches and tags, which never
 expire — can still reach the [limit](#limits) of 100 000 live refs, after which
 every push creating a ref there is refused `repo_refs`. A repository whose live
-refs and the refs it set in the last 14 days together pass 100 000 reaches the
-bound within 14 days at that rate, and none of those recent refs is the
-lifecycle's to delete, so every data node raises
-[`code_refs_near_limit`](../reference/alarms.md) while one is: it names how many
-repositories are past that point and the one with the most, with its live refs
+refs and the refs it set in the last 14 days together reach 100 000 reaches
+the bound within 14 days at that rate — or holds it already, refusing every
+create — and none of those recent refs is the lifecycle's to delete, so every
+data node raises [`code_refs_near_limit`](../reference/alarms.md) while one is:
+it names how many repositories have reached that point and the one with the
+most, with its live refs
 and how many it set in the window. An archived repository, which takes no push,
 and a deleted ref are never counted. It is measured from the data node's own
 rows on the trim's quarter-hour tick — a walk of the active repositories in
 name order, and a count of the refs set in the window for each one holding
-more than 50 000 live refs, the only ones that can pass the point — and a node
+at least 50 000 live refs, the only ones that can reach the point — and a node
 that cannot read them logs `code_refs_near_limit_unread` and raises nothing
 until the next tick reads them. Delete the branches and tags the repository no
 longer needs; one that needs more than 100 000 live refs is past what the code

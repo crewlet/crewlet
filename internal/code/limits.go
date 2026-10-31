@@ -457,8 +457,8 @@ const (
 	// which its deletion's code_ref_drops row keeps for PruneGrace at least,
 	// as for every deletion. And it is code_refs_near_limit's window
 	// ([NearLimit]): a repository whose live refs and the refs it set within
-	// it together pass MaxRefsPerRepo reaches the bound within it at that
-	// rate, and the lifecycle, which deletes nothing set within it, is not
+	// it together reach MaxRefsPerRepo reaches the bound within it at that
+	// rate, or holds it already, and the lifecycle, which deletes nothing set within it, is not
 	// what makes the room — so the alarm is raised before the first create
 	// is refused repo_refs, while deleting refs still prevents it.
 	RefExpiry = 14 * 24 * time.Hour

@@ -10,10 +10,14 @@ import (
 
 // THE POINT IS THE BOUND'S AND THE WINDOW'S ARITHMETIC: a repository is near
 // the limit when its live refs and the refs it set within RefExpiry together
-// pass MaxRefsPerRepo, and at that sum exactly it is not — the alarm borrows
-// both decisions whole and adds no margin of its own.
+// reach MaxRefsPerRepo — at that sum exactly too, since the push decide
+// refuses a create once a repository holds the bound, so a repository AT it
+// with nothing recent already refuses every create — and one ref short of it
+// is not: the alarm borrows both decisions whole and adds no margin of its
+// own.
 //
-// Mutation: compare with >= and the sum at the bound is near — red.
+// Mutation: compare with > and the sum at the bound is not near — red;
+// compare with >= MaxRefsPerRepo-1 and the sum one short is near — red.
 func TestNearLimitIsTheBoundsArithmetic(t *testing.T) {
 	t.Parallel()
 	half := code.MaxRefsPerRepo / 2
@@ -22,9 +26,11 @@ func TestNearLimitIsTheBoundsArithmetic(t *testing.T) {
 		want         bool
 	}{
 		{0, 0, false},
-		{half, half, false},
+		{half, half, true},
+		{half, half - 1, false},
 		{half + 1, half, true},
-		{code.MaxRefsPerRepo, 0, false},
+		{code.MaxRefsPerRepo, 0, true},
+		{code.MaxRefsPerRepo - 1, 0, false},
 		{code.MaxRefsPerRepo, 1, true},
 		{60_000, 45_000, true},
 		{60_000, 30_000, false},
@@ -47,12 +53,20 @@ func TestNearLimitIsTheBoundsArithmetic(t *testing.T) {
 //   - charlie holds 1 000, every one recent: never a candidate;
 //   - delta is ARCHIVED with 51 000, every one recent — 102 000 — and takes no
 //     push, so nothing it holds moves towards the bound: not counted;
-//   - echo holds 56 000, every one recent: 112 000, counted, and the worst.
+//   - echo holds 56 000, every one recent: 112 000, counted, and the worst;
+//   - foxtrot holds MaxRefsPerRepo exactly, none set within the window — a
+//     person's tags, which never expire: it is AT the bound, where the push
+//     decide refuses every create, so it is counted though its rate is nil;
+//   - golf holds half the bound exactly, every one recent: the sum reaches the
+//     bound, so it is counted — and it is a candidate only because the cut
+//     takes half the bound itself.
 //
 // Mutation: drop the empty-target test from the count and bravo's tombstones
-// count — three, red; drop the status from the candidates and the archived delta
-// counts — red; keep the first repository past the point as the worst rather
-// than the one with the most, and alpha is named — red.
+// count — five, red; drop the status from the candidates and the archived
+// delta counts — red; keep the first repository past the point as the worst
+// rather than the one with the most, and alpha is named — red; judge the sum
+// with > and foxtrot and golf drop — red; cut the candidates with > and golf
+// is never read — red.
 func TestRefsNearLimitCountsWhatTheBoundAndTheWindowSay(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -68,7 +82,11 @@ func TestRefsNearLimitCountsWhatTheBoundAndTheWindowSay(t *testing.T) {
 	live := func(name string, recentRefs, oldRefs int) string {
 		t.Helper()
 		repo := n.ensure(name, suiteSettings(), t1).RepoID
-		seed(repo, "recent", oidOf(name), recentRefs, recent)
+		// The recursive seed writes one row at a count of zero, so a count of
+		// none seeds nothing.
+		if recentRefs > 0 {
+			seed(repo, "recent", oidOf(name), recentRefs, recent)
+		}
 		if oldRefs > 0 {
 			seed(repo, "old", oidOf(name), oldRefs, old)
 		}
@@ -83,21 +101,27 @@ func TestRefsNearLimitCountsWhatTheBoundAndTheWindowSay(t *testing.T) {
 	delta := live("delta", 51_000, 0)
 	n.exec(`UPDATE code_repos SET status = 'archived' WHERE id = ?`, delta)
 	live("echo", 56_000, 0)
+	live("foxtrot", 0, code.MaxRefsPerRepo)
+	live("golf", code.MaxRefsPerRepo/2, 0)
 
 	got, err := n.reader.RefsNearLimit(t.Context(), now)
 	if err != nil {
 		t.Fatalf("read the repositories near the ref bound: %v", err)
 	}
-	want := code.RefsNear{Repos: 2, Worst: "echo", Live: 56_000, Recent: 56_000}
+	want := code.RefsNear{Repos: 4, Worst: "echo", Live: 56_000, Recent: 56_000}
 	if got != want {
-		t.Fatalf("the reading is %+v, want %+v: alpha and echo past the bound, echo the most, and neither "+
-			"bravo's tombstones nor the archived delta counted", got, want)
+		t.Fatalf("the reading is %+v, want %+v: alpha, echo, foxtrot (at the bound) and golf (reaching it "+
+			"from half) counted, echo the most, and neither bravo's tombstones nor the archived delta",
+			got, want)
 	}
 
 	// A WINDOW LATER every ref set an hour ago is past RefExpiry, so no
-	// repository sets refs fast enough to pass the bound: the reading clears.
-	if got, err := n.reader.RefsNearLimit(t.Context(), now.Add(code.RefExpiry)); err != nil ||
-		got != (code.RefsNear{}) {
-		t.Fatalf("a window later the reading is (%+v, %v), want none near the bound", got, err)
+	// repository sets refs fast enough to reach the bound — but foxtrot still
+	// holds it, and every create there is still refused: it alone is counted.
+	later, err := n.reader.RefsNearLimit(t.Context(), now.Add(code.RefExpiry))
+	if want := (code.RefsNear{Repos: 1, Worst: "foxtrot", Live: code.MaxRefsPerRepo}); err != nil ||
+		later != want {
+		t.Fatalf("a window later the reading is (%+v, %v), want (%+v, nil): foxtrot alone, at the bound",
+			later, err, want)
 	}
 }

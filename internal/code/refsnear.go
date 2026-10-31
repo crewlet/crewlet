@@ -11,12 +11,12 @@ import (
 )
 
 // RefsNear is what the code_refs_near_limit alarm reads of this node's rows
-// ([Reader.RefsNearLimit]): how many ACTIVE repositories are past the point
-// [NearLimit] names, and the one of them with the most live and recently set
-// refs together — by name, with its live refs and how many of those were set
-// within [RefExpiry]. The zero value is a reading that found none.
+// ([Reader.RefsNearLimit]): how many ACTIVE repositories have reached the
+// point [NearLimit] names, and the one of them with the most live and recently
+// set refs together — by name, with its live refs and how many of those were
+// set within [RefExpiry]. The zero value is a reading that found none.
 type RefsNear struct {
-	// Repos is how many repositories are past the point.
+	// Repos is how many repositories have reached the point.
 	Repos int
 
 	// Worst is the name of the one with the most live + recent refs, its
@@ -28,26 +28,41 @@ type RefsNear struct {
 }
 
 // NearLimit reports whether a repository holding live refs, recent of them
-// set within [RefExpiry], is past the point code_refs_near_limit stands for:
-// at the rate it sets refs it reaches [MaxRefsPerRepo] within RefExpiry unless
-// refs are deleted, and the ref lifecycle cannot be what makes the room — it
-// deletes only a seat's branch nobody set for RefExpiry, so none of the recent
-// ones, and of the rest only those seats set in their own namespaces.
+// set within [RefExpiry], has reached the point code_refs_near_limit stands
+// for: at the rate it sets refs it reaches [MaxRefsPerRepo] within RefExpiry
+// unless refs are deleted — or holds it already — and the ref lifecycle cannot
+// be what makes the room: it deletes only a seat's branch nobody set for
+// RefExpiry, so none of the recent ones, and of the rest only those seats set
+// in their own namespaces.
+//
+// REACHING THE BOUND IS WHAT IS REFUSED, so the sum is compared with >=, as
+// the push decide compares what a repository holds with the bound: a create
+// is refused repo_refs once the repository holds MaxRefsPerRepo live refs, not
+// once it holds more. A repository at the bound exactly with nothing set
+// within RefExpiry — persons' tags and branches, which never expire — refuses
+// every create, and is the very one the alarm is for.
 //
 // THE THRESHOLD IS TWO OTHER DECISIONS', never a number of its own (ADR-0015,
 // and internal/README.md's statelog row): the bound the push decide refuses a
 // create at (repo_refs) and the lifecycle's window. Recent refs measure the
 // rate over that window: a repository that set that many in the last
 // RefExpiry, holding them all still, sets as many again in the next one.
-func NearLimit(live, recent int) bool { return live+recent > MaxRefsPerRepo }
+func NearLimit(live, recent int) bool { return live+recent >= MaxRefsPerRepo }
 
-// RefsNearLimit reads the ACTIVE repositories past the point [NearLimit] names
-// as this node's rows hold them at now: those holding more than
-// [MaxRefsPerRepo]/2 live refs — the only ones NearLimit can hold for, since a
-// repository's recent refs are some of its live ones — found by a keyset walk
-// of code_repos in name order on code_repos_name_idx ([lifePage] at a time),
-// and each one's refs set within [RefExpiry] by one count over its own live
-// refs.
+// refsCandidateFloor is the fewest live refs at which [NearLimit] can hold,
+// and so the cut of [Reader.RefsNearLimit]'s candidates: a repository's recent
+// refs are some of its live ones, so live+recent >= MaxRefsPerRepo needs
+// 2*live >= MaxRefsPerRepo, that is live at least half the bound rounded up.
+// Arithmetic of the bound, never a tuning of its own.
+const refsCandidateFloor = (MaxRefsPerRepo + 1) / 2
+
+// RefsNearLimit reads the ACTIVE repositories that have reached the point
+// [NearLimit] names as this node's rows hold them at now: those holding at
+// least [refsCandidateFloor] live refs, half the bound — the only ones
+// NearLimit can hold for, since a repository's recent refs are some of its
+// live ones — found by a keyset walk of code_repos in name order on
+// code_repos_name_idx ([lifePage] at a time), and each one's refs set within
+// [RefExpiry] by one count over its own live refs.
 //
 // AN ARCHIVED REPOSITORY IS NEVER COUNTED: it takes no push, so nothing it
 // holds moves towards the bound, and a deleted one's refs are its purge's.
@@ -81,7 +96,7 @@ func (r *Reader) RefsNearLimit(ctx context.Context, now time.Time) (RefsNear, er
 	for {
 		_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 			page = page[:0]
-			rows, err := tx.QueryContext(ctx, refsCandidatesSQL, after, MaxRefsPerRepo/2, lifePage)
+			rows, err := tx.QueryContext(ctx, refsCandidatesSQL, after, refsCandidateFloor, lifePage)
 			if err != nil {
 				return err
 			}
@@ -135,7 +150,7 @@ func (r *Reader) RefsNearLimit(ctx context.Context, now time.Time) (RefsNear, er
 // tombstones (an empty target) never counted — a deletion is not a ref set.
 const (
 	refsCandidatesSQL = `SELECT id, name, refs FROM code_repos
-		WHERE name > ? AND status = 'active' AND refs > ?
+		WHERE name > ? AND status = 'active' AND refs >= ?
 		ORDER BY name LIMIT ?`
 	refsSetSinceSQL = `SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND target != '' AND at > ?`
 )

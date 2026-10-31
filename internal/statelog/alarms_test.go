@@ -231,7 +231,7 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			statelog.Reading{CodeRefsNearLimit: 1, CodeRefsNearLimitRepo: "web", CodeRefsNearLimitLive: 60_000,
 				CodeRefsNearLimitRecent: 45_000, CodeRefsLimit: 100_000, CodeRefsWindow: 14 * 24 * time.Hour},
 			"1 repository(ies) set refs so fast that they reach the 100000-ref bound within 14 days unless refs " +
-				"are deleted (the most: web, 60000 live and 45000 set in the last 14 days); a create past the " +
+				"are deleted (the most: web, 60000 live and 45000 set in the last 14 days); a create at the " +
 				"bound is refused repo_refs",
 		},
 		"a service objective burning its budget": {

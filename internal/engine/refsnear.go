@@ -43,7 +43,7 @@ func (e *Engine) refsNearLimit(ctx context.Context, now time.Time) (code.RefsNea
 //
 // A MEASUREMENT THAT FAILS LEAVES NOTHING rather than the last figure, and is
 // said once a tick (`code_refs_near_limit_unread`): an unread estate is not one
-// near the bound, and the push decide still refuses a create past it
+// near the bound, and the push decide still refuses a create at it
 // repo_refs, naming the bound, whatever the alarm knows.
 func (r *retention) measureRefs(ctx context.Context) {
 	if r.refs == nil {

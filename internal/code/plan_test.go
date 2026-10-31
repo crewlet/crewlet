@@ -481,7 +481,7 @@ func registeredStatements() map[string]statement {
 		// code_refs_near_limit's reading: the candidates by a keyset walk of
 		// the name index, as the reconcile's own walk is, and each one's refs
 		// set within RefExpiry by its key's repo_id prefix.
-		"refs candidates": {refsCandidatesSQL, []any{"", MaxRefsPerRepo / 2, 1000},
+		"refs candidates": {refsCandidatesSQL, []any{"", refsCandidateFloor, 1000},
 			[]string{"code_repos_name_idx (name>?)"}},
 		"refs set since": {refsSetSinceSQL, []any{"repo-1", 100}, []string{refsKey + " (repo_id=?)"}},
 		// THE RETENTION'S TWO NEW LISTINGS, keyset pages over their partial
