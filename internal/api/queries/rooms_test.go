@@ -395,7 +395,11 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // change's four, read by a script on the paths api-endpoints.md prints for
 // each (docs/reference/api-endpoints.md, "The code reads") until the
 // workspace draws a change's own page and a seat's reviews: the questions
-// land with the engine's change tools, which the dashboard follows.
+// land with the engine's change tools, which the dashboard follows. And a
+// repository's content, its refs, files, history, blame, diffs, comparisons
+// and commits, read by a script on the paths api-endpoints.md prints
+// ("A repository's content") until the workspace draws a repository's own
+// page (m4-u2's Repository, Commit and Compare pages delete these lines).
 var readOutsideTheDashboard = map[string]string{
 	"code_repo":           "crewlet code status -repo",
 	"code_repo_readers":   "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
@@ -403,6 +407,14 @@ var readOutsideTheDashboard = map[string]string{
 	"code_change":         "a script: GET /code/repos/{name}/changes/{n}, as docs/reference/api-endpoints.md prints it",
 	"code_change_routing": "a script: GET /code/repos/{name}/changes/{n}/routing, as docs/reference/api-endpoints.md prints it",
 	"code_reviews":        "a script: GET /code/reviews, as docs/reference/api-endpoints.md prints it",
+	"code_refs":           "a script: GET /code/repos/{name}/refs, as docs/reference/api-endpoints.md prints it",
+	"code_tree":           "a script: GET /code/repos/{name}/tree, as docs/reference/api-endpoints.md prints it",
+	"code_blob":           "a script: GET /code/repos/{name}/blob, as docs/reference/api-endpoints.md prints it",
+	"code_log":            "a script: GET /code/repos/{name}/log, as docs/reference/api-endpoints.md prints it",
+	"code_blame":          "a script: GET /code/repos/{name}/blame, as docs/reference/api-endpoints.md prints it",
+	"code_diff":           "a script: GET /code/repos/{name}/diff, as docs/reference/api-endpoints.md prints it",
+	"code_compare":        "a script: GET /code/repos/{name}/compare, as docs/reference/api-endpoints.md prints it",
+	"code_commit":         "a script: GET /code/repos/{name}/commits/{sha}, as docs/reference/api-endpoints.md prints it",
 }
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.

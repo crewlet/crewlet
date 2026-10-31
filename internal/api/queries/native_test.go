@@ -1578,6 +1578,33 @@ var sessionQuestions = []sessionQuestion{
 	{"code_reviews", []string{"code"}, map[string]any{"reviewer": "dev"},
 		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
 		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	// AND A REPOSITORY'S CONTENT (codegit.go): each reads its first row — the
+	// repository, or the commit's changes — at the caller's freshness, which
+	// a screen reads its own push back through.
+	{"code_refs", []string{"code"}, map[string]any{"name": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_tree", []string{"code"}, map[string]any{"name": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
+	{"code_blob", []string{"code"}, map[string]any{"name": "web", "path": "go.mod"},
+		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
+	{"code_log", []string{"code"}, map[string]any{"name": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
+	{"code_blame", []string{"code"}, map[string]any{"name": "web", "path": "go.mod"},
+		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
+	{"code_diff", []string{"code"}, map[string]any{"name": "web", "base": "HEAD", "head": "HEAD"},
+		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
+	{"code_compare", []string{"code"}, map[string]any{"name": "web", "base": "HEAD", "head": "HEAD"},
+		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
+	{"code_commit", []string{"code"}, map[string]any{"name": "web", "sha": "4b825dc642cb6eb9a060e54bf8d69288fbee4904"},
+		func(s stubs) statelog.ReadLevel { return s.code.first().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.first().Fresh) }, nil},
 }
 
 // handed is the bound of a reader of one log, as its stub recorded the two

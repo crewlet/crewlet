@@ -922,6 +922,12 @@ const (
 	// target's newest commit whose required checks passed — or one target's,
 	// held to the asker's grant.
 	ReadGreen ReadKind = "green"
+	// ReadCommit is ONE COMMIT'S CHANGES (commitread.go): the repository in
+	// detail, as a `repo` read answers it, and every change the commit
+	// [ReadQuery.Commit] names belongs to — each whose merge it is and each
+	// revision it heads — read in the same snapshot and held to the asker's
+	// grant on the repository.
+	ReadCommit ReadKind = "commit"
 )
 
 // ReadKinds is the closed set.
@@ -937,11 +943,12 @@ const (
 // [ReadQuery.ExpungeTips], `check_box` the only one that reads
 // [ReadQuery.CheckBox], `checks_running` the only one that reads
 // [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
-// that read [ReadQuery.Target], and `queue_due` the only one that reads
-// [ReadQuery.QueueDue].
+// that read [ReadQuery.Target], `queue_due` the only one that reads
+// [ReadQuery.QueueDue], and `commit` the only one that reads
+// [ReadQuery.Commit].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
-		ReadChangeRouting, ReadReviews,
+		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadChangesDue,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
 		ReadQueueDue, ReadLandings, ReadGreen}
@@ -1040,6 +1047,10 @@ type ReadQuery struct {
 	// which such a build refuses as a kind it does not know, rather than ride
 	// a field it ignores.
 	Push string `json:"push,omitempty"`
+	// Commit is the commit a `commit` read names the changes of, its whole
+	// id; refused on every other kind. A field only that kind reads, which a
+	// build that predates the kind refuses whole ([ReadKinds]).
+	Commit string `json:"commit,omitempty"`
 	// PathOwners asks a `repo` read for the repository's PATH OWNERS beside
 	// its detail ([RepoDetail.PathOwners]), and nothing else answers them: a
 	// read of who owns which of its paths sets it — the API's question of one
@@ -1272,10 +1283,12 @@ type ReadAnswer struct {
 	// the targets its page reaches; Landings a page of a `landings` read; and
 	// Green the target's green row a `landings` read starts above, or a
 	// `green` read's rows.
-	Queue    []QueueRow         `json:"queue,omitempty"`
-	Trains   []CandidateRow     `json:"trains,omitempty"`
-	Landings []LandingRow       `json:"landings,omitempty"`
-	Green    []GreenRow         `json:"green,omitempty"`
+	Queue    []QueueRow     `json:"queue,omitempty"`
+	Trains   []CandidateRow `json:"trains,omitempty"`
+	Landings []LandingRow   `json:"landings,omitempty"`
+	Green    []GreenRow     `json:"green,omitempty"`
+	// Commit is a `commit` read's changes of its commit, beside Repo.
+	Commit   *CommitChanges     `json:"commit,omitempty"`
 	Next     string             `json:"next,omitempty"`
 	Position statelog.Position  `json:"position"`
 	Level    statelog.ReadLevel `json:"level"`
@@ -2430,6 +2443,21 @@ func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
 // for the same reason.
 func (k GitReadKind) EnginesOwn() bool { return k == GitRevisionFacts || k == GitChecksFile }
 
+// Unstampable reports a kind whose answer is a PAGE of the repository's
+// content — a listing, a file's lines, a diff, a comparison, an interdiff, a
+// history or a blame — which a read may ask cut and answered with no stamp
+// ([GitQuery.Unstamped]). Never a landed-in read, whose answer IS what the
+// node's index says of a push; nor a revision's facts, a re-anchoring or a
+// checks file, which the engine and a change's own reads ask, never a
+// question that keeps a page.
+func (k GitReadKind) Unstampable() bool {
+	switch k {
+	case GitTree, GitBlob, GitDiff, GitCompare, GitInterdiff, GitLog, GitBlame:
+		return true
+	}
+	return false
+}
+
 // EnginesOwn reports a read THE ENGINE makes on its own account: one of a kind
 // only it reads ([GitReadKind.EnginesOwn]), or one it makes FOR A CHECK
 // ([GitQuery.Check]). Such a read names no asker and no seat it reads for, is
@@ -2508,6 +2536,24 @@ type GitQuery struct {
 	// record: a build that knows no `home` reads every read as one it may
 	// fill, which is this build's answer without the rule.
 	Home bool `json:"home,omitempty"`
+	// Unstamped asks for THE PAGE ALONE: its Kind, Rev, Next and the kind's
+	// own part, with none of the fields a git node stamps on an answer — the
+	// repository, the copy's position, Memo, the push that introduced each
+	// commit and the coverage of the index that says so ([GitAnswer]) — and
+	// CUT AGAINST A ROOM NONE OF THEM TAKES. A stamped page is cut against
+	// the room its stamps leave, so the same page cut where the node's index
+	// holds more of its commits, or at a longer position, holds fewer items
+	// and another Next; an unstamped page is a function of the object ids it
+	// names, its arguments and the build that cuts it, and of nothing a node
+	// or a moment holds — what a question may answer as never changing
+	// (internal/api/queries' Immutable), which a stamped page cannot be. A
+	// node memoizes the two apart, since they are two cuts of one read.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION: no build that carries the
+	// code domain has run without it — none of the domain is on main — so
+	// every git node that answers a read honours it.
+	Unstamped bool `json:"unstamped,omitempty"`
 
 	Tree          *TreeQuery          `json:"tree,omitempty"`
 	Blob          *BlobQuery          `json:"blob,omitempty"`
@@ -2926,6 +2972,9 @@ func (q GitQuery) Validate() error {
 		if err := q.atItsCheck(); err != nil {
 			return err
 		}
+	}
+	if q.Unstamped && !q.Kind.Unstampable() {
+		return fmt.Errorf("%w: unstamped: a %s read answers no page to cut unstamped", ErrInvalid, q.Kind)
 	}
 	switch q.Kind {
 	case GitTree:

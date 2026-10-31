@@ -339,6 +339,16 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_change":         "decided_by:" + string(authz.ActionCodeRead),
 		"code_change_routing": "decided_by:" + string(authz.ActionCodeRead),
 		"code_reviews":        "decided_by:" + string(authz.ActionCodeRead),
+		// AND A REPOSITORY'S CONTENT, decided per repository alike — and
+		// again by the git node that answers a read by object id.
+		"code_refs":    "decided_by:" + string(authz.ActionCodeRead),
+		"code_tree":    "decided_by:" + string(authz.ActionCodeRead),
+		"code_blob":    "decided_by:" + string(authz.ActionCodeRead),
+		"code_log":     "decided_by:" + string(authz.ActionCodeRead),
+		"code_blame":   "decided_by:" + string(authz.ActionCodeRead),
+		"code_diff":    "decided_by:" + string(authz.ActionCodeRead),
+		"code_compare": "decided_by:" + string(authz.ActionCodeRead),
+		"code_commit":  "decided_by:" + string(authz.ActionCodeRead),
 		// AND WHO READ A UNIT'S REPOSITORY, decided by its own verb before
 		// anything is read: an admin's, since the answer names the people
 		// who read it, which no repository's grant gives.

@@ -216,11 +216,44 @@ func (f *fakeCodeReads) Read(_ context.Context, q code.ReadQuery) (code.ReadAnsw
 	return f.answer(q)
 }
 
-// GitRead answers no read by object id: the questions this suite asks read
-// rows, and a part read by object id is the queries suite's.
-func (f *fakeCodeReads) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
-	return code.GitAnswer{}, errors.New("fakeCodeReads: no read by object id is asked here")
+// ResolveRef answers every name a branch at the commit fakeCommit: what the
+// content questions this suite asks by their paths read at.
+func (f *fakeCodeReads) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+	a := code.RefAnswer{Repo: code.RepoRef{ID: fakeRepoID, Name: q.Repo, DefaultBranch: "main"}}
+	for _, name := range q.Refs {
+		a.Refs = append(a.Refs, code.ResolvedRef{Name: name, Ref: "refs/heads/" + name, OID: fakeCommit})
+	}
+	return a, nil
 }
+
+// GitRead answers a read by object id with the one part each question reads:
+// a history of the commit asked, a comparison of the two — whatever this
+// suite asks by a path is answered, and what a part holds is the queries
+// suite's.
+func (f *fakeCodeReads) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	a := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}
+	switch q.Kind {
+	case code.GitLog:
+		a.Log = &code.LogAnswer{Commits: []code.LogCommit{{OID: q.Log.Rev}}}
+	case code.GitCompare:
+		a.Compare = &code.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head}
+	}
+	return a, nil
+}
+
+// MergePreview answers every preview clean.
+func (f *fakeCodeReads) MergePreview(_ context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer,
+	error) {
+
+	return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: code.MergeClean}, nil
+}
+
+// fakeRepoID is the repository every read of this suite answers, and
+// fakeCommit the commit every ref it resolves names.
+const (
+	fakeRepoID = "0e8bd7a4-5a04-4e17-8f3c-7e7d4b2c9a11"
+	fakeCommit = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+)
 
 // FloorOf is no floor: this node wrote nothing.
 func (f *fakeCodeReads) FloorOf(string) statelog.Position { return statelog.Position{} }
@@ -419,8 +452,13 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 			// EVERY REPOSITORY A DETAIL, the company's, so who read one is
 			// answered from its row — not recorded — without the readers.
 			reads := &fakeCodeReads{answer: func(q code.ReadQuery) (code.ReadAnswer, error) {
-				return code.ReadAnswer{Level: q.Fresh.Level, Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{
-					RepoRef: code.RepoRef{Name: q.Repo, Visibility: code.VisibilityCompany}}}}, nil
+				a := code.ReadAnswer{Level: q.Fresh.Level, Repo: &code.RepoDetail{RepoSummary: code.RepoSummary{
+					RepoRef: code.RepoRef{ID: fakeRepoID, Name: q.Repo, DefaultBranch: "main",
+						Visibility: code.VisibilityCompany}}}}
+				if q.Kind == code.ReadCommit {
+					a.Commit = &code.CommitChanges{Commit: q.Commit}
+				}
+				return a, nil
 			}}
 			a := codeApp(t, tc.roles, fixedCode{git: fakeGitRoutes{}, reads: reads,
 				readers: readersOn(t, &fakeRepoReaders{})})
@@ -450,8 +488,11 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 			// repository reach the reader as the generic form's do.
 			for _, q := range codeQuestions {
 				path := strings.Replace(strings.TrimPrefix(q.route, "GET "), "{name}", "web", 1)
-				path = strings.Replace(path, "{n}", "1", 1)
-				for _, at := range []string{path, "/query/" + q.what + "?name=web&change=1"} {
+				path = strings.Replace(strings.Replace(path, "{n}", "1", 1), "{sha}", fakeCommit, 1)
+				// A COMPARISON'S AND A DIFF'S TWO REVISIONS, which every other
+				// question reads past as no parameter of its own.
+				for _, at := range []string{path + "?base=HEAD&head=HEAD&path=go.mod",
+					"/query/" + q.what + "?name=web&change=1&sha=" + fakeCommit + "&base=HEAD&head=HEAD&path=go.mod"} {
 					before := len(reads.queries())
 					if rec := ask(t, a, http.MethodGet, at, true); rec.Code != http.StatusOK {
 						t.Errorf("GET %s answered %d %q", at, rec.Code, rec.Body.String())
@@ -495,6 +536,17 @@ var codeQuestions = []codeQuestion{
 	{"code_change", "GET /code/repos/{name}/changes/{n}", code.ReadChange, "web"},
 	{"code_change_routing", "GET /code/repos/{name}/changes/{n}/routing", code.ReadChangeRouting, "web"},
 	{"code_reviews", "GET /code/reviews", code.ReadReviews, ""},
+	// AND A REPOSITORY'S CONTENT: its refs, and each read by object id at its
+	// default branch — the repository read first, for it — or, a commit, its
+	// changes read first, for the repository.
+	{"code_refs", "GET /code/repos/{name}/refs", code.ReadRefs, "web"},
+	{"code_tree", "GET /code/repos/{name}/tree", code.ReadRepo, "web"},
+	{"code_blob", "GET /code/repos/{name}/blob", code.ReadRepo, "web"},
+	{"code_log", "GET /code/repos/{name}/log", code.ReadRepo, "web"},
+	{"code_blame", "GET /code/repos/{name}/blame", code.ReadRepo, "web"},
+	{"code_diff", "GET /code/repos/{name}/diff", code.ReadRepo, "web"},
+	{"code_compare", "GET /code/repos/{name}/compare", code.ReadRepo, "web"},
+	{"code_commit", "GET /code/repos/{name}/commits/{sha}", code.ReadCommit, "web"},
 }
 
 // THE CODE SURFACE IS ASKED ON EVERY REQUEST. The code host is built with the

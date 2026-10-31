@@ -442,8 +442,7 @@ func (s *Server) serve(ctx context.Context, q code.GitQuery) (code.GitAnswer, er
 			return code.GitAnswer{}, err
 		}
 	}
-	a.RepoID, a.Position = q.RepoID, r.synced.Position
-	a.PushedBy, a.Coverage = r.pushedBy, r.coverage
+	r.stamp(&a, a.Memo)
 	if q.Home {
 		s.o.Cache.WantHistory(q.RepoID)
 	}
@@ -528,14 +527,18 @@ func commitsOf(q code.GitQuery, objs found) []string {
 // earlier call named: a hit the memo answers is decorated by the commits its
 // page names, and one it could not use by the read's own.
 func (r *read) index(commits []string) {
-	if !r.indexRead {
-		r.indexRead = true
+	// AN UNSTAMPED READ READS NO INDEX: it names no push, so nothing of
+	// what the index holds may move its page (code.GitQuery.Unstamped). Its
+	// commits are named all the same, by nothing, as a stamped read's are
+	// where the index holds none of them.
+	if !r.indexRead && !r.q.Unstamped {
 		if p, err := r.s.o.Cache.Provenance(r.synced); err == nil && p.Indexed() {
 			r.prov = p
 			cov := p.Coverage()
 			r.coverage = &cov
 		}
 	}
+	r.indexRead = true
 	r.pushedBy, r.named = nil, nil
 	for _, id := range commits {
 		r.decorate(id)

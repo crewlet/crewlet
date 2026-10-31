@@ -36,6 +36,14 @@ type stubCode struct {
 	read    []code.GitQuery
 	floor   statelog.Position
 	readers stubReaders
+	// refs answers a resolve of refs by name, each recorded in resolved —
+	// every name a ref of its own at stubOID where refs is nil — and
+	// preview a merge preview, each recorded in previewed: clean where it is
+	// nil.
+	refs      func(code.RefQuery) (code.RefAnswer, error)
+	resolved  []code.RefQuery
+	preview   func(code.MergePreviewQuery) (code.MergePreviewAnswer, error)
+	previewed []code.MergePreviewQuery
 	// sourced counts the asks of the source itself: CodeReads and
 	// RepoReaders.
 	sourced int
@@ -71,12 +79,44 @@ func (s *stubCode) RepoReaders() (builtin.ReadersDeps, error) {
 	return builtin.ReadersDeps{Readers: &s.readers}, nil
 }
 
+// stubRepoID is the one repository the stub serves, whatever its name.
+const stubRepoID = "0e8bd7a4-5a04-4e17-8f3c-7e7d4b2c9a11"
+
+// stubOID is the commit every ref the stub resolves names.
+const stubOID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+// stubRepo is the repository the stub answers a read of name with: its
+// default branch main.
+func stubRepo(name string) *code.RepoDetail {
+	return &code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: code.RepoRef{ID: stubRepoID, Name: name,
+		DefaultBranch: "main", Visibility: code.VisibilityCompany}}}
+}
+
 func (s *stubCode) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	s.asked = append(s.asked, q)
 	if s.answer != nil {
 		return s.answer(q)
 	}
-	return code.ReadAnswer{Level: q.Fresh.Level}, nil
+	a := code.ReadAnswer{Level: q.Fresh.Level}
+	switch q.Kind {
+	case code.ReadRepo, code.ReadRefs:
+		a.Repo = stubRepo(q.Repo)
+	case code.ReadCommit:
+		a.Repo, a.Commit = stubRepo(q.Repo), &code.CommitChanges{Commit: q.Commit}
+	}
+	return a, nil
+}
+
+func (s *stubCode) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+	s.resolved = append(s.resolved, q)
+	if s.refs != nil {
+		return s.refs(q)
+	}
+	a := code.RefAnswer{Repo: stubRepo(q.Repo).RepoRef}
+	for _, name := range q.Refs {
+		a.Refs = append(a.Refs, code.ResolvedRef{Name: name, Ref: "refs/heads/" + name, OID: stubOID})
+	}
+	return a, nil
 }
 
 func (s *stubCode) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -84,10 +124,35 @@ func (s *stubCode) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, 
 	if s.git != nil {
 		return s.git(q)
 	}
-	return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}, nil
+	a := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}
+	switch q.Kind {
+	case code.GitCompare:
+		a.Compare = &code.CompareAnswer{Base: q.Compare.Base, Head: q.Compare.Head}
+	case code.GitLog:
+		a.Log = &code.LogAnswer{Commits: []code.LogCommit{{OID: q.Log.Rev}}}
+	}
+	return a, nil
+}
+
+func (s *stubCode) MergePreview(_ context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+	s.previewed = append(s.previewed, q)
+	if s.preview != nil {
+		return s.preview(q)
+	}
+	return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: code.MergeClean}, nil
 }
 
 func (s *stubCode) FloorOf(string) statelog.Position { return s.floor }
+
+// first is the first query asked — a question's read at the caller's own
+// freshness, before any read it floors at that one's position — the zero
+// query where none was.
+func (s *stubCode) first() code.ReadQuery {
+	if len(s.asked) == 0 {
+		return code.ReadQuery{}
+	}
+	return s.asked[0]
+}
 
 // last is the newest query asked, the zero query where none was.
 func (s *stubCode) last() code.ReadQuery {
@@ -111,6 +176,7 @@ var codeQuestions = []struct {
 	{"code_change", code.ReadChange, map[string]any{"name": "web", "change": "1"}},
 	{"code_change_routing", code.ReadChangeRouting, map[string]any{"name": "web", "change": "1"}},
 	{"code_reviews", code.ReadReviews, map[string]any{"reviewer": "dev"}},
+	{"code_refs", code.ReadRefs, map[string]any{"name": "web"}},
 }
 
 // A CODE QUESTION HANDS THE READER THE CALLER'S WHOLE FRESHNESS: the level,

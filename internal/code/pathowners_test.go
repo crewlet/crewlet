@@ -300,6 +300,7 @@ func everyReadAsked(id string) map[code.ReadKind]code.ReadQuery {
 		code.ReadChange:        {Asker: asker, Repo: "web", Change: 1},
 		code.ReadChangeRouting: {Asker: asker, Repo: "web", Change: 1},
 		code.ReadReviews:       {Asker: asker, Reviewer: "founder"},
+		code.ReadCommit:        {Asker: asker, Repo: "web", Commit: strings.Repeat("6", 40)},
 		code.ReadChecks:        {Asker: asker, Repo: "web"},
 		code.ReadCheck: {Asker: asker, Repo: "web",
 			Checks: &code.CheckQuery{OID: strings.Repeat("6", 40), Target: "refs/heads/main", Name: "unit",

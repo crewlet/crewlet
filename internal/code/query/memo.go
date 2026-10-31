@@ -76,6 +76,11 @@ import (
 // stamped fields would take more is cut again, and that cut memoized over it.
 // Every envelope is measured with Memo set (room), so a page from the memo
 // fits as the one cut did.
+//
+// An UNSTAMPED read (code.GitQuery.Unstamped) is stamped with nothing, so its
+// page is cut against a room nothing a node holds moves, and is the same page
+// whichever node cuts it and whenever: kept under a key of its own, since the
+// stamped cut of the same read is another page.
 
 // memoFormat names what an entry of this build holds — a memoPage as
 // appendPage writes it and its tail as appendTail does — and is the first part
@@ -130,6 +135,14 @@ var errMemoPage = errors.New("query: a memo entry that is no page of this build'
 // cursor, canonical as every one a node issues (parseCursor).
 func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 	parts := []string{memoFormat, strconv.Itoa(r.s.pageBytes), string(r.q.Kind)}
+	// AN UNSTAMPED PAGE IS ANOTHER CUT of the same read — against a room no
+	// stamp takes (code.GitQuery.Unstamped) — so it is kept apart: a stamped
+	// read recalling it would overrun its bound, and an unstamped one
+	// recalling a stamped page would answer a page whose extent its stamps
+	// chose.
+	if r.q.Unstamped {
+		parts = append(parts, "unstamped")
+	}
 	switch q := r.q; q.Kind {
 	case code.GitTree:
 		parts = append(parts, whole[q.Tree.Rev], pathOf(q), strconv.FormatBool(q.Tree.Recursive))
@@ -262,7 +275,7 @@ func (r *read) recall(whole map[string]string, at cursor) (code.GitAnswer, bool)
 		return code.GitAnswer{}, false
 	}
 	a := p.answer
-	a.Memo = true
+	r.stamp(&a, true)
 	return a, true
 }
 
@@ -284,8 +297,9 @@ func wholeOf(q code.GitQuery, objs found) map[string]string {
 // before them (Kind, which is never left out), so an answer's whole size moves
 // by the difference between two reads' stamp costs exactly.
 func (r *read) stampCost() int {
-	return jsonLen(code.GitAnswer{RepoID: r.q.RepoID, Position: r.synced.Position, Memo: true,
-		PushedBy: r.pushedBy, Coverage: r.coverage})
+	var a code.GitAnswer
+	r.stamp(&a, true)
+	return jsonLen(a)
 }
 
 // memoRun is the pages one run memoizes: a batch of the pinned copy's memo,

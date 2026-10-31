@@ -205,6 +205,19 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/code/repos/{name}/changes/{n}", what: "code_change", path: map[string]string{"name": "name", "n": "change"}},
 	{method: "GET", pattern: "/code/repos/{name}/changes/{n}/routing", what: "code_change_routing", path: map[string]string{"name": "name", "n": "change"}},
 	{method: "GET", pattern: "/code/reviews", what: "code_reviews"},
+	// AND A REPOSITORY'S CONTENT: its refs, a directory, a file, a path's
+	// history, a file's blame, a diff, a comparison with its merge preview
+	// and one commit with the changes it belongs to — each read by object id
+	// of the repository's home git node, and decided per repository as the
+	// rows are.
+	{method: "GET", pattern: "/code/repos/{name}/refs", what: "code_refs", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/tree", what: "code_tree", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/blob", what: "code_blob", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/log", what: "code_log", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/blame", what: "code_blame", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/diff", what: "code_diff", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/compare", what: "code_compare", path: map[string]string{"name": "name"}},
+	{method: "GET", pattern: "/code/repos/{name}/commits/{sha}", what: "code_commit", path: map[string]string{"name": "name", "sha": "sha"}},
 }
 
 // mountReads registers the named read routes.

@@ -2931,7 +2931,15 @@ var SESSION_QUERIES = {
 		"code_changes",
 		"code_change",
 		"code_change_routing",
-		"code_reviews"
+		"code_reviews",
+		"code_refs",
+		"code_tree",
+		"code_blob",
+		"code_log",
+		"code_blame",
+		"code_diff",
+		"code_compare",
+		"code_commit"
 	]
 };
 //#endregion

@@ -152,6 +152,28 @@ func ObjectFloor(own statelog.Position, revs ...RevisionRow) statelog.Freshness 
 	return statelog.FloorAt(statelog.ReadSession, at)
 }
 
+// RefsFloor is the floor a read by object id of the commits refs name is
+// asked at — [ObjectFloor]'s rule for revisions named by refs rather than by a
+// change's rows: the furthest of own (the asking node's own writes to the
+// repository, and any floor of its caller's) and the record that last moved
+// each ref ([ResolvedRef.Moved]), where the commit it names had landed at the
+// latest; or none, which reads the git node's copy as it stands. A code tool's
+// read and a question's read their revisions by it alike.
+//
+// NEVER THE RESOLVE'S CHECKPOINT ([RefAnswer.Position]), for ObjectFloor's
+// reason: a linearizable resolve's is past its own barrier.
+func RefsFloor(own statelog.Position, refs ...ResolvedRef) statelog.Freshness {
+	floors := []statelog.Position{own}
+	for _, r := range refs {
+		floors = append(floors, r.Moved)
+	}
+	at := statelog.Freshness{Floors: floors}.Floor(topics.CodeLogStream)
+	if at.IsZero() {
+		return statelog.Freshness{}
+	}
+	return statelog.FloorAt(statelog.ReadSession, at)
+}
+
 // FindingPlace is where a finding's lines are in the revision a read asks
 // about: moved by the lines changed above them; OUTDATED where its own lines
 // changed — then where they would be had only the lines above moved; GONE

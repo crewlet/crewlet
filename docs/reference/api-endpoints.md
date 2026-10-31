@@ -4382,6 +4382,14 @@ REST route calls, so the two surfaces cannot diverge:
 | `code_change` | `{name, change, part, revision, since_revision, file, file_b64, limit, cursor, read_level, …}` | `GET /code/repos/{name}/changes/{n}`. One change, a part at a time: its detail and revisions, a part of its conversation, a revision's files or one file's patch, its findings placed in a revision |
 | `code_change_routing` | `{name, change, limit, cursor, read_level, …}` | `GET /code/repos/{name}/changes/{n}/routing`. Whom the change's records reached, a whole record a page, its `delivery` telling `nobody` from `swept` |
 | `code_reviews` | `{reviewer, limit, cursor, read_level, …}` | `GET /code/reviews`. The reviews one reviewer gave, newest first, each naming its change |
+| `code_refs` | `{name, prefix, limit, cursor, read_level, …}` | `GET /code/repos/{name}/refs`. A repository's live refs under a prefix — see [A repository's content](#a-repositorys-content), which says what the eight content questions answer and which answers never change |
+| `code_tree` | `{name, ref, path, path_b64, recursive, cursor, read_level, …}` | `GET /code/repos/{name}/tree`. A directory at a revision, or every file below it |
+| `code_blob` | `{name, ref, path, path_b64, start_line, end_line, cursor, read_level, …}` | `GET /code/repos/{name}/blob`. A file's lines at a revision, or a blob by its id |
+| `code_log` | `{name, ref, path, path_b64, grep, since, limit, cursor, read_level, …}` | `GET /code/repos/{name}/log`. The commits that changed a path, newest first |
+| `code_blame` | `{name, ref, path, path_b64, start_line, end_line, cursor, read_level, …}` | `GET /code/repos/{name}/blame`. Which commit last changed each line of a file |
+| `code_diff` | `{name, base, head, paths, file, file_b64, renames, cursor, read_level, …}` | `GET /code/repos/{name}/diff`. What changed between two revisions: the stat, or one file's patch |
+| `code_compare` | `{name, base, head, read_level, …}` | `GET /code/repos/{name}/compare`. How two revisions relate, and what merging head into base would do |
+| `code_commit` | `{name, sha, read_level, …}` | `GET /code/repos/{name}/commits/{sha}`. One commit, the push that introduced it and the changes it belongs to |
 | `config` | `{}` | `GET /config` *(needs `admin`)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `admin`)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
@@ -7241,7 +7249,8 @@ its `min_position` at `read_level=session` is answered only once the serving
 node holds it — refused `503 unavailable` (`behind`) where it does not within
 the read's budget, never served from before the write — which is how a screen
 draws the list it just changed (the dashboard's `SESSION_QUERIES` lists them,
-and [a change's questions](#a-changes-questions), under the code log). A bare
+[a change's questions](#a-changes-questions) and [a repository's
+content](#a-repositorys-content), under the code log). A bare
 `session`, naming no position, is refused
 `400 bad_params`: it would wait for nothing. A `min_position` on another log
 is `400 bad_params` too, since no read of the code log can wait on it.
@@ -7329,6 +7338,70 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "https://crewlet.example.com/code/changes?repo=web&state=open"
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "https://crewlet.example.com/code/repos/web/changes/42?part=diff&since_revision=2&file=upload/retry.go"
+```
+
+### A repository's content
+
+A repository's refs, files, history and diffs are eight more questions,
+decided per repository as the rows above are and refused in the same
+vocabulary. All but `code_refs` read the repository's **content**, which its
+home git node answers by object id — the reads a seat's
+[code tools](../guides/tools-and-mcp.md#the-companys-code) make, one
+implementation:
+
+| Route | Question | What it answers |
+|---|---|---|
+| `GET /code/repos/{name}/refs` | `code_refs` | Its live refs under `?prefix=` (`refs/heads/`, the default, `refs/tags/`, or a directory of either ending in `/`), by name, a page at a time (`?limit=` 1–1000, unset or `0` is 200, and `?cursor=`); the first page carries the repository in detail too |
+| `GET /code/repos/{name}/tree` | `code_tree` | A directory's entries at `?ref=` — its root, or `?path=` (`?path_b64=` for a path's exact bytes) — or, with `?recursive=true`, every file below it, a page at a time (`?cursor=`) |
+| `GET /code/repos/{name}/blob` | `code_blob` | A file's lines at `?ref=` and `?path=`, `?start_line=` to `?end_line=`, a page at a time; `?ref=` a blob's own id with no path reads that blob, and a path naming a directory answers its listing |
+| `GET /code/repos/{name}/log` | `code_log` | The commits that changed `?path=` — or every commit — newest first from `?ref=`, each with its parents, its author, its two dates and its subject: `?limit=` a page (1–100, unset or `0` is 25), `?grep=` a literal its message must hold, `?since=` (RFC 3339) the oldest commit date kept |
+| `GET /code/repos/{name}/blame` | `code_blame` | Which commit last changed each line of the file `?path=` at `?ref=`, `?start_line=` to `?end_line=` (at most 500 lines a read), a page at a time |
+| `GET /code/repos/{name}/diff` | `code_diff` | What changed from `?base=` to `?head=` (both required): the per-file stat, narrowed to `?paths=` (repeated, at most 64), or one `?file=`'s patch (`?file_b64=`), with renames detected unless `?renames=false`, a page at a time |
+| `GET /code/repos/{name}/compare` | `code_compare` | How `?base=` and `?head=` relate — their merge base, which contains which, how many commits each has that the other lacks, the first page of what head changed since the merge base — and `preview`, what merging head into base would do as the repository's home merges it: `state` `clean`, `conflict` (`conflicts` the paths, `conflicts_omitted` how many more) or `unknown`, a merge its home could not decide in a read's time — the same merge a change's [mergeability](../concepts/code-host.md#mergeability) is recorded by |
+| `GET /code/repos/{name}/commits/{sha}` | `code_commit` | One commit by its **whole** id — its parents, author, dates and subject — with `pushed_by`, the push that introduced it where the git node's index names one, and `push`, that push's row whole (who pushed it, the run behind a seat's push, every ref it moved) where the push history still holds it; and the changes it belongs to: `merged`, each change whose merge it is, and `revisions`, each revision it heads (`revision 2 of web!42`), at most 50 of each, `more` set where either holds more |
+
+A revision — `?ref=`, `?base=`, `?head=` — is a commit's id, whole or its
+first 7 or more hex digits, or a branch, a tag, a whole ref, or `HEAD` for the
+default branch (the default where `ref` is not given); a branch whose name is
+all hex digits is named by its whole ref. Every ref a request names is
+resolved in one read at the caller's freshness, and the home git node is asked
+at the position of the record that last moved each, so its copy holds what
+the ref named.
+
+**A question every revision of which is a whole id never changes**, and says
+so: it is answered with a strong `ETag` and `Cache-Control: private,
+max-age=31536000, immutable`, and `304 Not Modified` to a request naming that
+tag in `If-None-Match` — a screen paging back through a file or a diff costs
+the node nothing to send twice. Such an answer is the page alone: the
+repository by the name asked, the `kind`, the `rev` read, the `next` page's
+cursor and the kind's own part, cut the same on every git node whatever it
+holds. A question naming a ref or an abbreviation is answered bare, without
+the tag, since what it names can move, and carries what its read found
+beside the page: `resolved`, each ref by the parameter that named it — its
+whole name, its commit and where it last moved — the answering copy's
+`position`, and `pushed_by`, the push that introduced each commit the page
+names, with `coverage`, what the node's index of pushes holds. A comparison
+whose merge preview is `unknown` is answered bare too, and so is every
+`code_commit`, whose changes and push move.
+
+A content question adds these refusals to the code reads':
+
+- `404 not_found` with `"reason": "no_ref"` for a ref the repository holds no
+  live ref of, every one named, and `"reason": "no_object"` for an object id
+  the repository holds no object of, or a path the revision holds no such
+  directory or file at;
+- `400 bad_params` for a revision that names nothing, a `code_commit` `sha`
+  that is not a whole commit id (an abbreviation is expanded by `code_log`
+  with it as `ref` and `limit=1`), a read too large to answer whole — narrow
+  it — and a parameter the read does not take;
+- `503 unavailable` where no git node holding the repository could answer
+  in time, which is never an answer about the repository.
+
+```sh
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "https://crewlet.example.com/code/repos/web/tree?ref=main&path=upload"
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "https://crewlet.example.com/code/repos/web/compare?base=main&head=feature/retry"
 ```
 
 ### `GET /code/repos/{name}/readers`

@@ -820,22 +820,12 @@ const headRev = "HEAD"
 // resolvedRev is a revision argument as a read by object id names it: the
 // object id — whole, or an abbreviation the git node expands — and, where the
 // argument was a ref, the ref it resolved through and the checkpoint that
-// read was at.
+// read was at. A read of it is floored at the record that last moved its ref
+// (code.RefsFloor), and an id's at nothing of its own.
 type resolvedRev struct {
 	oid  string
 	ref  *code.ResolvedRef
 	read statelog.Position
-}
-
-// at is what a read of the revision is floored at: the position of the record
-// that last moved its ref ([code.ResolvedRef.Moved]), where the commit it names
-// had landed at the latest — zero for an id, whose read names no floor of its
-// own.
-func (r resolvedRev) at() statelog.Position {
-	if r.ref == nil {
-		return statelog.Position{}
-	}
-	return r.ref.Moved
 }
 
 // revArg is the revision a call names in arg, or the refusal of an argument
@@ -909,16 +899,16 @@ func revPairArg(tool string, args map[string]any) (base, head string, refusal *t
 // this node's own floor on the repository and the positions the call's refs
 // last moved at — a SYNC level for the copy that answers, so it holds the
 // commits those refs named and this node's own pushes to it — or none, which
-// reads the copy as it stands.
+// reads the copy as it stands: the code domain's one rule (code.RefsFloor),
+// which a question's read by object id is floored by too.
 func (d CodeDeps) gitFresh(repo code.RepoRef, revs ...resolvedRev) statelog.Freshness {
-	floor := d.Code.FloorOf(repo.ID)
+	var refs []code.ResolvedRef
 	for _, r := range revs {
-		floor = furthestOnLog(floor, r.at())
+		if r.ref != nil {
+			refs = append(refs, *r.ref)
+		}
 	}
-	if floor.IsZero() {
-		return statelog.Freshness{}
-	}
-	return statelog.FloorAt(statelog.ReadSession, floor)
+	return code.RefsFloor(d.Code.FloorOf(repo.ID), refs...)
 }
 
 // furthestOnLog is the later of two positions on the code log, a zero one
@@ -2073,7 +2063,7 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitLandedIn,
 		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, commit, tip),
 		LandedIn: &code.LandedInQuery{Commit: commit.oid, Target: tip.ref.Ref, TargetOID: tip.oid,
-			At: tip.at()}})
+			At: tip.ref.Moved}})
 	if refusal != nil {
 		return *refusal, nil
 	}

@@ -1451,6 +1451,12 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// its rows stand.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.reviewsGiven(ctx, tx, q, chart, &out) }
+	case ReadCommit:
+		// A POINT READ, as a read of one repository is: its detail is the
+		// answer's first part, and a change a deferred record holds back
+		// would be a commit's page naming less than it belongs to.
+		query = fresh.Resolved(resolver(q.Repo), false)
+		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.commit(ctx, tx, q, chart, cp, &out) }
 	case ReadIntroduced:
 		// A POINT READ OF THE REPOSITORY, as a snapshot is: an index built
 		// past a record this node deferred on the repository would miss the
@@ -1675,6 +1681,8 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: part: only a change read names a part of the change", ErrInvalid)
 	case q.Part != "" && !q.Part.Valid():
 		return fmt.Errorf("%w: part: %q is not one of %v", ErrInvalid, q.Part, ChangeParts())
+	case q.Commit != "" && q.Kind != ReadCommit:
+		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	}
 	switch {
 	case q.Kind == ReadReviews && q.Repo != "":
@@ -1705,6 +1713,10 @@ func (q ReadQuery) validate() error {
 		}
 	case ReadReviews:
 		if err := q.validateReviews(); err != nil {
+			return err
+		}
+	case ReadCommit:
+		if err := q.validateCommit(); err != nil {
 			return err
 		}
 	case ReadChecks, ReadCheck:

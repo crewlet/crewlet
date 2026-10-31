@@ -150,16 +150,31 @@ func jsonLen(v any) int {
 
 // room is what a page's items may take in the read's answer whose envelope —
 // the answer with no items, every number and the cursor at their longest — is
-// envelope. THE FIELDS EVERY ANSWER CARRIES are filled here, the repository
-// and the position Read stamps on whatever the kind answered, the push that
-// introduced each commit it names with the coverage of the index that says so
-// (step 9, decorated before any page is cut), and Memo set — the page may be
-// read from the memo — so no kind can measure its envelope without them and
-// cut a page that its stamp then pushes past the bound.
+// envelope. THE FIELDS EVERY ANSWER CARRIES are filled here ([read.stamp]):
+// the repository and the position Read stamps on whatever the kind answered,
+// the push that introduced each commit it names with the coverage of the
+// index that says so (step 9, decorated before any page is cut), and Memo set
+// — the page may be read from the memo — so no kind can measure its envelope
+// without them and cut a page that its stamp then pushes past the bound. An
+// UNSTAMPED read ([code.GitQuery.Unstamped]) is stamped with none, so its
+// room is the bound less an envelope of the request's own fields alone, and
+// its page a function of what it names.
 func (r *read) room(envelope code.GitAnswer) int {
-	envelope.RepoID, envelope.Position = r.q.RepoID, r.synced.Position
-	envelope.PushedBy, envelope.Coverage, envelope.Memo = r.pushedBy, r.coverage, true
+	r.stamp(&envelope, true)
 	return r.s.pageBytes - jsonLen(envelope)
+}
+
+// stamp sets on a every field Read stamps on an answer — the repository, the
+// copy's position, the push that introduced each commit it names, the index's
+// coverage, and memo — or none, on an unstamped read ([code.GitQuery.Unstamped]):
+// THE ONE PLACE they are set, so the envelope a page is cut against, the cost
+// a memoized page's budget is held to and the answer itself carry the same.
+func (r *read) stamp(a *code.GitAnswer, memo bool) {
+	if r.q.Unstamped {
+		return
+	}
+	a.RepoID, a.Position = r.q.RepoID, r.synced.Position
+	a.PushedBy, a.Coverage, a.Memo = r.pushedBy, r.coverage, memo
 }
 
 // widest is the longest a page's count or position can encode as: every

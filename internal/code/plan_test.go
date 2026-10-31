@@ -911,6 +911,14 @@ func registeredStatements() map[string]statement {
 		// CHANGE'S RECORDS REACHED (the `change_routing` read), a range of
 		// the change's notices walked backward, each first and after a
 		// cursor.
+		// A COMMIT'S CHANGES (the `commit` read): those it merged, a range
+		// of the merge index on the repository and the commit, and the
+		// revisions it heads, a range of the heads index on the commit, each
+		// kept to the repository by its change's key.
+		"changes a commit merged": {commitMergedSQL, []any{"repo-1", oid("head-3-3"), MaxCommitChanges + 1},
+			[]string{commitMergedKey + " (repo_id=? AND merge_oid=?)"}},
+		"revisions a commit heads": {commitHeadsSQL, []any{oid("head-1-1"), "repo-1", MaxCommitChanges + 1},
+			[]string{commitHeadsKey + " (head_oid=?)", changeKey + " (id=?)"}},
 		"reviews given": {reviewsGivenSQL, []any{"seat-0", 50},
 			[]string{reviewsGivenKey + " (reviewer=?)"}},
 		"reviews given after": {reviewsGivenAfterSQL, []any{"seat-0", 3000, 50},
@@ -1214,9 +1222,9 @@ func planShapes() map[string]shape {
 // migration that declares the index rather than from whichever change first
 // issues the read. A change's indexes land with its tables (replicated 0058),
 // one migration for the rows rather than one an index, and their reads — the
-// lifecycle's, the listings', a commit's page — are each a change's of its own:
-// the listings' are registered now (changeread.go), and a commit's page's are
-// still claims.
+// lifecycle's, the listings', a commit's page — are each a change's of its own,
+// and are registered now (changeread.go, commitread.go): what stays a claim is
+// an index of a later reader.
 //
 // TWO-SIDED, as every allowance here is: a claim whose index a registered
 // statement reaches fails, because the change that issues the read registers
@@ -1230,11 +1238,6 @@ func planShapes() map[string]shape {
 // sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
-		"code_changes_merge_idx": {`SELECT id FROM code_changes WHERE repo_id = ? AND merge_oid = ?
-			AND merge_oid != ''`, []any{"repo-1", oid("head-3-3")},
-			[]string{"code_changes_merge_idx (repo_id=? AND merge_oid=?)"}},
-		"code_revisions_head_idx": {`SELECT change_id, n FROM code_revisions WHERE head_oid = ?`,
-			[]any{oid("head-1-1")}, []string{"code_revisions_head_idx (head_oid=?)"}},
 		// THE WEEKLY EXPUNGE'S LISTING, least recently expunged first over
 		// the repositories an expunge may be due in, its partial predicate
 		// repeated verbatim.

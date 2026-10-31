@@ -24,7 +24,10 @@ import (
 //
 // AND A CHANGE'S ROWS AND ITS ROUTING (codechange.go): `code_changes`,
 // `code_change`, `code_change_routing` and `code_reviews`, decided per
-// repository alike.
+// repository alike; AND A REPOSITORY'S CONTENT (codegit.go): `code_refs`,
+// `code_tree`, `code_blob`, `code_log`, `code_blame`, `code_diff`,
+// `code_compare` and `code_commit`, decided per repository alike — the git
+// node that answers judges the grant again.
 //
 // AND WHO READ A UNIT'S REPOSITORY, `code_repo_readers`: the operator tool's
 // one answer (builtin.ReadersOf) — the repository read by name as the asker,
@@ -89,7 +92,14 @@ func RepoNotDeclared(name string) string {
 // estate.CodeSeam satisfies it.
 type CodeReads interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	// ResolveRef is the refs a question names by name, read in one
+	// transaction at the level the query names (codegit.go).
+	ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnswer, error)
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	// MergePreview is what merging one commit into another would do, asked
+	// of the repository's home git node by the merge its mergeability is
+	// recorded by (code.merge_preview): a comparison's preview.
+	MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error)
 	// FloorOf is this node's own floor on a repository — the furthest of
 	// its writes to it — which a read by object id is floored at beside the
 	// records that moved what it reads (code.ObjectFloor).
@@ -193,6 +203,11 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	default:
 		q.Repo = p.String("name")
 	}
+	// A REFS LISTING NAMES ITS PREFIX, the reader's to refuse where it is
+	// none it lists under.
+	if kind == code.ReadRefs {
+		q.Prefix = strings.TrimSpace(p.String("prefix"))
+	}
 	// A CHANGE IS THE PATH'S TOO, by its number on the repository — web!42's
 	// 42 — on the reads of one change.
 	if kind == code.ReadChange || kind == code.ReadChangeRouting {
@@ -249,9 +264,9 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 
 // codeRefusal is a code read's failure in this surface's ONE vocabulary: a
 // repository that is not declared is [NotFound] (`not_declared`), naming it,
-// and so is a change it holds no such number of (`no_change`) and an object
-// or a path a revision does not hold (`no_object`); no git node able to
-// answer now is [ErrUnavailable];
+// and so is a change it holds no such number of (`no_change`), a ref no live
+// ref holds (`no_ref`) and an object or a path a revision does not hold
+// (`no_object`); no git node able to answer now is [ErrUnavailable];
 // a repository the asker's grant does not cover is [NotPermitted] with the
 // reader's own sentence; a level, a cursor or a parameter the reader refuses
 // is [ErrBadParams] with the reader's own sentence; and everything else — a
@@ -273,6 +288,8 @@ func codeRefusal(repo string, err error) error {
 			refusalSentence(err, code.ErrChangeNotFound))}
 	case errors.Is(err, code.ErrNotPermitted):
 		return &NotPermitted{Detail: refusalSentence(err, code.ErrNotPermitted)}
+	case errors.Is(err, code.ErrRefNotFound):
+		return &NotFound{Reason: ReasonNoRef, Detail: refusalSentence(err, code.ErrRefNotFound)}
 	case errors.Is(err, code.ErrObjectNotFound), errors.Is(err, code.ErrNotATree), errors.Is(err, code.ErrNotABlob):
 		return &NotFound{Reason: ReasonNoObject, Detail: objectSentence(err)}
 	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
@@ -368,8 +385,8 @@ func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 }
 
 // registerCode registers the code questions over s.Code — see the file's
-// doc, and codechange.go's for a change's, for what each answers and why
-// each is decided by the verb it is.
+// doc, codechange.go's for a change's and codegit.go's for a repository's
+// content, for what each answers and why each is decided by the verb it is.
 func registerCode(r *Registry, s Sources) {
 	r.Register("code_repos", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepos, "code_repos"))
 	r.Register("code_repo", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepo, "code_repo"))
@@ -380,4 +397,12 @@ func registerCode(r *Registry, s Sources) {
 	r.Register("code_change_routing", DecidedBy(authz.ActionCodeRead),
 		s.codeRead(code.ReadChangeRouting, "code_change_routing"))
 	r.Register("code_reviews", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadReviews, "code_reviews"))
+	r.Register("code_refs", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRefs, "code_refs"))
+	r.Register("code_tree", DecidedBy(authz.ActionCodeRead), s.codeTree)
+	r.Register("code_blob", DecidedBy(authz.ActionCodeRead), s.codeBlob)
+	r.Register("code_log", DecidedBy(authz.ActionCodeRead), s.codeLog)
+	r.Register("code_blame", DecidedBy(authz.ActionCodeRead), s.codeBlame)
+	r.Register("code_diff", DecidedBy(authz.ActionCodeRead), s.codeDiff)
+	r.Register("code_compare", DecidedBy(authz.ActionCodeRead), s.codeCompare)
+	r.Register("code_commit", DecidedBy(authz.ActionCodeRead), s.codeCommit)
 }
