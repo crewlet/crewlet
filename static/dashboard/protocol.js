@@ -1,4 +1,4 @@
-//#region src/protocol/equal.ts
+// src/protocol/equal.ts
 /**
 * Whether two values decoded off the wire say the same thing: the same JSON,
 * compared structurally rather than by identity.
@@ -26,8 +26,7 @@ function sameValue(a, b) {
 	if (lk.length !== keys(right).length) return false;
 	return lk.every((k) => Object.hasOwn(right, k) && sameValue(left[k], right[k]));
 }
-//#endregion
-//#region src/contract/wire.ts
+// src/contract/wire.ts
 /**
 * A live call's HEAVY fields, by the version that numbers each — the engine's
 * `livestate.CallDetail`, held there both ways by `internal/api/livestate`'s
@@ -66,8 +65,7 @@ var LIVE_CALL_DETAIL = {
 * that gave up first would report a slow answer as a failed one.
 */
 var QUERY_TIMEOUT_MS = 1e4;
-//#endregion
-//#region src/contract/domains.ts
+// src/contract/domains.ts
 /**
 * Which questions a write can be read back through.
 *
@@ -133,8 +131,7 @@ var SESSION_QUERIES = {
 		"chat_rooms"
 	]
 };
-//#endregion
-//#region src/protocol/session.ts
+// src/protocol/session.ts
 /**
 * This tab's read floors: the newest position each domain has been written at
 * from here, which every later read of that domain waits for.
@@ -931,8 +928,7 @@ var Store = class {
 		this.unknownPushes.set(name, (this.unknownPushes.get(name) ?? 0) + 1);
 	}
 };
-//#endregion
-//#region src/contract/retry.ts
+// src/contract/retry.ts
 /**
 * The two waits the dashboard's retries are bounded by that the ENGINE owns:
 * what it says when it has nothing better, and the longest hint it fixes.
@@ -975,8 +971,7 @@ var UNAVAILABLE_RETRY_MS = 5e3;
 * reason — and the gate fails the day a hint the engine fixes grows past it.
 */
 var RETRY_AFTER_MAX_MS = 3e4;
-//#endregion
-//#region src/contract/identity.ts
+// src/contract/identity.ts
 /**
 * The header an invitation's secret travels in to its view:
 * `authapi.InviteSecretHeader`, held by
@@ -1026,8 +1021,7 @@ var READER_HEADER = "X-Crewlet-Reader";
 * whoever the cookie is, until the tab's next request was refused.
 */
 var READER_PARAM = "reader";
-//#endregion
-//#region src/protocol/signin.ts
+// src/protocol/signin.ts
 /**
 * What this browser's sign-in needs from the person, as the transports learn
 * it.
@@ -1239,8 +1233,7 @@ function readerQuery() {
 function readerMoved() {
 	tabReader?.moved();
 }
-//#endregion
-//#region src/contract/engine.ts
+// src/contract/engine.ts
 /**
 * The header every answer the engine's API writes carries, and its one value
 * (`httpjson.EngineHeader`, set around everything a socket serves). An answer
@@ -1250,8 +1243,7 @@ function readerMoved() {
 * `TestTheDashboardKnowsTheEnginesOwnAnswers`.
 */
 var ENGINE_HEADER = "X-Crewlet-Engine";
-//#endregion
-//#region src/protocol/engineAnswer.ts
+// src/protocol/engineAnswer.ts
 /**
 * Whether an answer is the ENGINE'S OWN, the one rule every reader of a
 * failed request shares.
@@ -1291,8 +1283,7 @@ function markedByEngine(headers) {
 function answeredByEngine(status, code, marked) {
 	return status !== 0 && marked && code !== "" && code !== "unreadable_body";
 }
-//#endregion
-//#region src/contract/remedies.ts
+// src/contract/remedies.ts
 /**
 * The configurable limits a refusal names as where to change it, as the engine
 * names them (`internal/caveat`'s `Setting`, ADR-0060).
@@ -1309,8 +1300,7 @@ var LIMIT_SETTINGS = [
 	"assistant_token_budget",
 	"model_providers"
 ];
-//#endregion
-//#region src/protocol/remedy.ts
+// src/protocol/remedy.ts
 /**
 * A refusal's remedy, read off the wire: where a person changes the limit a
 * refusal was caused by (ADR-0060). The engine sends it beside a budget
@@ -1334,8 +1324,7 @@ function remedyOf(raw) {
 		seat: handle
 	};
 }
-//#endregion
-//#region src/lib/segment.ts
+// src/lib/segment.ts
 /**
 * What one segment of a URL path may be: the ONE rule, for the requests this
 * dashboard sends and the links it draws.
@@ -1379,8 +1368,7 @@ function pathSegment(value) {
 	if (segment === null) throw new RangeError(`"${value}" cannot be sent as one path segment`);
 	return segment;
 }
-//#endregion
-//#region src/protocol/rest.ts
+// src/protocol/rest.ts
 /**
 * The dashboard's one REST transport: every write, and the guarded reads the
 * socket has no question for.
@@ -2116,8 +2104,7 @@ var rest = {
 	/** A long-lived text answer, read as it arrives (see [stream]). */
 	stream
 };
-//#endregion
-//#region src/protocol/api.ts
+// src/protocol/api.ts
 /**
 * The degraded-mode snapshot, over HTTP.
 *
@@ -2172,8 +2159,7 @@ async snapshot() {
 		};
 	}
 } };
-//#endregion
-//#region src/protocol/auth.ts
+// src/protocol/auth.ts
 var auth = {
 	/**
 	* Whether the company has its first person — `/health`'s `identity`:
@@ -2288,8 +2274,7 @@ var auth = {
 		await rest.post("/auth/logout/all", {});
 	}
 };
-//#endregion
-//#region src/protocol/retry.ts
+// src/protocol/retry.ts
 /**
 * When to ask the engine again after it said it cannot answer yet.
 *
@@ -2326,8 +2311,7 @@ function retryAfterMs(seconds) {
 	if (!(seconds > 0)) return null;
 	return Math.min(seconds * 1e3, RETRY_AFTER_MAX_MS);
 }
-//#endregion
-//#region src/protocol/socket.ts
+// src/protocol/socket.ts
 /**
 * The dashboard's single connection to the engine.
 *
@@ -3415,8 +3399,7 @@ var LiveSocket = class {
 		this.fallbackTimer = setTimeout(() => void this.fallbackFetch(run), next);
 	}
 };
-//#endregion
-//#region src/contract/gate.ts
+// src/contract/gate.ts
 /**
 * The actions after which the gesture is finished under ITS OWN operation id —
 * `statelog.GateActionsKeepingOperation`, held by
@@ -3435,8 +3418,7 @@ var GATE_ACTIONS_KEEPING_OPERATION = [
 	"reanchor",
 	"set_capacity"
 ];
-//#endregion
-//#region src/protocol/sha256.ts
+// src/protocol/sha256.ts
 /**
 * SHA-256 (FIPS 180-4) over bytes: synchronous, and with no dependency.
 *
@@ -3585,8 +3567,7 @@ function sha256(data) {
 	for (let i = 0; i < 8; i++) outView.setUint32(i * 4, h[i]);
 	return out;
 }
-//#endregion
-//#region src/protocol/gate.ts
+// src/protocol/gate.ts
 /**
 * The node gate — evicting a node and readmitting one — as the wire knows it:
 * the remedy vocabulary a gate answer speaks, the operation id a gesture is
@@ -3695,8 +3676,7 @@ function layoutOpID(unixMs, tail, name) {
 function newGateOpID(verb, node, now = Date.now(), random = (bytes) => crypto.getRandomValues(bytes)) {
 	return layoutOpID(now, random(/* @__PURE__ */ new Uint8Array(10)), `${verb}-${opNamePart(node)}`);
 }
-//#endregion
-//#region src/contract/fleet.ts
+// src/contract/fleet.ts
 /**
 * The fleet's broker and object store, as the engine bounds them: the kinds
 * a node's broker can be and the disagreements named between the two records
@@ -3745,8 +3725,7 @@ var BROKER_FINDING_KINDS = [
 * failed.
 */
 var BROKER_REMOVE_TIMEOUT_MS = 185e3;
-//#endregion
-//#region src/protocol/keepalive.ts
+// src/protocol/keepalive.ts
 /**
 * Keeping a tab's session alive while it only listens.
 *
@@ -3805,8 +3784,7 @@ var SessionKeepAlive = class {
 		auth.keepAlive().catch(() => void 0);
 	}
 };
-//#endregion
-//#region src/contract/actions.ts
+// src/contract/actions.ts
 /**
 * Every change the dashboard makes, as the tool the engine runs for it.
 *
@@ -4204,8 +4182,7 @@ var ACTIONS = {
 		scope: "person"
 	}
 };
-//#endregion
-//#region src/contract/errors.ts
+// src/contract/errors.ts
 /**
 * Every `error` a write through `POST /operator/act/{tool}` can come back
 * with, and the sentence the dashboard shows for it.
@@ -4282,8 +4259,7 @@ var ACT_ERRORS = {
 	unavailable: "This node could not make the change just now. Try again in a moment.",
 	internal_error: "The change failed inside the engine, and trying again will not fix it. Its log has the reason; nothing was refused on purpose."
 };
-//#endregion
-//#region src/contract/caveats.ts
+// src/contract/caveats.ts
 /**
 * What a caveat on a landed write asks of the person who reads it, as the
 * engine names it (`internal/caveat`, ADR-0060).
@@ -4297,8 +4273,7 @@ var ACT_ERRORS = {
 * goes by itself.
 */
 var CAVEAT_ACTIONS = ["none", "required"];
-//#endregion
-//#region src/protocol/writeOutcome.ts
+// src/protocol/writeOutcome.ts
 /**
 * What a write's answer means: the one interpreter of "did it land", shared by
 * every surface that makes a change for a person.
@@ -4512,8 +4487,7 @@ function sentenceOf(code, err, detail, retryable) {
 }
 /** What a refusal no wait clears says where the engine's answer said nothing. */
 var NO_WAIT_CLEARS = "This can't be done here, and waiting won't change that.";
-//#endregion
-//#region src/protocol/act.ts
+// src/protocol/act.ts
 /**
 * The dashboard's one write: a change, made as the principal this browser's
 * session resolves to (ADR-0024).
@@ -4643,5 +4617,4 @@ function refusalOf(tool, opId, err, floors) {
 		opId
 	};
 }
-//#endregion
 export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, DETAILED_QUERY_ERRORS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, pathSegment, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
