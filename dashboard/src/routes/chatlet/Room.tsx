@@ -48,7 +48,6 @@ import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.ts
 import { ActivityLine, Button, Callout, Skeleton } from "@crewlethq/ui";
 import { CompassGlyph } from "@crewlethq/icons/glyphs";
 import { useChatRead } from "~/lib/chatLive.ts";
-import { isDirect } from "~/lib/chatRooms.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
@@ -285,7 +284,7 @@ function Conversation({ channelID }: { channelID: string }) {
   const working = presence.working ?? [];
   const typingNow = (presence.typing ?? []).filter((handle) => handle !== scope.viewer);
   const answering = working.find((seat) => !seat.thread);
-  const placeholder = channel && isDirect(channel.kind) ? `Message ${title}` : `Message #${title}`;
+  const placeholder = `Message ${where}`;
 
   return (
     <section className="chat-room" aria-label={where}>
@@ -325,7 +324,8 @@ function Conversation({ channelID }: { channelID: string }) {
         <Transcript
           ref={transcript}
           channel={channel}
-          title={channel && !isDirect(channel.kind) ? `#${title}` : title}
+          title={title}
+          where={where}
           participants={open?.summary?.participants ?? []}
           tail={tail}
           pending={pending}

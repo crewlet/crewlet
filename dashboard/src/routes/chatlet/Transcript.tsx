@@ -96,8 +96,13 @@ export interface EntryUnread {
 
 export interface TranscriptProps {
   channel: ChatChannel | undefined;
-  /** The room's name, or who a conversation is with. */
+  /**
+   * The room's bare name, or who a conversation is with: drawn beside the
+   * room's glyph in the intro, so never with a `#` of its own.
+   */
   title: string;
+  /** What a sentence calls the room (`rooms.ts`' `roomWhere`): `#name`. */
+  where: string;
   /** Who is in a direct conversation. */
   participants: readonly string[];
   tail: Tail;
@@ -408,7 +413,7 @@ export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
           ref={thread}
           jump={false}
           rest="end"
-          label={`Messages in ${props.title}`}
+          label={`Messages in ${props.where}`}
           busy={props.paging}
         >
           <div ref={head} className="chat-transcript-head">

@@ -7486,7 +7486,12 @@ as they are typed in.
   keys.
 - **A room** (`#/chatlet/{id}`) is the transcript, paged back on request, who is
   looking at it, typing in it or working on a reply in it, and the composer
-  (`Mod+Enter` sends; `Enter` is a new line). A message's links are drawn under
+  (`Mod+Enter` sends; `Enter` is a new line). **A room's name carries one
+  `#`**: beside the room's glyph (its intro, a row, a card) the glyph is the
+  sigil and the name is bare; in words that stand alone (a toast, the
+  composer's placeholder, a search result) a channel reads `#name`, a team's
+  room its team's name and a conversation the people in it (`rooms.ts`'
+  `roomWhere`). A message's links are drawn under
   it, in the room and in a thread alike, as rendered prose draws an address in
   an agent's words (`links: "checked"`,
   [above](#what-prose-names-is-drawn-as-what-it-is)), whoever wrote the

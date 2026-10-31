@@ -42,7 +42,7 @@ import { ChatFace } from "./Face.tsx";
 import { useChatNav, useOpenRoom } from "./nav.tsx";
 import { useChatPeople, type ChatPerson } from "./people.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
-import { roomMark } from "./rooms.ts";
+import { roomMark, roomWhere } from "./rooms.ts";
 import { useRoomScope } from "./scope.tsx";
 
 /** Faces a group conversation's intro shows; the title and the words name the rest. */
@@ -60,6 +60,22 @@ function madeWhen(createdAt: string, today: string): string {
   return Number.isFinite(at)
     ? `on ${new Date(at).toLocaleDateString(undefined, { month: "long", day: "numeric" })}`
     : "";
+}
+
+/**
+ * Who did something to a room, as its intro and its event lines say it:
+ * "You", a seat's name, or the org chart, which is nobody's name (a team's
+ * room is made and filled by the chart, and its actor's handle is nothing a
+ * reader knows).
+ */
+function actorName(
+  handle: string,
+  kind: string | undefined,
+  viewer: string,
+  nameOf: (handle: string) => string,
+): string {
+  if (kind === "system") return "The org chart";
+  return handle === viewer ? "You" : nameOf(handle);
 }
 
 /** Whether anything has been SAID in a room: events are not conversation. */
@@ -94,9 +110,7 @@ export function RoomIntro({
   }
 
   const creator = channel.created_by
-    ? channel.created_by === scope.viewer
-      ? "You"
-      : people.nameOf(channel.created_by)
+    ? actorName(channel.created_by, channel.created_by_kind, scope.viewer, people.nameOf)
     : "";
   const when = madeWhen(channel.created_at, today);
   const open = !channel.archived_at && scope.member;
@@ -228,21 +242,29 @@ function DirectIntro({ others, title }: { others: readonly ChatPerson[]; title: 
         </div>
       )}
       <h2 className="chat-intro-title">{title}</h2>
-      <p className="chat-intro-text">
-        This conversation is just between you{group ? ", " : " and "}
-        {others.map((p, i) => (
-          <Fragment key={p.handle}>
-            {i === 0 ? "" : i === others.length - 1 ? " and " : ", "}
-            <strong>{p.name}</strong>
-          </Fragment>
-        ))}
-        .
-        {agents.length === 1
-          ? ` ${agents[0]!.name} answers here, and its work shows up as it happens.`
-          : agents.length > 1
-            ? " The agents in it answer here, and their work shows up as it happens."
-            : " Here you can send messages and share links."}
-      </p>
+      {others.length === 0 ? (
+        // A CONVERSATION WITH NOBODY ELSE IN IT, which the engine allows and
+        // the title calls "Just you": "between you and" named nobody.
+        <p className="chat-intro-text">
+          Only you are in this conversation. Here you can send yourself messages and keep links.
+        </p>
+      ) : (
+        <p className="chat-intro-text">
+          This conversation is just between you{group ? ", " : " and "}
+          {others.map((p, i) => (
+            <Fragment key={p.handle}>
+              {i === 0 ? "" : i === others.length - 1 ? " and " : ", "}
+              <strong>{p.name}</strong>
+            </Fragment>
+          ))}
+          .
+          {agents.length === 1
+            ? ` ${agents[0]!.name} answers here, and its work shows up as it happens.`
+            : agents.length > 1
+              ? " The agents in it answer here, and their work shows up as it happens."
+              : " Here you can send messages and share links."}
+        </p>
+      )}
       {solo && (
         <div className="chat-intro-actions">
           {group ? (
@@ -330,14 +352,10 @@ export function EventRow({ view }: { view: ChatMessageView }) {
   const people = useChatPeople();
   const { message } = view;
   const event = message.event!;
-  // THE ORG CHART IS NOBODY'S NAME: a change it made is said as its own.
-  const who =
-    message.author_kind === "system"
-      ? "The org chart"
-      : message.author === scope.viewer
-        ? "You"
-        : people.nameOf(message.author);
-  const where = scope.channel?.name ? `#${scope.channel.name}` : "this room";
+  const who = actorName(message.author, message.author_kind, scope.viewer, people.nameOf);
+  const where = scope.channel?.name
+    ? roomWhere(scope.channel.kind, scope.channel.name)
+    : "this room";
   const handles = event.handles ?? [];
   let icon: ReactNode = <UserPlusGlyph size="sm" />;
   let words: ReactNode;

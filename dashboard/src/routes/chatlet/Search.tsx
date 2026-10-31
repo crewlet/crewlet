@@ -69,8 +69,7 @@ import { BrowseRow, matchesRoom } from "./Browse.tsx";
 import { ChatFace } from "./Face.tsx";
 import { useChatFrame, useChatNav } from "./nav.tsx";
 import { matchesPerson, useChatPeople, type ChatPerson } from "./people.ts";
-import { isDirect } from "~/lib/chatRooms.ts";
-import { roomTitle } from "./rooms.ts";
+import { roomTitle, roomWhere } from "./rooms.ts";
 import { SuggestedPerson } from "./Dialogs.tsx";
 import { ViewHead } from "./Views.tsx";
 
@@ -158,7 +157,7 @@ export function SearchView() {
       viewer: frame.viewer,
       nameOf: people.nameOf,
     });
-    return isDirect(channel.kind) ? title : `#${title}`;
+    return roomWhere(channel.kind, title);
   };
 
   const peopleHits = q
