@@ -33,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
@@ -662,82 +663,180 @@ func coldHeld(b *testing.B, f *codetest.SoloFleet) (codetest.Node, func()) {
 // index, is BenchmarkPackLookup's (internal/code/cache); this is the request
 // path a client hits beside the maintainer.
 //
+// mode is which index the node serves the fetches from (modes): own, the
+// maintainer's own whole index with its bitmap; chain, the repository's
+// published layers, installed after one publication of every pack it holds
+// (publishChain) — so each iteration's push lands outside the chain, in the
+// tail a chained repository serves between its publications.
+//
 // Each reports fetches a second, the p50 and p99 of one fetch, cpu-ms/fetch,
 // the serving node's git CPU (serverCPU) a fetch, and packs-outside, the mean
-// count of packs outside the index while the arm's fetches were served.
+// count of packs outside the index (or the chain) while the arm's fetches
+// were served.
 func BenchmarkFetchWarm(b *testing.B) {
 	codetest.Quiet(b)
-	for _, packs := range []int{1, 32} {
-		for _, clients := range []int{1, 8, 64} {
-			b.Run(fmt.Sprintf("clients=%d/packs=%d", clients, packs), func(b *testing.B) {
-				f, p := benchFleet(b, memobj.New(), 1)
-				node := f.Nodes()[0]
-				url := repoURL(node)
-				work := p.Init()
-				for i := range packs {
-					p.Commit(work, map[string]string{"README.md": fmt.Sprintf("push %d\n", i)}, fmt.Sprintf("push %d", i))
-					mustPush(b, p, work, url, "main")
-				}
-				rows, err := f.Rows(b.Context(), codetest.RepoName, codetest.Linearizable)
-				if err != nil {
-					b.Fatal(err)
-				}
-				warmIndex(b, node, rows.Repo.ID, packs)
-				dirs := make([]string, clients)
-				for c := range dirs {
-					dirs[c] = p.Clone(url)
-				}
-				var (
-					mu      sync.Mutex
-					took    []time.Duration
-					cpu     float64
-					outside int
-				)
-				fetches, rounds := 0, 0
-				for b.Loop() {
-					b.StopTimer()
-					p.Commit(work, map[string]string{"README.md": fmt.Sprintf("fetch %d\n", fetches)}, "next")
-					mustPush(b, p, work, url, "main")
-					indexed, held := indexedPacks(b, node, rows.Repo.ID)
-					outside += held - indexed
-					rounds++
-					before := serverCPU(node.Metrics())
-					b.StartTimer()
-					var wg sync.WaitGroup
-					errs := make([]error, clients)
-					for c, dir := range dirs {
-						wg.Go(func() {
-							at := time.Now()
-							_, stderr, err := p.Git().TryContext(b.Context(), dir, nil,
-								"-c", "protocol.version=2", "fetch", "--quiet", "origin", "main")
-							elapsed := time.Since(at)
-							if err != nil {
-								errs[c] = fmt.Errorf("git fetch: %w\n%s", err, stderr)
-							}
-							mu.Lock()
-							took = append(took, elapsed)
-							mu.Unlock()
-						})
+	for _, mode := range modes {
+		for _, packs := range []int{1, 32} {
+			for _, clients := range []int{1, 8, 64} {
+				b.Run(fmt.Sprintf("mode=%s/clients=%d/packs=%d", mode, clients, packs), func(b *testing.B) {
+					f, p := benchFleet(b, memobj.New(), 1)
+					node := f.Nodes()[0]
+					url := repoURL(node)
+					work := p.Init()
+					for i := range packs {
+						p.Commit(work, map[string]string{"README.md": fmt.Sprintf("push %d\n", i)}, fmt.Sprintf("push %d", i))
+						mustPush(b, p, work, url, "main")
 					}
-					wg.Wait()
-					b.StopTimer()
-					for _, err := range errs {
-						if err != nil {
-							b.Fatal(err)
+					rows, err := f.Rows(b.Context(), codetest.RepoName, codetest.Linearizable)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if mode == modeChain {
+						publishChain(b, f, node)
+						warmChain(b, node, rows.Repo.ID)
+					} else {
+						warmIndex(b, node, rows.Repo.ID, packs)
+					}
+					dirs := make([]string, clients)
+					for c := range dirs {
+						dirs[c] = p.Clone(url)
+					}
+					var (
+						mu      sync.Mutex
+						took    []time.Duration
+						cpu     float64
+						outside int
+					)
+					fetches, rounds := 0, 0
+					for b.Loop() {
+						b.StopTimer()
+						p.Commit(work, map[string]string{"README.md": fmt.Sprintf("fetch %d\n", fetches)}, "next")
+						mustPush(b, p, work, url, "main")
+						indexed, held := indexedPacks(b, node, rows.Repo.ID)
+						outside += held - indexed
+						rounds++
+						before := serverCPU(node.Metrics())
+						b.StartTimer()
+						var wg sync.WaitGroup
+						errs := make([]error, clients)
+						for c, dir := range dirs {
+							wg.Go(func() {
+								at := time.Now()
+								_, stderr, err := p.Git().TryContext(b.Context(), dir, nil,
+									"-c", "protocol.version=2", "fetch", "--quiet", "origin", "main")
+								elapsed := time.Since(at)
+								if err != nil {
+									errs[c] = fmt.Errorf("git fetch: %w\n%s", err, stderr)
+								}
+								mu.Lock()
+								took = append(took, elapsed)
+								mu.Unlock()
+							})
 						}
+						wg.Wait()
+						b.StopTimer()
+						for _, err := range errs {
+							if err != nil {
+								b.Fatal(err)
+							}
+						}
+						cpu += serverCPU(node.Metrics()) - before
+						fetches += clients
+						b.StartTimer()
 					}
-					cpu += serverCPU(node.Metrics()) - before
-					fetches += clients
-					b.StartTimer()
-				}
-				slices.Sort(took)
-				b.ReportMetric(float64(fetches)/b.Elapsed().Seconds(), "fetches/s")
-				b.ReportMetric(quantile(took, 0.50), "p50-ms")
-				b.ReportMetric(quantile(took, 0.99), "p99-ms")
-				b.ReportMetric(cpu/float64(fetches), "cpu-ms/fetch")
-				b.ReportMetric(float64(outside)/float64(rounds), "packs-outside")
-			})
+					slices.Sort(took)
+					b.ReportMetric(float64(fetches)/b.Elapsed().Seconds(), "fetches/s")
+					b.ReportMetric(quantile(took, 0.50), "p50-ms")
+					b.ReportMetric(quantile(took, 0.99), "p99-ms")
+					b.ReportMetric(cpu/float64(fetches), "cpu-ms/fetch")
+					b.ReportMetric(float64(outside)/float64(rounds), "packs-outside")
+				})
+			}
 		}
+	}
+}
+
+// The index a warm arm's node serves from (BenchmarkFetchWarm's and
+// BenchmarkCloneWarm's mode): modeOwn, the node's own whole multi-pack-index
+// and bitmap, as a node serves a repository nobody has published; modeChain,
+// the repository's published chain (internal/code/cache's layers.go), as
+// every git node serves one whose maintainer publishes it.
+const (
+	modeOwn   = "own"
+	modeChain = "chain"
+)
+
+// modes is every mode a warm arm runs, own first: BenchmarkCloneWarm's
+// chain arms run on the fixture its own arms served, published between them.
+var modes = []string{modeOwn, modeChain}
+
+// publishChain is one publication of the repository by node, its
+// maintainer as the only git node of f — the unit of the maintainer's pass,
+// driven here because a fleet's compactors are never started (Node.Compactor)
+// — asked again while it answers busy or waiting, for two minutes at the
+// most. The candidate is the one the publication due listing names, or the
+// rows' own where it names none yet (its debounce not run out), which is the
+// shape a repair publication is planned from.
+func publishChain(b *testing.B, f *codetest.SoloFleet, node codetest.Node) {
+	b.Helper()
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		rows, err := f.Rows(b.Context(), codetest.RepoName, codetest.Linearizable)
+		if err != nil {
+			b.Fatal(err)
+		}
+		cand := code.PublicationCandidate{ID: rows.Repo.ID, Name: codetest.RepoName,
+			LivePacks: int64(len(rows.Packs)), Version: rows.Position}
+		for _, p := range rows.Packs {
+			cand.LiveObjects += p.Objects
+		}
+		due, err := node.Read(b.Context(), code.ReadQuery{Kind: code.ReadPublicationDue, Fresh: codetest.Linearizable})
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, c := range due.Publish {
+			if c.ID == rows.Repo.ID {
+				cand = c
+			}
+		}
+		out, err := node.Compactor().Publish(b.Context(), cand)
+		if out == compact.OutcomeApplied {
+			return
+		}
+		if (out != compact.OutcomeBusy && out != compact.OutcomeWaiting) || time.Now().After(deadline) {
+			b.Fatalf("node %s's publication of the repository: %s, %v", node.ID(), out, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// warmChain waits until node's copy of the repository has installed every
+// layer of its published chain — what a chained copy serves from once the
+// installer has placed the publication's layers — and logs how many of the
+// packs it holds the chain covers: a publication leaves outside its chain
+// whatever it did not take in (its tail), which a chained repository serves
+// beside the chain until the next one.
+func warmChain(b *testing.B, node codetest.Node, repoID string) {
+	b.Helper()
+	deadline := time.Now().Add(5 * time.Minute)
+	for {
+		s, err := node.Cache().Sync(b.Context(), repoID, codetest.Linearizable)
+		if err != nil {
+			b.Fatal(err)
+		}
+		ch := node.Cache().Chain(s)
+		s.Release()
+		if len(ch.Rows) > 0 && ch.Installed == len(ch.Rows) {
+			indexed, held := indexedPacks(b, node, repoID)
+			b.Logf("node %s serves a chain of %d layers over %d of its %d packs", node.ID(), len(ch.Rows),
+				indexed, held)
+			return
+		}
+		if time.Now().After(deadline) {
+			b.Fatalf("node %s installed %d of the %d published layers in five minutes (refused: %v)", node.ID(),
+				ch.Installed, len(ch.Rows), ch.Refused)
+		}
+		time.Sleep(time.Second)
 	}
 }
 
@@ -792,7 +891,9 @@ func incarnationNumber(dir string) int {
 // indexedPacks is how many packs node's copy of the repository holds and how
 // many of them its multi-pack-index covers: the count its header states
 // (git's format — "MIDX", version, hash version, chunk count, base count, then
-// the packs as a four-byte count), and none without one.
+// the packs as a four-byte count) — summed over every layer its chain file
+// names where the copy holds an installed chain and no whole index, since
+// each layer's header counts only the packs it adds — and none without either.
 func indexedPacks(b *testing.B, node codetest.Node, repoID string) (indexed, packs int) {
 	b.Helper()
 	dir := filepath.Join(incarnation(b, node, repoID), "objects", "pack")
@@ -800,19 +901,42 @@ func indexedPacks(b *testing.B, node codetest.Node, repoID string) (indexed, pac
 	if err != nil {
 		b.Fatal(err)
 	}
-	head := make([]byte, 12)
-	f, err := os.Open(filepath.Join(dir, "multi-pack-index"))
+	if _, err := os.Stat(filepath.Join(dir, "multi-pack-index")); err == nil {
+		return midxPacks(b, node, filepath.Join(dir, "multi-pack-index")), len(held)
+	}
+	layers := filepath.Join(dir, "multi-pack-index.d")
+	chain, err := os.ReadFile(filepath.Join(layers, "multi-pack-index-chain"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, len(held)
 	}
 	if err != nil {
 		b.Fatal(err)
 	}
+	for _, sum := range strings.Fields(string(chain)) {
+		indexed += midxPacks(b, node, filepath.Join(layers, "multi-pack-index-"+sum+".midx"))
+	}
+	return indexed, len(held)
+}
+
+// midxPacks is the pack count a multi-pack-index file's header states — a
+// whole index's or one layer's. A file gone between the listing and the read
+// (the installer's swap took the incarnation's layer) counts none, so the
+// caller's poll looks again.
+func midxPacks(b *testing.B, node codetest.Node, path string) int {
+	b.Helper()
+	head := make([]byte, 12)
+	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		b.Fatal(err)
+	}
 	defer func() { _ = f.Close() }()
 	if _, err := io.ReadFull(f, head); err != nil || string(head[:4]) != "MIDX" {
-		b.Fatalf("node %s's multi-pack-index has no header (%v)", node.ID(), err)
+		b.Fatalf("node %s's %s has no header (%v)", node.ID(), filepath.Base(path), err)
 	}
-	return int(binary.BigEndian.Uint32(head[8:12])), len(held)
+	return int(binary.BigEndian.Uint32(head[8:12]))
 }
 
 // treeFilesPerPush is how many files each push of a tree fixture adds, and
@@ -1405,6 +1529,12 @@ func BenchmarkLazyBlame(b *testing.B) {
 //     commit four files of one directory, each version a window of its file
 //     rewritten — pushed as 200 pushes (pushEdits), so every push edits
 //     files an earlier one wrote, as a team's pushes do.
+//   - mode=own serves from the node's own whole index and bitmap; mode=chain
+//     from the repository's published chain, installed after ONE publication
+//     of the same fixture once the own arms have run (publishChain), so the
+//     two modes clone one history and the chain arms differ by the index:
+//     the chain, and whatever the publication left outside it, which
+//     warmChain logs.
 //
 // Each reports the p50 and p99 of one clone, the serving node's git CPU
 // (serverCPU) a round of clients clones and a clone, and bytes, every pack
@@ -1427,11 +1557,16 @@ func BenchmarkCloneWarm(b *testing.B) {
 				b.Fatal(err)
 			}
 			warmBitmap(b, node, rows.Repo.ID)
-			for _, shape := range []int{0, 2} {
-				for _, clients := range []int{1, 8, 32} {
-					b.Run(fmt.Sprintf("shape=%s/clients=%d", cloneShapes[shape].name, clients), func(b *testing.B) {
-						warmClones(b, node, p, shape, clients, cone)
-					})
+			for _, mode := range modes {
+				if mode == modeChain {
+					publishChain(b, f, node)
+					warmChain(b, node, rows.Repo.ID)
+				}
+				for _, shape := range []int{0, 2} {
+					for _, clients := range []int{1, 8, 32} {
+						b.Run(fmt.Sprintf("mode=%s/shape=%s/clients=%d", mode, cloneShapes[shape].name, clients),
+							func(b *testing.B) { warmClones(b, node, p, shape, clients, cone) })
+					}
 				}
 			}
 		})
