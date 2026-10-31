@@ -1051,6 +1051,26 @@ describe("the pane", () => {
     expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
   });
 
+  // THE LAST ANSWER STAYS IN SIGHT: with nothing left to open, the row stays
+  // open on its outcome, and the Answered group opens on it, so the open row
+  // is never one the list hides and j and k step from where it stands.
+  // Mutation: leave the group closed, and the open row is nowhere in the list.
+  test("answering the last item opens Answered on the row it left", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    expect(screen.getByRole("button", { name: "Answered, 1" }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    const answered = screen.getByRole("region", { name: "Answered, 1" });
+    expect(answered.querySelector(".crewlet-inbox-row--selected")).toBeTruthy();
+    expect(document.querySelector(".crewlet-reading-pane__outcome")?.textContent).toContain(
+      "Hold release",
+    );
+  });
+
   // ONE ANSWER PER ROW: a second word on a row already moved, a press
   // repeated before the list drew again, answers nothing and moves the reader
   // on no further. Mutation: drop the guard and the reader skips a row.
@@ -2164,9 +2184,8 @@ describe("what was answered", () => {
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
     await settle();
     await settle();
-    // ONE ROW FOR THE QUESTION, the one answered here, though the engine
-    // now lists it as answered too.
-    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    // ONE ROW FOR THE QUESTION, though the engine now lists it as answered
+    // too, in the group the last answer opened.
     expect(
       within(screen.getByRole("region", { name: "Answered, 1" })).getAllByRole("button", {
         name: /Answered$/,

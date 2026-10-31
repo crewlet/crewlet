@@ -290,7 +290,8 @@ export function Inbox() {
   // AN ANSWERED ROW THE ADDRESS NAMES OPENS ITS GROUP, so the open row is
   // never one the list is hiding: a link to an answer, or a return to one.
   // NOT ONE ANSWERED HERE: the next item opens with it, and the row it left
-  // lands in the closed group's count rather than opening the group.
+  // lands in the closed group's count rather than opening the group. Where
+  // nothing is left to open, the move opens the group itself ([settle]).
   useEffect(() => {
     if (
       open &&
@@ -392,7 +393,10 @@ export function Inbox() {
             : "Answered. Nothing else is waiting on you.",
         );
         window.clearTimeout(timer.current);
+        // NOTHING LEFT TO OPEN: the row stays open on its outcome, and the
+        // group it moved to opens on it, so the list never hides the open row.
         if (next) nav.filter({ row: next });
+        else setAnsweredOpen(true);
         return;
       }
       // NAMED FIRST, so the row stays open while it leaves the list.
