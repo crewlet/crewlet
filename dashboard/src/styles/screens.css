@@ -9460,45 +9460,6 @@ a.live-row:focus-visible {
   list-style: none;
 }
 
-/* ---- Chatlet ---------------------------------------------------------------
-
-   THE SCREEN OWNS THE HEIGHT RATHER THAN GROWING THE PAGE. Chatlet asks the shell
-   for the window (`app/fill.tsx`), so the page scroller stops being one and
-   this grid takes what is left: the rail scrolls itself, the transcript
-   scrolls itself, and the composer stays where somebody's hands are. A
-   transcript inside a scrolling page leaves the reader scrolling two things
-   at once, and the one that moves under them is whichever the pointer
-   happens to be over. */
-
-.chat-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  min-width: 0;
-  min-height: 0;
-}
-/* A LIST VIEW FILLS THE MAIN COLUMN, as a room does, so the body below its
-   header has a height to scroll within. */
-.chat-list {
-  flex: 1 1 auto;
-}
-
-/* A LIST VIEW SCROLLS ITSELF, as the room's transcript does. Under the fill the
-   shell's own scroller stops being one (the kit sets `overflow: hidden` on it),
-   so a list that grew past the window was clipped at its foot with nothing to
-   scroll it: the mention feed's older rows and its "Older mentions", Search
-   chat's lower hits. The header and the search toolbar stay outside it, where
-   the reader's hands are. */
-.chat-list-body {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: var(--spacing-2);
-}
-
 /* ---- Artifacts ------------------------------------------------------- */
 
 /* THE GALLERY'S FIELD is a search box in the page bar, as Agents' finder. */
