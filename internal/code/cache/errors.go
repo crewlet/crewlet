@@ -45,7 +45,8 @@ var (
 	ErrBadSnapshot = errors.New("cache: a snapshot this build cannot install")
 
 	// ErrLogRead is the code log failing a sync's read of a repository's
-	// rows — no quorum for a linearizable read, a copy out of service or
+	// rows — no quorum for a linearizable read (on a log one member
+	// stores, that member's stalled write), a copy out of service or
 	// behind, no data node answering — wrapped with the estate's own
 	// error. The one failure of a sync that is the code log's: the host
 	// answers it as that, and nothing else as that. (A repository the

@@ -275,7 +275,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		return pub
 	}
 	pub := publisher(d.o.ID)
-	index, err := statelog.NewReadIndex(code.Domain{}, spec, p.log, signer, reserve,
+	index, err := statelog.NewReadIndex(code.Domain{}, spec, p.log, p.log.Members, signer, reserve,
 		code.EncodeBarrier, gen, nil)
 	if err != nil {
 		t.Fatalf("codetest: %s: build the read index: %v", d.o.ID, err)

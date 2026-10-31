@@ -199,7 +199,7 @@ func TestASingleLogReadRefusesAnotherLogsFloor(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log,
-		testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+		h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}

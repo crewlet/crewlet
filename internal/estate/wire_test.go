@@ -377,15 +377,15 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 			value: request{ID: "r-4", Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
 				Deadline: envelopeInstant,
 				Spent: &statelog.Spent{
-					Index:    []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
-					Waited:   []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
-					NoQuorum: []string{pagesStream},
+					Index:       []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
+					Waited:      []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
+					Unconfirmed: []string{pagesStream},
 				}},
 			want: `{"id":"r-4","op":"tracker.tasks","args":{"Query":{}},` +
 				`"deadline":"2026-10-04T12:00:00Z","spent":{` +
 				`"index":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
 				`"waited":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
-				`"no_quorum":["CREWLET_PAGES_LOG"]}}`,
+				`"unconfirmed":["CREWLET_PAGES_LOG"]}}`,
 		},
 		"a write's last resort": {
 			value: request{ID: "r-2", Op: opCreateTask.spec.name, Actor: &swe,

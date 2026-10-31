@@ -136,8 +136,8 @@ type RouterOptions struct {
 // for the asker's floor, for a linearizable read's barrier and the position it
 // established, for a write's own record — ends code.ReplyMargin short of the
 // attempt's end ([statelog.WithReplyMargin]), so a node that runs out of time
-// says so (`behind`, `no_quorum`, `pending`) while its asker is still
-// listening. A shorter attempt therefore costs only that a node behind by more
+// says so (`behind`, `no_quorum` — `broker_stalled` on a log one member
+// stores — or `pending`) while its asker is still listening. A shorter attempt therefore costs only that a node behind by more
 // than it leaves says so sooner; it never reads an HONEST node as a wedged one,
 // which is what an attempt sized below the waits used to do — the asker had
 // stopped listening when a lagging but healthy node answered, asked it last for

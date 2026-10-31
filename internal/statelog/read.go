@@ -104,11 +104,23 @@ const (
 	// could be established either ([ReaderDeps.Health]).
 	RefuseBrokerUnreachable ReadRefusal = "broker_unreachable"
 
-	// RefuseNoQuorum — the barrier did not commit: in the read index's own
-	// budget, or in what a served request's asker left it
-	// ([WithReplyMargin]). It is not the same as unreachable: the broker
-	// answered, and a majority did not agree in that time.
+	// RefuseNoQuorum — the barrier on a log SEVERAL members store did not
+	// commit: in the read index's own budget, or in what a served request's
+	// asker left it ([WithReplyMargin]). A majority did not agree in that
+	// time, or no leader answered — an election, a member down or cut off.
+	// Never a log one member stores, which has no majority to miss
+	// ([ReadIndex.unconfirmed]).
 	RefuseNoQuorum ReadRefusal = "no_quorum"
+
+	// RefuseBrokerStalled — the barrier on a log ONE member stores was not
+	// acknowledged in the read index's own budget, or in what a served
+	// request's asker left it. Nothing waited on a peer, so the member's own
+	// write did not complete: a disk that is not taking the fsync
+	// `stream.sync: always` makes of every append, or a broker that stopped
+	// serving its stream. Every node appends its barrier to that one member,
+	// so another node is no better placed ([ReadRefusal.Elsewhere]); this
+	// one is, once the write completes.
+	RefuseBrokerStalled ReadRefusal = "broker_stalled"
 
 	// RefuseLogFull — the log is at its byte ceiling and refuses appends,
 	// so a barrier cannot be written. A full log therefore costs the
@@ -154,8 +166,8 @@ const (
 var ReadRefusals = []ReadRefusal{
 	RefuseBehind, RefuseDeferred, RefuseDeferredScopeUnknown, RefuseStalled,
 	RefuseBelowFloor, RefuseFloorUnknown, RefuseEvicted, RefuseBrokerUnreachable,
-	RefuseNoQuorum, RefuseLogFull, RefuseBrokerRefused, RefuseWrongStream,
-	RefuseTooStale, RefuseMaintenance,
+	RefuseNoQuorum, RefuseBrokerStalled, RefuseLogFull, RefuseBrokerRefused,
+	RefuseWrongStream, RefuseTooStale, RefuseMaintenance,
 }
 
 // Valid reports whether a refusal code off the wire is one this build knows.
@@ -178,21 +190,24 @@ func (r ReadRefusal) Valid() bool { return slices.Contains(ReadRefusals, r) }
 // writer on it was told to come back.
 func (r ReadRefusal) Retryable() bool {
 	switch r {
-	case RefuseBehind, RefuseNoQuorum, RefuseBrokerUnreachable, RefuseStalled,
-		RefuseBelowFloor, RefuseFloorUnknown:
+	case RefuseBehind, RefuseNoQuorum, RefuseBrokerStalled, RefuseBrokerUnreachable,
+		RefuseStalled, RefuseBelowFloor, RefuseFloorUnknown:
 		return true
 	}
 	return false
 }
 
 // Elsewhere reports whether ANOTHER node may serve a read this one refused
-// with r: every code but the three that are facts about the whole fleet rather
+// with r: every code but the four that are facts about the whole fleet rather
 // than about this node's copy, its view of the log or its place in a
 // partition — `log_full`, since every node appends its barrier to the one log
 // at the one ceiling; `broker_refused`, since the stream that refused to store
 // this node's barrier (sealed, or a store out of resources) is the one every
-// node appends its own to; and `maintenance`, since every node of a fleet in a
-// capacity window is in one.
+// node appends its own to; `broker_stalled`, since a log one member stores
+// takes every node's barrier through that member's one write path, and a node
+// asked next appends none of its own behind the stall ([Spent.Unconfirmed]);
+// and `maintenance`, since every node of a fleet in a capacity window is in
+// one.
 //
 // It is what makes a refusal a REDIRECT where [ReadRefusal.Retryable] makes it
 // a hint, and the two differ: a node that cannot decode a record will never
@@ -216,20 +231,34 @@ func (r ReadRefusal) Retryable() bool {
 // `behind`.
 func (r ReadRefusal) Elsewhere() bool {
 	switch r {
-	case RefuseLogFull, RefuseBrokerRefused, RefuseMaintenance:
+	case RefuseLogFull, RefuseBrokerRefused, RefuseBrokerStalled, RefuseMaintenance:
 		return false
 	}
 	return r.Valid()
 }
 
-// ElectionRetryHint is what a caller is told to wait after a barrier that did
-// not commit.
+// ElectionRetryHint is what a caller is told to wait after a barrier several
+// members did not commit, or a broker that did not answer.
 //
 // FOUR SECONDS, which is the broker's own minimum election timeout: a barrier
 // that failed to reach a quorum is waiting on an election, and a hint shorter
 // than the election itself sends every reader back before anything can have
-// changed.
+// changed. NOT a log one member stores, which holds no election — see
+// [StalledRetryHint].
 const ElectionRetryHint = 4 * time.Second
+
+// StalledRetryHint is what a caller is told to wait after a barrier the sole
+// member of its log did not acknowledge in time (`broker_stalled`).
+//
+// ONE BARRIER BUDGET, because that is the one thing measured about the stall:
+// the member's write has been held at least that long, and nothing on this
+// node says when it ends. A reader sent back sooner appends its barrier behind
+// the same held write and waits out a budget of its own, which is the same
+// wait spent holding a request open — and a stall that does clear sooner
+// costs the reader only the remainder of one budget. Not an election's four
+// seconds: there is no election, and a hint borrowed from one is a constant
+// with somebody else's reason.
+const StalledRetryHint = DefaultBarrierBudget
 
 // Refused is a read that was not served.
 type Refused struct {
@@ -284,6 +313,8 @@ func RetryHint(code ReadRefusal, lag uint64, recordsPerSecond float64) time.Dura
 	switch code {
 	case RefuseNoQuorum, RefuseBrokerUnreachable:
 		return ElectionRetryHint
+	case RefuseBrokerStalled:
+		return StalledRetryHint
 	case RefuseFloorUnknown, RefuseBelowFloor:
 		// ONE HEARTBEAT, and never the drain: neither clears by
 		// applying what is ahead of this node. The floor is read again,
@@ -1048,14 +1079,20 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health,
 		}
 		// NO SECOND BARRIER ON A LOG A NODE ASKED BEFORE THIS ONE SPENT A
 		// BARRIER'S WHOLE BUDGET ON: every node's goes to the one log's
-		// leader, which has no quorum ([Spent.NoQuorum]).
-		if spent.NoQuorumOn(r.stream) {
+		// leader, which has no quorum — or, on a log one member stores, to
+		// that member, whose write is stalled ([Spent.Unconfirmed]).
+		if spent.UnconfirmedOn(r.stream) {
+			code := r.index.unconfirmed(true)
+			why := "the log has no quorum"
+			if code != RefuseNoQuorum {
+				why = "the log's one member did not store it, its write stalled"
+			}
 			return Position{}, Position{}, false, &Refused{
-				Code: RefuseNoQuorum, Level: q.Level,
+				Code: code, Level: q.Level,
 				Detail: "a node asked for this read before this one spent a barrier's " +
-					"whole budget without it committing — the log has no quorum — so " +
+					"whole budget without it committing — " + why + " — so " +
 					"this one appends no second barrier",
-				Spent: Spent{NoQuorum: []string{r.stream}},
+				Spent: Spent{Unconfirmed: []string{r.stream}},
 			}
 		}
 		// THE BARRIER'S WAIT ENDS WHERE THE ASKER'S ATTEMPT LEAVES OFF, on a
@@ -1085,21 +1122,28 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health,
 				// operator's graph.
 				return Position{}, Position{}, false, ctx.Err()
 			case ranOut:
+				code := r.index.unconfirmed(true)
+				stalled := ""
+				if code != RefuseNoQuorum {
+					stalled = " — the log's one member had not stored it, its write stalled"
+				}
 				return Position{}, Position{}, false, &Refused{
-					Code: RefuseNoQuorum, Level: q.Level,
+					Code: code, Level: q.Level,
 					Detail: fmt.Sprintf("the barrier this read appended to establish the "+
-						"log's end had not committed after %s, all its asker's attempt left",
-						time.Since(began).Round(time.Millisecond)),
-					Spent: Spent{NoQuorum: []string{r.stream}},
+						"log's end had not committed after %s, all its asker's attempt left%s",
+						time.Since(began).Round(time.Millisecond), stalled),
+					Spent: Spent{Unconfirmed: []string{r.stream}},
 				}
 			}
-			refusal := barrierRefusal(q.Level, r.index.subject, err)
+			timedOut := errors.Is(err, context.DeadlineExceeded)
+			unconfirmed := r.index.unconfirmed(timedOut)
+			refusal := barrierRefusal(q.Level, r.index.subject, unconfirmed, err)
 			// A BARRIER THAT RAN ITS OWN WHOLE BUDGET is a log without a
-			// quorum, which a node asked next is spared appending to; one
-			// refused at once — a full log, a broker that did not answer —
-			// spent nothing it would.
-			if refusal.Code == RefuseNoQuorum && errors.Is(err, context.DeadlineExceeded) {
-				refusal.Spent = Spent{NoQuorum: []string{r.stream}}
+			// quorum, or one member's stalled write, which a node asked next
+			// is spared appending behind; one refused at once — a full log, a
+			// broker that did not answer — spent nothing it would.
+			if timedOut && refusal.Code == unconfirmed {
+				refusal.Spent = Spent{Unconfirmed: []string{r.stream}}
 			}
 			return Position{}, Position{}, false, refusal
 		}
@@ -1195,12 +1239,18 @@ func unreadHealth(err error) string {
 
 // barrierRefusal maps the read index's own failures onto refusal codes.
 //
-// The four are genuinely different: a majority that did not agree (or a
-// broker that did not answer), a log that is full, a broker that refused the
-// barrier for a reason of its own, and a duplicate answer that proves nothing.
-// Only the first is worth coming back for; a full log names a field an
-// operator has to change, and a broker's refusal names what the broker wants
-// changed.
+// The four are genuinely different: a barrier nobody confirmed, a log that is
+// full, a broker that refused the barrier for a reason of its own, and a
+// duplicate answer that proves nothing. Only the first is worth coming back
+// for; a full log names a field an operator has to change, and a broker's
+// refusal names what the broker wants changed.
+//
+// WHAT AN UNCONFIRMED BARRIER IS turns on how many members store the log, so
+// the caller hands its code in ([ReadIndex.unconfirmed]): a majority that did
+// not agree, or no leader that answered, on several (`no_quorum`); on one, its
+// own write that did not complete in time (`broker_stalled`) or a broker that
+// did not answer (`broker_unreachable`). A duplicate answer is unconfirmed
+// too: its sequence proves nothing about the log's end.
 //
 // A BARRIER NOBODY CONFIRMED IS TOLD IN THIS PACKAGE'S WORDS, never the
 // error's. The error is the client's or the broker's own — a timeout, a
@@ -1210,7 +1260,7 @@ func unreadHealth(err error) string {
 // faults. The barrier's append logs the error once per append
 // ([frameworkAppendError]), where an operator reads it, rather than once per
 // reader waiting on it.
-func barrierRefusal(level ReadLevel, subject string, err error) *Refused {
+func barrierRefusal(level ReadLevel, subject string, unconfirmed ReadRefusal, err error) *Refused {
 	var unavailable *Unavailable
 	if errors.As(err, &unavailable) {
 		switch unavailable.Reason {
@@ -1228,15 +1278,23 @@ func barrierRefusal(level ReadLevel, subject string, err error) *Refused {
 					"keep answering",
 			}
 		case ReasonSkew:
-			return &Refused{Code: RefuseNoQuorum, Level: level, Detail: unavailable.Detail}
+			return &Refused{Code: unconfirmed, Level: level, Detail: unavailable.Detail}
 		}
 	}
+	why := "the broker did not answer its append, or a majority of its members " +
+		"did not agree"
+	switch unconfirmed {
+	case RefuseBrokerStalled:
+		why = "the log's one member did not store it within the barrier's budget, " +
+			"so its own write is stalled — no peer was waited on"
+	case RefuseBrokerUnreachable:
+		why = "the broker, the log's one member, did not answer its append"
+	}
 	return &Refused{
-		Code: RefuseNoQuorum, Level: level,
-		Detail: fmt.Sprintf("the barrier on %s was not confirmed — the broker "+
-			"did not answer its append, or a majority of its members did not "+
-			"agree — so no position could be established as the log's end; "+
-			"the broker's own error is in this node's log", subject),
+		Code: unconfirmed, Level: level,
+		Detail: fmt.Sprintf("the barrier on %s was not confirmed — %s — so no "+
+			"position could be established as the log's end; the broker's own "+
+			"error is in this node's log", subject, why),
 	}
 }
 

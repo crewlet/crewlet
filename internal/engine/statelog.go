@@ -1594,7 +1594,7 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 		if running.reserve != nil {
 			admission = running.reserve
 		}
-		index, err := statelog.NewReadIndex(domain, spec, appendTo, running.signer, admission, encode,
+		index, err := statelog.NewReadIndex(domain, spec, appendTo, appendTo.Members, running.signer, admission, encode,
 			func() uint32 { return runner.Committed().Generation }, s.metrics)
 		if err != nil {
 			return nil, fmt.Errorf("engine: build %s's read index: %w", domain.Name(), err)

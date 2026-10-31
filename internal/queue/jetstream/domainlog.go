@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -92,6 +93,13 @@ type DomainLog struct {
 	// second whatever the read rate.
 	info func(ctx context.Context) (*jetstream.StreamInfo, error)
 
+	// members is how many members store the stream, as the broker last
+	// reported it: in the info its open read, and then in every state read
+	// ([DomainLog.stateInfo]) — so a stream an operator re-replicates is seen
+	// within the second a read's ends are re-read in, and asking it costs no
+	// round trip ([DomainLog.Members]).
+	members atomic.Int32
+
 	// watchTiming is every duration a watch on this log waits on, and the
 	// ZERO VALUE IS PRODUCTION: [DomainLog.watching] answers the constants
 	// beside [DomainLog.Watch] whenever it is unset, which is always
@@ -113,7 +121,7 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the log %q: %w", stream, err)
 	}
-	return &DomainLog{js: q.js, stream: s, name: stream, q: q, crossing: q.recordCrossing(s),
+	l := &DomainLog{js: q.js, stream: s, name: stream, q: q, crossing: q.recordCrossing(s),
 		info: func(ctx context.Context) (*jetstream.StreamInfo, error) {
 			// A HANDLE OF THIS REQUEST'S OWN — see [DomainLog.info].
 			fresh, err := q.js.Stream(ctx, stream)
@@ -121,7 +129,29 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 				return nil, err
 			}
 			return fresh.CachedInfo(), nil
-		}}, nil
+		}}
+	l.noteMembers(s.CachedInfo())
+	return l, nil
+}
+
+// Members is how many members store this log — its replication factor as the
+// broker last reported it — and at least one.
+//
+// It is what a barrier that did not commit MEANS ([statelog.NewReadIndex]):
+// on several members, a majority that did not agree in time; on one, never
+// that, since the sole member's acknowledgement waits on nobody else's — the
+// member's own write did not complete. Read from the stream's info rather
+// than from Tier A's stream.replicas, which is a floor the running stream may
+// exceed ([Queue.observeStream]): a node configured for one copy starts
+// against a stream that keeps three.
+func (l *DomainLog) Members() int { return int(max(l.members.Load(), 1)) }
+
+// noteMembers records the replication factor info states, where it states
+// one.
+func (l *DomainLog) noteMembers(info *jetstream.StreamInfo) {
+	if info != nil && info.Config.Replicas > 0 {
+		l.members.Store(int32(info.Config.Replicas))
+	}
 }
 
 // recordCrossing is how long the reply to a read of one of s's records by its
@@ -172,7 +202,11 @@ func (q *Queue) acrossLink() bool { return q.embedded == nil || q.embedded.leaf 
 // its own budget, every push batch and every linearizable read on the node
 // at once, where waiting would only have slowed them.
 func (l *DomainLog) stateInfo(ctx context.Context) (*jetstream.StreamInfo, error) {
-	return jsprovision.ReadWith(ctx, l.q.provisioning(), l.info, nil)
+	info, err := jsprovision.ReadWith(ctx, l.q.provisioning(), l.info, nil)
+	if err == nil {
+		l.noteMembers(info)
+	}
+	return info, err
 }
 
 // openProvisioned resolves a stream THIS NODE HAS JUST PROVISIONED, waiting

@@ -1290,3 +1290,43 @@ func TestADomainLogReadItsLeaderAnswersLateIsAnswered(t *testing.T) {
 		})
 	}
 }
+
+// A LOG'S MEMBER COUNT IS THE STREAM'S OWN, AND EVERY STATE READ KEEPS IT.
+//
+// What a barrier that did not commit means turns on it (statelog's read
+// index): a majority that did not agree where several members store the log,
+// the member's own stalled write where one does. So it is the replication
+// factor the broker reports for the stream — never Tier A's, which the running
+// stream may exceed — and a stream an operator re-replicates under a running
+// node is seen at the next read of its state rather than at the next restart.
+// An answer stating no factor leaves the last one standing, and a log whose
+// state nobody has read is one member, the fewest a stream has.
+func TestALogsMemberCountIsTheStreamsOwnAndEveryStateReadKeepsIt(t *testing.T) {
+	t.Parallel()
+	var replicas atomic.Int32
+	l := &DomainLog{name: "CREWLET_CODE_LOG", q: &Queue{timing: shortReads()},
+		info: func(context.Context) (*jetstream.StreamInfo, error) {
+			return &jetstream.StreamInfo{Config: jetstream.StreamConfig{
+				Replicas: int(replicas.Load())}}, nil
+		}}
+	if got := l.Members(); got != 1 {
+		t.Fatalf("a log whose state nobody read is stored by %d members, want 1", got)
+	}
+	for _, step := range []struct {
+		name     string
+		reported int32
+		want     int
+	}{
+		{"re-replicated to three", 3, 3},
+		{"an answer stating no factor", 0, 3},
+		{"back to one", 1, 1},
+	} {
+		replicas.Store(step.reported)
+		if _, err := l.stateInfo(t.Context()); err != nil {
+			t.Fatalf("%s: read the log's state: %v", step.name, err)
+		}
+		if got := l.Members(); got != step.want {
+			t.Errorf("%s: the log is stored by %d members, want %d", step.name, got, step.want)
+		}
+	}
+}

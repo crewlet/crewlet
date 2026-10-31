@@ -135,9 +135,11 @@ const (
 	// indistinguishable from an ordinary partial batch closing. THE
 	// CEILING IS FIVE SECONDS, which is a broker election's own scale
 	// and the write path's resolve budget: a broker that has not
-	// answered in five seconds is one without a quorum rather than a
-	// slow one, and asking it more often than that adds load to the
-	// thing that is failing. Against [ApplyRetryBudget] the ceiling
+	// answered in five seconds is one that cannot rather than a slow
+	// one — without a quorum where several members store the log, its
+	// own write stalled where one does ([DefaultBarrierBudget]) — and
+	// asking it more often than that adds load to the thing that is
+	// failing. Against [ApplyRetryBudget] the ceiling
 	// leaves a fault at least six attempts before it is reported, so a
 	// single failed call never takes a copy out of service.
 	ApplyRetryBeat    = ApplyLinger

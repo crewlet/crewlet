@@ -132,7 +132,10 @@ func laggingReadOn(t *testing.T, log statelog.Appender) func(context.Context) er
 		t.Fatal(err)
 	}
 	encode := func(env statelog.Envelope) ([]byte, error) { return json.Marshal(env) }
-	index, err := statelog.NewReadIndex(domain, spec, log, signer, reserve, encode,
+	// THREE MEMBERS, a fleet's log, though no barrier here fails to commit:
+	// what the count decides is only what an unconfirmed one is refused as.
+	threeMembers := func() int { return 3 }
+	index, err := statelog.NewReadIndex(domain, spec, log, threeMembers, signer, reserve, encode,
 		func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatal(err)

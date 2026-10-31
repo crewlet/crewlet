@@ -1015,7 +1015,7 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 			// SIGNED AS EVERY BARRIER A NODE APPENDS IS, since the frame is
 			// part of what the log stores and so of what a barrier costs it.
 			index, err := statelog.NewReadIndex(tracker.Domain{}, tracker.Domain{}.Stream(),
-				r.log, testSigner(t, tracker.Domain{}), r.reserve, tracker.EncodeBarrier,
+				r.log, r.log.Members, testSigner(t, tracker.Domain{}), r.reserve, tracker.EncodeBarrier,
 				func() uint32 { return arm.generation }, nil)
 			if err != nil {
 				t.Fatalf("build the read index: %v", err)

@@ -22,11 +22,11 @@ var (
 
 // countingIndex is a read index over a broker that commits every barrier at
 // once at barrierAt's sequence, counting what it was asked to append.
-func countingIndex(t *testing.T, appends *atomic.Int64) *statelog.ReadIndex {
+func countingIndex(t *testing.T, appends *atomic.Int64, members func() int) *statelog.ReadIndex {
 	t.Helper()
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
 		&countingAppends{inner: committingLog{seq: barrierAt.Seq}, n: appends},
-		testSigner(t, probeDomain{}), noCeiling(t),
+		members, testSigner(t, probeDomain{}), noCeiling(t),
 		probeEncode, func() uint32 { return barrierAt.Generation }, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -58,7 +58,7 @@ func TestAReadHandedAReadIndexWaitsForItAndAppendsNothing(t *testing.T) {
 	var appends atomic.Int64
 	db := newStubStore(t)
 	waiter := &stubWaiter{at: healthy().Position}
-	r := newReader(t, db, healthy, waiter, countingIndex(t, &appends))
+	r := newReader(t, db, healthy, waiter, countingIndex(t, &appends, members(3)))
 	read := func(ctx context.Context) (statelog.Answer, error) {
 		return r.Read(ctx, pointQuery(statelog.ReadLinearizable), func(*sql.Tx) error { return nil })
 	}
@@ -111,7 +111,7 @@ func TestARefusedReadSaysWhatItPaidForAndTheNextNodePaysForNone(t *testing.T) {
 	t.Parallel()
 	var appends atomic.Int64
 	r := newReader(t, newStubStore(t), healthy, unreachedWaiter{at: healthy().Position},
-		countingIndex(t, &appends))
+		countingIndex(t, &appends, members(3)))
 	read := func(ctx context.Context) error {
 		_, err := r.Read(ctx, pointQuery(statelog.ReadLinearizable), func(*sql.Tx) error { return nil })
 		return err
@@ -188,12 +188,103 @@ func TestAPositionWaitedOutIsNotWaitedForAgainAndALaterOneIs(t *testing.T) {
 	}
 }
 
-// A BARRIER THAT RUNS ITS WHOLE BUDGET IS A LOG WITHOUT A QUORUM, and no node
-// asked after it appends another: every node's barrier goes to the one log's
-// leader. The first node's refusal says so — whether its asker's attempt or
-// the barrier's own budget is what ran out — and the next node is refused
-// `no_quorum` at once, appending nothing. A barrier refused at once by a full
-// log spent nothing of the kind, and the next node appends its own.
+// A SINGLE MEMBER'S BARRIER THAT RUNS OUT OF ITS BUDGET IS ITS OWN WRITE
+// STALLED, NEVER A MISSED QUORUM.
+//
+// One member stores the log — the count read off the harness's own broker, as
+// the engine reads its stream's — and the member holds the barrier's write
+// past the barrier's whole budget, as a disk holding the fsync `stream.sync:
+// always` makes of every append holds it. No majority was asked and no
+// election is coming, and refused `no_quorum` with an election's hint, a
+// single node on a stalling disk sent its operator looking for peers it does
+// not have. It is refused `broker_stalled`: one budget's hint, the stall named,
+// and no node asked next appends a barrier behind it.
+func TestASingleMembersStalledBarrierIsNeverAMissedQuorum(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	if got := h.log.Members(); got != 1 {
+		t.Fatalf("the premise: the harness's log is stored by %d members, want one", got)
+	}
+	read := func(ctx context.Context, r *statelog.Reader) error {
+		_, err := r.Read(ctx, pointQuery(statelog.ReadLinearizable), func(*sql.Tx) error { return nil })
+		return err
+	}
+	stalled := func(t *testing.T, what string, err error) *statelog.Refused {
+		t.Helper()
+		var refusal *statelog.Refused
+		if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBrokerStalled {
+			t.Fatalf("%s = %v, want refused %q", what, err, statelog.RefuseBrokerStalled)
+		}
+		if refusal.RetryAfter != statelog.StalledRetryHint {
+			t.Errorf("%s says come back in %v, want one barrier budget (%v) — there is "+
+				"no election to wait out", what, refusal.RetryAfter, statelog.StalledRetryHint)
+		}
+		if !slices.Equal(refusal.Spent.Unconfirmed, []string{probeStream}) {
+			t.Errorf("%s says it paid for %+v, want the log its barrier ran out on", what, refusal.Spent)
+		}
+		for _, wrong := range []string{"quorum", "majority"} {
+			if strings.Contains(refusal.Detail, wrong) {
+				t.Errorf("%s reads %q, which speaks of a %s one member does not have",
+					what, refusal.Detail, wrong)
+			}
+		}
+		if !strings.Contains(refusal.Detail, "one member") {
+			t.Errorf("%s reads %q, which does not say the log's one member is what stalled",
+				what, refusal.Detail)
+		}
+		return refusal
+	}
+
+	t.Run("the barrier's own budget ran out", func(t *testing.T) {
+		t.Parallel()
+		r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position},
+			heldIndex(t, newHeldAppender(t), h.log.Members))
+		began := time.Now()
+		stalled(t, "a barrier the member held past its budget", read(t.Context(), r))
+		if took := time.Since(began); took < statelog.DefaultBarrierBudget {
+			t.Errorf("refused after %v, before the barrier's own %v budget was spent",
+				took, statelog.DefaultBarrierBudget)
+		}
+	})
+	t.Run("the asker's attempt ran out", func(t *testing.T) {
+		t.Parallel()
+		r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position},
+			heldIndex(t, newHeldAppender(t), h.log.Members))
+		ctx, deadline := asked(t)
+		refusal := stalled(t, "a barrier its asker's attempt ended", read(ctx, r))
+		heard(t, "a read whose barrier the member held", deadline)
+		if !strings.Contains(refusal.Detail, "all its asker's attempt left") {
+			t.Errorf("the refusal reads %q, which does not say the asker's time is what ran out",
+				refusal.Detail)
+		}
+	})
+	t.Run("the next node", func(t *testing.T) {
+		t.Parallel()
+		var appends atomic.Int64
+		r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position},
+			countingIndex(t, &appends, h.log.Members))
+		begun := time.Now()
+		refusal := stalled(t, "a node asked after the member's write stalled",
+			read(statelog.WithSpent(t.Context(), statelog.Spent{Unconfirmed: []string{probeStream}}), r))
+		if took := time.Since(begun); took >= statelog.ReadBudget/4 {
+			t.Errorf("it took %v to refuse", took)
+		}
+		if got := appends.Load(); got != 0 {
+			t.Errorf("it appended %d barrier(s) behind a member whose write is stalled", got)
+		}
+		if !strings.Contains(refusal.Detail, "appends no second barrier") {
+			t.Errorf("the refusal reads %q, which does not say why nothing was appended", refusal.Detail)
+		}
+	})
+}
+
+// A BARRIER THAT RUNS ITS WHOLE BUDGET IS A LOG WITHOUT A QUORUM, where several
+// members store it, and no node asked after it appends another: every node's
+// barrier goes to the one log's leader. The first node's refusal says so —
+// whether its asker's attempt or the barrier's own budget is what ran out —
+// and the next node is refused `no_quorum` at once, appending nothing. A
+// barrier refused at once by a full log spent nothing of the kind, and the
+// next node appends its own.
 func TestNoNodeAppendsASecondBarrierToALogWithoutAQuorum(t *testing.T) {
 	t.Parallel()
 	read := func(ctx context.Context, r *statelog.Reader) error {
@@ -206,7 +297,7 @@ func TestNoNodeAppendsASecondBarrierToALogWithoutAQuorum(t *testing.T) {
 		if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseNoQuorum {
 			t.Fatalf("%s = %v, want refused %q", what, err, statelog.RefuseNoQuorum)
 		}
-		if !slices.Equal(refusal.Spent.NoQuorum, []string{probeStream}) {
+		if !slices.Equal(refusal.Spent.Unconfirmed, []string{probeStream}) {
 			t.Errorf("%s says it paid for %+v, want the log its barrier ran out on", what, refusal.Spent)
 		}
 		return refusal
@@ -215,24 +306,24 @@ func TestNoNodeAppendsASecondBarrierToALogWithoutAQuorum(t *testing.T) {
 	t.Run("the asker's attempt ran out", func(t *testing.T) {
 		t.Parallel()
 		r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position},
-			heldIndex(t, newHeldAppender(t)))
+			heldIndex(t, newHeldAppender(t), members(3)))
 		ctx, _ := asked(t)
 		noQuorum(t, "a barrier its asker's attempt ended", read(ctx, r))
 	})
 	t.Run("the barrier's own budget ran out", func(t *testing.T) {
 		t.Parallel()
 		r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position},
-			heldIndex(t, newHeldAppender(t)))
+			heldIndex(t, newHeldAppender(t), members(3)))
 		noQuorum(t, "a barrier that ran its own budget", read(t.Context(), r))
 	})
 	t.Run("the next node", func(t *testing.T) {
 		t.Parallel()
 		var appends atomic.Int64
 		r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position},
-			countingIndex(t, &appends))
+			countingIndex(t, &appends, members(3)))
 		begun := time.Now()
 		refusal := noQuorum(t, "a node asked after a barrier ran out",
-			read(statelog.WithSpent(t.Context(), statelog.Spent{NoQuorum: []string{probeStream}}), r))
+			read(statelog.WithSpent(t.Context(), statelog.Spent{Unconfirmed: []string{probeStream}}), r))
 		if took := time.Since(begun); took >= statelog.ReadBudget/4 {
 			t.Errorf("it took %v to refuse", took)
 		}
@@ -243,7 +334,7 @@ func TestNoNodeAppendsASecondBarrierToALogWithoutAQuorum(t *testing.T) {
 			t.Errorf("the refusal reads %q, which does not say why nothing was appended", refusal.Detail)
 		}
 		// ANOTHER LOG'S RUN-OUT barrier says nothing about this one.
-		if err := read(statelog.WithSpent(t.Context(), statelog.Spent{NoQuorum: []string{elsewhere.Stream}}), r); err != nil {
+		if err := read(statelog.WithSpent(t.Context(), statelog.Spent{Unconfirmed: []string{elsewhere.Stream}}), r); err != nil {
 			t.Fatalf("a read after another log's barrier ran out = %v, want it served", err)
 		}
 		if got := appends.Load(); got != 1 {
@@ -253,7 +344,7 @@ func TestNoNodeAppendsASecondBarrierToALogWithoutAQuorum(t *testing.T) {
 	t.Run("a full log spends nothing", func(t *testing.T) {
 		t.Parallel()
 		index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), fullLog(),
-			testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+			members(1), testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 		if err != nil {
 			t.Fatalf("NewReadIndex: %v", err)
 		}
@@ -280,12 +371,12 @@ func TestWhatAWalkPaidForIsKeptPerLog(t *testing.T) {
 		Index:  []statelog.Position{at(probeStream, 7)},
 		Waited: []statelog.Position{at(probeStream, 7)},
 	}.Merge(statelog.Spent{
-		Index:    []statelog.Position{at(probeStream, 9), at(elsewhere.Stream, 3)},
-		Waited:   []statelog.Position{at(probeStream, 9), at(elsewhere.Stream, 3)},
-		NoQuorum: []string{elsewhere.Stream},
+		Index:       []statelog.Position{at(probeStream, 9), at(elsewhere.Stream, 3)},
+		Waited:      []statelog.Position{at(probeStream, 9), at(elsewhere.Stream, 3)},
+		Unconfirmed: []string{elsewhere.Stream},
 	}).Merge(statelog.Spent{
-		Waited:   []statelog.Position{at(probeStream, 8)},
-		NoQuorum: []string{elsewhere.Stream},
+		Waited:      []statelog.Position{at(probeStream, 8)},
+		Unconfirmed: []string{elsewhere.Stream},
 	})
 	if idx, _ := got.IndexOn(probeStream); idx != at(probeStream, 7) {
 		t.Errorf("the probe log's index is %v, want the first one established", idx)
@@ -299,8 +390,8 @@ func TestWhatAWalkPaidForIsKeptPerLog(t *testing.T) {
 	if got.WaitedFor(at(elsewhere.Stream, 4)) || !got.WaitedFor(at(elsewhere.Stream, 3)) {
 		t.Errorf("waited out %v, want the other log's own (3)", got.Waited)
 	}
-	if !slices.Equal(got.NoQuorum, []string{elsewhere.Stream}) || got.NoQuorumOn(probeStream) {
-		t.Errorf("no quorum on %v, want the other log alone, once", got.NoQuorum)
+	if !slices.Equal(got.Unconfirmed, []string{elsewhere.Stream}) || got.UnconfirmedOn(probeStream) {
+		t.Errorf("unconfirmed on %v, want the other log alone, once", got.Unconfirmed)
 	}
 	if (statelog.Spent{}).Merge(statelog.Spent{}).IsZero() != true {
 		t.Error("nothing merged with nothing paid for something")

@@ -151,10 +151,11 @@
 // node's copy may serve the read at once, so the next one is asked and the
 // refusal is the answer only where nobody does better. Returned as the answer,
 // a git fetch through a data node whose applier fell a second behind was told
-// 503 while two peers could serve it. `log_full`, `broker_refused` and
-// `maintenance` hold for every node alike — every node appends its barrier to
-// the one stream, and every node of a fleet in a capacity window is in one — and
-// are answered from the first node that gives them.
+// 503 while two peers could serve it. `log_full`, `broker_refused`,
+// `broker_stalled` and `maintenance` hold for every node alike — every node
+// appends its barrier to the one stream, through its one member where it has
+// one, and every node of a fleet in a capacity window is in one — and are
+// answered from the first node that gives them.
 //
 // A WALK PAYS FOR A READ ONCE, whatever its length: a refusal says what the
 // read had paid for ([statelog.Refused.Spent]) — the read index its barrier
@@ -163,7 +164,9 @@
 // [statelog.WithSpent]): it waits for the read index rather than append a
 // barrier of its own, waits for no position already waited out (a floor
 // included, which a node behind it answers [unservedBehind] for), and appends
-// no second barrier to a log without a quorum. Asked afresh, every node of a
+// no second barrier to a log whose barrier ran its whole budget — a log
+// without a quorum, or, where one member stores it, that member's stalled
+// write ([statelog.Spent.Unconfirmed]). Asked afresh, every node of a
 // fleet one burst put behind together appended a barrier to the log they were
 // all behind on and waited a whole read budget for it, so one final `behind`
 // cost a barrier and two seconds per data node.

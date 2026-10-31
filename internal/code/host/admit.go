@@ -464,8 +464,9 @@ func (s *Server) identityUnknown(w http.ResponseWriter, r *http.Request, name st
 }
 
 // unavailable answers a request the code log could not be read for here — a
-// linearizable read refused (no quorum, a copy out of service), or no data
-// node answered — 503 with Retry-After, logged.
+// linearizable read refused (no quorum, a single member's stalled write, a
+// copy out of service), or no data node answered — 503 with Retry-After,
+// logged.
 func (s *Server) unavailable(w http.ResponseWriter, r *http.Request, name string, err error) {
 	if s.ended(w, r, name, err) {
 		return

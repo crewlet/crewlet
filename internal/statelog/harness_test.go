@@ -720,6 +720,11 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness { return newHarnessFor(t, probeDomain{}) }
 
+// members is a member count a case STATES, for a read index whose appender is
+// a fake with no stream to ask; a case over the harness's broker reads its
+// log's own ([js.DomainLog.Members]).
+func members(n int) func() int { return func() int { return n } }
+
 // noCeiling is a gate reserve over a log with no byte ceiling, for a case
 // about something other than capacity.
 func noCeiling(t testing.TB) *statelog.Reserve {

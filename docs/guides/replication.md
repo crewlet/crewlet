@@ -1184,7 +1184,7 @@ a thing somebody did once.
 
 ## See also
 
-- **[Read consistency](consistency.md)** — the four levels and the fourteen
+- **[Read consistency](consistency.md)** — the four levels and the fifteen
   refusals.
 - **[Retention](retention.md)** — the trim, the six terms, snapshots and the
   join runbook.

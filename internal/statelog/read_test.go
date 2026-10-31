@@ -186,7 +186,7 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			var appends atomic.Int64
 			h := newHarness(t)
 			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-				&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+				&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
@@ -235,7 +235,7 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 	var appends atomic.Int64
 	h := newHarness(t)
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 func TestAStallBelowTheFloorServesNoRead(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -399,7 +399,7 @@ func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender,
 	admission statelog.Admission) {
 	t.Helper()
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log,
-		testSigner(t, probeDomain{}),
+		members(1), testSigner(t, probeDomain{}),
 		admission, probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -438,7 +438,8 @@ func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender,
 // and it will answer the same to the next barrier. Read as `no_quorum` — which
 // is where every refusal the read index did not recognise went — it carried an
 // election's retry hint to a caller the node will refuse identically. And a
-// barrier nobody answered IS the missed quorum, which the control holds.
+// barrier nobody answered IS the missed quorum — on a log several members
+// store, which the control holds.
 func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 	t.Parallel()
 	//
@@ -448,36 +449,57 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 	// the transport's own and every surface sends a refusal's detail to the
 	// caller. `words` is what the detail must say and `absent` what it must
 	// not.
+	//
+	// AND THE MEMBERS: what an unconfirmed barrier is turns on how many store
+	// the log. On three it is a majority that did not agree, or no leader
+	// that answered; on one there is no majority, so it is never `no_quorum`
+	// — a broker that did not answer, or, where its time ran out, the
+	// member's own write that stalled. What the broker NAMED is the same
+	// refusal at any count.
+	timedOut := fmt.Errorf("append: %w", context.DeadlineExceeded)
 	for _, c := range []struct {
-		name   string
-		err    error
-		want   statelog.ReadRefusal
-		words  string
-		absent string
+		name    string
+		members int
+		err     error
+		want    statelog.ReadRefusal
+		words   string
+		absent  string
 	}{
-		{"a sealed stream", &jetstream.APIError{Code: 400, ErrorCode: 10109,
+		{"a sealed stream", 3, &jetstream.APIError{Code: 400, ErrorCode: 10109,
+			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused,
+			"invalid operation on sealed stream", ""},
+		{"a sealed stream, on one member", 1, &jetstream.APIError{Code: 400, ErrorCode: 10109,
 			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused,
 			"invalid operation on sealed stream", ""},
 		// A BARRIER THE CLIENT REFUSED AS TOO LARGE is a server whose
 		// max_payload refuses every record, and the client's decision, so
 		// it is the broker's refusal too — never an unanswered append.
-		{"a barrier past the server's max_payload",
+		{"a barrier past the server's max_payload", 3,
 			fmt.Errorf("append: %w", nats.ErrMaxPayload), statelog.RefuseBrokerRefused,
 			"max_payload", ""},
-		{"nobody answered", errors.New("nats: timeout dialling 10.0.0.7:4222"),
+		{"nobody answered", 3, errors.New("nats: timeout dialling 10.0.0.7:4222"),
 			statelog.RefuseNoQuorum, "was not confirmed", "10.0.0.7"},
+		{"nobody answered, on one member", 1, errors.New("nats: timeout dialling 10.0.0.7:4222"),
+			statelog.RefuseBrokerUnreachable, "did not answer its append", "10.0.0.7"},
+		{"the barrier's time ran out", 3, timedOut,
+			statelog.RefuseNoQuorum, "a majority of its members did not agree", "deadline"},
+		{"the barrier's time ran out, on one member", 1, timedOut,
+			statelog.RefuseBrokerStalled, "its own write is stalled", "deadline"},
 		// A STORE THAT CLOSED UNDER THE BARRIER is a stream restarting:
 		// the broker answered, and what it said is that the entry may
-		// yet land — which clears exactly as a missed quorum does.
-		{"a store closed under it", &jetstream.APIError{Code: 503, ErrorCode: 10077,
+		// yet land — which clears exactly as an unanswered append does.
+		{"a store closed under it", 3, &jetstream.APIError{Code: 503, ErrorCode: 10077,
 			Description: "store is closed"}, statelog.RefuseNoQuorum,
+			"was not confirmed", "store is closed"},
+		{"a store closed under it, on one member", 1, &jetstream.APIError{Code: 503, ErrorCode: 10077,
+			Description: "store is closed"}, statelog.RefuseBrokerUnreachable,
 			"was not confirmed", "store is closed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
 			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), refusingAppender{err: c.err},
-				testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+				members(c.members), testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
@@ -499,8 +521,9 @@ func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
 				t.Errorf("the refusal carries the transport's own words to the "+
 					"caller: %q", err)
 			}
-			if c.want == statelog.RefuseNoQuorum &&
-				!strings.Contains(refusal.Detail, probePrefix+"."+statelog.BarrierKind) {
+			unconfirmed := c.want == statelog.RefuseNoQuorum ||
+				c.want == statelog.RefuseBrokerStalled || c.want == statelog.RefuseBrokerUnreachable
+			if unconfirmed && !strings.Contains(refusal.Detail, probePrefix+"."+statelog.BarrierKind) {
 				t.Errorf("detail = %q, want it to name the barrier's subject",
 					refusal.Detail)
 			}
@@ -528,7 +551,7 @@ func TestACallerThatGaveUpIsNotARefusal(t *testing.T) {
 		release := make(chan struct{})
 		t.Cleanup(func() { close(release) })
 		index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), blockingAppender{release: release},
-			testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+			members(1), testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 		if err != nil {
 			t.Fatalf("NewReadIndex: %v", err)
 		}
@@ -611,7 +634,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -657,7 +680,7 @@ func TestALinearizableReadWaitsForTheRecordBeforeItsBarrier(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}),
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}),
 		noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -757,7 +780,7 @@ func TestALinearizableReadAtTheStartOfALogIsStampedAndBounded(t *testing.T) {
 			h := newHarness(t)
 			h.gen.Store(0)
 			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log,
-				testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+				h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
@@ -878,10 +901,12 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 }
 
 // EVERY REFUSAL ABOUT THIS NODE IS ONE ANOTHER NODE MAY SERVE, and only the
-// three that are facts about the whole fleet are not: a full log refuses every
+// four that are facts about the whole fleet are not: a full log refuses every
 // node's barrier, and so does a broker that refused to store one for a reason
 // of its own (a sealed stream, a store out of resources), since every node
-// appends to the one stream; and a capacity window holds every node. Each code
+// appends to the one stream; a log one member stores takes every node's
+// barrier through that member's one write, so its stall holds every node; and
+// a capacity window holds every node. Each code
 // is named here, so a code added to the set is a decision this table has to make —
 // and a code from a newer build, which nobody here can judge, is final.
 func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
@@ -900,6 +925,7 @@ func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
 		statelog.RefuseTooStale:             true,
 		statelog.RefuseLogFull:              false,
 		statelog.RefuseBrokerRefused:        false,
+		statelog.RefuseBrokerStalled:        false,
 		statelog.RefuseMaintenance:          false,
 	}
 	for _, code := range statelog.ReadRefusals {
@@ -1135,7 +1161,7 @@ func TestADeferredScopeRefusesAPointReadAndUncertifiesASetRead(t *testing.T) {
 	var appends atomic.Int64
 	broker := newHarness(t)
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: broker.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, broker.gen.Load, nil)
+		&countingAppends{inner: broker.log, n: &appends}, broker.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, broker.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -1415,7 +1441,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -1493,7 +1519,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -1767,7 +1793,7 @@ func TestANodeThatPublishesNothingAppendsNoBarrier(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t),
+		&countingAppends{inner: h.log, n: &appends}, h.log.Members, testSigner(t, probeDomain{}), noCeiling(t),
 		probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)

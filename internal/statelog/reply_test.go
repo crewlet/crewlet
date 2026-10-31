@@ -87,10 +87,10 @@ func (a heldAppender) Append(ctx context.Context, _, _ string, _ *uint64, _ []by
 func (heldAppender) LastSeq(context.Context, string) (uint64, bool, error) { return 0, false, nil }
 
 // heldIndex is a read index whose every barrier is held ([heldAppender]).
-func heldIndex(t *testing.T, held heldAppender) *statelog.ReadIndex {
+func heldIndex(t *testing.T, held heldAppender, members func() int) *statelog.ReadIndex {
 	t.Helper()
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), held,
-		testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+		members, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -132,15 +132,15 @@ func TestAServedReadSaysItIsBehindWhileItsAskerListens(t *testing.T) {
 // margin. The barrier's append is held — a broker that does not answer — and
 // the barrier's own budget (statelog.DefaultBarrierBudget) outlasts the
 // asker: waited out, the read was refused after its asker had stopped
-// listening. It is refused `no_quorum` a margin short of the deadline instead,
-// saying the asker's time is what ran out.
+// listening. It is refused `no_quorum` — the log is three members' — a margin
+// short of the deadline instead, saying the asker's time is what ran out.
 func TestAServedReadsBarrierEndsWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
 	if replyMargin+askerSlack >= statelog.DefaultBarrierBudget {
 		t.Fatalf("the premise: the asker's %v must end before the barrier's own %v would",
 			replyMargin+askerSlack, statelog.DefaultBarrierBudget)
 	}
-	index := heldIndex(t, newHeldAppender(t))
+	index := heldIndex(t, newHeldAppender(t), members(3))
 	r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position}, index)
 
 	ctx, deadline := asked(t)
@@ -165,7 +165,7 @@ func TestAServedReadsBarrierEndsWhileItsAskerListens(t *testing.T) {
 func TestAServedReadOnAFullLogIsToldTheLogIsFull(t *testing.T) {
 	t.Parallel()
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), fullLog(),
-		testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+		members(1), testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestAServedReadOnAFullLogIsToldTheLogIsFull(t *testing.T) {
 func TestAReaderThatHangsUpDuringItsBarrierIsToldItsOwnEnding(t *testing.T) {
 	t.Parallel()
 	held := newHeldAppender(t)
-	r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position}, heldIndex(t, held))
+	r := newReader(t, newStubStore(t), healthy, &stubWaiter{at: healthy().Position}, heldIndex(t, held, members(3)))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {

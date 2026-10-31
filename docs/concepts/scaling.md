@@ -687,10 +687,12 @@ flowchart TD
   and what a node is behind on is a row it has not committed or a record it
   has not been handed yet. Or it stalled, it holds a record it cannot decode,
   it was evicted, or it lost its broker or its quorum: the next data node is
-  asked, and the refusal is the answer only where none does better. The three
+  asked, and the refusal is the answer only where none does better. The four
   refusals that hold for every node alike — the log is full (`log_full`), the
   broker refused to store the barrier on the log every node appends to
-  (`broker_refused`: a sealed stream, a store with no resources left), the
+  (`broker_refused`: a sealed stream, a store with no resources left), the one
+  member a log is stored on did not complete the barrier's write in time
+  (`broker_stalled`: every node's barrier waits on that member's disk), the
   fleet is in a capacity window (`maintenance`) — are answered at once, from
   the first node that gives them. Asking the next node costs a question and
   nothing more: it is handed what the read already paid for — the barrier the

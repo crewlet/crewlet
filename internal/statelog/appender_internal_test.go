@@ -234,12 +234,14 @@ func TestABarrierOnAFullLogRefusesReadsAsAFullLog(t *testing.T) {
 	full := &jetstream.APIError{ErrorCode: codeStreamStoreFailed,
 		Description: storeFailedMaxBytes}
 	var refused *Refused
-	if err := barrierRefusal(ReadLinearizable, "crewlet.probe.barrier",
+	// ON SEVERAL MEMBERS, where an unconfirmed barrier is `no_quorum`: a full
+	// log is still the ceiling, whatever an unconfirmed one would have been.
+	if err := barrierRefusal(ReadLinearizable, "crewlet.probe.barrier", RefuseNoQuorum,
 		frameworkAppendError(BarrierKind, "crewlet.probe.barrier", full)); !errors.As(err, &refused) ||
 		refused.Code != RefuseLogFull {
 		t.Fatalf("a full log's barrier refused the read with %v, want %s", err, RefuseLogFull)
 	}
-	if err := barrierRefusal(ReadLinearizable, "crewlet.probe.barrier",
+	if err := barrierRefusal(ReadLinearizable, "crewlet.probe.barrier", RefuseNoQuorum,
 		frameworkAppendError(BarrierKind, "crewlet.probe.barrier", nats.ErrNoResponders)); !errors.As(err, &refused) ||
 		refused.Code != RefuseNoQuorum {
 		t.Fatalf("an unanswered barrier refused the read with %v, want %s", err, RefuseNoQuorum)
