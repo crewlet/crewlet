@@ -3,6 +3,7 @@ package chatlet_test
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -339,6 +340,66 @@ func TestASeatsLinkToNoAddressIsRefusedInTheStoresWords(t *testing.T) {
 			t.Errorf("%s answered %q (failed %v, class %q), want the store's %q, "+
 				"classed %s", tool, res.Output, res.Failed, res.Refusal(), want,
 				tools.RefusalInvalid)
+		}
+	}
+	r.drain()
+	if got := seat.end(); got != end {
+		t.Errorf("the refused calls published %d records", got-end)
+	}
+}
+
+// A SEAT READS A ROOM'S EVENT AS AN EVENT, AND CANNOT ANSWER IT.
+//
+// A named room opens with its founding line (its members joined), which sits
+// in the room's sequence beside what people said. End to end through a seat's
+// own tool surface: read_channel hands the line over carrying its `event`,
+// which the tool's description tells a model is the room's own change, and a
+// reaction to it or a reply to it is refused in the store's words, classed as
+// an argument to change, with nothing published.
+// Mutation: drop the event check before a reaction or a reply, and that call
+// lands on the founding line.
+func TestASeatReadsARoomEventAsOneAndCannotAnswerIt(t *testing.T) {
+	t.Parallel()
+	r := newWriteRound(t, agents().withPeople("jane"))
+	room := r.room(person("jane"), "launch", "eng").Channel.ID
+	page, err := r.reader().Messages(t.Context(), "eng",
+		chatlet.TranscriptQuery{ChannelID: room},
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		t.Fatalf("read the room: %v", err)
+	}
+	if len(page.Messages) != 1 || page.Messages[0].Message.Event == nil ||
+		page.Messages[0].Message.Event.Kind != chatlet.EventJoined {
+		t.Fatalf("the room opened with %+v, want its founding line alone", page.Messages)
+	}
+	founding := page.Messages[0].Message.ID
+
+	seat := newSeatTools(t, r)
+	end := seat.end()
+	call := seat.run("run-1")
+	read, err := call.surface.Execute(t.Context(), llm.ToolCall{Name: chatlet.ReadChannelTool,
+		Arguments: map[string]any{"channel": room}})
+	if err != nil || read.Failed {
+		t.Fatalf("read_channel: %v %s", err, read.Output)
+	}
+	if !regexp.MustCompile(`"event":\s*\{\s*"kind":\s*"joined"`).MatchString(read.Output) {
+		t.Errorf("read_channel handed the founding line over without its event: %s",
+			read.Output)
+	}
+
+	for tool, args := range map[string]map[string]any{
+		chatlet.ReactToMessageTool: {"channel": room, "message_id": founding, "emoji": ":eyes:"},
+		chatlet.ReplyInThreadTool:  {"channel": room, "reply_to": founding, "body": "noted"},
+	} {
+		res, err := call.surface.Execute(t.Context(), llm.ToolCall{Name: tool, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s: %v", tool, err)
+		}
+		if !res.Failed || res.Refusal() != tools.RefusalInvalid ||
+			!strings.Contains(res.Output, "records a change to the room") {
+			t.Errorf("%s on the founding line answered %q (failed %v, class %q), want "+
+				"it refused as a change to the room", tool, res.Output, res.Failed,
+				res.Refusal())
 		}
 	}
 	r.drain()
