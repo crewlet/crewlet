@@ -4776,14 +4776,18 @@ a tool arrives in it with the control that sends it. The controls
 | Send (`Enter`) | A chat room's composer | `post_message{channel, body}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one |
 | Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body}` |
 | Edit message, then Save | A chat message of your own (its More menu) | `edit_message{channel, message_id, body}`: the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
-| Delete, then Delete in its dialog | A chat message of your own (its More menu), and anybody's to an admin | `delete_message{channel, message_id}`: the author's, or an admin's moderation, and the tombstone records who. Reaches past membership and past an archive; held on a room this build cannot classify, and while another message's delete is out |
+| Delete, then Delete in its dialog | A chat message of your own (its More menu), and anybody's to an admin | `delete_message{channel, message_id}`: the author's, or an admin's moderation, and the tombstone records who. The dialog shows the message as the room draws it and says that everybody in the room sees who deleted it. Reaches past membership and past an archive; held on a room this build cannot classify |
 | A reaction | A chat message's reaction chips | `react_to_message{channel, message_id, emoji, remove}` — quiet, no toast; a refusal is said above the transcript. Held outside a private room you are not in, as a post is; an archived room takes it |
 | Join · Leave | Join on a room you are not in and in **Browse rooms**; Leave in the room's **More** | `join_channel{channel}` / `leave_channel{channel}`, refused on a unit's room and a direct conversation, so neither offers it |
 | Mute · Unmute | A chat room's header | `mark_chat_read{mute}` / `{unmute}` — this room alone, every other room's state kept |
-| New room | The chat rail | `create_channel{channel, kind, topic?, members?}` |
-| New direct message | The chat rail | `open_dm{to}` — a direct conversation's identity is who is in it, so opening one again reaches the same room |
-| Topic · Purpose | A chat room's settings dialog | `update_channel{channel, topic?, purpose?}` — only the fields changed. Archiving and the room's horizon are not offered anywhere in the dashboard, and the dialog says so: an archive closes the room for everybody in it, and the horizon decides what survives on every data node and is an administrator's step-up gesture (`PUT /chatlet/channels/{channel_id}/retention`) |
-| Save for later · Remove from Saved | A chat message's tray | `mark_chat_read{save}` / `{unsave}`: the reader's own; past `MAX_READER_MARKS` the press says Saved is full rather than sending |
+| New room | The Rooms switcher's and the Rooms panel's foot, and Browse rooms | `create_channel{channel, kind, topic?, members?}`: the name is claimed, never renamed, and a name somebody holds goes back to its field; the visibility opens on the company's own default |
+| A new message | **New message** (`#/chatlet/new`) | `open_dm{to}`, then `post_message` to the conversation it answers: only once there is something to say; the people chosen may already share a conversation, which the view shows and sending adds to |
+| Add people | A room's details (Members), its first-step card and More | `add_channel_members{channel, members}`: never on a unit's room (the org chart's) or a direct conversation (its people are its identity); the answer names who it actually put in. Leaving a new room's dialog with nobody chosen asks once |
+| When new agents and people join, add them | Add people, to an admin, on a public room | `update_channel{channel, auto_join}`: an admin's alone, on a public room alone; it adds the seats that join the company from then on and nobody already in it |
+| Topic · Description · A template | A room's details (About), its first-step cards and More | `update_channel{channel, topic?, purpose?, template?}`: only the field changed; each held to 250 characters, counted as the engine counts them (code points, so an emoji is one); a template sets both in one change that names it, one line in the transcript. Archiving and the room's horizon are not offered anywhere in the dashboard: an archive closes the room for everybody in it, and the horizon decides what survives on every data node and is an administrator's step-up gesture (`PUT /chatlet/channels/{channel_id}/retention`) |
+| Every message · Mentions · Muted | The top bar's notification choice, and a room's details (Notifications) | `mark_chat_read{notify}`: the reader's own mark, waking nobody; Muted is the mute |
+| Follow · Unfollow | A thread's pane, and Threads | `mark_chat_read{follow}` / `{unfollow}`: the reader's own mark; a thread they started, replied in or were named in is followed without one, and replying in one they unfollowed follows it again |
+| Save for later · Remove from Saved | A chat message's tray, and Saved | `mark_chat_read{save}` / `{unsave}`: the reader's own; past `MAX_READER_MARKS` the press says Saved is full rather than sending, and a saved message that is gone stays listed until it is removed |
 | Mark unread | A chat message's More menu | `mark_chat_read{rewind}`: the room's place set to just before the message, the one way it moves back |
 | Join room | The bar in place of a room's composer, for a room you may read but are not in | `join_channel{channel}` |
 | — (the read cursor, no control) | Written as you read a chat room | `mark_chat_read{cursors}` — every `READ_FLUSH_MS` (15 s) and at once on leaving the room, hiding the tab or closing it; quiet, and on no log (`domain: null`). Its answer is your seat's read state as it left it, and the tab applies it as it would the push — so the rail asks again once, when the revision moves |
@@ -7515,26 +7519,69 @@ a link from any place (`routes/chatlet/nav.tsx`).
   until the answer is a decision: it landed, and the transcript brings it, or it
   was refused, and the row says why. It waits there while you look at another
   room, and is there when you come back.
-- **A thread** is a pane (`pane=thread:{room}:{root}`), opened beside the
-  conversation or over it. It is one level deep, so a reply offers no thread
-  of its own.
+- **The panes** draw in the kit's side panel, so opening one moves focus to
+  its heading, Escape inside closes it, and closing gives focus back to what
+  opened it (to a menu's trigger, when a menu item opened it and is gone).
+  **A thread** (`pane=thread:{room}:{root}`), opened beside the conversation
+  or over it, is its root, the reply count, the
+  replies as the room draws them, an agent writing a reply, the reply box
+  where the room takes one, who a reply reaches, and Follow. It is one level
+  deep, so a reply offers no thread of its own, and it pages forwards from its
+  root. Its read place moves to the newest reply on screen. **Details**
+  (`pane=details:{room}:{tab}`) groups the room's facts in cards (its name,
+  which never changes; its topic and description, each with Edit where the
+  engine would take the change; its team, who made it and when, how long it
+  keeps what is said, and Leave where a person may leave), its Members (find,
+  Add people where the engine adds anybody, people before agents, each opening
+  their profile), what it **Shared** (every link said in it, newest first, as
+  the room unfurls it, each opening the message it came in) and its
+  **Notifications**. **A profile** (`pane=profile:{handle}`) is the seat's
+  face, team and what it is doing now, Message, its page in the org chart, and
+  the rooms you share with it (`chat_channels{with}`). **Catch up**
+  (`pane=catchup:{room}`, or `summarize` with nothing unread) is Ask Crewlet's
+  brief of the room: the gist, what waits on you, and what was said, each
+  point opening the message it came from; it reads only what you can read and
+  posts nothing, and goes on in Ask Crewlet.
 - **Activity** (`#/chatlet/activity`) is every message that named your seat, in
   every room, every reply in a thread you follow and every reaction to what you
-  said: the whole away story, because the engine sends no email, push or SMS.
-  Each row is the moment it happened and is dated by it. An edit that still
-  names you leaves the row where it was, with the new words and marked edited;
-  one that names you anew puts it at the top; a delete takes it away.
+  said (`chat_activity`): the whole away story, because the engine sends no
+  email, push or SMS. It filters to mentions, replies or reactions, and to the
+  unread alone; the row chosen is read beside the list as the room draws it
+  (`chat_message`: the message, and for a reply its root and the replies just
+  before it) with a reply box under it, and choosing an unread row marks it
+  read through its room's cursor. A narrow column draws no reading pane, so a
+  row opens where it was said instead. Each row is the moment it happened and
+  is dated by it.
+- **Threads** (`#/chatlet/threads`) lists the threads you follow, newest reply
+  first (`chat_threads`), each its root and newest replies with Unfollow and
+  Reply; **Drafts and sent** (`#/chatlet/drafts`) lists what you have not sent
+  (a message the engine did not confirm, and the words left in a box, kept in
+  the tab and never in the address or the browser's storage) and what you sent
+  (`chat_sent`); **Saved** (`#/chatlet/saved`) lists what you saved, the newest
+  save first (`chat_saved`). A card there quotes its message read-only: its
+  actions are a press away in the thread or the room.
+- **New message** (`#/chatlet/new`, `to=`) takes people and agents as chips in
+  its To field (`#` there finds one of your rooms instead), shows the
+  conversation you already share with them, and opens one only when you send.
+- **Browse rooms** (`#/chatlet/browse`) lists every room you can read, joined or
+  not, archived ones under their own filter (`chat_rooms`), with each room's
+  topic, size and last message, sorted by activity, name or size; Join where
+  the engine would take one, Open everywhere else.
 - **Search chat** (`#/chatlet/search`, `q=` and `in=`) ranks what was said in every
   room your seat may READ (wider than your own rooms) by keyword alone: chat is not
   in the vector corpus
   ([ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
-  A phrase past the engine's bound is not sent, and the screen says why. It
-  asks for the engine's own page — forty hits, `contract/chat.ts`'s
-  `CHAT_SEARCH_PAGE`, the engine's `search.MaxChatSearchLimit` — and so does
-  **Browse rooms** while it is narrowed by a search, offering the rooms those
-  hits are in: the ranking has no
-  next page, so a full page says there may be more matches and how to narrow
-  the search, rather than reading as everything that matched.
+  It searches as you type, once the words rest (`lib/useQuiet.ts`), and keeps
+  the settled words in the address by replacement. In and From narrow it at
+  the engine (`channel_id`, `author`); Who (people or agents) narrows the page
+  the engine ranked, and says so. A phrase past the engine's bound is not sent,
+  and the screen says why. It asks for the engine's own page (forty hits,
+  `contract/chat.ts`'s `CHAT_SEARCH_PAGE`, the engine's
+  `search.MaxChatSearchLimit`), and the ranking has no next page, so a full
+  page says there may be more matches and how to narrow the search, rather
+  than reading as everything that matched. Its People tab matches the org
+  chart's seats and its Rooms tab every room you can read, on the words each
+  row draws.
 - **On Home**, Chatlet offers two widgets for the reader's board
   (`routes/chatlet/home.widgets.tsx`; see
   [Home is the reader's board](#home-is-the-readers-board)), each asking what
@@ -7544,8 +7591,10 @@ a link from any place (`routes/chatlet/nav.tsx`).
   said to count only the reader's most recently active rooms, a room a newer
   engine made counted as left out, a rail that met a record this build cannot
   read said to be incomplete, and where the cursors could not be read a
-  sentence saying so, none of them ever drawn as "caught up" — and **Mentions**, the feed's newest page, a mention in a
-  thread opening the thread. Neither marks anything read. Like every chat page
+  sentence saying so, none of them ever drawn as "caught up" — and **Mentions**,
+  Activity's newest mentions, a mention in a thread opening the thread. The
+  rooms are the frame's one reading of the reader's rooms, the one the
+  sidebar's badge and the Rooms panel draw. Neither marks anything read. Like every chat page
   they are the Chatlet app's: a credential acting as no seat is told so in a line
   and asked nothing, and a company whose chat is a vendor's or none is offered
   neither, as Home offers no widget of a service it does not run.
