@@ -4212,7 +4212,7 @@ export interface ChatRoomNamesAnswer extends ChatServed {
   truncated?: boolean;
 }
 
-/** One room as Browse lists it — `chat_rooms`. */
+/** One room as Browse lists it (`chat_rooms`). */
 export interface ChatDirectoryRoom {
   channel: ChatChannel;
   /** How many people and agents are in it. */
@@ -4227,7 +4227,7 @@ export interface ChatDirectoryRoom {
 
 /**
  * Every NAMED room the reader may read, joined or not, the archived ones
- * included — `chat_rooms`: what Browse lists, sorts and filters on the client.
+ * included (`chat_rooms`): what Browse lists, sorts and filters on the client.
  * A private room is listed to its members alone, and a direct conversation is
  * never listed. Live rooms in name order, then the archived ones, the most
  * recently archived first.

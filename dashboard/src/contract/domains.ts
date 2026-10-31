@@ -49,5 +49,6 @@ export const SESSION_QUERIES = {
     "chat_mentions",
     "chat_search",
     "chat_room_names",
+    "chat_rooms",
   ],
 } as const;

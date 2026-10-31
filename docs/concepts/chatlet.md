@@ -169,7 +169,13 @@ somebody is not an edit but a different conversation, which the write path
 refuses to pretend otherwise about.
 
 **Threads** are one level deep. A reply to a reply carries the same root, which
-is what makes "this thread" a range rather than a recursive walk.
+is what makes "this thread" a range rather than a recursive walk. A room post
+somebody answered shows its thread's summary in the transcript: how many
+replies it has (a deleted one included, since its tombstone still sits in the
+thread), when the newest arrived, and the first three people or agents to
+reply with how many replied in all. It is counted from the thread's own rows
+when the page is read, so a delete, an erase or a prune changes it with no
+counter to keep in step.
 
 **Messages** carry up to 32 KiB of text and up to eight links, and no file:
 a message links to one — see [what is not here](#what-is-not-here).
@@ -261,6 +267,62 @@ in that room and accepts nothing either — not a post, an edit, a delete, a
 reaction, a join or a settings change, an author's and a moderator's alike —
 because whether that room's transcript is reachable is exactly what it cannot
 say. Upgrade the node and the same gesture lands.
+
+## A room says what changed in it
+
+A room's own changes are lines in its transcript, where they happened: who
+joined it, who put somebody in it or took them out, who left, and what its
+topic and description were set to. They are **room events**, written by the
+engine from the record that made the change, in that record's own
+transaction, so a description never changes without its line and a line never
+claims a change that did not land. Each takes the room's next number like a
+message, so a page, a cursor and a live update carry it in order, and the
+retention prune and an erase reach it like any other row.
+
+| Event | Written when |
+|---|---|
+| `joined` | A named room is made (its founding members), somebody joins it themselves, or the engine puts a seat in: the org chart staffing a unit's room, or an auto-join room taking in a newcomer |
+| `added` | Somebody puts other people or agents in the room |
+| `left` | Somebody leaves the room themselves, or the org chart takes a seat out of its unit's room |
+| `removed` | Somebody takes other people or agents out of the room |
+| `topic`, `description` | Somebody sets the room's topic or its description (its `purpose`); an empty value is the old one cleared |
+| `template` | Somebody sets the topic and description from a template, which is one line naming the template rather than two |
+
+A direct conversation has none: its people are what it is, so nobody joins or
+leaves one, and it has no topic. Archiving a room writes none either.
+
+**A room event is not conversation.** It is never an unread message or a
+mention, never the last message a room is previewed by, never a search hit,
+and it takes no reply, reaction, edit or delete: it is the room's record of a
+change, not anybody's words. Its author is whoever made the change, or the
+engine for the org chart's and auto-join's own changes. A seat reading the
+room sees it as a message carrying an `event`, and the words it records (a
+topic, a description, a template's name) are fenced as their author's, as a
+topic is.
+
+**A room's topic and description are 250 characters each**, counted as a
+person sees them (an emoji is one), because a person edits both under a
+counter. A longer description is describing a project, which has a page.
+
+**Adding people to a room** names who to add and nobody else. It is decided
+against the room as it stands when the write lands, so two people adding
+colleagues at once both land, where stating the whole membership would let
+the second write the first one's people back out. The rules are the
+membership's own: a private room is changed only by somebody in it, a unit's
+room is the org chart's, and a direct conversation is its people.
+
+**A public room can take in everybody the company takes on.** An
+administrator turns on a room's auto-join, and from then every seat that joins
+the company, agent or person, is put in the room by the engine at the
+activation that brings it in, with a `joined` line. Turning it on adds nobody
+already in the company: the room accounts for the company as it stood, and
+for every newcomer it puts in, so a newcomer who leaves the room is not put
+back by the next activation. Turning it off and on again starts from the
+company as it is then. A private room cannot take it, because who may read a
+private room is no setting's to decide for people nobody has met yet; nor can
+a unit's room or a direct conversation, for the reasons above. An archived
+room takes nobody in, and accounts for the newcomers it missed when it is
+opened again.
 
 ## Who gets woken
 
@@ -470,7 +532,8 @@ went. A mute is a room at a time rather than a list: a flush mutes or unmutes
 the rooms it names and every other keeps its state, so a screen mutes the room
 it is on without first reading what else is muted, and two tabs muting two
 different rooms at once both land. The same surface's `list_channels` counts
-each room's unread messages against it, and marks the rooms the seat muted and
+each room's unread messages against it, and how many of those name the person
+or the whole room (`@channel`), and marks the rooms the seat muted and
 a do-not-disturb its person is in, so their own assistant sees what the
 dashboard's badges show; a read state that cannot be read is said rather than
 counted from zero, which would call every room unread.
@@ -575,7 +638,8 @@ is not in.
 | List rooms, read a room or a thread, search | `chatlet`, as a seat — over the rooms that seat may read |
 | Post, reply, send a direct message, react | `chatlet`, as a seat, in a room it may reach; a post or a reply is refused in an archived room |
 | Join or leave a room | `chatlet`, as a seat, its own membership only; a private room cannot be joined, and a unit's room can be neither joined nor left |
-| Make a room, open a direct conversation, set a room's topic or purpose, state its whole membership | `chatlet`, as a person — never an agent — in a room they can reach; a unit's room is the org chart's, and a direct conversation's membership is its identity |
+| Make a room, open a direct conversation, set a room's topic or purpose, add people to it, state its whole membership | `chatlet`, as a person — never an agent — in a room they can reach; a unit's room is the org chart's, and a direct conversation's membership is its identity |
+| Make a public room take in everybody the company takes on | `admin`, as a person, never an agent |
 | Archive a room, or open it again | the room's creator, the lead of the unit whose room it is or of a unit above it, or `admin` — as a person, never an agent |
 | Edit a message | its author, as a person — nobody else, an administrator included |
 | Take a message down | its author, as a person, or `admin` as a moderator — in any room, without reading it |

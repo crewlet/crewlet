@@ -1219,7 +1219,9 @@ func (t *readChannel) Description() string {
 		"woken in is handed to you at turn start under `## The thread so far`; " +
 		"read it here only where that block says it is incomplete. The rest " +
 		"of the room is not handed to you, so read it here when your answer " +
-		"depends on what was said before."
+		"depends on what was said before. A message carrying an `event` is the " +
+		"room's own change (who joined or was added, a new topic or " +
+		"description), not something anybody said, and takes no reply."
 }
 
 func (t *readChannel) Parameters() map[string]any {
@@ -1297,9 +1299,19 @@ func (t *readChannel) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // view at path: the transcript records the author's kind beside the handle,
 // which the fence takes at its word. A tombstone says nothing and is not
 // fenced; its row carries no body.
+//
+// A ROOM EVENT says nothing either, and carries words all the same: the topic
+// or description it records, or a template's name, which its author wrote as
+// the room's label. They are fenced under that author, read from the room as
+// a topic is.
 func fenceMessage(read *foreignRead, path fieldPath, m chatlet.Message) {
+	writers := []provenance.Author{read.writer(m.Author, iam.ActorKind(m.AuthorKind))}
 	read.fence(path.key("message").key("body"), provenance.SourceChatThread,
-		[]provenance.Author{read.writer(m.Author, iam.ActorKind(m.AuthorKind))}, false, m.Body)
+		writers, false, m.Body)
+	if m.Event != nil {
+		read.fence(path.key("message").key("event").key("text"),
+			provenance.SourceChatRoom, writers, false, m.Event.Text)
+	}
 }
 
 // ---- search_messages --------------------------------------------------- //

@@ -26,6 +26,7 @@ var chatReadRoutes = map[string]string{
 	"/chatlet/mentions":                    "chat_mentions",
 	"/chatlet/search":                      "chat_search",
 	"/chatlet/room-names":                  "chat_room_names",
+	"/chatlet/rooms":                       "chat_rooms",
 }
 
 // EVERY CHAT READ ROUTE REACHES THE REGISTRY.
@@ -82,6 +83,7 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 		"/chatlet/mentions?cursor=c":                     "chat_mentions",
 		"/chatlet/search":                                "chat_search",
 		"/chatlet/room-names":                            "chat_room_names",
+		"/chatlet/rooms":                                 "chat_rooms",
 	} {
 		rec := httptest.NewRecorder()
 		a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, path, nil)))

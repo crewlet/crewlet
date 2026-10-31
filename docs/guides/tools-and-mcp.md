@@ -388,10 +388,10 @@ a new join rather than the first one's retry.
 
 The same nine are served to **your** AI assistant and to the dashboard over the
 [operator surface](../reference/api-endpoints.md#the-chat-gestures-only-a-person-makes),
-as the seat the person behind the call holds, and seven more that no seat is
+as the seat the person behind the call holds, and eight more that no seat is
 given:
-`create_channel`, `open_dm`, `update_channel`, `set_channel_members`,
-`edit_message`, `delete_message` and `mark_chat_read`. A seat corrects what it
+`create_channel`, `open_dm`, `update_channel`, `add_channel_members`,
+`set_channel_members`, `edit_message`, `delete_message` and `mark_chat_read`. A seat corrects what it
 said by replying rather than rewriting it; a room, its settings and its
 membership are the company's furniture; and a read cursor is a person's
 attention, which a seat — woken rather than reading — does not have. Every one

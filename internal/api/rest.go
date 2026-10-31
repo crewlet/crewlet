@@ -209,6 +209,9 @@ var namedRoutes = []struct {
 	// names a room by, which a reader cannot tell from a colour or an
 	// issue's number without knowing the rooms.
 	{method: "GET", pattern: "/chatlet/room-names", what: "chat_room_names"},
+	// EVERY ROOM THE CALLER MAY BROWSE, with what a person chooses one by:
+	// its member count, whether they are in it and when it was last active.
+	{method: "GET", pattern: "/chatlet/rooms", what: "chat_rooms"},
 	// WHO IS ASKING. Not under /worklet/: the answer is the caller's own
 	// identity rather than anything the tracker holds, and a node with no
 	// Worklet still has a viewer.
