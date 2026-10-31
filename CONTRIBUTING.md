@@ -1537,6 +1537,31 @@ Small, focused PRs are much easier to review than large ones. If you are
 planning a substantial change — a new subsystem, or a reshaping of the config
 format — please open an issue first to discuss the approach.
 
+### Land a feature as a series of pull requests
+
+A feature lands as a sequence of pull requests, not as one large one. Plan the
+pieces before writing code. A piece doesn't have to deliver working
+functionality by itself, but `main` has to be able to take it as it is: clean,
+finished code with its own tests and docs, every gate green, no existing
+behaviour broken, and nothing half-wired for a user to trip over. Code that
+nothing calls until a later piece wires it in, or that sits behind config
+nothing sets yet, is fine. A stub or a `TODO` is not.
+
+- **Track the series in one issue.** It describes the feature and lists the
+  pieces as a checklist. Each pull request says `Part of #N`, and the last one
+  says `Closes #N`. Add each pull request's link to the checklist as it opens.
+- **Land one piece, then start the next on `main`.** Each pull request is
+  green in CI and titled as a release note on its own.
+- **If a piece is waiting on review, stack the next one on it.** Branch from
+  the previous piece's branch and open the pull request against that branch,
+  saying in the description which pull request it builds on. When the lower
+  one merges, rebase onto `main` and retarget. Stacking against another
+  branch needs that branch in this repository. From a fork, open the next
+  pull request against `main` and say which one it builds on; its diff
+  includes the lower piece until that one merges.
+- **The series is the change.** It is done when the last piece merges and
+  the issue closes.
+
 ## Reporting bugs and requesting features
 
 Use [GitHub issues](https://github.com/crewlet/crewlet/issues). For bugs,
