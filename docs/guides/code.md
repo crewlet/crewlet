@@ -672,11 +672,31 @@ landed a commit](../concepts/code-host.md#which-push-landed-a-commit)).
 ### Working in a clone
 
 A seat whose role has a [sandbox](../concepts/code-sandbox.md) also works in a
-clone: it names the repositories in `run_sandbox`'s `repos`, and the engine
-clones each into the coding box — on the seat's own branch for the work item
-by default — and hands that run a credential of its own, which pushes only
-what the run was given and its seat may push, and ends with the run
-([Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)).
+clone, and there it is a git user of the code host as you are, with a
+credential of its run's own rather than yours or any token's. It names the
+repositories in `run_sandbox`'s `repos`, and the engine clones each into the
+coding box before the coding agent starts
+([Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)):
+
+- **on the seat's own branch** for the work item its turn is charged to,
+  `seats/<handle>/<the item's key>`, unless the call names another — so every
+  run on one item continues what the last one pushed. A work item whose key
+  changes starts a new branch;
+- **from that branch's head**, or the default branch's where the branch does
+  not exist yet, unless the call names a `base`;
+- **to push, where the seat may**, else to read: a seat that may not push a
+  repository is still given it to look at. The run's credential pushes only
+  what the run was given and its seat may push, and ends with the run.
+
+The box reaches the git nodes at `/box/git/`, through the address every node
+that runs seats is given in `CREWLET_BOX_GIT_URL`
+([Deployment](deployment.md#exposing-webhooks-without-the-admin-api)), and
+every request it makes is admitted by its run's record, never by its token
+alone ([Coding boxes](../concepts/code-host.md#coding-boxes)). The commits it
+makes carry `Crewlet-Seat`, `Crewlet-Run` and `Crewlet-Work-Item` trailers by
+convention, which a box can drop or forge and nothing on the code host reads:
+the push's record is what says who pushed a commit ([Commit
+trailers](../concepts/code-sandbox.md#commit-trailers)).
 Its pushes are held to the seat's rules above, and when the run ends, the seat
 is told what it pushed from the code host's own record of its pushes — each
 branch it moved, from where to where, and the change it heads — not from what
@@ -686,9 +706,31 @@ A run can work on a change — `change: web!42` puts it on that change's branch,
 from its head — or ask for one: `open_change` opens a change from the run's
 branch once the run has succeeded, once, carrying the seat's work item
 ([A run's changes](../concepts/code-sandbox.md#a-runs-changes)).
-Every node that runs seats needs `CREWLET_BOX_GIT_URL` for it, the address a
-box reaches the git nodes' `/box/git/` at
-([Deployment](deployment.md#exposing-webhooks-without-the-admin-api)).
+
+### A seat's idle branches
+
+A seat leaves a branch under `seats/<handle>/` for each piece of work, and
+nobody else deletes them, so the code host does: a branch **a seat set in its
+own namespace and nobody has set for 14 days** is deleted by the
+`code-retention` duty, as a push on the engine's own account ([The ref
+lifecycle](../concepts/code-host.md#the-ref-lifecycle)). A branch a person
+pushed last, the repository's default branch, a live change's source or target
+and a protected branch are never deleted; nor is a branch a seat's work still
+depends on — one a live turn read or wrote with a code tool, one a coding
+run's launch gave its box, or one its box pushed — for as long as that turn,
+or the run it is waiting on, has not ended, however long the run takes. A
+turn that reads a branch nobody has set for nearly 14 days records its hold
+on the repository, so the read and a deletion already under way are ordered:
+when the deletion lands first, the turn's call is refused, the answer naming
+the commit the branch was at, and nothing about the branch is sent.
+
+**A deleted branch is restored** with `code_create_branch` at the commit it
+was at, by the seat or by you through your assistant. The deletion's row in
+the push history — `GET /code/repos/{name}/pushes` and `crewlet code status
+-repo` — names every branch it deleted beside that commit (`via` `expiry`,
+`actor_kind` `system`), for the 181 days the history keeps it. A repository
+setting refs faster than they go idle raises `code_refs_near_limit` before it
+reaches the 100 000 live refs it may hold ([alarms](../reference/alarms.md)).
 
 ## Who read a unit's repository
 

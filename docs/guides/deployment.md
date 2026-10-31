@@ -1943,6 +1943,10 @@ cache on its own disk. What such a node needs from its host:
   route `/git/<name>` by repository — a balancer hashing the path to a node,
   with the next one in line when it is down — so each repository stays warm on
   one or two nodes. Routing by repository is never required for correctness.
+  All of it holds for a coding box's `/box/git/<name>` on the public
+  listener's balancer as well: a box's clone meets the same cold sync and
+  the same holds, so give that balancer the same idle timeout, or route the
+  box prefix by repository the same way.
   A fetch large enough to spool — a partial clone's checkout asking for more
   than a mebibyte of objects — that finds the node's room for such requests in
   use is silent too: it waits up to 55 s for its turn, a keepalive interval

@@ -2143,17 +2143,22 @@ a day, 3 000 turns a day, 50 projects):
 | replicated store, per node | 9.7 GB | 26.6 GB | 43.8 GB |
 | snapshot volume at ×4.2 | 40.8 GB | 111.8 GB | 183.9 GB |
 | plus, hosting code at 3 000 pushes a day: the code host's rows, per node | 0.4 GB | 0.4 GB | 0.4 GB |
-| and their snapshot volume at ×4.2 | 1.6 GB | 1.6 GB | 1.6 GB |
+| and their snapshot volume at ×4.2 | 1.7 GB | 1.7 GB | 1.7 GB |
 
 The code host's line is for a company whose seats push — 3 000 pushes a day,
 the rate the code host is built for, every one of them a seat's (a hundred
 seats pushing thirty times a day); in this release pushes are people's, their
 CI's, and their seats' — through the code tools and from coding boxes — and
 the line scales with them. A seat's push leaves a push row of
-about 680 bytes, naming the seat and the turn, work item and model behind it
-(a person's is about 623), kept the 181 days of the push-history horizon
-(369 MB once the horizon is reached, in the first year), and its pack's row
-of about 588, kept while the pack is live. A repository's home git node looks
+about 680 bytes where its code tools built it, naming the seat and the turn,
+work item and model behind it, and of about 755 from its coding box, which
+names the coding run and the coding agent besides (a person's is about 623),
+kept the 181 days of the push-history horizon — 410 MB once the horizon is
+reached, in the first year, every push priced as a box's, the most a seat's
+push leaves, since which of a company's seats push from their boxes and which
+through their tools is no figure the reference company has (369 MB priced as
+a tool's, as this line was before a box's push was measured) — and its pack's
+row of about 588, kept while the pack is live. A repository's home git node looks
 at it every minute and merges its small packs once sixteen have gathered — a
 busy repository's at every look, the minute's pushes taking it past them
 ([Compaction](../concepts/code-host.md#compaction)) — so a repository holds at

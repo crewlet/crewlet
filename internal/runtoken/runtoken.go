@@ -1,5 +1,6 @@
 // Package runtoken is the signed, self-describing credential a per-run
-// endpoint carries in its own URL path.
+// endpoint carries: in its own URL path, or, at the code host's /box/git/,
+// as git's Basic password.
 //
 // # Why a token in the path at all
 //

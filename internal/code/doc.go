@@ -474,7 +474,8 @@
 // restated from one count of one iteration once each row was weighed by its
 // own table, again once every id was the shape production writes, and the
 // pack row again once it named the position its content dates from,
-// replicated 0067, with that column's index),
+// replicated 0067, with that column's index, and once a seat's coding box's
+// push was measured beside a person's and a tool's),
 // measured as the replicated estate's growth after a truncating checkpoint
 // over records whose refs existed before, so a ref's own row is rewritten in
 // place and never counted — EACH ROW BY THE PAGES ITS OWN TABLE'S B-TREES
@@ -496,9 +497,16 @@
 //     repository holds) — 679.9 for the same commit pushed by a seat and
 //     built by the engine, its row naming the seat and the run behind it at
 //     a run's usual sizes (a UUID turn id, the work item `native ENG-1234`, a
-//     seventeen-byte model id; 4 000 records; 622.6 with no pack), and
-//     420 086 for the widest a push can leave ([MaxCommandsPerPush] commands
-//     on refs of [MaxRefNameBytes], [MaxIntroduced] ids; 100 records);
+//     seventeen-byte model id; 4 000 records; 622.6 with no pack) — 754.7
+//     for the same commit pushed by that seat's coding box, received by
+//     git, its run naming as well the launch that pushed (a UUID) and the
+//     coding agent the box ran (`claude-code`), the widest a seat's push
+//     leaves (push=box; 4 000 records; 679.9 with no pack; one count of one
+//     iteration, Go 1.27.2, on two E-cores of an Intel Core Ultra 7 265U,
+//     2026-10-31, the person's and the tool's arms measured beside it to
+//     the figures above) — and 420 086 for the widest a push can leave
+//     ([MaxCommandsPerPush] commands on refs of [MaxRefNameBytes],
+//     [MaxIntroduced] ids; 100 records);
 //   - its pack's code_packs row, 587.8 bytes with its index entries, which
 //     lives while the pack is LIVE: until a compaction merges it (# A
 //     compaction merges packs, decided alone), or the repository is purged;
@@ -512,8 +520,9 @@
 //     code-retention duty's sweep removes it, a [RetentionInterval] later at
 //     the most.
 //
-// So every data node, holding the whole estate, holds 679.9 bytes for each
-// seat's push of the last 181 days (622.6 for a person's), and pack rows that
+// So every data node, holding the whole estate, holds 754.7 bytes for each
+// push a seat's coding box landed in the last 181 days, 679.9 for each its
+// tools landed and 622.6 for a person's, and pack rows that
 // follow its repositories rather than its pushes. A repository's home looks
 // at it at every poll, a minute apart, and merges its small packs once
 // [CompactMinMerge] have gathered — a busy repository's at every poll, the
@@ -531,8 +540,13 @@
 // pushed to fast enough that a minute's roll takes hundreds (the steady arms:
 // 1.05 for a repository pushed once a minute, 1.003 for one pushed three
 // hundred times a minute). The
-// reference company's 3 000 pushes a day, every one a seat's, carry about
-// 369 MB of push rows at the horizon and at most about 2.0 MB of retired pack
+// reference company's 3 000 pushes a day, every one a seat's and priced as
+// its coding box's — the widest a seat's push leaves, as the code log's day
+// prices it (THE PUSH ON THE LOG, below), since which of its seats push from
+// their boxes and which through their tools is no figure the reference
+// company has — carry about 410 MB of push rows at the horizon (369 MB
+// priced at a tool's push, as they were before a box's was measured; 34.2 GB
+// and 30.8 GB at 250 000 pushes a day) and at most about 2.0 MB of retired pack
 // rows — 3 200 of them, a day of 16/15 a push and the RetentionInterval past
 // it — beside its repositories' live ones, where while nothing merged a
 // repository's packs every push's row stayed for as long as its repository
@@ -544,8 +558,17 @@
 // entry, where an index of the push
 // rows serving that one-day question would have kept an entry of some forty
 // bytes for every seat's push for its 181 days, about 1.8 GB at 250 000
-// pushes a day. A forced
-// update or a deletion leaves one row more, its ref drop, a commit id and a
+// pushes a day. That is one of THREE INDEXES THE PUSH ROWS ARE NOT GIVEN,
+// each an entry every push would keep on every data node for its 181 days
+// to answer a question the one index the rows have already answers: that
+// one; a second index of the rows in log order beside the repository's,
+// where the one was reordered instead (replicated 0056; a second would have
+// added about a quarter to the 395.3 bytes a push's row weighed then,
+// measured, # Measured); and an index
+// of each coding run's pushes, where a collected run's report scans its
+// repositories' pushes since its launch ([ReadRunPushes], below) — some 40
+// to 100 bytes a push each, 1.8 to 4.5 GB each at 250 000 pushes a day. A
+// forced update or a deletion leaves one row more, its ref drop, a commit id and a
 // ref without the history row's commands, kept [PruneGrace] — two weeks of
 // such commands, against the history's half year of every push — and longer
 // while the repository's records are full of them (the REF DROPS horizon

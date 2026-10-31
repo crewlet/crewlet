@@ -458,9 +458,11 @@ sixteenth more has been kept.
 
 **What every data node holds for the code host.** Every data node holds the
 whole estate, and the code host's rows with it. A seat's push of one commit
-leaves a push row of about 680 bytes, naming the seat and the turn, work item
-and model behind it (a person's push, naming the token it came through,
-leaves one of about 623), kept 181 days, and its pack's row of about 588,
+leaves a push row of about 680 bytes where its code tools built it, naming the
+seat and the turn, work item and model behind it, and of about 755 from its
+coding box, which names the coding run and the coding agent besides (a
+person's push, naming the token it came through, leaves one of about 623),
+kept 181 days, and its pack's row of about 588,
 kept while the pack is live: a repository's maintainer looks at it every minute and
 merges its small packs once sixteen have gathered — a busy repository's at
 every look, the minute's pushes taking it past them
@@ -484,7 +486,16 @@ newest company days, each a row of about 30 bytes and its key's entry, the
 older kept for a node whose clock has not reached midnight yet
 ([A seat's push](code-host.md#a-seats-push)) — where an index of the push
 rows for that one-day question would have kept an entry of some 40 bytes for
-every seat's push for its 181 days, about 1.8 GB at 250 000 pushes a day. The
+every seat's push for its 181 days, about 1.8 GB at 250 000 pushes a day.
+That is one of three indexes the push rows are not given, each an entry every
+push would keep on every data node for its 181 days to answer a question the
+rows' one index already answers: that one; a second index of the push rows in
+log order, where their one index was reordered instead (a second, measured,
+would have added about a quarter to the 395 bytes a push's row weighed then);
+and an index of each coding run's pushes, where the report of [what a run
+pushed](code-sandbox.md#what-a-run-pushed-is-reported-for-it) scans its
+repositories' pushes since its launch instead — some 40 to 100 bytes a push
+each, 1.8 to 4.5 GB each at 250 000 pushes a day. The
 code log, which keeps only the trim's window of records, takes 1 555 bytes
 for a seat's coding box's push in a record of its own (1 481 where the engine
 builds it for a tool) and about 970 for each of a burst group commit holds
@@ -497,13 +508,16 @@ are swept apart and a fraction of a byte where a busy repository's sweep takes
 the rows of thousands of pushes at once. The table prices every push as a seat's:
 the reference company's 3 000 pushes a day are all its seats', a hundred
 seats pushing thirty times a day while its people fetch, and a larger
-company's are its thousands of seats' — on the code log, each as a coding
-box's push, the most a seat's push takes of it. So:
+company's are its thousands of seats' — each as a coding box's push, the most
+a seat's push takes of the rows and of the code log, since which of a
+company's seats push from their boxes and which through their tools is no
+figure the reference company has. Priced as a tool's push, as the table was
+before a box's push was measured, the push rows were 369 MB and 30.8 GB. So:
 
 | Pushes a day | Push rows at the 181-day horizon | Retired pack rows, at most | On the code log, over the default seven days |
 |---|---|---|---|
-| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 369 MB | about 3 200, 2.0 MB | about 36 MB |
-| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 269 000, 164 MB | 1.8 to 3.0 GB |
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 410 MB | about 3 200, 2.0 MB | about 36 MB |
+| 250 000 — a company of thousands of seats | about 45 million, 34.2 GB | about 269 000, 164 MB | 1.8 to 3.0 GB |
 
 The live pack rows are not a column, because they follow the repositories and
 not the pushes: some 29 KB a repository at fifty, 29 MB for every thousand,
