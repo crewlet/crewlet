@@ -167,6 +167,20 @@ type LifecycleRequest struct {
 	Protect *ProtectChange `json:"protect,omitempty"`
 	// Reason is a delete's, recorded on its record.
 	Reason string `json:"reason,omitempty"`
+	// Ceiling is whom a SEAT'S request is made for inside a turn somebody
+	// woke ([WriteCeiling]), nil for one made for its seat alone or for a
+	// person; never a hold's, which is the turn's own bookkeeping rather than
+	// a change made for anybody. The deciding data node judges it beside the
+	// seat ([lifecycleRefusal]): a colleague's request decided again as that
+	// colleague asking it, from the same chart and snapshot, and nobody's
+	// refused — but for the seat's own work, which whoever woke it steers.
+	//
+	// A request is no record, so this field takes no versionedFields row; it
+	// crosses the estate's wire to whichever data node decides it under the
+	// code domain's stated condition — no build carrying the domain has run
+	// without it, none of the domain being on main — so every node asked it
+	// reads it.
+	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 	// TurnID is a hold's, and only a hold's: the turn taking it, recorded on
 	// its [Hold] so a reader of the log can say whose hold ordered an expiry.
 	TurnID string `json:"turn_id,omitempty"`
@@ -479,6 +493,12 @@ func (r LifecycleRequest) invalid() string {
 	case r.Actor.Kind == PrincipalOperator && r.Actor.Seat == "":
 		return "actor: a token bound to nobody holds no seat to be judged as, so it asks no lifecycle " +
 			"request — a person asks through the token bound to them"
+	case r.Ceiling != nil && r.Kind == LifecycleHold:
+		return "ceiling: a hold is the turn's own, made for nobody else"
+	case r.Ceiling != nil:
+		if why := r.Ceiling.invalid(r.Actor); why != "" {
+			return why
+		}
 	}
 	// EXACTLY THE KIND'S FIELDS: a field another kind reads, sent with this
 	// one, is a caller that meant another request.
@@ -742,7 +762,83 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 // a unit or a seat the chart lacks is nobody to ask. Naming one grants nothing
 // ([PathOwner]), so a seat that maintains the repository may name any the
 // chart holds — the same review it could request by name.
+//
+// AND THEN FOR WHOEVER THE SEAT'S TURN WORKS FOR ([LifecycleRequest.Ceiling]),
+// once the seat itself may ([ceilingLifecycleRefusal]).
 func lifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protection, next RepoRef,
+	nextRules []Protection, owners []PathOwner, roster Roster) (bool, string) {
+	if refused, why := askerLifecycleRefusal(req, repo, rules, next, nextRules, owners, roster); refused ||
+		req.Ceiling == nil {
+		return refused, why
+	}
+	return ceilingLifecycleRefusal(req, repo, rules, next, nextRules, owners, roster)
+}
+
+// ceilingLifecycleRefusal is the requester ceiling of a seat's lifecycle
+// request (M3-decisions U40 (a), [WriteCeiling]), judged once the seat itself
+// may ask it: in a turn a colleague SEAT woke, the request is decided AGAIN as
+// that colleague asking it itself — the same rules, the same chart, the same
+// snapshot, so the ceiling cannot drift from the rules it bounds — and in one
+// whoever may change nothing woke ([WriteCeilingNobody]), it is refused.
+//
+// EXCEPT THE SEAT'S OWN WORK ([steeredOwnWork]), which whoever woke the turn
+// steers, as authz.DecideWithin spares a steerable verb on what an agent
+// owns: creating its own scratch repository, and editing the settings or the
+// protections of a repository it owns without handing it to anybody.
+func ceilingLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protection, next RepoRef,
+	nextRules []Protection, owners []PathOwner, roster Roster) (bool, string) {
+	if steeredOwnWork(req, repo, next) {
+		return false, ""
+	}
+	what := lifecycleWhat(req, repo)
+	if req.Ceiling.Kind != WriteCeilingSeat {
+		return true, fmt.Sprintf("this work is for whoever started this turn, who may change nothing of this "+
+			"company's code, so seat %s may not %s for them: they steer only its own work — creating its own "+
+			"scratch repository, and the settings and protections of a repository it owns", req.Actor.Seat, what)
+	}
+	asked := req
+	asked.Actor, asked.Ceiling = Principal{Kind: PrincipalAgent, Seat: req.Ceiling.Seat}, nil
+	if refused, why := askerLifecycleRefusal(asked, repo, rules, next, nextRules, owners, roster); refused {
+		return true, fmt.Sprintf("this work is for seat %s, whose ask started this turn, so seat %s may %s "+
+			"only where %s could itself, and it could not: %s", req.Ceiling.Seat, req.Actor.Seat, what,
+			req.Ceiling.Seat, why)
+	}
+	return false, ""
+}
+
+// steeredOwnWork reports whether req is the asking seat's OWN WORK, which
+// whoever its turn works for steers ([ceilingLifecycleRefusal]): a create of
+// its own scratch repository — the one kind a create names the seat as the
+// owner of — and, of a repository it owns, a protection or a settings change
+// that leaves its owner and its visibility as they are. NEVER what discloses
+// it, hands it on or retires it — a visibility, an owner, an archive, a
+// delete, a restore, a rename others clone it by — as sharing, transferring
+// and trashing an artifact are never steered: those are decided for the
+// requester however the repository came to be the seat's.
+func steeredOwnWork(req LifecycleRequest, repo, next RepoRef) bool {
+	own := Owner{Kind: OwnerSeat, Ref: req.Actor.Seat}
+	switch req.Kind {
+	case LifecycleCreate:
+		return next.Kind == RepoScratch && next.Owner == own
+	case LifecycleProtect:
+		return repo.Owner == own
+	case LifecycleSettings:
+		return repo.Owner == own && next.Owner == own && next.Visibility == repo.Visibility
+	}
+	return false
+}
+
+// lifecycleWhat is req as a refusal names it.
+func lifecycleWhat(req LifecycleRequest, repo RepoRef) string {
+	if req.Kind == LifecycleCreate {
+		return "create " + req.Name
+	}
+	return string(req.Kind) + " " + repo.Name
+}
+
+// askerLifecycleRefusal is [lifecycleRefusal] for the request's own actor,
+// with no ceiling: the rules above.
+func askerLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protection, next RepoRef,
 	nextRules []Protection, owners []PathOwner, roster Roster) (bool, string) {
 	actor := req.Actor
 	if req.Kind == LifecycleRename {

@@ -461,7 +461,18 @@ request a data node decides ([Repositories made by
 tools](../concepts/code-host.md#repositories-made-by-tools)). Who may is the
 repository's grant, decided where the change is: a person maintains every
 repository a tool made, and a seat what its tier and its relation to the
-repository allow; a token bound to nobody writes nothing. Every call names one
+repository allow; a token bound to nobody writes nothing. In a turn somebody
+woke, the write is decided for them too, where it is decided: a colleague
+seat's turn changes only what both seats may, a stranger's — or a person's
+who may not act in the company now — nothing but the seat's own work (its own
+`seats/<handle>/` branches and the repositories it owns, never their
+name, visibility, owner or status), and a person's what the seat may. The change
+tools are held the same way: a colleague must hold the access the write needs
+on the repository (`review` to have a seat review a change, `read` for every
+other change write), and a stranger has a seat write nothing of a change but
+its own
+([Writes made for somebody else](../concepts/code-host.md#writes-made-for-somebody-else)).
+Every call names one
 operation — derived from the turn or a request's own key, or on the operator
 catalogue the `op_id` the call was answered — so the same call made again,
 after an answer that said the outcome is unknown, is the same push, and its

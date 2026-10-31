@@ -41,9 +41,10 @@ import (
 // the run's row names that seat ([RunRepos.Ceiling], the row's CodeCeiling),
 // and the code host's box admission holds the box to the colleague's own
 // grant on every request it makes ([code.Grant.Under]) — a read the colleague
-// could not make, and a push outside the seat's own namespace the colleague
-// could not make, are refused, while the seat's own branches stay its own
-// work, which anybody who can message it steers. The launch prechecks the
+// could not make, and a push outside the seat's own work the colleague could
+// not make, are refused, while its own work — the branches under its own
+// namespace, and every branch of a repository it owns — stays its own,
+// which anybody who can message it steers. The launch prechecks the
 // same rule ([runAccess]), so `access: write` on a branch the colleague could
 // not push is refused before a box costs anything, and an access left out is
 // write only where the box could push. A person bounds nothing, holding
@@ -99,7 +100,8 @@ type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 //  4. the access: `write` asked must pass, for the branch, the ref rule the
 //     box will be judged by — the seat's grant held to a run given write and,
 //     in a turn a colleague woke, to that colleague's grant outside the
-//     seat's own namespace — and the repository must not be archived; `read`
+//     seat's own work (code.Grant.Under: its own namespace, and a repository
+//     it owns) — and the repository must not be archived; `read`
 //     is read, and none asked is write where `write` would pass, else read;
 //     a run that asks to open a change must come to write, or it could
 //     deliver nothing to open one from;

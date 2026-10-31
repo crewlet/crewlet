@@ -41,7 +41,10 @@ import (
 // verb can answer before the change is read. A person writes as the human seat
 // they hold; a credential bound to nobody writes nothing, refused before
 // anything is read or routed ([CodeDeps.writeCaller]). [changeToolNeeds] names
-// the least access each one's call may be admitted at.
+// the least access each one's call may be admitted at — and, inside a seat's
+// turn somebody woke, the access the committer holds them to as well
+// (code.ChangeProposal.Ceiling and code.ConversationWrite.Ceiling, which every
+// write here carries), the seat's own work excepted.
 //
 // # One operation, so a retry is the same write
 //
@@ -383,7 +386,8 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if turn != nil && c.asker.Kind == code.PrincipalAgent {
 		open.TurnID = turn.RunID
 	}
-	p := code.ChangeProposal{OpID: op, Asker: c.asker, Seen: t.deps.openSeen(c, repo), Open: &open}
+	p := code.ChangeProposal{OpID: op, Asker: c.asker, Ceiling: c.write, Seen: t.deps.openSeen(c, repo),
+		Open: &open}
 	res, refusal := t.deps.proposeChange(ctx, turn, tool, c, repo, p)
 	if refusal != nil {
 		return *refusal, nil
@@ -446,8 +450,8 @@ func (d CodeDeps) askOpened(ctx context.Context, turn *turnctx.Turn, c codeCalle
 	for _, h := range reviewers {
 		ask.Request = append(ask.Request, code.Reviewer{Handle: h})
 	}
-	w := code.ConversationWrite{OpID: statelog.StepOpID(openOp, stepTwo), Asker: c.asker, Seen: opened.Position,
-		Reviewers: &ask}
+	w := code.ConversationWrite{OpID: statelog.StepOpID(openOp, stepTwo), Asker: c.asker, Ceiling: c.write,
+		Seen: opened.Position, Reviewers: &ask}
 	named := out.Change
 	if named == "" {
 		named = "a change of " + repo.Name + " its apply has yet to number"
@@ -717,8 +721,8 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 	case p.Reopen != nil:
 		p.Reopen.RepoID, p.Reopen.ChangeID = repo.ID, id
 	}
-	p.OpID, p.Asker, p.Seen, p.ExpectedVersion = opIDFor(actor, tool, changeVerb, repo.ID, args), c.asker,
-		change.at, version
+	p.OpID, p.Asker, p.Ceiling, p.Seen, p.ExpectedVersion = opIDFor(actor, tool, changeVerb, repo.ID, args),
+		c.asker, c.write, change.at, version
 	res, refusal := d.proposeChange(ctx, turn, tool, c, repo, p)
 	if refusal != nil {
 		return *refusal, nil

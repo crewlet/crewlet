@@ -77,6 +77,14 @@ import (
 // dismissal or its raiser's later review clears a blocker (S40): an author's
 // answer leaves it standing, for its raiser to judge.
 //
+// EACH OF THOSE FIVE, made by a seat whose turn works for somebody
+// ([ConversationWrite.Ceiling]), is then held to them too, once the seat
+// itself may make it ([WriteCeiling.changeRefusal]): a colleague seat must
+// hold the write's least access on the repository — review for a review,
+// read for every other ([ConversationWrite.CeilingNeeds]) — and nobody may
+// have the seat write anything but its own work, a change it owns or one in a
+// repository it owns — else not_permitted, an answer unchanged included.
+//
 // A REVISION'S FACTS ([Revise], revise.go) are the repository's home git
 // node's, which no principal asks: they take a LIVE change (change_closed,
 // change_merged), and are decided only while they are of the change's head
@@ -317,6 +325,11 @@ func (w ConversationWrite) validFields() error {
 	case !w.Asker.Run.IsZero():
 		return badField("asker.run", "a comment keeps the turn that said it in its own field, and an asker "+
 			"names no run")
+	}
+	if w.Ceiling != nil {
+		if why := w.Ceiling.invalid(w.Asker); why != "" {
+			return fmt.Errorf("%w: %s", ErrInvalidProposal, why)
+		}
 	}
 	if !w.Seen.IsZero() {
 		switch {
@@ -680,10 +693,33 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	default:
 		d, err = decideThreadResolve(ctx, tx, w, asker, kind, row, named, grant, d)
 	}
-	if err != nil {
+	if err != nil || d.refusal != "" {
 		return d, err
 	}
+	// AND THEN FOR WHOEVER THE SEAT'S TURN WORKS FOR, once the seat itself
+	// may: a refusal here forms nothing, an answer unchanged included.
+	what := "write " + named + "'s conversation"
+	if w.Review != nil {
+		what = "review " + named
+	}
+	if why := w.Ceiling.changeRefusal(w.Asker, repo.grantRef(repoID), ownChange(w.Asker, row), w.CeilingNeeds(),
+		what, seats.Roster); why != "" {
+		refused := conversationDecision{version: d.version, position: d.position, readiness: d.readiness}
+		return refused.refuse(ConversationRefusalNotPermitted, why)
+	}
 	return routeConversation(ctx, tx, w, seats.Roster, repo.name, row, d)
+}
+
+// CeilingNeeds is the least access whoever a seat's turn works for must hold
+// on the repository for the seat to make w for them
+// ([ConversationWrite.Ceiling]): review for a review, the one write whose
+// access alone admits it, and read for every other — internal/agent/builtin's
+// changeToolNeeds, held to it by its test.
+func (w ConversationWrite) CeilingNeeds() Access {
+	if w.Review != nil {
+		return AccessReview
+	}
+	return AccessRead
 }
 
 // decideReview is a review's rules over row (rules D21 and D22): a LIVE change

@@ -91,8 +91,9 @@ import (
 //     same chart (code.Grant.Under) — what a seat does for a colleague is
 //     decided for the colleague too, as its code tools' reads and writes are
 //     (M3-decisions U40 (a)): a fetch the colleague could not make, and a
-//     command outside the seat's own namespace the colleague could not make,
-//     are refused, and the seat's own branches stay its own work. A node with
+//     command outside the seat's own work the colleague could not make, are
+//     refused, and its own work — the branches under its own namespace, and
+//     every branch of a repository it owns — stays its own. A node with
 //     no chart, or one confirmed behind the company's configuration
 //     (Options.Current), judges no box's grant and answers 503: the
 //     configuration it failed to apply may be the one that revoked the seat,

@@ -434,6 +434,128 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 	}
 }
 
+// A CODE WRITE IS DECIDED AGAIN FOR WHOEVER WOKE THE TURN (M3-decisions U40
+// (a)): the engine writes, the lifecycle request and a change's writes — an
+// open, its ask for review, an edit, a comment, and a suggestions apply and
+// its findings' answer — a seat's call sends carry
+// whom its turn works for, for the git node and the data node that decide them
+// to judge beside the seat's own grant — none for a turn nobody woke, the
+// outcome of its own act or a person (who maintains every repository); the
+// colleague seat whose ask woke it, which every read the call makes is held
+// to as well; and NOBODY for a stranger or a person who may not act in the
+// company now, whose turn is still sent, since the seat's own work stays
+// theirs to steer and only the deciding node reads whether that is what it
+// is. A requester this node cannot compose is answered unavailable with
+// nothing sent, never as a turn nobody woke. A person's own write carries
+// none.
+//
+// Mutations: writeCaller composing no ceiling → the colleague's and the
+// stranger's writes carry none, red; the ceiling's refusal answered as a
+// refusal rather than nobody's ceiling → the stranger's write is refused
+// before it is sent, red; the colleague left off the call's reads → red; the
+// lifecycle request, a change proposal or a conversation write left
+// unstamped → red.
+func TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
+	t.Parallel()
+	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
+	speaker := func(handle string) []types.CanonicalIdentity {
+		return []types.CanonicalIdentity{{Handle: handle}}
+	}
+	seat := &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "agent-ceo"}
+	nobody := &code.WriteCeiling{Kind: code.WriteCeilingNobody}
+	for _, c := range []struct {
+		name      string
+		requester string
+		senders   []types.CanonicalIdentity
+		ceiling   *code.WriteCeiling
+		reads     string
+	}{
+		{"a turn nobody woke", "", nil, nil, ""},
+		{"a turn the outcome of the seat's own act woke", "agent-cto", speaker("agent-cto"), nil, ""},
+		{"a turn a person woke", "founder", speaker("founder"), nil, ""},
+		{"a turn a colleague seat woke", "agent-ceo", speaker("agent-ceo"), seat, "agent-ceo"},
+		{"a turn a stranger woke", "", unknown, nobody, ""},
+		{"a turn a departed person woke", "departed", speaker("departed"), nobody, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host, writer := newChangeHost(suggestedChange()), &codeWrites{}
+			reg := codeRegistry(t, writeDeps(host, writer))
+			turn := writerTurn(t)
+			turn.Requester, turn.Senders = c.requester, c.senders
+			for _, call := range []struct {
+				tool string
+				args map[string]any
+			}{
+				{builtin.CodeCommitFilesTool, commitArgs("hello")},
+				{builtin.CodeUpdateRepoTool, map[string]any{"repo": "site", "description": "steered"}},
+				{builtin.CodeOpenChangeTool, openArgs()},
+				{builtin.CodeUpdateChangeTool, map[string]any{"change": "site!7", "expected_version": 4,
+					"title": "Retry twice"}},
+				{builtin.CodeCommentOnChangeTool, map[string]any{"change": "site!7", "body": "Hm."}},
+				{builtin.CodeApplySuggestionsTool, applyArgs(suggestedA)},
+			} {
+				if got := callWrite(t, everyGrant(), reg, turn, call.tool, call.args); got.Failed {
+					t.Fatalf("%s answered %q", call.tool, got.Output)
+				}
+			}
+			writes, requests := writer.asked()
+			if len(writes) != 2 || len(requests) != 1 {
+				t.Fatalf("%d engine writes and %d lifecycle requests were sent, want a commit and an apply, and "+
+					"one request", len(writes), len(requests))
+			}
+			for _, w := range writes {
+				if !reflect.DeepEqual(w.Ceiling, c.ceiling) {
+					t.Errorf("the engine write %s is made for %+v, want %+v", w.Kind, w.Ceiling, c.ceiling)
+				}
+			}
+			if !reflect.DeepEqual(requests[0].Ceiling, c.ceiling) {
+				t.Errorf("the lifecycle request is made for %+v, want %+v", requests[0].Ceiling, c.ceiling)
+			}
+			changes, converses := writer.changesAsked()
+			if len(changes) != 2 || len(converses) != 3 {
+				t.Fatalf("%d change proposals and %d conversation writes were sent, want an open and an edit, "+
+					"and the open's ask, a comment and the apply's answer", len(changes), len(converses))
+			}
+			for _, p := range changes {
+				if !reflect.DeepEqual(p.Ceiling, c.ceiling) {
+					t.Errorf("the change proposal %+v is made for %+v, want %+v", p, p.Ceiling, c.ceiling)
+				}
+			}
+			for _, w := range converses {
+				if !reflect.DeepEqual(w.Ceiling, c.ceiling) {
+					t.Errorf("the conversation write %+v is made for %+v, want %+v", w, w.Ceiling, c.ceiling)
+				}
+			}
+			reads, resolves, _ := host.asked()
+			for _, q := range reads {
+				if q.CeilingSeat != c.reads {
+					t.Errorf("the write's %s read was made for %q, want %q", q.Kind, q.CeilingSeat, c.reads)
+				}
+			}
+			for _, q := range resolves {
+				if q.CeilingSeat != c.reads {
+					t.Errorf("the write's resolve was made for %q, want %q", q.CeilingSeat, c.reads)
+				}
+			}
+		})
+	}
+
+	host, writer := newCodeHost(), &codeWrites{}
+	reg := codeRegistry(t, writeDeps(host, writer))
+	turn := writerTurn(t)
+	turn.Requester = "agent-gone"
+	got := callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("hello"))
+	if tools.RefusalOf(got) != tools.RefusalUnavailable || !errors.Is(got.Cause, builtin.ErrUndecidable) ||
+		!strings.Contains(got.Output, "could not establish who this turn's work is for") {
+		t.Errorf("a write whose requester this node cannot compose answered %s %q (%v), want unavailable",
+			tools.RefusalOf(got), got.Output, got.Cause)
+	}
+	if writes, requests := writer.asked(); len(writes)+len(requests) != 0 {
+		t.Errorf("the undecidable call sent %d writes and %d requests", len(writes), len(requests))
+	}
+}
+
 // A SEAT'S WRITE IS FLOORED AT EVERY REF ITS TURN READ: a write naming a
 // commit by a ref is floored at where that ref last moved, as a read by object
 // id is; and a write onto a head the turn read with code_resolve — a branch

@@ -117,6 +117,14 @@ func ChangeToolNames() []string { return []string{CodeListChangesTool, CodeGetCh
 // author asks whatever their access); a review needs review, the one write
 // whose access alone admits it; and an answer to findings is an author's, or a
 // dismissal by the raiser, a maintainer or a person — read.
+//
+// A WRITE IN A TURN A COLLEAGUE SEAT WOKE holds that colleague at the same
+// access, on the data node that decides it (code.ChangeProposal.Ceiling,
+// code.ConversationWrite.Ceiling, [CodeDeps.writeCaller]): the relation beyond
+// it is the seat's own to meet, so an author may ask a seat to review the
+// change it could never review itself. The committer reads that access from
+// the write's kind — review for a review, read for every other — which
+// TestEveryChangeToolNamesTheAccessItNeeds holds to these rows.
 var changeToolNeeds = map[string]code.Access{
 	CodeListChangesTool:     code.AccessRead,
 	CodeGetChangeTool:       code.AccessRead,

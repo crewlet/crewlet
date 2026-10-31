@@ -45,7 +45,11 @@ import (
 //     own sentence: a change proposes what its source holds, so who may open
 //     one from a branch is who may push to it — a seat's own namespace for a
 //     full_access seat outside the owning unit, any branch for one that
-//     writes, and every branch for a person;
+//     writes, and every branch for a person — and, for a seat whose turn
+//     works for somebody ([ChangeProposal.Ceiling]), them too
+//     ([WriteCeiling.changeRefusal]: a colleague reading the repository,
+//     nobody steering only an open of the seat's own namespace or in a
+//     repository it owns) — else not_permitted;
 //  2. a source that is not its target — else same_ref;
 //  3. a source and a target that are live branches — else no_source, then
 //     no_target: a change is about branches that exist;
@@ -62,7 +66,10 @@ import (
 //  2. its asker being the change's owner, a principal that maintains the
 //     repository ([AccessMaintain]) or a person — else not_permitted
 //     ([mayWrite]): a change's lifecycle is its author's to steer, its
-//     repository's maintainers' to keep in order, and every person's;
+//     repository's maintainers' to keep in order, and every person's — and,
+//     for a seat whose turn works for somebody, them too: a colleague reading
+//     the repository, nobody steering only the seat's own change or one in a
+//     repository it owns ([WriteCeiling.changeRefusal]) — else not_permitted;
 //  3. the version it names being the change's ([ChangeProposal.ExpectedVersion])
 //     — else stale: another write landed first, a push that moved the
 //     change's head among them, and the asker reads the change again;
@@ -307,6 +314,11 @@ func (p ChangeProposal) validFields() error {
 	case !p.Asker.Run.IsZero():
 		return badField("asker.run", "a change keeps the turn and the run that opened it in its own fields, "+
 			"and its asker names none")
+	}
+	if p.Ceiling != nil {
+		if why := p.Ceiling.invalid(p.Asker); why != "" {
+			return fmt.Errorf("%w: %s", ErrInvalidProposal, why)
+		}
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -664,7 +676,7 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	}
 	grant := GrantOf(p.Asker, repo.grantRef(repoID), seats.Roster)
 	if p.Open != nil {
-		if d, err = decideOpen(ctx, tx, p, repo, grant, d); err != nil || d.payload == nil {
+		if d, err = decideOpen(ctx, tx, p, repo, grant, seats.Roster, d); err != nil || d.payload == nil {
 			return d, err
 		}
 		var row changeRow
@@ -691,6 +703,10 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 		return routeChange(ctx, tx, p, repo, row, seats, d)
 	}
 	if why := mayWrite(p.Asker, row, grant, named); why != "" {
+		return d.refuse(ChangeRefusalNotPermitted, why)
+	}
+	if why := p.Ceiling.changeRefusal(p.Asker, repo.grantRef(repoID), ownChange(p.Asker, row), p.CeilingNeeds(),
+		"write "+named, seats.Roster); why != "" {
 		return d.refuse(ChangeRefusalNotPermitted, why)
 	}
 	if p.ExpectedVersion != row.version {
@@ -736,14 +752,24 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 }
 
 // decideOpen is an open's rules 1–5 over the repository's row as repo holds it
-// and the rows tx holds, its asker's grant g.
-func decideOpen(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRepo, g Grant,
+// and the rows tx holds, its asker's grant g — rule 1 held, for a seat whose
+// turn works for somebody, to them too ([WriteCeiling.changeRefusal]) on
+// roster, the deciding chart.
+func decideOpen(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRepo, g Grant, roster Roster,
 	d changeDecision) (changeDecision, error) {
 
 	o := p.Open
 	if r, why := g.RefRule(fastForward(o.SourceRef)); r != "" {
 		return d.refuse(ChangeRefusalNotPermitted, "a change is opened by whoever may push its source branch, "+
 			"and "+why)
+	}
+	// THE CHANGE AN OPEN MAKES IS THE SEAT'S OWN WORK where its source is: a
+	// branch under the seat's own namespace.
+	owner, under := seatNamespaceRef(o.SourceRef)
+	own := under && p.Asker.Kind == PrincipalAgent && owner == p.Asker.Seat
+	if why := p.Ceiling.changeRefusal(p.Asker, repo.grantRef(o.RepoID), own, p.CeilingNeeds(),
+		"open a change from "+o.SourceRef, roster); why != "" {
+		return d.refuse(ChangeRefusalNotPermitted, why)
 	}
 	if o.SourceRef == o.TargetRef {
 		return d.refuse(ChangeRefusalSameRef, fmt.Sprintf("%s is both the change's source and its target: a "+
@@ -947,6 +973,22 @@ func mayWrite(asker Principal, row changeRow, g Grant, named string) string {
 		"change's lifecycle is its owner's, a maintainer's — %s — or a person's", handle, g.Access,
 		g.Tier.spelled(), g.Relation, named, g.lead())
 }
+
+// ownChange reports whether row is asker's own change: a seat's, by the handle
+// that owns it — the change the requester ceiling spares as the seat's own
+// work ([WriteCeiling.changeRefusal]).
+func ownChange(asker Principal, row changeRow) bool {
+	handle, kind := asker.party()
+	return kind == PartyAgent && row.ownerKind == PartyAgent && row.owner == handle
+}
+
+// CeilingNeeds is the least access whoever a seat's turn works for must hold
+// on the repository for the seat to make p for them ([ChangeProposal.Ceiling]):
+// read, for every write of a change's lifecycle — an open needs the push of
+// its source and the rest a change's owner or a maintainer, relations that
+// are the seat's own to meet — internal/agent/builtin's changeToolNeeds, held
+// to it by its test.
+func (p ChangeProposal) CeilingNeeds() Access { return AccessRead }
 
 // fastForward is a fast-forward of ref, as [Grant.RefRule] judges one: the
 // command an open's asker must be able to push to open a change from ref.

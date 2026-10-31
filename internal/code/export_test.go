@@ -11,6 +11,14 @@ import (
 // Quiet is quiet, for this package's external benchmarks.
 var Quiet = quiet
 
+// ChangeCeilingRefusal is why a seat's write of a change may not be made for
+// whoever c is, for the case that judges the requester ceiling of a change's
+// writes apart from the decides that reach it.
+func ChangeCeilingRefusal(c *WriteCeiling, asker Principal, repo RepoRef, own bool, need Access,
+	roster Roster) string {
+	return c.changeRefusal(asker, repo, own, need, "write it", roster)
+}
+
 // SetShareWait scales how long s's takers wait for a unit — production's
 // GitShareWait — so a case waits it out in milliseconds.
 func SetShareWait(s *GitShare, d time.Duration) { s.wait = d }

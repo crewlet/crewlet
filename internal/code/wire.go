@@ -1555,6 +1555,19 @@ type ChangeProposal struct {
 	// read — the change's head and target and the target's tip — and an edit
 	// of its title between the read and the landing changes none of those.
 	ExpectedVersion int64 `json:"expected_version,omitempty"`
+	// Ceiling is whom a SEAT'S write is made for inside a turn somebody woke
+	// ([WriteCeiling]), nil for one made for its seat alone or for a person;
+	// never a landing's, which no principal asks. The committer judges it
+	// once the seat's own rules are met (decide_change.go's head): a
+	// colleague held at the least access the write needs, nobody refused —
+	// but for the seat's own work, which whoever woke it steers.
+	//
+	// A proposal is no record — the record is what the committer stamps from
+	// it — so this field takes no versionedFields row; it crosses the
+	// estate's wire to whichever data node decides it under the code domain's
+	// stated condition — no build carrying the domain has run without it,
+	// none of the domain being on main — so every node asked it reads it.
+	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 
 	Open     *ChangeOpen     `json:"open,omitempty"`
 	Edit     *ChangeEdit     `json:"edit,omitempty"`
@@ -1637,6 +1650,20 @@ type ConversationWrite struct {
 	// decide would refuse a write formed against what the asker was shown —
 	// a change it was shown open as missing, a revision it read as unknown.
 	Seen statelog.Position `json:"seen,omitzero"`
+	// Ceiling is whom a SEAT'S write is made for inside a turn somebody woke
+	// ([WriteCeiling]), nil for one made for its seat alone or for a person;
+	// never a revision's facts' or a mergeability's, which no principal asks.
+	// The writer judges it beside the seat (decide_conversation.go's head): a
+	// colleague held at the least access the write needs — review for a
+	// review, read for every other — nobody refused, but for the seat's own
+	// work, which whoever woke it steers.
+	//
+	// A write is no record — the record is what the writer stamps from it —
+	// so this field takes no versionedFields row; it crosses the estate's
+	// wire to whichever data node decides it under the code domain's stated
+	// condition — no build carrying the domain has run without it, none of
+	// the domain being on main — so every node asked it reads it.
+	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 
 	Reviewers      *ReviewerRequest `json:"reviewers,omitempty"`
 	Comment        *Comment         `json:"comment,omitempty"`

@@ -374,10 +374,16 @@ func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (A
 // a colleague seat woke — that seat, whose own grant bounds the asker's on
 // every read the call makes ([code.ReadQuery.CeilingSeat]), "" for a call made
 // for nobody else.
+//
+// A WRITE's call carries the same requester as its write's ceiling too
+// ([CodeDeps.writeCaller]): nil for a write made for its seat alone or for a
+// person, a colleague seat's, or nobody's — a requester who may change
+// nothing, whose turn the write is still made in for the seat's own work.
 type codeCaller struct {
 	actor   Actor
 	asker   code.Principal
 	ceiling string
+	write   *code.WriteCeiling
 }
 
 // caller is who this call reads as, or the refusal it is answered with: the

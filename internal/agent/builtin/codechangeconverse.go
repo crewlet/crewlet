@@ -128,7 +128,7 @@ func (cv conversing) decided(ctx context.Context, w code.ConversationWrite) (cod
 	*tools.Result) {
 
 	g := cv.g
-	w.Asker = g.c.asker
+	w.Asker, w.Ceiling = g.c.asker, g.c.write
 	if err := w.Validate(); err != nil {
 		r := codeWriteFailure(ctx, g.tool, g.c.actor, g.repo.Name, err)
 		return code.ConversationResult{}, &r

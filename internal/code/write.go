@@ -167,6 +167,21 @@ type EngineWrite struct {
 	// Suggestions are an apply_suggestions' findings' suggestions, 1 to
 	// [MaxSuggestionOps], each finding at most once.
 	Suggestions []SuggestionOp `json:"suggestions,omitempty"`
+	// Ceiling is whom a SEAT'S write is made for inside a turn somebody woke
+	// ([WriteCeiling]), nil for a write made for its seat alone or for a
+	// person: the git node that builds it judges the write's one command
+	// against the seat's grant held to the ceiling's ([Grant.Under]), from
+	// its own chart and the synced row, beside the seat's own. Refused beside
+	// a person's write, which no ceiling bounds. The committer's decide never
+	// reads it, as it never reads a coding box's (the run's grant and its
+	// ceiling are an admission's).
+	//
+	// A write is no record (this file's doc), so the field takes no
+	// versionedFields row; it crosses the estate's wire to the repository's
+	// git node under the code domain's stated condition — no build carrying
+	// the domain has run without it, none of the domain being on main — so
+	// every git node asked it reads it.
+	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
 	// Home is whether this attempt was asked of the walk's EFFECTIVE HOME —
 	// stamped by the router's keyed git walk on every attempt
 	// ([GitQuery.Home]'s rule), never by a caller — the one node that may
@@ -501,6 +516,11 @@ func (w EngineWrite) Validate() error {
 	case w.Principal.Kind == PrincipalOperator && w.Principal.Seat == "":
 		return fmt.Errorf("%w: principal.seat: a write is a person's, through a credential bound to their human "+
 			"seat — a token bound to nobody writes nothing", ErrInvalid)
+	}
+	if w.Ceiling != nil {
+		if why := w.Ceiling.invalid(w.Principal); why != "" {
+			return fmt.Errorf("%w: %s", ErrInvalid, why)
+		}
 	}
 	if err := statelog.CheckCallerOpID(w.OpID); err != nil {
 		var bad *statelog.CallerOpIDError

@@ -3539,11 +3539,12 @@ seat on its row, and the box is held to the colleague's own grant from the
 same chart as well as its seat's, as the seat's own code tools are in that
 turn ([Reads made for somebody else](#reads-made-for-somebody-else)): it
 fetches no repository the colleague could not read, and pushes nothing outside
-its seat's own namespace that the colleague could not push — a colleague who
+its seat's own work that the colleague could not push — a colleague who
 only reads a repository can ask a seat to change it on the seat's own branch,
 `seats/<handle>/…`, never on `main` or a `release/*` branch the seat itself
-could move. The seat's own branches stay its own work, which anybody who can
-message it steers. A run a person asked for, or nobody, is bounded by its seat
+could move. The seat's own work — the branches under its own namespace, and
+every branch of a repository it owns, such as its scratch repositories — stays
+its own, which anybody who can message it steers. A run a person asked for, or nobody, is bounded by its seat
 alone: a person maintains every repository.
 
 **The admission**, in this order, each refusal in the one line git prints:
@@ -3563,7 +3564,7 @@ alone: a person maintains every repository.
 | | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit — or, for a run working for a colleague, one that colleague reads nothing of | `403 not_permitted`, naming whose grant reads nothing |
 | The run's hold, for a push (below) | the run store could not be written | `503 holds_unwritten` with `Retry-After` — the push is never received unheld |
 | | the run already holds the most repositories and branches one run may (1 024) | `403 holds_full` |
-| A push's commands, each | a command the seat's grant refuses, or — for a run working for a colleague — one outside the seat's own namespace the colleague's grant refuses | `not_permitted` on that ref, saying what the seat or the colleague holds and what the command needs |
+| A push's commands, each | a command the seat's grant refuses, or — for a run working for a colleague — one outside the seat's own work (its own namespace and the repositories it owns) the colleague's grant refuses | `not_permitted` on that ref, saying what the seat or the colleague holds and what the command needs |
 
 **A box's push holds the seat branches it pushes.** A seat's branch — a ref
 under `refs/heads/seats/<handle>/` — that a coding run's box pushes is what the
@@ -4003,8 +4004,8 @@ And for a [coding run](#coding-boxes) the seat launches in such a turn: its
 repositories are resolved for whoever woke it, so a stranger's turn is given
 none and a colleague's is given none that colleague could not read; the run's
 row names the colleague, and its box is held to the colleague's grant on every
-request it makes — every fetch, and every push outside the seat's own
-namespace, which stays the seat's own work. A launch asking to `write` a
+request it makes — every fetch, and every push outside the seat's own work —
+its own namespace and the repositories it owns. A launch asking to `write` a
 branch the colleague could not push is refused before any box exists.
 
 The colleague's grant is judged where the seat's own is: by the node that
@@ -4034,6 +4035,58 @@ turn nobody woke. What a seat was refused for somebody can therefore still
 reach them through a colleague's answer or the seat's own memory: the ceiling
 decides what a turn reads for somebody, not what a seat may go on to tell
 them.
+
+### Writes made for somebody else
+
+The same ceiling holds what a seat **changes** in such a turn, through the
+[code write tools](../guides/tools-and-mcp.md#the-companys-code): a seat a
+colleague outside a unit messages, or a stranger on a chat surface, changes
+nothing of a repository they could not change themselves. Each write is
+decided again for whoever woke the turn, at the relation the write needs —
+moving a branch, creating one, deleting one, changing a repository's settings
+or its protections — exactly as they would be decided asking it themselves.
+
+| The turn was woken by | What the seat changes |
+|---|---|
+| nobody, or the outcome of its own act | what its own grant allows |
+| a person of the company | what its own grant allows: a person maintains every repository |
+| a colleague seat | what **both** grants allow: a branch the colleague could push, a repository the colleague maintains — and its own work |
+| a person who may not act in the company now, or somebody the company does not know | its own work, and nothing else |
+
+**Its own work is steered by whoever woke it**, as an agent's own artifact is:
+anybody who can message a seat may ask it to fix its own work. That is every
+branch under its own namespace (`seats/<handle>/`), every branch of a
+repository the seat owns — its scratch repositories, and a project a person
+handed it — creating its own scratch repository, and changing the settings or
+the protections of a repository it owns. **What discloses, hands on or retires
+a repository is never steered**, as sharing, transferring and trashing an
+artifact are not: changing its visibility or its owner, renaming, archiving,
+deleting or restoring it are decided for whoever woke the turn like any other
+write. A colleague seat bounds every read the write makes too, so a write tool
+shows nothing of a repository the colleague could not read.
+
+The write's ceiling is judged where the write is decided — the git node that
+builds an [engine-built commit](#engine-built-commits) and the data node that
+decides a repository's create, settings or protection — from the same chart and
+row as the seat's own grant, so an activation that takes a colleague out of a
+unit stops the next write made for it. A refusal names whom the work is for and,
+for a colleague, what that colleague may not do; a turn whose requester the
+node cannot establish writes nothing and is told to try again. A person's own
+assistant writes for nobody but its caller.
+
+**A [change](#changes)'s writes are held the same way**, by the data node that
+commits the repository, once the seat itself may make the write: opening,
+editing, closing or reopening a change, asking for a review, reviewing,
+commenting, and answering findings. For a colleague seat the question is the
+**access** the write needs on the repository, never the relation beyond it:
+`review` for a review and `read` for every other write. Who owns the change, who
+may push its source branch and who wrote it are the seat's own to meet, and
+judged for the seat alone. That is what lets a change's author ask a seat to
+review the change, which its author may never review itself. For a stranger,
+or a person who may not act in the company now, a seat writes nothing of a
+change except its own work: a change it owns, an open of a branch under its own
+namespace, and any change of a repository it owns. Every read a change tool
+makes is held to a colleague as every code read is.
 
 ---
 

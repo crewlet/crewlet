@@ -130,7 +130,8 @@ var errWritesStopping = errors.New("host: the code host is stopping")
 //     caller's floor, within statelog.ReadBudget, the sync's failure read as
 //     a read's is (cache.EveryFillMeets).
 //  4. The repository's status, the stateless rules, the grant
-//     (code.GrantOf on this node's chart) and the protections of the one
+//     (code.GrantOf on this node's chart, held to the write's ceiling —
+//     code.EngineWrite.Ceiling) and the protections of the one
 //     command the write makes are judged on the synced row; then the copy is
 //     checked (build.go's check): where the branch is, by its exact name, and
 //     what the objects the write names by id are — short reads, each one
@@ -537,7 +538,14 @@ func (wr *writing) rules() (writeVerdict, error) {
 				"%q's grant by; a git node holding one builds the write", s.o.NodeID, w.Principal.Seat))
 		}
 	}
-	if reason, words := code.GrantOf(w.Principal, repo, roster).RefRule(judged); reason != "" {
+	// THE SEAT'S GRANT, HELD TO WHOEVER ITS TURN WORKS FOR (code.WriteCeiling):
+	// judged here, from this node's chart and the synced row, as the seat's
+	// own is — never on the node the turn runs on.
+	grant := code.GrantOf(w.Principal, repo, roster)
+	if w.Ceiling != nil {
+		grant = grant.Under(w.Ceiling.Grant(repo, roster))
+	}
+	if reason, words := grant.RefRule(judged); reason != "" {
 		return writeVerdict{reason: reason, detail: words}, nil
 	}
 	rules, err := code.ParseProtections(repo.Protections)

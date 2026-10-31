@@ -376,6 +376,53 @@ func TestASeatsWriteRefusalIsJudgedAgainWhileItsResyncsLast(t *testing.T) {
 	}
 }
 
+// A SEAT'S WRITE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the git node that
+// builds it (code.EngineWrite.Ceiling, M3-decisions U40 (a)): alice, who
+// writes the fixture repository, moves main for the unit's lead, who writes it
+// too, and not for bob, who only reads it, nor for nobody — a stranger, or a
+// person who may not act — each refused not_permitted in words saying whom the
+// work is for, nothing built; and under every ceiling she still writes under
+// her own namespace, her own work.
+//
+// Mutations: build with the seat's own grant alone (drop the ceiling in
+// rules) — bob's and nobody's main lands, red; refuse the seat's own work under
+// a ceiling (ownWork answering false) — the namespace write is refused, red.
+func TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
+	t.Parallel()
+	c := newWriteCase(t, codetest.SoloOptions{}, map[string]string{"README.md": "one\n"})
+	open := codetest.Settings()
+	open.Protections = nil
+	c.Fleet.Declare(t, code.Declared{Name: codetest.RepoName, Settings: open})
+	for _, tc := range []struct {
+		name    string
+		ceiling *code.WriteCeiling
+		says    string
+	}{
+		{"a colleague who only reads", &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureBob},
+			"this work is for the seat whose ask started its turn"},
+		{"nobody", &code.WriteCeiling{Kind: code.WriteCeilingNobody}, "may change nothing of this company's code"},
+	} {
+		w := files(c.repo, alice(), "refs/heads/main", c.head, "", text(tc.name+".md", "x\n"))
+		w.Ceiling = tc.ceiling
+		res, err := c.write(w)
+		if err != nil {
+			t.Fatalf("alice's write for %s: %v", tc.name, err)
+		}
+		if res.Command.Reason != code.RefusalNotPermitted || !strings.Contains(res.Command.Detail, tc.says) ||
+			res.Commit != "" {
+			t.Errorf("alice's write of main for %s: %+v, want not_permitted saying %q, nothing built", tc.name,
+				res, tc.says)
+		}
+		mine := files(c.repo, alice(), "refs/heads/seats/alice/"+strings.ReplaceAll(tc.name, " ", "-"), "",
+			c.head, text("mine.md", "mine\n"))
+		mine.Ceiling = tc.ceiling
+		c.land(mine)
+	}
+	w := files(c.repo, alice(), "refs/heads/main", c.head, "", text("lead.md", "x\n"))
+	w.Ceiling = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureLead}
+	c.land(w)
+}
+
 // A RETRIED WRITE THAT LANDED IS ANSWERED FROM ITS ROW: its branch moved on by
 // a later push, the write asked again finds a head that is not the one it
 // read, asks its own push's outcome before calling it stale, and answers

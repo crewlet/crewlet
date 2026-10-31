@@ -880,7 +880,8 @@ type PendingRun struct {
 	// repositories under — whose own grant on each repository bounds what
 	// the job's box may do there, as it bounds the turn's own code tools: a
 	// read the colleague could not make, or a push outside the seat's own
-	// namespace the colleague could not make, is refused the box (the code
+	// work (its own namespace, and a repository it owns) the colleague could
+	// not make, is refused the box (the code
 	// host's box admission, code.Grant.Under). Empty for a job no colleague
 	// seat bounds: a turn nobody woke, one the seat itself woke, and one a
 	// person woke, since a person maintains every repository.

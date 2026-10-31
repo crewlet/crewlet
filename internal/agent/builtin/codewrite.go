@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -43,6 +44,13 @@ import (
 // person writes as the human seat they hold, through their own credential; a
 // credential bound to nobody writes nothing, and is told so before anything
 // is routed ([code.UnboundDetail]).
+//
+// # And whoever woke the turn's
+//
+// Inside a seat's turn somebody woke, every write is decided again for them
+// (the REQUESTER CEILING, [CodeDeps.writeCaller]): it carries whom the turn
+// works for ([code.WriteCeiling]) to the node that decides it, which holds
+// the seat's grant to theirs and spares only the seat's own work.
 //
 // # One operation, so a retry is the same write
 //
@@ -176,10 +184,31 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 // [CodeDeps.asker]'s caller, held to the one rule every write is — a token
 // bound to nobody writes nothing, refused before anything is read or routed.
 //
-// NO REQUESTER CEILING HERE: a seat's write is decided by its own grant on the
-// repository, at the nodes that decide it. Whether a seat's code writes are
-// decided again for whoever woke its turn is a hardening the user decides
-// (M3 U40), built apart from these tools.
+// AND, INSIDE A SEAT'S TURN SOMEBODY WOKE, WHOEVER THAT IS ([ceilingOf]) —
+// the requester ceiling (M3-decisions U40 (a)), the reads' ([CodeDeps.caller])
+// carried onto the writes: a seat's write is decided again for its requester,
+// so a colleague outside a unit, or a stranger on a chat surface, cannot have
+// a seat change a repository they could not change themselves. The tool's own
+// authority row is decided for the requester first ([authz.DecideWithin],
+// over no object, since the repository is not read yet): a requester this
+// node cannot compose or decide is answered unavailable, never as a turn
+// nobody woke; one the row refuses — a stranger, a person who may not act in
+// the company now — becomes a ceiling of NOBODY rather than a refusal here,
+// because the seat's own work stays steerable by whoever woke it, and only
+// the node that decides the write reads whether that is what it is; a
+// colleague SEAT rides on the write as its ceiling, and on every read the call
+// makes too ([codeCaller.ceiling]), so nothing a write tool reads is shown for
+// a colleague who could not read it; and a PERSON bounds nothing, since a
+// person maintains every repository (ADR-0055).
+//
+// JUDGED WHERE THE WRITE IS DECIDED, never here: the ceiling travels on the
+// request ([code.EngineWrite.Ceiling], [code.LifecycleRequest.Ceiling], and a
+// change's [code.ChangeProposal.Ceiling] and [code.ConversationWrite.Ceiling])
+// to the git node and the data node that judge the seat's own grant, from the
+// same chart and row (code.WriteCeiling), so an activation that takes a
+// colleague out of the owning unit stops the next write made for it. A
+// change's write holds a colleague at the access [changeToolNeeds] names for
+// its tool, and the relation beyond it is the seat's alone.
 func (d CodeDeps) writeCaller(ctx context.Context, turn *turnctx.Turn, tool string) (codeCaller, *tools.Result) {
 	actor, asker, refusal := d.asker(ctx, turn, tool)
 	if refusal != nil {
@@ -190,7 +219,39 @@ func (d CodeDeps) writeCaller(ctx context.Context, turn *turnctx.Turn, tool stri
 			tool, code.UnboundDetail))
 		return codeCaller{}, &r
 	}
-	return codeCaller{actor: actor, asker: asker}, nil
+	c := codeCaller{actor: actor, asker: asker}
+	if asker.Kind != code.PrincipalAgent {
+		return c, nil
+	}
+	ceiling, err := ceilingOf(ctx, turn, asker.Seat, d.Requesters)
+	if err != nil {
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, err),
+			fmt.Sprintf("%s could not establish who this turn's work is for, which every code write is "+
+				"decided for as well as for you. Nothing was written. Try again shortly.", tool))
+		return codeCaller{}, &r
+	}
+	if ceiling.Kind == authz.CeilingNone {
+		return c, nil
+	}
+	action := authz.Action(tool)
+	dec := authz.DecideWithin(ctx, turnctx.Principal(turn), ceiling, action, authz.Object{}, d.Chart,
+		time.Now().UTC())
+	switch {
+	case dec.Unknown():
+		r := refusedBy(tools.RefusalUnavailable, fmt.Errorf("%w: %w", ErrUndecidable, dec.Err),
+			fmt.Sprintf("%s could not decide right now whether whoever this turn is working for may "+
+				"change the company's code. Nothing was written. Try again shortly.", tool))
+		return codeCaller{}, &r
+	case !dec.Allowed && dec.Reason == authz.ReasonCeiling:
+		c.write = &code.WriteCeiling{Kind: code.WriteCeilingNobody}
+	case !dec.Allowed:
+		r := authorityRefusal(tool, DecisionError(action, dec))
+		return codeCaller{}, &r
+	case ceiling.Kind == authz.CeilingRequester && ceiling.Principal.Kind == iam.KindSeat:
+		c.ceiling = ceiling.Principal.Seat
+		c.write = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: ceiling.Principal.Seat}
+	}
+	return c, nil
 }
 
 // writer is the principal a write is made by: the caller as a repository's
@@ -395,6 +456,7 @@ func (t *codeBranchWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	w.RepoID, w.Principal, w.Fresh = repo.ID, writer(ctx, turn, c), t.deps.writeFresh(turn, c, repo)
+	w.Ceiling = c.write
 	w.OpID = opIDFor(actor, tool, codeWriteVerb, repo.ID, args)
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, actor, repo.Name, err), nil
@@ -776,7 +838,7 @@ func (t *codeRepoWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(bound), nil
 	}
 	c.actor = actor
-	req.Actor = c.asker
+	req.Actor, req.Ceiling = c.asker, c.write
 	var repo code.RepoRef
 	if req.Kind == code.LifecycleCreate {
 		req.OpID = opIDFor(actor, t.tool, lifecycleVerb(req.Kind), newRepoObject, args)

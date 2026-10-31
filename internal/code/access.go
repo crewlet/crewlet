@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // WHO MAY DO WHAT TO A REPOSITORY — a grant DERIVED from the chart, never
@@ -246,25 +247,30 @@ func (g Grant) Within(run Access) Grant {
 //   - a READ needs both: the holder's grant, and the colleague's reading the
 //     repository ([Grant.MayRead], [Grant.ReadRefusal]);
 //   - a COMMAND needs both — the holder's [Grant.RefRule], and the
-//     colleague's RefRule for the very same command — EXCEPT under the
-//     holder's own namespace, which is the holder's own work: anybody who can
-//     message a seat steers its own work, as authz.DecideWithin lets a
-//     steerable verb on what an agent owns skip the requester, so a colleague
-//     who only reads a repository may still ask a seat to change it on the
-//     seat's own branch, and never on one the colleague could not push.
+//     colleague's RefRule for the very same command — EXCEPT on the holder's
+//     OWN WORK ([Grant.ownWork]): under its own namespace, and in a
+//     repository its seat owns. Anybody who can message a seat steers its own
+//     work, as authz.DecideWithin lets a steerable verb on what an agent owns
+//     skip the requester, so a colleague who only reads a repository may
+//     still ask a seat to change it on the seat's own branch, or to change the
+//     seat's own scratch repository, and never a branch of anybody else's the
+//     colleague could not push.
 //
 // A grant UNDER A CEILING IS NEVER WIDER than g: the ceiling only refuses.
 // A PERSON bounds nothing — a person maintains every repository (ADR-0055) —
 // so a caller holds a grant under a seat's ceiling alone, never a person's,
 // and a ceiling that stands nowhere (no seat of the chart, a human seat
-// asked as an agent) refuses every read and every command outside the
-// namespace, the narrow direction.
+// asked as an agent, or whoever may change nothing at all —
+// [WriteCeilingNobody]) refuses every read and every command outside the
+// holder's own work, the narrow direction.
 //
 // Like [Grant.Within], it is coordination state a coding box's admission
 // judges — the run's row names the colleague (internal/sandbox's
 // PendingRun.CodeCeiling) — and the decide never reads it; the launch's
 // precheck reads it too, so a run that could never deliver is refused before a
-// box costs anything.
+// box costs anything. A seat's ENGINE WRITE carries its ceiling on the write
+// itself ([EngineWrite.Ceiling]), which the git node that builds it judges
+// through this, beside the seat's own grant and from the same chart and row.
 func (g Grant) Under(ceiling Grant) Grant {
 	ceiling.ceiling = nil
 	g.ceiling = &ceiling
@@ -608,18 +614,172 @@ func (g Grant) RefRule(c Command) (Refusal, string) {
 	if refusal != "" || g.ceiling == nil {
 		return refusal, sentence
 	}
-	if owner, ok := seatNamespaceRef(c.Ref); ok && g.Principal.Kind == PrincipalAgent &&
-		owner == g.Principal.Seat {
+	if g.ownWork(c) {
 		// THE SEAT'S OWN WORK, which whoever messages it steers.
 		return "", ""
 	}
 	if refusal, _ := g.ceiling.RefRule(c); refusal != "" {
 		action, need := commandNeeds(c)
+		if g.ceiling.Principal.Kind != PrincipalAgent {
+			return RefusalNotPermitted, fmt.Sprintf("this work is for whoever started its turn, who may "+
+				"change nothing of this company's code; %s needs %s, and they steer only this seat's own "+
+				"work — its own namespace (%s<its handle>/) and the repositories it owns", action, need,
+				SeatNamespaceRoot)
+		}
 		return RefusalNotPermitted, fmt.Sprintf("this work is for the seat whose ask started its turn, which "+
 			"holds %s on this repository; %s needs %s, which that seat does not hold — push under this "+
 			"seat's own namespace (%s<its handle>/) instead", g.ceiling.Access, action, need, SeatNamespaceRoot)
 	}
 	return "", ""
+}
+
+// ownWork reports whether c is the holder's OWN WORK, which whoever its turn
+// works for steers ([Grant.Under]): a seat's command under its own namespace,
+// or any command in a repository its seat owns — which a scratch repository
+// always is, and a project repository a seat owns is until it is handed on.
+// Judged on the row the grant was read from, so a repository handed to a
+// unit since is the unit's, and steered no more.
+func (g Grant) ownWork(c Command) bool {
+	if g.Principal.Kind != PrincipalAgent {
+		return false
+	}
+	if owner, ok := seatNamespaceRef(c.Ref); ok && owner == g.Principal.Seat {
+		return true
+	}
+	return g.Owner == Owner{Kind: OwnerSeat, Ref: g.Principal.Seat}
+}
+
+// WriteCeilingKind is whom a seat's write is made for inside a turn somebody
+// woke ([WriteCeiling]): a closed set.
+type WriteCeilingKind string
+
+const (
+	// WriteCeilingSeat is a colleague SEAT whose ask woke the turn: the write
+	// is decided again as that seat would be asking it itself.
+	WriteCeilingSeat WriteCeilingKind = "seat"
+	// WriteCeilingNobody is a requester who may change nothing of the
+	// company's code: a stranger the company does not know, or a person who
+	// may not act in it now (authz.DecideWithin refused them the tool's own
+	// row). Only the seat's own work is steered for them.
+	WriteCeilingNobody WriteCeilingKind = "nobody"
+)
+
+// WriteCeilingKinds is the closed set.
+func WriteCeilingKinds() []WriteCeilingKind {
+	return []WriteCeilingKind{WriteCeilingSeat, WriteCeilingNobody}
+}
+
+// Valid reports a kind this build knows.
+func (k WriteCeilingKind) Valid() bool { return slices.Contains(WriteCeilingKinds(), k) }
+
+// WriteCeiling is the REQUESTER CEILING of a seat's write (M3-decisions U40
+// (a)): whom the turn that asks it is working for, whose standing on the
+// repository bounds the seat's as authz.DecideWithin bounds an artifact verb.
+// A write carries it ([EngineWrite.Ceiling], [LifecycleRequest.Ceiling],
+// [ChangeProposal.Ceiling], [ConversationWrite.Ceiling]) and the node that
+// DECIDES the write judges it, beside the seat's own grant and from the same
+// chart and row — the git node for an engine write ([Grant.Under]), the data
+// node for a lifecycle request and for a change's writes
+// ([WriteCeiling.changeRefusal]) — never the node
+// the turn runs on against a repository it resolved once, which would keep
+// writing for a colleague a later activation shut out (the reads' rule,
+// [JudgeRead]).
+//
+// NO CEILING is a write made for its seat alone — a turn nobody woke, the
+// outcome of its own act — or for a PERSON, who bounds nothing: a person
+// maintains every repository (ADR-0055). A person's own write carries none.
+//
+// THE SEAT'S OWN WORK IS STEERED by whoever woke the turn, nobody included,
+// as DecideWithin spares a steerable verb on what an agent owns: a command
+// under its own namespace or in a repository it owns ([Grant.ownWork]), and
+// the lifecycle requests that edit a repository it owns and hand it to
+// nobody (lifecycle.go's ceilingLifecycleRefusal), and the writes of a change
+// it owns, opens from its own namespace or holds in a repository it owns
+// ([WriteCeiling.changeRefusal]). What discloses, hands on
+// or retires a repository — its visibility, its owner, archiving, deleting,
+// restoring, renaming — is never steered, as sharing, transferring and
+// trashing an artifact are not.
+type WriteCeiling struct {
+	Kind WriteCeilingKind `json:"kind"`
+	// Seat is a [WriteCeilingSeat] ceiling's colleague, by handle; "" for
+	// [WriteCeilingNobody].
+	Seat string `json:"seat,omitempty"`
+}
+
+// invalid is why c may not bound a write asker makes, or "": only a seat's
+// write is made for somebody else, a kind this build knows, and a colleague
+// named by a handle that is not the asker's own — a seat's own voice is its
+// own work, never a ceiling.
+func (c WriteCeiling) invalid(asker Principal) string {
+	switch {
+	case asker.Kind != PrincipalAgent:
+		return "ceiling: only a seat's write is made for somebody else — a person's write is their own, " +
+			"which no ceiling bounds"
+	case !c.Kind.Valid():
+		return fmt.Sprintf("ceiling.kind: %q is not one of %v", c.Kind, WriteCeilingKinds())
+	case c.Kind == WriteCeilingNobody && c.Seat != "":
+		return "ceiling.seat: a ceiling of nobody names no seat"
+	case c.Kind == WriteCeilingSeat && !org.ValidHandle(c.Seat):
+		return fmt.Sprintf("ceiling.seat: %q is not a seat's handle", c.Seat)
+	case c.Kind == WriteCeilingSeat && c.Seat == asker.Seat:
+		return "ceiling.seat: a seat's write is never made for the seat itself"
+	}
+	return ""
+}
+
+// Grant is the ceiling's own standing on repo, read from r — the grant
+// [Grant.Under] holds a seat's to: a colleague's as [GrantOf] reads that
+// seat, and nobody's standing nowhere.
+func (c WriteCeiling) Grant(repo RepoRef, r Roster) Grant {
+	if c.Kind == WriteCeilingSeat {
+		return GrantOf(Principal{Kind: PrincipalAgent, Seat: c.Seat}, repo, r)
+	}
+	return Grant{RepoID: repo.ID, RepoName: repo.Name, Owner: repo.Owner,
+		none: "whoever this turn works for may change nothing of this company's code"}
+}
+
+// changeRefusal is why a seat's write of a CHANGE — its lifecycle
+// ([ChangeProposal]) or its conversation ([ConversationWrite]) — may not be
+// made for whoever its turn works for, or "" where it may: judged by the
+// committing data node once the seat itself may make the write, from the same
+// chart and snapshot, as M4-decisions D30 sets it.
+//
+//   - THE SEAT'S OWN WORK is steered by whoever woke the turn, nobody
+//     included, as authz.DecideWithin spares a steerable verb on what an
+//     agent owns: own is a change the seat owns, an open of a branch under
+//     its own namespace (the change it makes is its own), and every change of
+//     a repository the seat owns, as [Grant.ownWork] spares every command
+//     there.
+//   - NOBODY ([WriteCeilingNobody]) steers nothing else.
+//   - A COLLEAGUE SEAT is held at need, its own grant's access on the
+//     repository: the LEAST access at which the write's decide may admit it
+//     (internal/agent/builtin's changeToolNeeds: review for a review, read for
+//     every other). The relation beyond it — who owns the change, who may
+//     push its source, who wrote it — is the seat's own to meet, and judged
+//     for the seat alone, because judging it for the colleague would refuse
+//     the very ask a ceiling exists to admit: a change's author asking a seat
+//     to review it, which its author may never do itself.
+//
+// A nil c is a write made for its seat alone, or a person's.
+func (c *WriteCeiling) changeRefusal(asker Principal, repo RepoRef, own bool, need Access, what string,
+	roster Roster) string {
+
+	if c == nil || own || repo.Owner == (Owner{Kind: OwnerSeat, Ref: asker.Seat}) {
+		return ""
+	}
+	if c.Kind != WriteCeilingSeat {
+		return fmt.Sprintf("this work is for whoever started this turn, who may change nothing of this company's "+
+			"code, so seat %s may not %s for them: they steer only its own work — its own changes, a change of "+
+			"a branch under its own namespace (%s<its handle>/), and the changes of a repository it owns",
+			asker.Seat, what, SeatNamespaceRoot)
+	}
+	g := GrantOf(Principal{Kind: PrincipalAgent, Seat: c.Seat}, repo, roster)
+	if g.Access >= need {
+		return ""
+	}
+	return fmt.Sprintf("this work is for seat %s, whose ask started this turn, which holds %s on this repository, "+
+		"so seat %s may not %s for it: that needs %s, which %s does not hold", c.Seat, g.Access, asker.Seat, what,
+		need, c.Seat)
 }
 
 // ownRefRule is [Grant.RefRule] for the principal's own grant, held to its

@@ -138,7 +138,7 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	}
 	w := code.EngineWrite{Kind: code.WriteApplySuggestions, RepoID: repo.ID, Principal: writer(ctx, turn, cv.g.c),
 		OpID: op, Fresh: t.deps.writeFresh(turn, cv.g.c, repo), Ref: cv.change.SourceRef, ExpectedHead: head,
-		Message: message, Suggestions: suggestions}
+		Message: message, Suggestions: suggestions, Ceiling: cv.g.c.write}
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}

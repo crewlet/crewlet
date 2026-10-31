@@ -19,8 +19,9 @@ named, each `read` or `write`, resolved at the launch through the code tools' ow
 whoever woke its turn — matched BY NAME before anything else is read, and a box's GIT does at most what both the
 row and the seat's own grant from the chart allow. In a turn a colleague SEAT woke, the row names that colleague,
 and the box is also held to the colleague's own grant from the same chart: it fetches nothing the colleague could
-not read, and pushes nothing outside the seat's own namespace that the colleague could not push — the seat's own
-branches are its own work, which anybody who can message it steers (`code.Grant.Under`); a person bounds nothing,
+not read, and pushes nothing outside the seat's own work that the colleague could not push — the branches under
+the seat's own namespace and every branch of a repository it owns are its own work, which anybody who can message
+it steers (`code.Grant.Under`); a person bounds nothing,
 maintaining every repository. A person's pause that stops the seat's running work refuses the box's every push, and
 every bridged call of a tool not proven read-only, until the seat is resumed — both by the engine's one reading of
 the stop, so the two edges stop and resume together. Boxes together hold at most half the transfer lane and one

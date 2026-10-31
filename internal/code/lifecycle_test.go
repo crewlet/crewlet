@@ -359,6 +359,83 @@ func TestWhoMayChangeARepository(t *testing.T) {
 	n.lands(lcSettings(lcPerson, id, code.RepoChange{Owner: &sales}))
 }
 
+// A SEAT'S LIFECYCLE REQUEST IS DECIDED AGAIN FOR WHOEVER WOKE ITS TURN
+// (LifecycleRequest.Ceiling, M3-decisions U40 (a)): the lead, who maintains
+// Engineering's project, changes neither its settings nor its protections for
+// nobody — a stranger, a person who may not act — nor for dev, a member who
+// only writes it, each refused not_permitted naming whom the work is for and,
+// for a colleague, the colleague's own refusal. Its own work is steered by
+// either: dev creates its scratch repository and changes its description
+// there, and protects a branch of the project a person handed it (a scratch
+// repository takes no protections); what discloses a repository or retires it
+// — its visibility, a delete — is decided for them like anything else, and
+// refused.
+//
+// Mutations: steeredOwnWork answering false — dev's own create and edit are
+// refused, red; its protect answering false — dev's own protection is
+// refused, red; or true whoever owns the repository — the lead's protection
+// lands for both, red; answering true for every kind on its own repository —
+// the visibility change and the delete land, red; lifecycleRefusal skipping
+// the ceiling — the lead's change for dev and for nobody lands, red.
+func TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	forDev := &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "dev"}
+	nobody := &code.WriteCeiling{Kind: code.WriteCeilingNobody}
+	project := n.made(lcPerson, "ceilinged", unitOwned("eng"))
+	handed := n.made(lcPerson, "handed", seatOwned("dev"))
+	tightened := &code.Protection{PushRule: code.PushRule{DirectPush: code.DirectNone}}
+	for _, tc := range []struct {
+		ceiling *code.WriteCeiling
+		says    string
+	}{
+		{forDev, "this work is for seat dev, whose ask started this turn"},
+		{nobody, "who may change nothing of this company's code"},
+	} {
+		for _, req := range []code.LifecycleRequest{
+			lcSettings(agent("cto"), project, code.RepoChange{Description: new("for " + string(tc.ceiling.Kind))}),
+			lcProtect(agent("cto"), project, "refs/heads/main", tightened),
+		} {
+			req.Ceiling = tc.ceiling
+			if got := n.life(req); got.Refusal != code.LifecycleNotPermitted ||
+				!strings.Contains(got.Detail, tc.says) {
+				t.Errorf("the lead's %s for %s: %+v, want not_permitted saying %q", req.Kind, tc.ceiling.Kind, got,
+					tc.says)
+			}
+		}
+	}
+	n.lands(lcSettings(agent("cto"), project, code.RepoChange{Description: new("for itself")}))
+
+	for i, ceiling := range []*code.WriteCeiling{{Kind: code.WriteCeilingSeat, Seat: "vp-sales"}, nobody} {
+		create := lcCreate(agent("dev"), fmt.Sprintf("dev.steered%d", i), seatOwned("dev"))
+		create.Ceiling = ceiling
+		id := n.lands(create).Repo.ID
+		edit := lcSettings(agent("dev"), id, code.RepoChange{Description: new("steered")})
+		edit.Ceiling = ceiling
+		n.lands(edit)
+		protect := lcProtect(agent("dev"), handed, fmt.Sprintf("refs/heads/steered%d", i), tightened)
+		protect.Ceiling = ceiling
+		n.lands(protect)
+		unit := code.VisibilityUnit
+		for _, req := range []code.LifecycleRequest{
+			lcSettings(agent("dev"), id, code.RepoChange{Visibility: &unit}),
+			lcOn(code.LifecycleDelete, agent("dev"), id),
+		} {
+			req.Ceiling = ceiling
+			if got := n.life(req); got.Refusal != code.LifecycleNotPermitted {
+				t.Errorf("dev's %s of its own repository for %s: %+v, want not_permitted", req.Kind,
+					ceiling.Kind, got)
+			}
+		}
+	}
+	hold := lcHold(agent("dev"), project, "0192f00d-0000-7000-8000-000000000001", n.resolved("ceilinged").Position)
+	hold.Ceiling = nobody
+	if err := hold.Validate(); !errors.Is(err, code.ErrInvalid) {
+		t.Errorf("a hold made for nobody: %v, want ErrInvalid", err)
+	}
+}
+
 // A CONFIGURATION-MANAGED REPOSITORY REFUSES EVERY TOOL: a repository code.repos
 // declares is the configuration's to change, and a tool's request names the
 // declaration to change instead — keeping its sentinel across the wire.

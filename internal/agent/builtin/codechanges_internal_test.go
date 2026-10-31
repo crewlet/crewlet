@@ -17,9 +17,13 @@ import (
 // read: the node that answers a read judges the colleague it is made for at
 // read and nothing else (code.JudgeRead, through the ceiling every question of
 // it carries), so a read naming more would be a need no read holds anybody to.
+// A WRITE's row is the access the deciding node holds the colleague its turn
+// works for to (code.ChangeProposal.CeilingNeeds,
+// code.ConversationWrite.CeilingNeeds), the two one rule.
 //
 // Mutations: a change tool's row dropped — a read's or a write's; a row naming
-// a tool that is not one; a read's row raised to review → red.
+// a tool that is not one; a read's row raised to review; the review's row, or
+// the decide's need for a review, lowered to read → red.
 func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 	t.Parallel()
 	every := slices.Concat(ChangeToolNames(), ChangeWrites())
@@ -48,6 +52,29 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 	for name := range changeToolNeeds {
 		if !slices.Contains(every, name) {
 			t.Errorf("changeToolNeeds names %s, which is no change tool", name)
+		}
+	}
+	// A WRITE'S ROW IS THE ACCESS ITS DECIDE HOLDS A COLLEAGUE TO in a turn
+	// that colleague woke (code.WriteCeiling): the committer reads it from the
+	// write the tool sends, so the two cannot be allowed to disagree.
+	sends := map[string]interface{ CeilingNeeds() code.Access }{
+		CodeOpenChangeTool:       code.ChangeProposal{Open: &code.ChangeOpen{}},
+		CodeUpdateChangeTool:     code.ChangeProposal{Edit: &code.ChangeEdit{}},
+		CodeCloseChangeTool:      code.ChangeProposal{Close: &code.ChangeClose{}},
+		CodeRequestReviewTool:    code.ConversationWrite{Reviewers: &code.ReviewerRequest{}},
+		CodeReviewChangeTool:     code.ConversationWrite{Review: &code.Review{}},
+		CodeCommentOnChangeTool:  code.ConversationWrite{Comment: &code.Comment{}},
+		CodeResolveFindingTool:   code.ConversationWrite{FindingResolve: &code.FindingResolve{}},
+		CodeApplySuggestionsTool: code.ConversationWrite{FindingResolve: &code.FindingResolve{}},
+	}
+	for _, name := range ChangeWrites() {
+		write, ok := sends[name]
+		switch {
+		case !ok:
+			t.Errorf("%s names no write its decide holds a colleague by", name)
+		case write.CeilingNeeds() != changeToolNeeds[name]:
+			t.Errorf("%s needs %s by changeToolNeeds, and its decide holds a colleague at %s", name,
+				changeToolNeeds[name], write.CeilingNeeds())
 		}
 	}
 }

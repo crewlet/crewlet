@@ -481,6 +481,108 @@ func TestAGrantUnderAColleaguesCeilingIsHeldToBoth(t *testing.T) {
 	}
 }
 
+// A SEAT'S OWN WORK IS STEERED BY WHOEVER WOKE ITS TURN, and nothing else is
+// (code.WriteCeiling, M3-decisions U40 (a)): dev — full_access in Infra —
+// working for vp-sales, who only reads a company repository, or for nobody (a
+// stranger, a person who may not act), moves a branch under its own namespace
+// and any branch of a repository its seat owns, its scratch repository and a
+// project handed to it, and no other branch of Platform's repository it writes
+// for itself; the moment that project is handed to a unit it is steered no
+// more. Nobody's ceiling reads nothing, and its refusal says the work is for
+// somebody who may change nothing. A colleague's ceiling is that colleague's
+// own grant (WriteCeiling.Grant), and a ceiling no build writes — nobody's
+// naming a seat, a seat's naming the writer itself or no handle, a person's
+// write carrying any — is refused on the write.
+//
+// Mutations: ownWork answering only the namespace — the scratch repository's
+// and the seat-owned project's main are refused, red; ownWork answering true
+// for every repository — Platform's main lands for both, red; WriteCeiling.Grant
+// granting nobody what GrantOf grants a seat — nobody's main lands, red.
+func TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn(t *testing.T) {
+	t.Parallel()
+	r := testChart()
+	main := code.Command{Ref: "refs/heads/main", Old: oidOf("a"), New: oidOf("b")}
+	ns := code.Command{Ref: "refs/heads/seats/dev/fix", Old: code.ZeroOID, New: oidOf("b")}
+	platform := ownedBy("platform", code.OwnerUnit, "Platform")
+	scratch := ownedBy("dev.notes", code.OwnerSeat, "dev")
+	handed := ownedBy("tools", code.OwnerSeat, "dev")
+	given := handed
+	given.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Infra"}
+	for _, ceiling := range []code.WriteCeiling{
+		{Kind: code.WriteCeilingSeat, Seat: "vp-sales"},
+		{Kind: code.WriteCeilingNobody},
+	} {
+		for _, tc := range []struct {
+			repo   code.RepoRef
+			c      code.Command
+			passes bool
+		}{
+			{platform, main, false}, {platform, ns, true}, {scratch, main, true}, {handed, main, true},
+			{given, main, false},
+		} {
+			own := code.GrantOf(agent("dev"), tc.repo, r)
+			if !tc.passes {
+				if reason, _ := own.RefRule(tc.c); reason != "" {
+					t.Fatalf("dev's own grant refuses %s on %s, so this case judges no ceiling", tc.c.Ref,
+						tc.repo.Name)
+				}
+			}
+			reason, words := own.Under(ceiling.Grant(tc.repo, r)).RefRule(tc.c)
+			if (reason == "") != tc.passes {
+				t.Errorf("dev for %s, %s on %s: refused %q %q, want passes %v", ceiling.Kind, tc.c.Ref,
+					tc.repo.Name, reason, words, tc.passes)
+			}
+			if ceiling.Kind == code.WriteCeilingNobody && reason != "" &&
+				!strings.Contains(words, "may change nothing of this company's code") {
+				t.Errorf("dev for nobody, %s on %s: told %q, want the work is for somebody who may change "+
+					"nothing", tc.c.Ref, tc.repo.Name, words)
+			}
+		}
+	}
+	if code.GrantOf(agent("dev"), platform, r).Under(code.WriteCeiling{Kind: code.WriteCeilingNobody}.
+		Grant(platform, r)).MayRead() {
+		t.Error("dev reads Platform's repository for nobody")
+	}
+	if got, want := (code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "vp-sales"}).Grant(platform, r),
+		code.GrantOf(agent("vp-sales"), platform, r); got.Access != want.Access || got.Relation != want.Relation {
+		t.Errorf("a colleague's ceiling stands at %s/%s, its own grant at %s/%s", got.Access, got.Relation,
+			want.Access, want.Relation)
+	}
+
+	write := aWrite()
+	for name, tc := range map[string]struct {
+		who     code.Principal
+		ceiling code.WriteCeiling
+	}{
+		"nobody naming a seat":    {write.Principal, code.WriteCeiling{Kind: code.WriteCeilingNobody, Seat: "bob"}},
+		"the writer itself":       {write.Principal, code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "alice"}},
+		"no handle":               {write.Principal, code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "Not A Handle"}},
+		"a kind no build writes":  {write.Principal, code.WriteCeiling{Kind: "person", Seat: "bob"}},
+		"beside a person's write": {lcPerson, code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "bob"}},
+	} {
+		w := aWrite()
+		w.Principal, w.Ceiling = tc.who, &tc.ceiling
+		if err := w.Validate(); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "ceiling") {
+			t.Errorf("a write whose ceiling is %s: %v, want ErrInvalid naming the ceiling", name, err)
+		}
+		asker := tc.who
+		asker.Run = code.RunProvenance{} // a lifecycle request names who asks, and no run
+		req := lcSettings(asker, "0190f3c4-0000-7000-8000-0000000000aa", code.RepoChange{Description: new("x")})
+		req.Ceiling = &tc.ceiling
+		if err := req.Validate(); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "ceiling") {
+			t.Errorf("a lifecycle request whose ceiling is %s: %v, want ErrInvalid naming the ceiling", name, err)
+		}
+	}
+	for _, ceiling := range []code.WriteCeiling{{Kind: code.WriteCeilingSeat, Seat: "bob"},
+		{Kind: code.WriteCeilingNobody}} {
+		w := aWrite()
+		w.Ceiling = &ceiling
+		if err := w.Validate(); err != nil {
+			t.Errorf("a seat's write for %s %s: %v", ceiling.Kind, ceiling.Seat, err)
+		}
+	}
+}
+
 type askedRoster struct{ n int }
 
 func (a *askedRoster) Seat(string) (code.RosterSeat, bool) { a.n++; return code.RosterSeat{}, false }

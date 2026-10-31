@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/code.TestAnAgentCannotLoosenAProtection`, `internal/code.TestEveryProtectionControlIsJudged`, `internal/code.TestAnAgentCannotLoosenAGate`, `internal/code.TestAnAgentMayTightenAGate`, `internal/code.TestEveryGateFieldIsJudged`, `internal/code.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, and the code host fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
+- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/code.TestAnAgentCannotLoosenAProtection`, `internal/code.TestEveryProtectionControlIsJudged`, `internal/code.TestAnAgentCannotLoosenAGate`, `internal/code.TestAnAgentMayTightenAGate`, `internal/code.TestEveryGateFieldIsJudged`, `internal/code.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, `internal/code.TestASeatsOwnWorkIsSteeredByWhoeverWokeItsTurn`, `internal/code.TestALifecycleRequestIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code/host.TestASeatsWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/agent/builtin.TestACodeWriteIsDecidedAgainForWhoeverWokeTheTurn`, `internal/code.TestAChangeWriteIsHeldToWhoeverItsTurnWorksFor`, `internal/code.TestAChangeWriteIsDecidedAgainForWhoeverWokeTheTurn`, and the code host fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
 - **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
 - **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
 - **Tag-status:** unreleased
@@ -59,6 +59,22 @@ repositories beside a view of its own — `code_status`, the health grant's — 
 ceiling, its requester decided on the code host's read verb (`code.read`) rather than on its own row, which
 grants a view of the deployment that the ceiling does not bound.
 
+A seat's WRITE made inside a turn somebody woke is decided again for them too (`code.WriteCeiling`), on the
+repository's grant at the relation the write needs, by the node that decides the write and from the same chart
+and row: an engine write by its git node, the seat's grant held to the requester's (`code.Grant.Under`), and a
+lifecycle request by its data node, asked again as the colleague asking it itself. The tool's own row is decided
+for the requester first, and a requester it refuses — a stranger, a person who may not act now — is a ceiling of
+NOBODY rather than a refusal there, because the seat's OWN WORK stays steerable by whoever woke it, as
+`authz.DecideWithin` spares a steerable verb on what an agent owns: a command under its own namespace or in a
+repository it owns, its own scratch repository's create, and a repository it owns edited without being handed on.
+What discloses, hands on or retires a repository — its visibility, its owner, an archive, a delete, a restore, a
+rename — is never steered. A colleague seat bounds every read a write makes as well, and a person bounds nothing.
+A CHANGE's writes carry the same ceiling to the data node that commits the repository, judged once the seat
+itself may make the write: a colleague is held at the ACCESS the write needs (`review` for a review, `read` for
+every other) and never at the relation beyond it, which is the seat's own, so a change's author may ask a seat to
+review it; nobody steers only the seat's own change, an open of its own namespace, and the changes of a
+repository it owns.
+
 ## Why the obvious alternative is wrong
 
 Access lists per repository duplicate the chart and drift from it; GitHub's tier as the only vocabulary made the
@@ -71,9 +87,8 @@ protection and then force it.
 ## What this does not decide
 
 A box's own grant on top of the seat's (M3 P6), read-side directory access lists (not planned: sensitive code
-goes in its own repository with `visibility: unit`), the review and merge levels' use (M4, M5). Nor the requester ceiling of a seat's code
-WRITES (M3 P5's write tools, each held at the relation its write needs): the ceiling above bounds what a seat
-reads for somebody, and nothing it writes. Nor a ceiling carried past its turn: a colleague a seat asks answers
+goes in its own repository with `visibility: unit`), the review and merge levels' use (M4, M5). Nor a ceiling carried
+past its turn: a colleague a seat asks answers
 in a turn the asking seat woke, and the answer wakes the asking seat in a turn of its own work, so each turn is
 decided for whoever woke it and never for whoever woke the asker — as the artifacts tools' ceiling is — and
 nothing here bounds what a seat already knows, from its memory or a read made in a turn nobody woke.
