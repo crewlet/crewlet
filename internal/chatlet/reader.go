@@ -288,16 +288,17 @@ func (r *Reader) Activity(ctx context.Context, viewer string, q ActivityQuery,
 	out := Activity{Items: []ActivityItem{}, ReadState: q.Marks.Known}
 	answer, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true),
 		func(tx *sql.Tx) error {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			counts, err := activityCounts(ctx, tx, who, q.Marks)
 			if err != nil {
 				return err
 			}
 			out.Unread = counts
-			window, after := limitOf(q.Limit), after
+			window, from := limitOf(q.Limit), after
 			if q.Unread {
-				window, after = UnreadLimit, nil
+				window, from = UnreadLimit, nil
 			}
-			windows, err := activitySources(ctx, tx, who, q.Kind, q.Marks, after, window)
+			windows, err := activitySources(ctx, tx, who, q.Kind, q.Marks, from, window)
 			if err != nil {
 				return err
 			}
@@ -829,6 +830,7 @@ func (r *Reader) Threads(ctx context.Context, viewer string, q ThreadsQuery,
 	out := FollowedThreads{Threads: []FollowedThread{}, ReadState: q.Marks.Known}
 	answer, err := r.log.Read(ctx, fresh.Query(ReadScope(""), true),
 		func(tx *sql.Tx) error {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			candidates, err := followedCandidates(ctx, tx, who, q.Marks)
 			if err != nil {
 				return err
@@ -1102,6 +1104,7 @@ func (r *Reader) Saved(ctx context.Context, viewer string, q SavedQuery,
 					out.NextCursor = savedKey(marks[i-1]).String()
 					return nil
 				}
+				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 				entry, err := readSaved(ctx, tx, who, mark)
 				if err != nil {
 					return err
@@ -1218,6 +1221,7 @@ func (r *Reader) Sent(ctx context.Context, viewer string, q SentQuery,
 			where = append(where, `channel_id IN (SELECT c.id FROM chat_channels c
 			     WHERE `+visibleWhere+`)`)
 			args = append(args, who)
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			page, err := readMessagePage(ctx, tx, who, where, args,
 				"created_at DESC, id DESC", limit)
 			if err != nil {
@@ -1312,6 +1316,7 @@ func (r *Reader) Links(ctx context.Context, viewer string, q LinksQuery,
 	out := SharedLinks{ChannelID: q.ChannelID, Links: []SharedLink{}}
 	answer, err := r.log.Read(ctx, fresh.Query(ReadScope(q.ChannelID), false),
 		func(tx *sql.Tx) error {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := r.reachable(ctx, tx, who, q.ChannelID); err != nil {
 				return err
 			}
@@ -1322,6 +1327,7 @@ func (r *Reader) Links(ctx context.Context, viewer string, q LinksQuery,
 				args = append(args, before)
 			}
 			args = append(args, limit+1)
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			rows, err := tx.QueryContext(ctx, `
 				SELECT document, channel_seq FROM chat_messages
 				 WHERE channel_id = ? AND links <> '' AND deleted_at IS NULL
@@ -1412,9 +1418,11 @@ func (r *Reader) Message(ctx context.Context, viewer string, q MessageQuery,
 	var out OneMessage
 	answer, err := r.log.Read(ctx, fresh.Query(ReadScope(q.ChannelID), false),
 		func(tx *sql.Tx) error {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := r.reachable(ctx, tx, who, q.ChannelID); err != nil {
 				return err
 			}
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			room, _, _, err := readRoom(ctx, tx, q.ChannelID)
 			if err != nil {
 				return err

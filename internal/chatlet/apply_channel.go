@@ -293,6 +293,7 @@ func (a *Applier) applyChannelPatch(ctx context.Context, tx *sql.Tx,
 		return 0, err
 	}
 	if p.AutoJoin != nil && *p.AutoJoin != before.AutoJoin {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		accounted, err := resetAutoJoin(ctx, tx, at, room.ID, *p.AutoJoin, p.AutoJoinSeats)
 		if err != nil {
 			return 0, err

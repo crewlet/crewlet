@@ -2242,6 +2242,7 @@ func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID stri
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := isEvent(held, "edit"); err != nil {
 				return statelog.Decision{}, err
 			}
@@ -2506,6 +2507,7 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 			// handle that knows a room id and a message id attaches
 			// an attributable, durable row inside a private
 			// conversation it cannot open.
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := s.reachableTx(ctx, tx, room, actor); err != nil {
 				return statelog.Decision{}, err
 			}
@@ -2899,6 +2901,7 @@ func (s *Store) threadOf(ctx context.Context, tx *sql.Tx, channelID, replyTo str
 	if err != nil {
 		return "", "", err
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := isEvent(parent, "reply"); err != nil {
 		return "", "", err
 	}

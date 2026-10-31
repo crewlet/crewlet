@@ -72,15 +72,15 @@ func (a *Applier) writeEvents(ctx context.Context, tx *sql.Tx, at applyContext,
 		return out, nil
 	}
 	var seq int64
-	err := tx.QueryRowContext(ctx,
+	seqErr := tx.QueryRowContext(ctx,
 		`SELECT message_seq FROM chat_channels WHERE id = ?`, roomID).Scan(&seq)
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(seqErr, sql.ErrNoRows):
 		return out, fmt.Errorf("chatlet: the record at %s wrote events into room "+
 			"%s, which this node has no row for", at.position, roomID)
-	case err != nil:
+	case seqErr != nil:
 		return out, fmt.Errorf("chatlet: read room %s's sequence at %s: %w",
-			roomID, at.position, err)
+			roomID, at.position, seqErr)
 	}
 	for i, event := range events {
 		id := eventID(at.record.OpID, i)
