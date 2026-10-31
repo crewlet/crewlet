@@ -41,6 +41,7 @@ import {
   SquarePenGlyph,
 } from "@crewlethq/icons/glyphs";
 
+import { useToastTop } from "~/app/toastInset.tsx";
 import { attentionFigure, isDirect, useChatAttention } from "~/lib/chatRooms.ts";
 import type { ChatChannelSummary } from "~/protocol/index.ts";
 
@@ -310,6 +311,10 @@ export function ChatTopBar() {
   const nav = useChatNav();
   const bar = useRef<HTMLDivElement | null>(null);
   const width = useBarWidth(bar);
+  // TOASTS STAND UNDER THIS BAR, at the conversation's top right: at the
+  // window's foot they lay over the room's composer and a thread's, which
+  // grow as they are typed in, so no fixed inset from the foot clears them.
+  useToastTop(bar);
   const narrow = width > 0 && width < BAR_NARROW_PX;
   const tight = width > 0 && width < BAR_TIGHT_PX;
   // THE SIDEBAR'S OWN FIGURE (`lib/chatRooms.ts`), so the Chatlet row and
