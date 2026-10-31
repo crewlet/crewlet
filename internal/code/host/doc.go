@@ -490,9 +490,15 @@
 // a push introduces excluding every one (read CPU 5.4–5.7, 9.7–10.6 and
 // 52 ms); the push's advertisement, a request before it, is 15–19, 22–29 and
 // 518 ms, and the person's git 102–116, 300–327 and 2 750 ms for the whole
-// push, most of it the client's own work over the refs it was shown. Each
-// arm pushes to a node that read the repository whole and indexed it just
-// before, so what the refs cost is not mixed with packs another arm left
+// push, most of it the client's own work over the refs it was shown. The
+// 518 ms is one run on two cores of a machine shared with other work, and
+// it keeps neither the smaller arms' rate — ten thousand's 22–29 ms is
+// under 3 µs a ref with the request's fixed cost in it, and past a
+// thousand the refs cost 0.3–1.6 µs each, which would put the bound under
+// 300 ms — nor the cache's own advertisement at the bound (112–117 ms,
+// internal/code/cache's measured section, on the Xeon), so it is that
+// run's figure, not what the bound costs an advertisement. Each arm pushes
+// to a node that read the repository whole and indexed it just before, so what the refs cost is not mixed with packs another arm left
 // outside an index. The other node's sync, packed-refs merged as a stream,
 // is 9–14, 12–29 and 88 ms — at the bound two fifths of the request: the
 // packed-refs file a cache writes itself, in place of reftable, cost a delta

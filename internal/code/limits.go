@@ -306,7 +306,11 @@ const (
 	// seconds as a person waits for it — measured over a gigabyte of
 	// history on the node pin, one push on two loaded cores, 2.75 s: its
 	// request 216 ms against 37 at one ref, another node's delta sync 88 ms,
-	// the advertisement 518 ms (internal/code/host's measured section). A
+	// the advertisement 518 ms in that one run, which departs from both the
+	// smaller arms' rate (under 3 µs a ref at ten thousand, fixed cost
+	// included: under 300 ms at the bound) and the cache's own
+	// advertisement at the bound, 112–117 ms on the Xeon
+	// (internal/code/host's measured section). A
 	// deleted ref never counts against it: its tombstone is bounded apart, by
 	// MaxTombstonesPerRepo, and refuses nobody.
 	MaxRefsPerRepo = 100_000
