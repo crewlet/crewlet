@@ -25,6 +25,7 @@ import {
   attentionFigure,
   badgesAreMeasured,
   chatAttention,
+  roomWaiting,
   useChatAttention,
   useChatRooms,
 } from "./chatRooms.ts";
@@ -73,6 +74,14 @@ describe("what waits on the reader", () => {
     );
     expect(counted).toEqual({ value: 6, capped: false });
     expect(attentionFigure(counted!)).toBe("6");
+  });
+
+  test("in one room is its mentions, a direct conversation's every unread message, and nothing muted", () => {
+    expect(roomWaiting(row("general", "public", { unread: 12, mentions: 2 }))).toBe(2);
+    expect(roomWaiting(row("ada-bo", "dm", { unread: 3, mentions: 1 }))).toBe(3);
+    expect(roomWaiting(row("trio", "group", { unread: 4 }))).toBe(4);
+    expect(roomWaiting(row("noisy", "public", { unread: 40, mentions: 5, muted: true }))).toBe(0);
+    expect(roomWaiting(row("hushed", "dm", { unread: 2, muted: true }))).toBe(0);
   });
 
   test("is a floor where a counted room stopped at the engine's bound, or rooms were left out", () => {

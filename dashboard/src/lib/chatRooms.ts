@@ -48,7 +48,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ChatChannelsAnswer, ChatKind } from "~/protocol/index.ts";
+import type { ChatChannelSummary, ChatChannelsAnswer, ChatKind } from "~/protocol/index.ts";
 import { LIVE_REFETCH_MS, useChatActivity, useChatRead, useCoalesced } from "./chatLive.ts";
 import { useServicesAsk } from "./services.ts";
 import { useClient } from "./store-hooks.ts";
@@ -86,6 +86,22 @@ export function badgesAreMeasured(answer: { read_state?: boolean } | null | unde
   return answer?.read_state === true;
 }
 
+/**
+ * What waits on the reader in ONE room, as every badge that counts it says:
+ * in a named room, the unread messages that name them or the whole room; in a
+ * direct conversation, every unread message, since each of them is addressed
+ * to the reader; in a muted room, nothing, which is what muting it asked for.
+ *
+ * ONE RULE for the sidebar's Chatlet badge ([chatAttention]) and every row
+ * and switcher in Chatlet that badges a room, so no two can count a room
+ * differently. Whether the counts were measured at all is the caller's to ask
+ * ([badgesAreMeasured]), of the answer the row came from.
+ */
+export function roomWaiting(row: ChatChannelSummary): number {
+  if (row.muted) return 0;
+  return isDirect(row.channel.kind) ? row.unread : row.mentions;
+}
+
 /** What waits on the reader in Chatlet, as the sidebar's badge says it. */
 export interface ChatAttention {
   /** Unread messages naming the reader, plus unread direct messages. */
@@ -95,10 +111,7 @@ export interface ChatAttention {
 }
 
 /**
- * What waits on the reader across their rooms: in a named room, the unread
- * messages that name them or the whole room; in a direct conversation, every
- * unread message, since each of them is addressed to the reader. A muted room
- * counts for nothing, which is what muting it asked for.
+ * What waits on the reader across their rooms, each counted by [roomWaiting].
  *
  * NULL WHERE THERE IS NO FIGURE TO DRAW: before the answer, on an answer whose
  * counts were not measured ([badgesAreMeasured]), and when nothing waits. A
@@ -110,8 +123,7 @@ export function chatAttention(answer: ChatChannelsAnswer | null | undefined): Ch
   let value = 0;
   let capped = answer.truncated === true;
   for (const row of answer.channels) {
-    if (row.muted) continue;
-    const waiting = isDirect(row.channel.kind) ? row.unread : row.mentions;
+    const waiting = roomWaiting(row);
     if (waiting <= 0) continue;
     value += waiting;
     if (row.unread_capped) capped = true;
