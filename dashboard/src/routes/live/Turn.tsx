@@ -2012,7 +2012,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                           // doing now, and with only the first open that was a
                           // phase that finished minutes ago, the one it is on a
                           // closed row under it. A phase that goes live while the
-                          // page is open is a new key, so it mounts — and opens —
+                          // page is open is a new key, so it mounts (and opens)
                           // then; one that completes keeps its key and its card,
                           // and the card latches, so finishing never closes it
                           // under a reader. A parked turn has no live phase: its
@@ -2081,7 +2081,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                                 properties: [
                                   {
                                     // The turn's CONVERSATION IDENTITY,
-                                    // "{source}:{local}" — the surface's own
+                                    // "{source}:{local}", the surface's own
                                     // answer to "which ongoing conversation is
                                     // this", not an address.
                                     label: "Conversation",
