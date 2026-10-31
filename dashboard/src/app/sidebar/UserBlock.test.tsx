@@ -1041,7 +1041,8 @@ describe("the folded foot", () => {
 
   test("opens the preferences from the face's menu, as a dialog of the same controls", async () => {
     folded();
-    fireEvent.click(await screen.findByRole("button", { name: /^Ada Lovelace/ }));
+    // THE FACE IS NAMED BY THE ROW'S OWN WORDS, ending in what it opens.
+    fireEvent.click(await screen.findByRole("button", { name: /, your menu$/ }));
     fireEvent.click(screen.getByRole("menuitem", { name: /^Preferences/ }));
     const dialog = await screen.findByRole("dialog", { name: "Preferences" });
     expect(within(dialog).getByRole("radiogroup", { name: "Mode" })).toBeDefined();

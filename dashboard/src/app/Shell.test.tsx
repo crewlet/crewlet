@@ -1568,7 +1568,7 @@ describe("the compact sidebar", () => {
       expect(screen.getByRole("link", { name: /^Settings/ }).getAttribute("href")).toBe(
         "#/settings/models",
       );
-      act(() => screen.getByRole("button", { name: /^Ada Lovelace/ }).click());
+      act(() => screen.getByRole("button", { name: /, your menu$/ }).click());
       act(() => screen.getByRole("menuitem", { name: /^Preferences/ }).click());
       const dialog = await screen.findByRole("dialog", { name: "Preferences" });
       expect(within(dialog).getByRole("radiogroup", { name: "Mode" })).toBeDefined();
