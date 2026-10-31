@@ -2166,7 +2166,9 @@ for the keys is the reader who does not know `?` yet.
 | In the artifacts gallery and its folders | `x` starts picking artifacts (and, pressed again, stops and clears the picks), `m` moves what is picked to a folder, `n` makes a new folder where the reader is, `u` goes up to the folder above. Bare letters, since a window chord compares no Shift and no Alt |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
-| Writing a reply or a message | `Mod+Enter` sends it: a reply in the Inbox, a comment on a task, a message in a chat room or a thread. `Enter` alone is a new line, since what you say to somebody is often several lines. Ask Crewlet's question box is the one exception: a question is one line far more often than not, so `Enter` sends it there (below) |
+| Writing a reply or a message | `Mod+Enter` sends it: a reply in the Inbox or a comment on a task. `Enter` alone is a new line, since such a letter is often several lines |
+| Writing a chat message | `Enter` sends it and `Shift+Enter` adds a line (bound by the design system's `Composer`), `Up` in an empty box edits your last message, `Mod+B` and `Mod+I` bold and italicise the selection |
+| On a focused chat message | `E` edits your message, `T` opens its thread, `S` saves it for later, `Delete` deletes it, `Up` and `Down` move to the message above and below |
 | Writing the company's principles | `Mod+Enter` saves the part being written and `Esc` stops writing it, asking first when it has changes (bound by the design system's `InlineEditor`); in the standing policies `Enter` adds the policy typed, and `Alt+Up` and `Alt+Down` move the one you are in |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
 | In Ask Crewlet | `Enter` sends the question and `Shift+Enter` adds a line (bound by the design system's `Composer`); `Esc` stops a running answer first, then closes Ask Crewlet and never a peek beside it; `Up` in an empty box brings back the last question |
@@ -4114,9 +4116,17 @@ injected instruction would carry words away. An address an ask cites as
 evidence is the same: a button only when it is rebuilt on the company's host,
 labelled by the dashboard with the reference it is and its app's mark, and
 otherwise the address as written, never the asker's label ([ADR-0061](../../adr/0061-a-read-is-named-in-the-answer-never-drawn-as-a-card.md)).
-A chat message's links are read the same way, whoever wrote the message
-(`routes/chatlet/MessageLinks.tsx`): each is the address token, and one whose
-scheme the allowlist refuses is its words.
+A chat message is read the same way, whoever wrote it, with one addition
+(`links: "own"`, `CHAT_WORDS`): a page of the dashboard's own (a `#/` route,
+or the whole address a Copy link writes on its origin) opens in place, rebuilt
+from its path alone (`lib/appRoute.ts`), so the task or page a message is about
+is one click away and no query a writer chose rides along. Ask Crewlet's
+answers never take it: their one way to move the page is an Open in app card
+the engine built. A message's links (`routes/chatlet/MessageLinks.tsx`): a task, a page, an artifact or a pull
+request the reader may open unfurls into a preview the engine resolved as the
+reader (`chat_unfurls`, with an address the engine built), an address of an app
+the dashboard knows unfurls into its mark, name and reference, every other is
+the address token, and one whose scheme the allowlist refuses is its words.
 A coding run's question is read so wherever it is answered: its Answer dialog
 (`components/writes.tsx`), opened from Live › Runs, a seat's page and every
 decision row, reads the run's context and reasoning `checked`.
@@ -4763,16 +4773,19 @@ a tool arrives in it with the control that sends it. The controls
 | Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from |
 | Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
-| Send (`Mod+Enter`) | A chat room's composer | `post_message{channel, body}` — under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one |
+| Send (`Enter`) | A chat room's composer | `post_message{channel, body}`: under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one |
 | Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body}` |
-| Edit, then Save | A chat message of your own | `edit_message{channel, message_id, body}` — the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
-| Delete (pressed twice) | A chat message of your own, and anybody's to an admin | `delete_message{channel, message_id}` — the author's, or an admin's moderation, and the tombstone records who. Reaches past membership and past an archive; held on a room this build cannot classify, and while another message's delete is out |
+| Edit message, then Save | A chat message of your own (its More menu) | `edit_message{channel, message_id, body}`: the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
+| Delete, then Delete in its dialog | A chat message of your own (its More menu), and anybody's to an admin | `delete_message{channel, message_id}`: the author's, or an admin's moderation, and the tombstone records who. Reaches past membership and past an archive; held on a room this build cannot classify, and while another message's delete is out |
 | A reaction | A chat message's reaction chips | `react_to_message{channel, message_id, emoji, remove}` — quiet, no toast; a refusal is said above the transcript. Held outside a private room you are not in, as a post is; an archived room takes it |
 | Join · Leave | Join on a room you are not in and in **Browse rooms**; Leave in the room's **More** | `join_channel{channel}` / `leave_channel{channel}`, refused on a unit's room and a direct conversation, so neither offers it |
 | Mute · Unmute | A chat room's header | `mark_chat_read{mute}` / `{unmute}` — this room alone, every other room's state kept |
 | New room | The chat rail | `create_channel{channel, kind, topic?, members?}` |
 | New direct message | The chat rail | `open_dm{to}` — a direct conversation's identity is who is in it, so opening one again reaches the same room |
 | Topic · Purpose | A chat room's settings dialog | `update_channel{channel, topic?, purpose?}` — only the fields changed. Archiving and the room's horizon are not offered anywhere in the dashboard, and the dialog says so: an archive closes the room for everybody in it, and the horizon decides what survives on every data node and is an administrator's step-up gesture (`PUT /chatlet/channels/{channel_id}/retention`) |
+| Save for later · Remove from Saved | A chat message's tray | `mark_chat_read{save}` / `{unsave}`: the reader's own; past `MAX_READER_MARKS` the press says Saved is full rather than sending |
+| Mark unread | A chat message's More menu | `mark_chat_read{rewind}`: the room's place set to just before the message, the one way it moves back |
+| Join room | The bar in place of a room's composer, for a room you may read but are not in | `join_channel{channel}` |
 | — (the read cursor, no control) | Written as you read a chat room | `mark_chat_read{cursors}` — every `READ_FLUSH_MS` (15 s) and at once on leaving the room, hiding the tab or closing it; quiet, and on no log (`domain: null`). Its answer is your seat's read state as it left it, and the tab applies it as it would the push — so the rail asks again once, when the revision moves |
 
 A change to the **company's configuration** is not an act. The company

@@ -161,14 +161,14 @@ const VIEW_BOUNDED: Record<string, string> = {
  * Under the fill (`app/fill.tsx`) the shell's own scroller stops being one, so
  * a view whose list has no block scroller of its own is clipped at its foot
  * with nothing to scroll it — the mention feed's older rows and Search chat's
- * lower hits were, on any company with more than a screenful. Each of these
+ * lower hits were, on any company with more than a screenful. A room's
+ * transcript is the kit's `ChatThread`, which scrolls itself. Each of these
  * FILLS rather than being bounded (no height of its own: it is the rest of a
  * column the shell sized), so the bound rule below does not reach it; this
  * does. jsdom computes no layout, which is why it is held in the sheets.
  */
 const FILLS_AND_SCROLLS: Record<string, string> = {
   "chatlet-frame.css .chat-rooms-scroll": "chat's Rooms panel, slid in or pinned",
-  "screens.css .chat-scroller": "a room's transcript",
   "screens.css .chat-thread-body": "an open thread",
   "screens.css .chat-list-body": "the mention feed and Search chat",
 };
@@ -191,10 +191,8 @@ describe("a list on a screen that fills the shell", () => {
     const views = modules().filter(
       (m) => m.path.startsWith("routes/chatlet/") && /className="chat-list"/.test(m.text),
     );
-    // THE CONTROL: the mention feed and the search are both list views.
-    expect(views.map((m) => m.path)).toEqual(
-      expect.arrayContaining(["routes/chatlet/Mentions.tsx", "routes/chatlet/Search.tsx"]),
-    );
+    // THE CONTROL: the search is a list view.
+    expect(views.map((m) => m.path)).toEqual(expect.arrayContaining(["routes/chatlet/Search.tsx"]));
     for (const view of views) {
       expect(
         view.text,

@@ -955,10 +955,11 @@ describe("every class the dashboard names", () => {
 // `folders.css`, the folders' (their tiles, dialogs, row and fact), and
 // `models.css`, Settings › Models' (its list, model page, wizard and By job),
 // `integrations.css`, Company › Integrations' (the directory's detail, an
-// app's tabs, its setup form and disconnect dialog), and `access.css`, the
+// app's tabs, its setup form and disconnect dialog), `access.css`, the
 // agents' access table an integration's Agents tab and an agent's Access tab
-// share, and `chatlet-frame.css`, Chatlet's frame (its grid, top bar and Rooms
-// panel). Each is
+// share, `chatlet-frame.css`, Chatlet's frame (its grid, top bar and Rooms
+// panel), and `chatlet-room.css`, a Chatlet room's transcript and composer.
+// Each is
 // appended after the entry's sheets, so each of its rules must select a class
 // of the screen it arrives with, or a tie it wins would change other screens
 // from the moment a reader first opened that one.
@@ -990,6 +991,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "chatlet-frame.css": {
     importer: "routes/chatlet/Chat.tsx",
     owns: /\.chat-[a-z_-]+\b/,
+  },
+  "chatlet-room.css": {
+    importer: "routes/chatlet/Room.tsx",
+    owns: /\.chat-[a-z-]+\b/,
   },
   "folders.css": {
     importer: "routes/artifacts/MoveDialog.tsx",

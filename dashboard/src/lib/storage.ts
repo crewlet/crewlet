@@ -96,6 +96,11 @@ export const STORAGE_KEYS = {
    * than slid in from Menu (`routes/chatlet/nav.tsx`).
    */
   chatletRoomsDocked: "crewlet.chatlet.rooms-docked",
+  /**
+   * Whether Chatlet's message boxes show their formatting row, one choice for
+   * every box (`routes/chatlet/Composer.tsx`).
+   */
+  chatletFormatting: "crewlet.chatlet.formatting",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

@@ -1,673 +1,558 @@
 /**
- * A room's transcript: a scroller that stays where the reader put it.
+ * A room's transcript, on the kit's `ChatThread`: each day under its rule
+ * with its date pill pinned near the top while the day is in view (a Jump to
+ * menu), the New line where the reader left off, a banner floating over the
+ * list while that line is out of view, and the room's intro where the
+ * history reaches its very beginning.
  *
- * # Two rules, and they are the same rule
+ * # The page moves only when the reader is not reading
  *
- * THE PAGE MOVES ONLY WHEN THE READER IS NOT READING. At the bottom of the
- * scroller a new message follows, because that is somebody watching a
- * conversation and holding rows back from them looks broken. Scrolled up, new
- * messages are COUNTED and the reader lets them in when they choose — the same
- * rule `lib/settled.ts` keeps for the activity feed, applied to a list that
- * grows at the bottom instead of the top.
- *
- * AND IT IS KEYED ON IDENTITY. An edit, a reaction or a delete arriving for a
- * message already on screen is not an arrival: counting by length would show
- * "1 new" for somebody fixing a typo, and the pill would never clear.
+ * At the foot of the list a new message follows, because that is somebody
+ * watching a conversation; scrolled up, the list stays where the reader put
+ * it (`ChatThread`'s own rule). A short room rests on the composer rather
+ * than under its intro at the top of the view.
  *
  * # Only what is on screen is in the DOM
  *
- * A reader who pages back through an afternoon holds hundreds of rows, each of
- * which can be a pasted stack trace. The window is computed from measured
- * heights in `messages.ts`, and the rows that are not drawn are replaced by two
- * spacers of exactly their height — so the scrollbar describes the whole
- * conversation rather than the part of it that happens to be rendered.
+ * A reader who pages back through an afternoon holds hundreds of rows, each
+ * of which can be a pasted stack trace. The window is computed from measured
+ * heights (`messages.ts`'s `windowFor`), and the rows that are not drawn are
+ * replaced by spacers of their height, inside the day they belong to, so the
+ * scrollbar describes the whole conversation and a day's pill still pins
+ * over the part of the day that is drawn.
+ *
+ * # What arrives while the reader reads back is counted, not pulled in
+ *
+ * Scrolled up, a new message is COUNTED and said over the foot of the list
+ * ("3 new messages"), and the reader comes back to it when they choose. The
+ * count is KEYED ON IDENTITY, by the room's own sequence: an edit, a reaction
+ * or a delete arriving for a message already on screen is not an arrival,
+ * and counted by length a fixed typo would read as news.
+ *
+ * # The New line is where the reader left off when they came in
+ *
+ * It stays there for the visit, after the room is marked read underneath it:
+ * a line that moved as the reader read would chase them down the list. A
+ * jump to it, to a date or to the beginning reads back as far as it needs
+ * first (`readBack`), since a room is held from its newest page down.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
-import { Button, Count, NewItemsNotice, StatusDot, Tag, Textarea } from "@crewlethq/ui";
-import { SplitGlyph } from "@crewlethq/icons/glyphs";
-import { useDraftBox } from "~/app/assistant/boxes.ts";
-import { WriteButton, pressable } from "~/components/WriteButton.tsx";
-import type { Act } from "~/lib/useAct.ts";
-import { fmtDateTime, fmtTime } from "~/lib/format.ts";
-import { kindOfAuthor } from "~/lib/seats.ts";
-import type { ChatMessageView, ChatWorking } from "~/protocol/index.ts";
+import {
+  Button,
+  CHAT_THREAD_FOLLOW_WITHIN,
+  ChatDay,
+  ChatDivider,
+  ChatThread,
+  NewItemsNotice,
+  type ChatThreadHandle,
+} from "@crewlethq/ui";
+import { ArrowUpGlyph } from "@crewlethq/icons/glyphs";
+import { useNow } from "~/lib/clock.ts";
+import { readerDay } from "~/lib/format.ts";
+import type { ChatChannel, ChatMessageView, ChatWorking } from "~/protocol/index.ts";
 
-import { BodyField, bodyBudget, bodyRefusal, SHORTEN_FIRST } from "./Composer.tsx";
-import { MessageLinks } from "./MessageLinks.tsx";
+import { packPosition } from "./cursor.ts";
+import { dayOf, isUnread, layoutDays, timeOf, type Day } from "./days.ts";
+import { DayJump, type Jumps } from "./DayJump.tsx";
+import { MessageRow } from "./MessageRow.tsx";
 import { windowFor, type Tail } from "./messages.ts";
 import type { Outgoing } from "./outbox.ts";
-import { PendingMessage } from "./Pending.tsx";
+import { PendingRow } from "./Pending.tsx";
+import { RoomIntro, isNewRoom } from "./RoomIntro.tsx";
+import { useRoomScope } from "./scope.tsx";
 
 /**
- * How tall a message is assumed to be before it has been drawn.
- *
- * SIXTY-FOUR PIXELS: an author line and one line of body at this density. It
- * is only ever a placeholder for rows outside the window — every row that has
- * been on screen is remembered at its measured height — so being wrong costs a
- * scrollbar that settles as the reader moves rather than a wrong layout.
+ * How tall a message is assumed to be before it has been drawn: an author
+ * line and one line of body at this density. Only ever a placeholder for rows
+ * outside the window; every row that has been on screen is remembered at its
+ * measured height.
  */
 const ROW_ESTIMATE = 64;
 
-/** How near the bottom still counts as watching the conversation. */
-const BOTTOM_SLACK_PX = 48;
+/** What the room can ask of its transcript. */
+export interface TranscriptHandle {
+  /** The newest messages, followed again: after a send. */
+  scrollToLatest: () => void;
+}
+
+/** How many messages the reader had not read when they came in, as the rail counted them. */
+export interface EntryUnread {
+  count: number;
+  /** The count stopped at the engine's limit: "99+" rather than 99. */
+  capped: boolean;
+}
 
 export interface TranscriptProps {
+  channel: ChatChannel | undefined;
+  /** The room's name, or who a conversation is with. */
+  title: string;
+  /** Who is in a direct conversation. */
+  participants: readonly string[];
   tail: Tail;
-  /** Messages this tab is still trying to say, drawn under the transcript. */
-  pending: Outgoing[];
+  /** This room's own messages still on their way (not a thread's). */
+  pending: readonly Outgoing[];
+  /** The seats answering in this room, each under the message it answers. */
+  working: readonly ChatWorking[];
+  /** The packed place the reader had read through when they came in, or null. */
+  since: number | null;
+  sinceUnread: EntryUnread | null;
+  paging: boolean;
   /** Ask for the page below the oldest row held. */
   onOlder: () => void;
-  paging: boolean;
-  /** Which thread is open, so the row it belongs to can say so. */
-  threadRoot: string;
-  onOpenThread: (rootID: string) => void;
-  onReact: (messageID: string, emoji: string, remove: boolean) => void;
-  /** Rewrite one's own message. What the new words name is the engine's
-   *  reading of them, as it is for a post. Resolves with whether the engine
-   *  took it — applied or pending — which is what closes the editor: a
-   *  rewrite that was refused, or that nobody can say landed, stays in front
-   *  of the person who typed it. */
-  onEdit: (messageID: string, body: string) => Promise<boolean>;
-  /** Take a message back. The row survives as a tombstone. */
-  onDelete: (messageID: string) => void;
-  /** The message whose delete is out, or "" — the one row whose Delete shows
-   *  it is sending, while every other row's is held with why. */
-  deleting: string;
-  onRetry: (opId: string) => void;
-  onDiscard: (opId: string) => void;
   /**
-   * Why a pending message's retry cannot be sent now — the room's refusal or
-   * the browser's reason for `post_message` — or "" where it can. The retry
-   * is a press like any other and is held with its sentence, never sent into
-   * a refusal this tab could have said itself.
+   * Read older pages until `enough` says the held tail reaches what a jump
+   * needs, or the room's start; resolves with the tail as it then stands.
    */
-  retryHold: string;
-  /** The newest row drawn, reported as rows scroll past. Whether anybody could
-   *  see it, and so whether it counts as read, is the room's (`Room.tsx`). */
+  readBack: (enough: (tail: Tail) => boolean) => Promise<Tail>;
+  /** The newest row drawn, reported as rows scroll past. Whether it counts as
+   *  read is the room's (`Room.tsx`). */
   onSeen: (view: ChatMessageView) => void;
-  viewer: string;
-  /**
-   * Whether this reader MODERATES — may take anybody's message down — which
-   * the authority table gives an admin and nobody else (`delete_message` is
-   * the author's own, or an admin's). Read off the viewer's own permissions,
-   * which the engine answers, never decided here.
-   */
-  moderates: boolean;
-  nameOf: (handle: string) => string;
-  /**
-   * The three changes a message takes, each its own press (`useAct`): the
-   * browser's reason for each — offline, a credential acting as no seat, a
-   * person the engine does not make THAT change for — is the act's own, and
-   * one tool's sentence is never another's, since the engine serves each of
-   * them to a person on its own (`viewer.acts`).
-   */
-  writes: MessageWrites;
-  /**
-   * Why this ROOM refuses each of a message's changes from this reader, or ""
-   * where it takes it — ONE PER CHANGE, because the engine's rule is one per
-   * tool rather than the room's rule for a post: a reaction is held outside a
-   * private room as a post is, an edit and a delete reach past membership
-   * (their author's, and an admin's moderation), and an archived room takes
-   * all three, since an archive closes a room to new messages and to nothing
-   * else. A kind this build cannot classify refuses every one of them.
-   * Every control stays DRAWN and is held with its sentence: a write control
-   * is never hidden, and one that vanished from a room would read as a
-   * permission this reader lacks.
-   */
-  rules: MessageRules;
-  /**
-   * The seats running a turn against a message in this room.
-   *
-   * THE INDICATOR GOES WHERE THE REPLY WILL LAND, which is what the frame's
-   * `thread` field is for: a seat answering in a thread is working under THAT
-   * message, and an indicator at the top of the room would put it somewhere
-   * the answer is not going to appear.
-   */
-  working: ChatWorking[];
+  onMarkRead: () => void;
+  /** A message a link, a mention or a search landed on, or "". */
+  flash: string;
+  /** The landing is done: the address can drop the message. */
+  onLanded: () => void;
 }
 
-/** The presses a message's changes are made through. */
-export interface MessageWrites {
-  react: Act<"react_to_message">;
-  edit: Act<"edit_message">;
-  remove: Act<"delete_message">;
-}
+export const Transcript = forwardRef<TranscriptHandle, TranscriptProps>(
+  function Transcript(props, ref) {
+    const { tail, since, onSeen, readBack } = props;
+    const scope = useRoomScope();
+    const thread = useRef<ChatThreadHandle | null>(null);
+    const head = useRef<HTMLDivElement | null>(null);
+    const heights = useRef(new Map<string, number>());
+    const [metrics, setMetrics] = useState({ scrollTop: 0, viewport: 0 });
+    const [following, setFollowing] = useState(true);
+    // THE NEWEST MESSAGE THE READER HAD IN VIEW AT THE FOOT, by the room's
+    // own sequence, which an edit does not move.
+    const [seenSeq, setSeenSeq] = useState(0);
+    const today = readerDay(useNow());
 
-/** Why the room refuses each of a message's changes, "" where it takes it. */
-export interface MessageRules {
-  /** `react_to_message`. */
-  react: string;
-  /** `edit_message`. */
-  edit: string;
-  /** `delete_message`. */
-  remove: string;
-}
+    // OLDEST AT THE TOP, the order a conversation is read in and the reverse of
+    // the order the engine answers in.
+    const rows = useMemo(() => [...tail.messages].reverse(), [tail.messages]);
+    const firstUnread = useMemo(
+      () => rows.find((view) => isUnread(view, since, scope.viewer))?.message.id ?? "",
+      [rows, since, scope.viewer],
+    );
+    const days = useMemo(() => layoutDays(rows, today, firstUnread), [rows, today, firstUnread]);
 
-/** What Save says over a rewrite that is the message as it stands. */
-export const NOTHING_CHANGED = "Nothing has changed yet.";
+    const newestSeq = rows[rows.length - 1]?.channel_seq ?? 0;
+    useEffect(() => {
+      if (following && newestSeq > seenSeq) setSeenSeq(newestSeq);
+    }, [following, newestSeq, seenSeq]);
+    const arrived = following
+      ? 0
+      : rows.filter(
+          (r) => r.channel_seq > seenSeq && r.message.author !== scope.viewer && !r.message.event,
+        ).length;
 
-/** What a second message's Delete says while the first one's is out. */
-export const DELETE_IN_FLIGHT = "Waiting for the last delete's answer before another.";
+    // --- the window ----------------------------------------------------------
 
-/** What a second editor's Save says while another rewrite is out. */
-export const EDIT_IN_FLIGHT = "Waiting for the last edit's answer before another.";
+    const scroller = useCallback(() => thread.current?.scroller() ?? null, []);
+    const measure = useCallback(() => {
+      const el = scroller();
+      if (!el) return;
+      const top = el.scrollTop - (head.current?.offsetHeight ?? 0);
+      setMetrics((held) =>
+        held.scrollTop === top && held.viewport === el.clientHeight
+          ? held
+          : { scrollTop: top, viewport: el.clientHeight },
+      );
+      setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight <= CHAT_THREAD_FOLLOW_WITHIN);
+    }, [scroller]);
+    useEffect(() => {
+      const el = scroller();
+      if (!el) return;
+      measure();
+      el.addEventListener("scroll", measure, { passive: true });
+      const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+      observer?.observe(el);
+      return () => {
+        el.removeEventListener("scroll", measure);
+        observer?.disconnect();
+      };
+    }, [scroller, measure]);
 
-export function Transcript(props: TranscriptProps) {
-  const { tail, pending, onOlder, paging, onSeen } = props;
-  const scroller = useRef<HTMLDivElement | null>(null);
-  const heights = useRef(new Map<string, number>());
-  const [metrics, setMetrics] = useState({ scrollTop: 0, viewport: 0 });
-  const [following, setFollowing] = useState(true);
-  // The newest row the reader has actually had on screen. Kept by the room's
-  // own sequence, which an edit does not move — so a corrected typo is not an
-  // arrival.
-  const [seenSeq, setSeenSeq] = useState(0);
+    const heightOf = (index: number) =>
+      heights.current.get(rows[index]?.message.id ?? "") ?? ROW_ESTIMATE;
+    const view = windowFor({
+      count: rows.length,
+      heightOf,
+      scrollTop: metrics.scrollTop,
+      viewport: metrics.viewport,
+    });
+    const keep = useCallback((id: string, height: number) => heights.current.set(id, height), []);
 
-  // OLDEST AT THE TOP, which is the order a conversation is read in and the
-  // reverse of the order the engine answers in.
-  const rows = useMemo(() => [...tail.messages].reverse(), [tail.messages]);
+    // AN OLDER PAGE KEEPS THE READER WHERE THEY WERE. Rows land above what they
+    // are reading, and with the browser's own scroll anchoring off (the thread
+    // anchors its foot itself) the list would jump down by the page's height.
+    const before = useRef<{ first: string; height: number }>({ first: "", height: 0 });
+    useLayoutEffect(() => {
+      const el = scroller();
+      const first = rows[0]?.message.id ?? "";
+      const was = before.current;
+      if (el && was.first && first !== was.first && rows.some((r) => r.message.id === was.first)) {
+        el.scrollTop += el.scrollHeight - was.height;
+      }
+    }, [rows, scroller]);
+    useLayoutEffect(() => {
+      before.current = { first: rows[0]?.message.id ?? "", height: scroller()?.scrollHeight ?? 0 };
+    });
 
-  const measure = useCallback(() => {
-    const el = scroller.current;
-    if (!el) return;
-    setMetrics({ scrollTop: el.scrollTop, viewport: el.clientHeight });
-    setFollowing(el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_SLACK_PX);
-  }, []);
+    // WHAT THE READER HAS SEEN is the newest row drawn, reported rather than
+    // decided here: how far that moves a durable cursor is the room's business.
+    const newestDrawn = rows[Math.min(view.end, rows.length) - 1];
+    useEffect(() => {
+      if (newestDrawn) onSeen(newestDrawn);
+    }, [newestDrawn?.message.id, onSeen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    measure();
-    const el = scroller.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [measure]);
+    // --- jumps ---------------------------------------------------------------
 
-  const view = windowFor({
-    count: rows.length,
-    heightOf: (index) => heights.current.get(rows[index]?.message.id ?? "") ?? ROW_ESTIMATE,
-    scrollTop: metrics.scrollTop,
-    viewport: metrics.viewport,
-  });
-  const drawn = rows.slice(view.start, view.end);
+    /** Bring a row to the view: its day's rule to the top, or the row to the middle. */
+    const land = useCallback(
+      (id: string, how: "day" | "middle") => {
+        const el = scroller();
+        if (!el) return;
+        const index = rows.findIndex((r) => r.message.id === id);
+        if (index >= 0) {
+          // FIRST BY ARITHMETIC, so the row is inside the window and drawn,
+          // then by the element itself once it is.
+          let offset = head.current?.offsetHeight ?? 0;
+          for (let i = 0; i < index; i++) offset += heightOf(i);
+          el.scrollTop = Math.max(0, offset - (how === "middle" ? el.clientHeight / 2 : 0));
+        }
+        requestAnimationFrame(() => {
+          const row = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(id)}"]`);
+          if (!row) return;
+          if (how === "middle") thread.current?.reveal(row);
+          else
+            (row.closest<HTMLElement>(".crewlet-chat-day") ?? row).scrollIntoView({
+              block: "start",
+            });
+        });
+      },
+      // `heightOf` reads the refs and `rows`, both named here.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [rows, scroller],
+    );
 
-  // FOLLOW ONLY FROM THE BOTTOM. In a layout effect so the jump happens in the
-  // same frame the rows landed in: after the paint it is a visible lurch.
-  useLayoutEffect(() => {
-    if (!following) return;
-    const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [rows.length, pending.length, following]);
+    const jumps: Jumps = {
+      latest: () => thread.current?.scrollToLatest(),
+      beginning: () => {
+        void readBack((held) => held.older === "").then(() =>
+          requestAnimationFrame(() => {
+            const el = scroller();
+            if (el) el.scrollTop = 0;
+          }),
+        );
+      },
+      toDay: (key) => {
+        // READ BACK PAST THE START OF THAT DAY, so its first message is held.
+        void readBack((held) => {
+          const oldestHeld = held.messages[held.messages.length - 1];
+          return !!oldestHeld && dayOf(oldestHeld.message.created_at) < key;
+        }).then((held) => {
+          const target = [...held.messages]
+            .reverse()
+            .find((r) => dayOf(r.message.created_at) >= key);
+          if (target) requestAnimationFrame(() => land(target.message.id, "day"));
+          else thread.current?.scrollToLatest();
+        });
+      },
+    };
 
-  // WHAT THE READER HAS SEEN is the newest row drawn, and it is reported
-  // rather than decided here: how far that moves a durable cursor is the
-  // room's business, and a transcript that wrote one would be a second policy.
-  useEffect(() => {
-    const newest = drawn[drawn.length - 1];
-    if (!newest) return;
-    if (newest.channel_seq > seenSeq) setSeenSeq(newest.channel_seq);
-    onSeen(newest);
-    // `drawn` is rebuilt every render; the row that matters is its last one.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawn[drawn.length - 1]?.message.id, onSeen]);
+    useImperativeHandle(
+      ref,
+      () => ({ scrollToLatest: () => thread.current?.scrollToLatest() }),
+      [],
+    );
 
-  const held = rows.filter((row) => row.channel_seq > seenSeq).length;
+    // A MESSAGE OPENED FROM A LINK, A MENTION OR A SEARCH LANDS IN THE MIDDLE
+    // OF THE VIEW, with the messages before and after it in sight, read back to
+    // first where it is older than what is held.
+    const [flashed, setFlashed] = useState("");
+    const { flash, onLanded } = props;
+    useEffect(() => {
+      if (!flash || !tail.loaded) return;
+      let live = true;
+      void readBack((held) => held.messages.some((r) => r.message.id === flash)).then((held) => {
+        if (!live) return;
+        if (held.messages.some((r) => r.message.id === flash)) {
+          setFlashed(flash);
+          requestAnimationFrame(() => land(flash, "middle"));
+        }
+        onLanded();
+      });
+      return () => {
+        live = false;
+      };
+      // Once per landing: the tail it reads back through is the hook's own.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [flash, tail.loaded]);
 
-  return (
-    <>
-      <div className="chat-scroller" ref={scroller} onScroll={measure} role="log" tabIndex={0}>
-        {tail.older ? (
-          <div className="chat-older">
-            <Button variant="ghost" onClick={onOlder} disabled={paging}>
-              {paging ? "Reading…" : "Older messages"}
-            </Button>
-          </div>
-        ) : (
-          tail.loaded &&
-          rows.length > 0 && <div className="chat-older t-caption muted">The start of the room</div>
-        )}
+    // --- the banner ----------------------------------------------------------
 
-        {view.padTop > 0 && <div style={{ height: view.padTop }} aria-hidden="true" />}
-        {drawn.map((row, index) => (
-          <Row
-            key={row.message.id}
-            row={row}
-            previous={index === 0 ? undefined : drawn[index - 1]}
-            measure={(id, height) => heights.current.set(id, height)}
-            threadRoot={props.threadRoot}
-            onOpenThread={props.onOpenThread}
-            onReact={props.onReact}
-            viewer={props.viewer}
-            moderates={props.moderates}
-            nameOf={props.nameOf}
-            writes={props.writes}
-            rules={props.rules}
-            onEdit={props.onEdit}
-            onDelete={props.onDelete}
-            deleting={props.deleting}
-            working={props.working.filter((seat) => seat.thread === row.message.id)}
-          />
-        ))}
-        {view.padBottom > 0 && <div style={{ height: view.padBottom }} aria-hidden="true" />}
+    const unreadHeld = useMemo(
+      () => rows.filter((r) => isUnread(r, since, scope.viewer)).length,
+      [rows, since, scope.viewer],
+    );
+    const oldest = packPosition(rows[0]?.position);
+    const reachesSince =
+      tail.older === "" || (since !== null && oldest !== null && oldest <= since);
+    const entry = props.sinceUnread;
+    const count = reachesSince ? unreadHeld : Math.max(unreadHeld, entry?.count ?? 0);
+    const capped = !reachesSince && !!entry?.capped && count >= entry.count;
+    const sinceAt = rows.find((r) => r.message.id === firstUnread)?.message.created_at;
+    const [bannerGone, setBannerGone] = useState(false);
+    const banner = count > 0 && !bannerGone && (firstUnread !== "" || !reachesSince);
 
-        {pending.map((row) => (
-          <PendingMessage
-            key={row.opId}
-            row={row}
-            nameOf={props.nameOf}
-            viewer={props.viewer}
-            onRetry={props.onRetry}
-            onDiscard={props.onDiscard}
-            blocked={props.retryHold}
-          />
-        ))}
-      </div>
+    // THE BANNER IS FOR A NEW LINE OUT OF VIEW: once the reader can see the
+    // line, it has said what it had to say.
+    useEffect(() => {
+      if (!banner || typeof IntersectionObserver === "undefined") return;
+      const line = scroller()?.querySelector('[data-divider="unread"]');
+      if (!line) return;
+      const seen = new IntersectionObserver((entries) => {
+        if (entries.some((e) => e.isIntersecting)) setBannerGone(true);
+      });
+      seen.observe(line);
+      return () => seen.disconnect();
+    }, [banner, days, view.start, view.end, scroller]);
 
-      {!following && (
-        <div className="chat-jump">
-          <NewItemsNotice
-            count={held}
-            noun="new message"
-            onShow={() => {
-              const el = scroller.current;
-              if (el) el.scrollTop = el.scrollHeight;
-              setFollowing(true);
-            }}
-          />
-        </div>
-      )}
-    </>
-  );
-}
+    const jumpToNew = () => {
+      setBannerGone(true);
+      void readBack((held) => {
+        const end = packPosition(held.messages[held.messages.length - 1]?.position);
+        return since !== null && end !== null && end <= since;
+      }).then((held) => {
+        const first = [...held.messages].reverse().find((r) => isUnread(r, since, scope.viewer))
+          ?.message.id;
+        if (first) requestAnimationFrame(() => land(first, "day"));
+      });
+    };
 
-/**
- * What one row needs.
- *
- * A ROW RE-RENDERS WITH THE TRANSCRIPT, on every page merge and every press's
- * busy flag: it is not memoised, and the writes and rules it is handed are
- * rebuilt on every render of the room. What bounds that cost is the WINDOW —
- * only the rows the reader is over, and a screen and a half either side
- * (`OVERSCAN_PX`), are rendered at all — not the props, so a room paged back
- * through an afternoon redraws a screenful rather than every row it holds.
- */
-interface RowProps {
-  row: ChatMessageView;
-  /** The row above it in the WINDOW, for the run-of-speech grouping. The first
-   *  row of a window has none and draws its author, which is right: a row that
-   *  scrolled into view has to say who said it. */
-  previous: ChatMessageView | undefined;
-  measure: (id: string, height: number) => void;
-  threadRoot: string;
-  onOpenThread: (rootID: string) => void;
-  onReact: (messageID: string, emoji: string, remove: boolean) => void;
-  onEdit: (messageID: string, body: string) => Promise<boolean>;
-  onDelete: (messageID: string) => void;
-  deleting: string;
-  viewer: string;
-  moderates: boolean;
-  nameOf: (handle: string) => string;
-  writes: MessageWrites;
-  rules: MessageRules;
-  /** Seats working on an answer UNDER this message. */
-  working: ChatWorking[];
-}
+    // --- drawing -------------------------------------------------------------
 
-/**
- * Who said a message, and when — for the transcript's rows and the thread's
- * alike, so the two cannot come to name one author two ways.
- *
- * THE PERSON BY NAME, AND AN AGENT SAID, by the one reading every surface
- * gives an author kind (`kindOfAuthor`): a person's message — `human`, the
- * seat they hold, however they wrote it (ADR-0024) — and a credential's
- * `operator` both read as a person, so neither is tagged; a tag naming the
- * kind would put a fact about how somebody signed in on every human message
- * in every room. An AGENT is said, because a seat speaking for itself is a
- * fact a reader weighs a remark by.
- */
-export function AuthorLine({
-  message,
-  nameOf,
-}: {
-  message: ChatMessageView["message"];
-  nameOf: (handle: string) => string;
-}) {
-  return (
-    <div className="row gap-2 chat-author">
-      <strong className="truncate t-cell">{nameOf(message.author)}</strong>
-      {kindOfAuthor(message.author_kind) === "agent" && <Tag appearance="outline">agent</Tag>}
-      <span className="t-caption muted" title={fmtDateTime(message.created_at)}>
-        {fmtTime(message.created_at)}
-      </span>
-    </div>
-  );
-}
-
-/** Why opening the editor is held: the room's rule, then the browser's. */
-function editHold(rule: string, edit: Act<"edit_message">): string {
-  return rule || (edit.access.can ? "" : edit.access.reason);
-}
-
-/**
- * How much of a message the field of its rewrite quotes to name it: enough to
- * tell two of the person's messages apart, short enough for a row of the
- * approval card.
- */
-const REWRITE_QUOTE_CHARS = 40;
-
-/** The field a rewrite is, named by the message: its first words, or when it was said. */
-function rewriteLabel(message: ChatMessageView["message"]): string {
-  const words = [...(message.body ?? "").replace(/\s+/g, " ").trim()];
-  if (words.length === 0) return `Rewrite of your message from ${fmtDateTime(message.created_at)}`;
-  const quoted =
-    words.length > REWRITE_QUOTE_CHARS
-      ? `${words.slice(0, REWRITE_QUOTE_CHARS).join("").trimEnd()}…`
-      : words.join("");
-  return `Rewrite of your message “${quoted}”`;
-}
-
-/**
- * A rewrite open in its row's editor, a field of the room's one draft for the
- * person's own assistant (`app/assistant/boxes.ts`): named by the message,
- * set through the editor's own setter, and refused while its save is out. Put
- * there by this child only while the editor is open, so a transcript of
- * hundreds of rows adds the one box being written rather than an empty one for
- * every row.
- */
-function RewriteBox({
-  view,
-  value,
-  apply,
-  saving,
-}: {
-  view: ChatMessageView;
-  value: string;
-  apply: (next: string) => void;
-  saving: boolean;
-}) {
-  useDraftBox({
-    path: `rewrite.${view.channel_seq}`,
-    label: rewriteLabel(view.message),
-    hint: "Plain text",
-    // AFTER THE ROOM'S AND THE THREAD'S BOXES, in the order the room said them.
-    rank: 2 + view.channel_seq,
-    value,
-    set: apply,
-    refuses: (next) => (saving ? "That rewrite is being saved." : bodyRefusal(next)),
-  });
-  return null;
-}
-
-/** One message. */
-function Row({
-  row,
-  previous,
-  measure,
-  threadRoot,
-  onOpenThread,
-  onReact,
-  onEdit,
-  onDelete,
-  deleting,
-  viewer,
-  moderates,
-  nameOf,
-  writes,
-  rules,
-  working,
-}: RowProps) {
-  const { message } = row;
-  const node = useRef<HTMLDivElement | null>(null);
-  // THE REWRITE, or null while nothing is being rewritten. Not the empty
-  // string: a person clearing the box to keep only a message's links has
-  // emptied the rewrite, not closed the editor.
-  const [editing, setEditing] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  // TWO PRESSES, NOT A DIALOG. A delete is a tombstone rather than an erasure
-  // — the row survives with its body blanked — so the cost of a misclick is
-  // real and recoverable-looking rather than catastrophic, and a modal over a
-  // conversation to take back one line is heavier than the act.
-  const [confirming, setConfirming] = useState(false);
-  // MEASURED AFTER EVERY RENDER, because a row's height changes with its own
-  // content: an edit, a reaction appearing, a link unfurling into a second
-  // line. A height recorded once would make the spacers wrong for the rest of
-  // the session.
-  useLayoutEffect(() => {
-    if (node.current) measure(message.id, node.current.offsetHeight);
-  });
-
-  // ONE RUN OF SPEECH, drawn as one: the same author inside a few minutes
-  // repeats neither their name nor the clock. It is the same message either
-  // way — the grouping is about reading, and every row still carries its own
-  // time on hover.
-  const grouped =
-    previous !== undefined &&
-    previous.message.author === message.author &&
-    !previous.message.thread_root === !message.thread_root &&
-    Date.parse(message.created_at) - Date.parse(previous.message.created_at) < 5 * 60_000;
-
-  const deleted = !!message.deleted_at;
-  const mine = message.author === viewer;
-  // WHY THE REWRITE WOULD CHANGE NOTHING THE ENGINE TAKES, after the room's
-  // own rule: the same words again are no edit at all — the engine has no
-  // same-content no-op, so a Save there would write a record and draw
-  // "edited" on a message nobody changed — `edit_message` refuses an empty
-  // body whatever links the message keeps, because emptying a message is a
-  // delete — and a rewrite past the cap is refused as the composer's message
-  // would be, measured the same way (`bodyBudget`), before the round trip
-  // rather than after it. A save that silently did nothing is a button
-  // somebody presses twice.
-  const rewrite = (editing ?? "").trim();
-  const unchanged = rewrite === (message.body ?? "").trim();
-  const budget = bodyBudget(editing ?? "");
-  const saveRule =
-    rules.edit ||
-    (unchanged
-      ? NOTHING_CHANGED
-      : !rewrite
-        ? "Write the message first. To take it back, delete it."
-        : budget.over
-          ? SHORTEN_FIRST
-          : "");
-  // ONE REWRITE OUT AT A TIME, said on every other editor's Save rather than
-  // dropped: the press is the hook's, and it takes one at a time.
-  const saveBlocked = saveRule || (writes.edit.busy && !saving ? EDIT_IN_FLIGHT : "");
-  const save = async () => {
-    // THE BUTTON'S OWN GATE, because a form submits on its own: a second
-    // submit while the first answer was out would rewrite the message again
-    // under a new operation key.
-    if (saving || !pressable(writes.edit, saveBlocked || undefined)) return;
-    setSaving(true);
-    try {
-      if (await onEdit(message.id, rewrite)) setEditing(null);
-    } finally {
-      setSaving(false);
+    const first = props.channel ? dayOf(props.channel.created_at) : "";
+    const newest = dayOf(rows[rows.length - 1]?.message.created_at);
+    const drawnDays: ReactNode[] = [];
+    for (const day of days) {
+      const inWindow = day.rows.filter((r) => r.index >= view.start && r.index < view.end);
+      if (inWindow.length === 0) continue;
+      const above = day.rows
+        .filter((r) => r.index < view.start)
+        .reduce((sum, r) => sum + heightOf(r.index), 0);
+      const below = day.rows
+        .filter((r) => r.index >= view.end)
+        .reduce((sum, r) => sum + heightOf(r.index), 0);
+      drawnDays.push(
+        <DayBlock
+          key={day.key}
+          day={day}
+          rows={inWindow}
+          above={above}
+          below={below}
+          today={today}
+          newest={newest}
+          first={first}
+          jumps={jumps}
+          keep={keep}
+          working={props.working}
+          flashed={flashed}
+        />,
+      );
     }
-  };
-  // A DELETE IS HELD BY THE ROOM'S RULE FOR IT, then — while another
-  // message's delete is out — with why, rather than taking a press it drops.
-  const deleteBlocked =
-    rules.remove || (writes.remove.busy && deleting !== message.id ? DELETE_IN_FLIGHT : "");
-  // A REACTION IS HELD BY THE ROOM'S RULE FOR IT, then the browser's own
-  // reason for `react_to_message`. Not by a reaction in flight: two chips are
-  // two independent toggles.
-  const reactHold = rules.react || (writes.react.access.can ? "" : writes.react.access.reason);
+    const insideTop = sumAbove(days, view.start, heightOf);
+    const insideBottom = sumBelow(days, view.end, heightOf);
 
-  return (
-    <div
-      className={`chat-message${deleted ? " tombstone" : ""}`}
-      ref={node}
-      // AN ATTRIBUTE RATHER THAN AN `id`, because an element id is an anchor
-      // and this product's addresses live in the hash: `#m-…` would be a
-      // promise that pasting it scrolls somebody to the message, which needs
-      // the transcript to page back until it finds one and does not exist.
-      data-message-id={message.id}
-    >
-      {!grouped && <AuthorLine message={message} nameOf={nameOf} />}
-
-      {deleted ? (
-        // THE ROW SURVIVES SO THE THREAD DOES. A delete blanks the body and
-        // keeps the message, which is what lets a reply still resolve to what
-        // it answered — so the row says what happened rather than disappearing
-        // and taking its thread's first line with it.
-        <p className="chat-body muted">
-          Deleted{message.deleted_by ? ` by ${nameOf(message.deleted_by)}` : ""}.
-        </p>
-      ) : editing !== null ? (
-        <form
-          className="col gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void save();
-          }}
-        >
-          <RewriteBox view={row} value={editing} apply={setEditing} saving={saving} />
-          <BodyField budget={budget}>
-            {(field) => (
-              <Textarea
-                id={field.id}
-                aria-describedby={field.describedBy}
-                autoResize
-                autoFocus
-                value={editing}
-                error={budget.over}
-                aria-label="Rewrite this message"
-                onChange={(event) => setEditing(event.target.value)}
-              />
-            )}
-          </BodyField>
-          <div className="row gap-2">
-            {/* THE REFUSAL IS DRAWN ABOVE THE TRANSCRIPT, once for every
-                row's Save, so this button draws none of its own. */}
-            <WriteButton
-              variant="primary"
-              size="small"
-              type="submit"
-              write={writes.edit}
-              pressing={saving}
-              blocked={saveBlocked || undefined}
-              showRefusal={false}
-              onPress={() => void save()}
+    const fresh = isNewRoom(rows);
+    return (
+      <div className={`chat-transcript${banner ? " has-banner" : ""}`} data-transcript>
+        {banner && (
+          <div className="chat-unread-banner" role="status">
+            <button type="button" onClick={jumpToNew}>
+              <ArrowUpGlyph size="sm" />
+              <span className="chat-unread-banner-text">
+                {capped ? `${count}+` : count} new {count === 1 ? "message" : "messages"}
+                {sinceAt && (
+                  <span className="chat-unread-banner-since"> since {timeOf(sinceAt)}</span>
+                )}
+              </span>
+            </button>
+            <button
+              type="button"
+              className="chat-unread-banner-mark"
+              onClick={() => {
+                setBannerGone(true);
+                props.onMarkRead();
+              }}
             >
-              Save
-            </WriteButton>
-            <Button variant="ghost" size="small" onClick={() => setEditing(null)} disabled={saving}>
-              Cancel
-            </Button>
+              Mark as read
+            </button>
           </div>
-        </form>
-      ) : (
-        <p className="chat-body">{message.body}</p>
-      )}
-
-      <MessageLinks links={message.links} />
-
-      <div className="row wrap gap-2 chat-meta">
-        {message.edited_at && (
-          <span className="t-caption muted" title={fmtDateTime(message.edited_at)}>
-            edited
-          </span>
         )}
-        {message.collective && <span className="t-caption muted">to the whole room</span>}
-        {(row.reactions ?? []).map((reaction) => (
-          // THE KIT'S TOGGLE: pressed is the reaction this reader put there,
-          // drawn from the state a screen reader is told, so the two cannot
-          // disagree. Held — focusable, with its sentence — by the room's
-          // rule for a reaction or the browser's own reason.
-          <Button
-            key={reaction.emoji}
-            variant="outline"
-            size="small"
-            shape="pill"
-            pressed={!!reaction.mine}
-            disabledReason={reactHold || undefined}
-            title={reactHold || undefined}
-            onClick={() => onReact(message.id, reaction.emoji, !!reaction.mine)}
-            aria-label={`${reaction.emoji}, ${reaction.count}`}
-          >
-            <span aria-hidden="true">{reaction.emoji}</span>
-            <Count value={reaction.count} />
-          </Button>
-        ))}
-
-        {working.map((seat) => (
-          <StatusDot key={seat.handle} tone="info" pulse className="t-caption">
-            {nameOf(seat.handle)} {seat.status || "is working on a reply"}
-          </StatusDot>
-        ))}
-
-        {/* EDIT IS THE AUTHOR'S ALONE, not even an admin's: a remark somebody
-            else can rewrite is a remark attributed to a person who did not
-            make it, and the engine refuses it from anybody else. Opening the
-            editor writes nothing, so it is held by what would hold its Save
-            before any word is changed — the room's rule, then the browser's
-            reason — rather than by a rewrite not yet typed. */}
-        {mine && !deleted && editing === null && (
-          <Button
-            variant="ghost"
-            size="small"
-            disabledReason={editHold(rules.edit, writes.edit) || undefined}
-            title={editHold(rules.edit, writes.edit) || undefined}
-            onClick={() => setEditing(message.body ?? "")}
-          >
-            Edit
-          </Button>
-        )}
-        {/* DELETE IS THE AUTHOR'S, AND AN ADMIN'S MODERATION: offered on the
-            reader's own messages, and on everybody's to a reader who
-            moderates — the authority table's rule, which the engine judges
-            against the message's stored author — and the tombstone records
-            who did it. Nowhere else, for Edit's reason: a Delete on somebody
-            else's words that the engine refuses every reader but an admin
-            reads as a gesture this reader could make. Held by the room's rule
-            for a delete, which reaches past membership and past an archive.
-            Its refusal is drawn above the transcript, once. */}
-        {(mine || moderates) && !deleted && editing === null && (
-          <WriteButton
-            variant={confirming ? "danger" : "ghost"}
-            size="small"
-            write={writes.remove}
-            pressing={deleting === message.id}
-            blocked={deleteBlocked || undefined}
-            showRefusal={false}
-            onPress={() => {
-              if (confirming) {
-                onDelete(message.id);
-                setConfirming(false);
-              } else {
-                setConfirming(true);
-              }
-            }}
-            onBlur={() => setConfirming(false)}
-          >
-            {confirming ? "Really delete?" : "Delete"}
-          </WriteButton>
-        )}
-
-        {/* A THREAD IS ONE LEVEL DEEP, so a message that is ALREADY a reply
-            offers no thread of its own: it says which thread it is in, and
-            that thread is the only one it can ever belong to. */}
-        {message.thread_root ? (
-          <Button
-            variant="ghost"
-            size="small"
-            onClick={() => onOpenThread(message.thread_root ?? "")}
-          >
-            In thread
-          </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="small"
-            leadingIcon={<SplitGlyph size="sm" />}
-            pressed={threadRoot === message.id}
-            onClick={() => onOpenThread(message.id)}
-          >
-            {threadRoot === message.id ? "Thread open" : "Reply in thread"}
-          </Button>
+        <ChatThread
+          ref={thread}
+          jump={false}
+          rest="end"
+          label={`Messages in ${props.title}`}
+          busy={props.paging}
+        >
+          <div ref={head} className="chat-transcript-head">
+            {tail.older ? (
+              <div className="chat-older">
+                <Button
+                  variant="ghost"
+                  size="small"
+                  onClick={props.onOlder}
+                  disabled={props.paging}
+                >
+                  {props.paging ? "Reading…" : "Older messages"}
+                </Button>
+              </div>
+            ) : (
+              tail.loaded &&
+              props.channel && (
+                <RoomIntro
+                  channel={props.channel}
+                  participants={props.participants}
+                  title={props.title}
+                  fresh={fresh}
+                />
+              )
+            )}
+          </div>
+          {view.padTop - insideTop > 0 && (
+            <div style={{ height: view.padTop - insideTop }} aria-hidden="true" />
+          )}
+          {drawnDays}
+          {view.padBottom - insideBottom > 0 && (
+            <div style={{ height: view.padBottom - insideBottom }} aria-hidden="true" />
+          )}
+          {props.pending.map((row) => (
+            <PendingRow key={row.opId} row={row} />
+          ))}
+        </ChatThread>
+        {arrived > 0 && (
+          <div className="chat-new-below">
+            <NewItemsNotice
+              count={arrived}
+              noun="new message"
+              onShow={() => thread.current?.scrollToLatest()}
+            />
+          </div>
         )}
       </div>
+    );
+  },
+);
+
+/** The height of the rows above the window that sit inside the first drawn day. */
+function sumAbove(days: readonly Day[], start: number, heightOf: (i: number) => number): number {
+  const day = days.find((d) => d.rows.some((r) => r.index >= start));
+  if (!day) return 0;
+  return day.rows.filter((r) => r.index < start).reduce((sum, r) => sum + heightOf(r.index), 0);
+}
+
+/** The height of the rows below the window that sit inside the last drawn day. */
+function sumBelow(days: readonly Day[], end: number, heightOf: (i: number) => number): number {
+  const day = [...days].reverse().find((d) => d.rows.some((r) => r.index < end));
+  if (!day) return 0;
+  return day.rows.filter((r) => r.index >= end).reduce((sum, r) => sum + heightOf(r.index), 0);
+}
+
+/** One day: its rule, its pill as a Jump to menu, and its drawn rows between spacers. */
+function DayBlock({
+  day,
+  rows,
+  above,
+  below,
+  today,
+  newest,
+  first,
+  jumps,
+  keep,
+  working,
+  flashed,
+}: {
+  day: Day;
+  rows: Day["rows"];
+  above: number;
+  below: number;
+  today: string;
+  newest: string;
+  first: string;
+  jumps: Jumps;
+  keep: (id: string, height: number) => void;
+  working: readonly ChatWorking[];
+  flashed: string;
+}) {
+  return (
+    <ChatDay
+      label={day.label}
+      unread={day.newOnRule ? "New" : undefined}
+      pill={
+        <DayJump
+          label={day.label}
+          day={day.key}
+          today={today}
+          newest={newest}
+          first={first}
+          jumps={jumps}
+        />
+      }
+    >
+      {above > 0 && <div style={{ height: above }} aria-hidden="true" />}
+      {rows.map((row) => (
+        <Measured key={row.view.message.id} id={row.view.message.id} keep={keep}>
+          {row.newAbove && <ChatDivider variant="unread" label="New" />}
+          <MessageRow
+            view={row.view}
+            continuation={row.continuation}
+            working={working}
+            flash={flashed === row.view.message.id}
+          />
+        </Measured>
+      ))}
+      {below > 0 && <div style={{ height: below }} aria-hidden="true" />}
+    </ChatDay>
+  );
+}
+
+/**
+ * A row, measured after every render: a row's height changes with its own
+ * content (an edit, a reaction, a preview), and a height recorded once would
+ * make the spacers wrong for the rest of the visit.
+ */
+function Measured({
+  id,
+  keep,
+  children,
+}: {
+  id: string;
+  keep: (id: string, height: number) => void;
+  children: ReactNode;
+}) {
+  const node = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    if (node.current) keep(id, node.current.offsetHeight);
+  });
+  return (
+    <div ref={node} className="chat-row">
+      {children}
     </div>
   );
 }

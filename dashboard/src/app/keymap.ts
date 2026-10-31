@@ -54,6 +54,8 @@ export type KeyScope =
   | "draft"
   | "compose"
   | "chat"
+  | "chatbox"
+  | "message"
   | "create"
   | "charter"
   | "search"
@@ -72,6 +74,8 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
   { scope: "compose", title: "Writing a reply or a message" },
   { scope: "chat", title: "In Chatlet" },
+  { scope: "chatbox", title: "Writing a chat message" },
+  { scope: "message", title: "On a focused chat message" },
   { scope: "create", title: "Making a new artifact" },
   { scope: "charter", title: "Writing the company's principles" },
   { scope: "search", title: "In search" },
@@ -384,24 +388,27 @@ const PAGE: KeyRow[] = [
 ];
 
 /**
- * THE SEND KEY FOR WHAT A PERSON SAYS TO SOMEBODY, read from inside the field
- * through [matchesRow] by every box that says it: a reply in the Inbox and a
- * comment on a task (`components/Composer.tsx`), and a message in a chat room
- * or a thread (`routes/chatlet/Composer.tsx`). Enter alone is a new line there,
- * because what is said to somebody is often several lines: a list, a pasted
+ * THE SEND KEYS FOR WHAT A PERSON SAYS TO SOMEBODY, read from inside the field
+ * by every box that says it.
+ *
+ * A LETTER TAKES THE COMMAND KEY: a reply in the Inbox and a comment on a task
+ * (`components/Composer.tsx`, through [matchesRow]), where Enter alone is a new
+ * line, because what is said there is often several lines: a list, a pasted
  * stack trace.
  *
- * THE ASSISTANT'S QUESTION BOX IS THE ONE EXCEPTION, and on purpose: it sends
- * on Enter ([ASSISTANT]'s `assistant.send`), the design system's own rule for
- * a question, which is one line far more often than not. Two kinds of box,
- * two keys, each listed in the legend under its own heading.
+ * A CHAT MESSAGE TAKES ENTER ([CHATBOX]'s `chatbox.send`), with Shift for a
+ * new line: a room is talked in a line at a time, and the box grows for the
+ * message that needs more. The assistant's question box sends the same way
+ * ([ASSISTANT]'s `assistant.send`).
+ *
+ * The chat box's own keys are [CHATBOX]'s.
  */
 const COMPOSE: KeyRow[] = [
   {
     id: "compose.send",
     scope: "compose",
     presses: [{ key: "enter", mod: true }],
-    does: "Send it",
+    does: "Send a reply or a comment",
     by: "dashboard",
     whileTyping: true,
   },
@@ -462,6 +469,93 @@ const CHAT: KeyRow[] = [
 ];
 
 /**
+ * A CHAT BOX'S OWN KEYS, read from inside its field (`routes/chatlet/Composer.tsx`):
+ * Enter sends (the kit's `Composer` with `submitOn="enter"`), Up in an empty
+ * box opens the reader's last message for a rewrite, and the command key with
+ * B or I marks the selection. A field's own keys, so a list's bare keys and a
+ * focused message's never fire beside them ([SCOPES_APART]).
+ */
+const CHATBOX: KeyRow[] = [
+  {
+    id: "chatbox.send",
+    scope: "chatbox",
+    presses: [{ key: "enter" }],
+    does: "Send it; with Shift, a new line",
+    by: "kit",
+    whileTyping: true,
+  },
+  {
+    id: "chatbox.edit-last",
+    scope: "chatbox",
+    presses: [{ key: "arrowup" }],
+    does: "Edit your last message, from an empty box",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chatbox.bold",
+    scope: "chatbox",
+    presses: [{ key: "b", mod: true }],
+    does: "Bold the selection",
+    by: "dashboard",
+    whileTyping: true,
+  },
+  {
+    id: "chatbox.italic",
+    scope: "chatbox",
+    presses: [{ key: "i", mod: true }],
+    does: "Italicise the selection",
+    by: "dashboard",
+    whileTyping: true,
+  },
+];
+
+/**
+ * A FOCUSED CHAT MESSAGE'S KEYS, answered by the message row itself
+ * (`routes/chatlet/MessageRow.tsx`) through [matchesRow], only while the row
+ * has the focus: Tab or a click puts it there, and Up and Down move it to the
+ * message above and below. A bare letter here is never a key in a field, so
+ * none of these fires while somebody types.
+ */
+const MESSAGE: KeyRow[] = [
+  {
+    id: "message.edit",
+    scope: "message",
+    presses: [{ key: "e" }],
+    does: "Edit your message",
+    by: "dashboard",
+  },
+  {
+    id: "message.thread",
+    scope: "message",
+    presses: [{ key: "t" }],
+    does: "Open its thread",
+    by: "dashboard",
+  },
+  {
+    id: "message.save",
+    scope: "message",
+    presses: [{ key: "s" }],
+    does: "Save it for later, or take it out of Saved",
+    by: "dashboard",
+  },
+  {
+    id: "message.delete",
+    scope: "message",
+    presses: [{ key: "delete" }, { key: "backspace" }],
+    does: "Delete your message",
+    by: "dashboard",
+  },
+  {
+    id: "message.move",
+    scope: "message",
+    presses: [{ key: "arrowup" }, { key: "arrowdown" }],
+    does: "Move to the message above or below",
+    by: "dashboard",
+  },
+];
+
+/**
  * A CREATE PAGE'S KEY, bound by the shared frame every kind's create page
  * stands in (`routes/artifacts/new/CreateShell.tsx`) to the page's one primary
  * action, so every kind starts with the same press and none binds its own. It
@@ -517,6 +611,12 @@ const CHARTER: KeyRow[] = [
  * peek, so its editor's Save and Escape are free there.
  */
 export const SCOPES_APART: readonly (readonly [KeyScope, KeyScope])[] = [
+  // A chat box's keys fire only inside its field, where a list's bare keys and
+  // a focused message's never do; and a message row is drawn only in Chatlet,
+  // never on an open artifact.
+  ["chatbox", "list"],
+  ["chatbox", "message"],
+  ["artifact", "message"],
   ["compose", "create"],
   // CHATLET DRAWS NO CREATE PAGE AND NO CHARTER. A PEEK can be open over it
   // (any address may carry one), and Chatlet's Escape is bound only while
@@ -619,6 +719,8 @@ export const KEYMAP: readonly KeyRow[] = [
   ...PAGE,
   ...COMPOSE,
   ...CHAT,
+  ...CHATBOX,
+  ...MESSAGE,
   ...CREATE,
   ...CHARTER,
   ...SEARCH,
@@ -742,6 +844,9 @@ const CAP_NAMES: Record<string, string> = {
   enter: "Enter",
   tab: "Tab",
   backspace: "Backspace",
+  delete: "Delete",
+  arrowup: "ArrowUp",
+  arrowdown: "ArrowDown",
 };
 
 /**
