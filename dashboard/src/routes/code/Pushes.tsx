@@ -110,6 +110,7 @@ const VIA_WORDS: Readonly<Record<string, string>> = {
   git: "git push",
   engine: "built by the engine",
   merge: "a change merged",
+  queue: "a merge queue landed it",
 };
 
 export function Pushes() {

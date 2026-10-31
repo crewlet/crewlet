@@ -319,6 +319,24 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"target's landing by code_merge_change, through the estate's code.queue"},
 	code.OpDequeue: {payload: reflect.TypeFor[code.Dequeue](), how: "an entry leaves its queue by " +
 		"code_dequeue_change, through the estate's code.queue"},
+	// A QUEUE'S OWN RECORDS, decided by its repository's committer since the
+	// committer's queue records landed, are appended by no node while nothing
+	// asks for them: the home git node's queue worker, which builds a train
+	// and lands what it tested, and its tip checks, which green or break what
+	// landed, are their first writers, through the estate's code.queue — a
+	// few records a change landed through a queue, which those writers are
+	// the ones to price.
+	code.OpCandidate: {payload: reflect.TypeFor[code.Candidate](), how: "a train of a queue's waiting " +
+		"changes is recorded by its repository's home git node, through the estate's code.queue"},
+	code.OpEject: {payload: reflect.TypeFor[code.Eject](), how: "entries a check, a conflict or a gate " +
+		"put out are ejected by their repository's home git node, through the estate's code.queue"},
+	code.OpLand: {payload: reflect.TypeFor[code.Land](), how: "a train's tested prefix, or a lane's chain, " +
+		"is landed by its repository's home git node, through the estate's code.queue"},
+	code.OpGreen: {payload: reflect.TypeFor[code.Green](), how: "a protected branch's green row is moved " +
+		"onto a landing its tip checks passed by its repository's home git node, through the estate's " +
+		"code.queue"},
+	code.OpBroken: {payload: reflect.TypeFor[code.Broken](), how: "a landing its tip checks failed is " +
+		"marked broken by its repository's home git node, through the estate's code.queue"},
 	// A CHANGE'S CONVERSATION, written by the change writer beside each
 	// committer since its subject landed, is appended by no node while
 	// nothing asks for it: the review and comment tools a seat and a person
@@ -415,6 +433,17 @@ var codeLogRiders = map[code.OpKind]struct {
 		"sweeps an idle repository's attempts past code.CheckHistory, which its own endings no longer " +
 		"remove, once one has outlived it by code.CheckSweepGrace: a record an idle repository holding " +
 		"them, a day at most"},
+	// A REPOSITORY'S QUEUE HISTORY is its ended entries, which only an
+	// enqueue makes, and its protected branches' landings below their green
+	// rows, which a merge, a queue's landing and a person's push onto a
+	// protected branch make: its sweep comes at the rate an idle repository
+	// holds them past code.QueueHistory by code.QueueSweepGrace, once a grace
+	// at most.
+	code.OpQueueSweep: {on: code.OpEnqueue, makers: []codeLogMaker{{op: code.OpPush, key: "pushes.landings"}},
+		how: "the code-retention pass sweeps an idle repository's ended queue entries and its landings " +
+			"below their green rows past code.QueueHistory, which its own queue's records no longer remove, " +
+			"once they have outlived it by code.QueueSweepGrace: a record an idle repository holding them, " +
+			"a day at most"},
 }
 
 // codeLogMaker is a key of a priced op's payload whose records make the object
@@ -487,6 +516,9 @@ var codeLogPushVias = map[code.PushVia]string{
 	code.ViaMerge: "the push a merge record lands, written by the merge's own apply and never a push " +
 		"record: its bytes are the merge record's (code.OpMerge), which no node appends while " +
 		"nothing asks for one (codeLogUnwritten)",
+	code.ViaQueue: "the pushes a land record lands, one a change, written by the landing's own apply and " +
+		"never a push record: their bytes are the land record's (code.OpLand), which no node appends " +
+		"while nothing asks for one (codeLogUnwritten)",
 }
 
 // codeLogManagers is everything that may manage a repository
@@ -574,6 +606,11 @@ var codeLogFields = map[code.OpKind]struct {
 				"its routing once a change, beside the opening and the landing it announces, which the day " +
 				"leaves out (codeLogUnwritten, codeLogRiders), held with the record's bytes by the push's " +
 				"decide (internal/code's routingRoom)",
+			"pushes.landings": "the landings a push makes on a protected branch (code.PushEntry.Landings): " +
+				"only a person's own push under direct_push persons moves one — no protection takes a " +
+				"seat's direct push — each its command's place and whether it lands green; the measured " +
+				"push, a coding box's moving its branch on, moves none. The queue's history it makes is " +
+				"swept with an idle repository's queue (codeLogRiders)",
 		},
 	},
 	code.OpCompact: {

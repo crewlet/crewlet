@@ -1029,7 +1029,8 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, boo
 func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.RetentionReport, err error,
 	ended bool) {
 	attrs := []any{"sweeps", report.Sweeps, "swept_rows", report.SweptRows,
-		"checks_sweeps", report.ChecksSweeps, "checks_swept_rows", report.ChecksSweptRows, "purged", report.Purged,
+		"checks_sweeps", report.ChecksSweeps, "checks_swept_rows", report.ChecksSweptRows,
+		"queue_sweeps", report.QueueSweeps, "queue_swept_rows", report.QueueSweptRows, "purged", report.Purged,
 		"steps", report.Steps, "remain", report.Remain, "released", report.Released, "expired", report.Expired,
 		"scratch_held", report.ScratchHeld, "refs_expired", report.RefsExpired, "refs_kept", report.RefsKept,
 		"refs_held", report.RefsHeld}
@@ -1052,10 +1053,11 @@ func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.Rete
 	case err != nil && !ended:
 		logger.WarnContext(ctx, "code_retention_pass_failed", append(attrs, "error", err.Error(),
 			"detail", "the next pass, a tick later, lists what is due again")...)
-	case report.Sweeps > 0 || report.ChecksSweeps > 0 || len(report.Purged) > 0 || len(report.Failed) > 0 ||
-		len(report.Unhanded) > 0 || report.Remain || report.Released > 0 || report.Expired > 0 ||
-		report.ScratchHeld > 0 || report.ScratchExpiryUnread != "" || report.RefsExpired > 0 ||
-		report.RefsKept > 0 || report.RefsHeld > 0 || len(report.ExpiryFailed) > 0 || report.ExpiryUnread != "":
+	case report.Sweeps > 0 || report.ChecksSweeps > 0 || report.QueueSweeps > 0 || len(report.Purged) > 0 ||
+		len(report.Failed) > 0 || len(report.Unhanded) > 0 || report.Remain || report.Released > 0 ||
+		report.Expired > 0 || report.ScratchHeld > 0 || report.ScratchExpiryUnread != "" ||
+		report.RefsExpired > 0 || report.RefsKept > 0 || report.RefsHeld > 0 || len(report.ExpiryFailed) > 0 ||
+		report.ExpiryUnread != "":
 		logger.InfoContext(ctx, "code_retention_pass", attrs...)
 	default:
 		logger.DebugContext(ctx, "code_retention_pass", attrs...)

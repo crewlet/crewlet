@@ -324,11 +324,14 @@ const (
 	// squashed commit and the trees and blobs the merge wrote — which its
 	// merge record adds ([Merge]).
 	PackMerge PackKind = "merge"
-	// PackCandidate is the pack a speculative queue's candidate is recorded
-	// with (M5): no record of this build writes one.
+	// PackCandidate is the pack a pre_land queue's train is recorded with —
+	// the commits its candidates built of their entries, and the trees and
+	// blobs their merges wrote — which its candidate record adds
+	// ([Candidate]).
 	PackCandidate PackKind = "candidate"
-	// PackLand is the pack a post-land lane's landing records (M5): no
-	// record of this build writes one.
+	// PackLand is the pack a post_land lane's landing is recorded with — the
+	// commits its chain built of its entries — which its land record's first
+	// push adds ([Land]).
 	PackLand PackKind = "land"
 	// PackExpunge is a pack an expunge's begin keeps: what of its inputs a
 	// ref reached, live.
@@ -943,6 +946,30 @@ type PushEntry struct {
 	// "push", Path: []string{"mutation", "pushes", "routing"}} in
 	// versionedFields, with the companions concerns.go names.
 	Routing []ChangeRouting `json:"routing,omitempty"`
+	// Landings is every LANDING the entry makes on a protected branch: each
+	// ok command that moves a branch a protection rule matches onto a
+	// commit — a person's own push under direct_push persons, their recorded
+	// override (ADR-0066), since no seat's push moves a protected branch —
+	// in command order, STAMPED BY ITS DECIDE from the rules its snapshot
+	// holds, so the record's apply writes the branch's landing row, and its
+	// green row where the branch's gate requires no check, without matching
+	// a rule itself. None for an entry that lands on no protected branch.
+	//
+	// BASE FORMAT, under the condition queuerecords.go's head states: once
+	// a build without it has run, it takes {Name: "PushEntry.Landings",
+	// Since: 2, Op: "push", Path: []string{"mutation", "pushes",
+	// "landings"}} in versionedFields — such a build would apply the push
+	// and write no landing, and the branch's tip checks would never judge
+	// what it landed.
+	Landings []PushLanding `json:"landings,omitempty"`
+}
+
+// PushLanding is one landing a push entry makes on a protected branch: the
+// place of its command among the entry's, and whether it is green as it lands —
+// the branch's gate requiring no check, so the branch's green row moves to it.
+type PushLanding struct {
+	Command int  `json:"command"`
+	Green   bool `json:"green,omitempty"`
 }
 
 // Principal is who acts on a repository: an operator credential and the
@@ -1687,6 +1714,18 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Enqueue](rec)
 	case kind == KindRepo && op == OpDequeue:
 		return decodePayload[Dequeue](rec)
+	case kind == KindRepo && op == OpCandidate:
+		return decodePayload[Candidate](rec)
+	case kind == KindRepo && op == OpEject:
+		return decodePayload[Eject](rec)
+	case kind == KindRepo && op == OpLand:
+		return decodePayload[Land](rec)
+	case kind == KindRepo && op == OpGreen:
+		return decodePayload[Green](rec)
+	case kind == KindRepo && op == OpBroken:
+		return decodePayload[Broken](rec)
+	case kind == KindRepo && op == OpQueueSweep:
+		return decodePayload[QueueSweep](rec)
 	case kind == KindChange && op == OpReviewers:
 		return decodePayload[ReviewerRequest](rec)
 	case kind == KindChange && op == OpComment:

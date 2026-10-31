@@ -200,32 +200,63 @@ type Dequeue struct {
 }
 
 // QueueProposal is one write of a target's queue as its asker hands it to the
-// repository's committer ([Committer.ProposeQueue]): EXACTLY ONE of an enqueue
-// and a dequeue, decided alone as a record of its own, beside who asks and the
-// floor they read at. Its OpID is the record's operation id — an enqueue's
-// entry id is derived from it — and its Seen the publish's session floor.
+// repository's committer ([Committer.ProposeQueue]): EXACTLY ONE of an
+// enqueue, a dequeue and one of the queue's own records — a candidate, an
+// eject, a land, a green and a broken (queuerecords.go) — decided alone as a
+// record of its own, beside who asks and the floor they read at. Its OpID is
+// the record's operation id — an enqueue's entry id, a candidate's train and a
+// landing's id are derived from it — and its Seen the publish's session floor.
 type QueueProposal struct {
 	OpID string `json:"op_id"`
-	// Asker is who asks: a person, or a seat — whose merge authority, like
-	// every approval an enqueue's gate counts, is judged from the chart of
-	// the deciding node's epoch ([QueueProposal.JudgesChart]). A token bound
-	// to nobody merges nothing.
+	// Asker is who asks an enqueue or a dequeue: a person, or a seat — whose
+	// merge authority, like every approval an enqueue's gate counts, is
+	// judged from the chart of the deciding node's epoch
+	// ([QueueProposal.JudgesChart]). A token bound to nobody merges nothing.
+	// The queue's own records name NOBODY: they are the engine's — its home
+	// builds them — and a landing lands each entry as its enqueuer, read from
+	// the entry's row, never as whoever asked.
 	Asker Principal `json:"asker"`
 	// Seen is the code log's position the asker read the change at — zero
 	// for one that read none. The committer DECIDES AT OR PAST IT, or refuses
 	// `behind` about itself, so the runner-up decides.
-	Seen    statelog.Position `json:"seen,omitzero"`
-	Enqueue *Enqueue          `json:"enqueue,omitempty"`
-	Dequeue *Dequeue          `json:"dequeue,omitempty"`
+	Seen      statelog.Position `json:"seen,omitzero"`
+	Enqueue   *Enqueue          `json:"enqueue,omitempty"`
+	Dequeue   *Dequeue          `json:"dequeue,omitempty"`
+	Candidate *Candidate        `json:"candidate,omitempty"`
+	Eject     *Eject            `json:"eject,omitempty"`
+	Land      *Land             `json:"land,omitempty"`
+	Green     *Green            `json:"green,omitempty"`
+	Broken    *Broken           `json:"broken,omitempty"`
+}
+
+// engines reports a proposal of one of the queue's OWN records, which its home
+// asks and which names no asker.
+func (p QueueProposal) engines() bool {
+	return p.Candidate != nil || p.Eject != nil || p.Land != nil || p.Green != nil || p.Broken != nil
+}
+
+// writes is how many of the records a proposal may be p carries: one, or it
+// is no proposal.
+func (p QueueProposal) writes() int {
+	n := 0
+	for _, set := range []bool{p.Enqueue != nil, p.Dequeue != nil, p.Candidate != nil, p.Eject != nil,
+		p.Land != nil, p.Green != nil, p.Broken != nil} {
+		if set {
+			n++
+		}
+	}
+	return n
 }
 
 // QueueResult is what became of one queue proposal.
 type QueueResult struct {
 	// Outcome is applied, pending or unknown for a proposal whose record was
-	// appended, and empty for one refused. Applied is answered from the
-	// entry's row the record wrote.
+	// appended, and empty for one refused. Applied is answered from the rows
+	// the record wrote: an enqueue's or a dequeue's entry, a candidate's,
+	// an eject's and a land's entries, a green's green row and a broken's
+	// landing.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
-	// EntryID is the entry the proposal is about.
+	// EntryID is the entry an enqueue or a dequeue is about.
 	EntryID string `json:"entry_id,omitempty"`
 	// State is the entry's state once the record applied; Place its place
 	// in its target's queue while it is live, from 1, and 0 otherwise — or
@@ -242,6 +273,21 @@ type QueueResult struct {
 	// refused gate_unmet did not meet, each naming whom it waits on.
 	Refusal MergeRefusal   `json:"refusal,omitempty"`
 	Detail  string         `json:"detail,omitempty"`
+	Unmet   []Precondition `json:"unmet,omitempty"`
+	// Refused is every entry of a landing its decide would not land, each
+	// with why — not_queued, head_moved, gate_unmet with every precondition
+	// unmet — beside the landing's own refusal naming the first: what its
+	// home ejects before it builds the landing again.
+	Refused []RefusedEntry `json:"refused,omitempty"`
+}
+
+// RefusedEntry is one entry of a landing its decide would not land: why, its
+// one sentence, and every precondition of its change's merge gate it no longer
+// meets with its enqueuer as the merger.
+type RefusedEntry struct {
+	EntryID string         `json:"entry_id"`
+	Refusal MergeRefusal   `json:"refusal"`
+	Detail  string         `json:"detail"`
 	Unmet   []Precondition `json:"unmet,omitempty"`
 }
 
@@ -331,6 +377,21 @@ const (
 	// the entry's enqueuer, its change's owner, a principal that maintains
 	// the repository, nor a person.
 	MergeRefusalNotPermitted MergeRefusal = "not_permitted"
+	// MergeRefusalNotGreen is a pre_land landing whose tip, or a green row
+	// whose landing, some required check of its target has not passed on —
+	// by its latest attempt checked for the target: nothing moves on red,
+	// nor on what is still running.
+	MergeRefusalNotGreen MergeRefusal = "not_green"
+	// MergeRefusalNotRed is a broken landing none of whose named checks
+	// failed on its commit by its latest attempt.
+	MergeRefusalNotRed MergeRefusal = "not_red"
+	// MergeRefusalNoLanding is a green or a broken naming no landing above
+	// its target's green row: one green already, or none at all.
+	MergeRefusalNoLanding MergeRefusal = "no_landing"
+	// MergeRefusalRecordFull is a landing whose rows — its entries' own and
+	// the live changes their pushes move — would take its record past
+	// MaxRecordRows: its home lands fewer entries at once.
+	MergeRefusalRecordFull MergeRefusal = "record_full"
 	// MergeRefusalBusy is the committer's queue full, or its round lost to a
 	// repository that kept changing.
 	MergeRefusalBusy MergeRefusal = "busy"
@@ -348,7 +409,8 @@ func MergeRefusals() []MergeRefusal {
 		MergeRefusalTargetMoved, MergeRefusalTargetMoving, MergeRefusalNotPerson, MergeRefusalQueueTarget, MergeRefusalNoQueue,
 		MergeRefusalNoAutoRevert, MergeRefusalAlreadyQueued, MergeRefusalQueueFull, MergeRefusalGateUnmet,
 		MergeRefusalSourceRefused, MergeRefusalUploadExpired, MergeRefusalRepoSize,
-		MergeRefusalCompactionBehind, MergeRefusalNotQueued, MergeRefusalNotPermitted, MergeRefusalBusy,
+		MergeRefusalCompactionBehind, MergeRefusalNotQueued, MergeRefusalNotPermitted, MergeRefusalNotGreen,
+		MergeRefusalNotRed, MergeRefusalNoLanding, MergeRefusalRecordFull, MergeRefusalBusy,
 		MergeRefusalNotApplied, MergeRefusalUnavailable}
 }
 
@@ -356,27 +418,40 @@ func MergeRefusals() []MergeRefusal {
 func (r MergeRefusal) Valid() bool { return slices.Contains(MergeRefusals(), r) }
 
 // Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
-// naming the field), before it is queued: anything but exactly one of an
-// enqueue and a dequeue; an operation id this engine does not accept; an asker
-// that is no principal, or names a run; a Seen that is no position on the code
-// log; a repository id that is no UUID in its canonical spelling; an entry id
-// that is no bare UUIDv7 — and an enqueue's that is not [QueueEntryID] of its
-// operation id; a change id that is no bare UUIDv7; a target that is no branch
-// a change may name; a head that is no whole object id; a method this build
-// does not know; a principal the asker set, which the committer stamps; and a
-// record past what one proposal may carry ([EntryRoom]).
+// naming the field), before it is queued: anything but exactly one of the
+// records a queue proposal may be; an operation id this engine does not
+// accept; an enqueue's or a dequeue's asker that is no principal, or names a
+// run, and an asker on one of the queue's own records, which name nobody; a
+// Seen that is no position on the code log; a repository id that is no UUID
+// in its canonical spelling; an entry id that is no bare UUIDv7 — and an
+// enqueue's that is not [QueueEntryID] of its operation id; a change id that
+// is no bare UUIDv7; a target that is no branch a change may name; a head that
+// is no whole object id; a method this build does not know; a principal the
+// asker set, which the committer stamps; each of the queue's own records'
+// rules (queuerecords.go); and a record past what one proposal may carry
+// ([EntryRoom]).
 func (p QueueProposal) Validate() error {
 	_, err := p.measure()
 	return err
 }
 
 // measure validates p and answers its queued byte charge: its record's
-// payload as the committer stamps it, encoded, held under [EntryRoom].
+// payload as the committer stamps it — a landing green and every entry of it
+// deleting its source, the widest its decide makes it — encoded, held under
+// [EntryRoom].
 func (p QueueProposal) measure() (int, error) {
 	if err := p.validFields(); err != nil {
 		return 0, err
 	}
 	op, payload := p.stamped()
+	if l, ok := payload.(Land); ok {
+		l.Green = true
+		l.Entries = slices.Clone(l.Entries)
+		for i := range l.Entries {
+			l.Entries[i].DeleteSource = true
+		}
+		payload = l
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
@@ -391,17 +466,27 @@ func (p QueueProposal) measure() (int, error) {
 // validFields is every rule of [QueueProposal.Validate] but the record's
 // bytes.
 func (p QueueProposal) validFields() error {
-	if (p.Enqueue == nil) == (p.Dequeue == nil) {
-		return fmt.Errorf("%w: a queue proposal is exactly one of an enqueue and a dequeue", ErrInvalidProposal)
+	if p.writes() != 1 {
+		return fmt.Errorf("%w: a queue proposal is exactly one of an enqueue, a dequeue, a candidate, an "+
+			"eject, a land, a green and a broken", ErrInvalidProposal)
 	}
 	if err := statelog.CheckCallerOpID(p.OpID); err != nil {
 		return badField("op_id", "%v", err)
 	}
-	switch why := p.Asker.invalid(); {
-	case why != "":
-		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
-	case !p.Asker.Run.IsZero():
-		return badField("asker.run", "a queue's write names its asker alone, never a run")
+	if p.engines() {
+		// THE QUEUE'S OWN RECORDS NAME NOBODY: its home asks them, and a
+		// landing lands each entry as its enqueuer.
+		if p.Asker != (Principal{}) {
+			return badField("asker", "the queue's own records are the engine's and name no asker: a landing "+
+				"lands each entry as its enqueuer")
+		}
+	} else {
+		switch why := p.Asker.invalid(); {
+		case why != "":
+			return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
+		case !p.Asker.Run.IsZero():
+			return badField("asker.run", "a queue's write names its asker alone, never a run")
+		}
 	}
 	if !p.Seen.IsZero() {
 		switch {
@@ -414,6 +499,18 @@ func (p QueueProposal) validFields() error {
 	}
 	if err := validRepoID("repo_id", p.RepoID()); err != nil {
 		return err
+	}
+	switch {
+	case p.Candidate != nil:
+		return p.Candidate.validate(p.OpID)
+	case p.Eject != nil:
+		return p.Eject.validate()
+	case p.Land != nil:
+		return p.Land.validate(p.OpID)
+	case p.Green != nil:
+		return p.Green.validate()
+	case p.Broken != nil:
+		return p.Broken.validate()
 	}
 	if d := p.Dequeue; d != nil {
 		if err := bareUUIDv7("dequeue.entry_id", d.EntryID); err != nil {
@@ -450,17 +547,28 @@ func (p QueueProposal) validFields() error {
 
 // record is the op and the payload p carries, as its asker sent it.
 func (p QueueProposal) record() (OpKind, any) {
-	if p.Enqueue != nil {
+	switch {
+	case p.Enqueue != nil:
 		return OpEnqueue, *p.Enqueue
-	}
-	if p.Dequeue != nil {
+	case p.Dequeue != nil:
 		return OpDequeue, *p.Dequeue
+	case p.Candidate != nil:
+		return OpCandidate, *p.Candidate
+	case p.Eject != nil:
+		return OpEject, *p.Eject
+	case p.Land != nil:
+		return OpLand, *p.Land
+	case p.Green != nil:
+		return OpGreen, *p.Green
+	case p.Broken != nil:
+		return OpBroken, *p.Broken
 	}
 	return "", nil
 }
 
-// stamped is the op and the payload of p's record as the committer forms it:
-// its asker as the record's principal.
+// stamped is the op and the payload of p's record as the committer forms it
+// before its decide: an enqueue's and a dequeue's asker as its principal. A
+// landing's stamps are its decide's, from its snapshot.
 func (p QueueProposal) stamped() (OpKind, any) {
 	op, payload := p.record()
 	switch r := payload.(type) {
@@ -483,11 +591,22 @@ func (p QueueProposal) RepoID() string {
 		return p.Enqueue.RepoID
 	case p.Dequeue != nil:
 		return p.Dequeue.RepoID
+	case p.Candidate != nil:
+		return p.Candidate.RepoID
+	case p.Eject != nil:
+		return p.Eject.RepoID
+	case p.Land != nil:
+		return p.Land.RepoID
+	case p.Green != nil:
+		return p.Green.RepoID
+	case p.Broken != nil:
+		return p.Broken.RepoID
 	}
 	return ""
 }
 
-// EntryID is the entry p is about.
+// EntryID is the entry an enqueue or a dequeue is about, "" for the queue's
+// own records, which name several.
 func (p QueueProposal) EntryID() string {
 	switch {
 	case p.Enqueue != nil:
@@ -500,20 +619,48 @@ func (p QueueProposal) EntryID() string {
 
 // JudgesChart reports a proposal whose decide reads the deciding node's chart,
 // which a node holding none, or one confirmed behind the company's
-// configuration, never decides: EVERY ENQUEUE, whoever asks — its merge gate
-// counts an approval by who may approve the change, an owner's by the lead
-// chain above it and a seat's merge authority by its grant, each the chart's
-// ([JudgeGate]), as a mergeability's readiness is
-// ([ConversationWrite.JudgesChart]) — and a SEAT'S dequeue, whose grant says
-// whether it may take an entry out. A person's dequeue consults none. ONE
-// ANSWER, which the committer queues and decides by and the estate declares
-// the operation's grant by, so the two never disagree about which writes a
-// node behind the company's configuration may decide.
-func (p QueueProposal) JudgesChart() bool { return p.Enqueue != nil || p.Asker.Kind.readsChart() }
+// configuration, never decides: EVERY ENQUEUE AND EVERY LANDING, whoever asks
+// — the merge gate each judges counts an approval by who may approve the
+// change, an owner's by the lead chain above it and a seat's merge authority
+// by its grant, each the chart's ([JudgeGate]), as a mergeability's readiness
+// is ([ConversationWrite.JudgesChart]) — and a SEAT'S dequeue, whose grant
+// says whether it may take an entry out. A person's dequeue consults none, nor
+// do the queue's other records, which read rows alone. ONE ANSWER, which the
+// committer queues and decides by and the estate declares the operation's
+// grant by, so the two never disagree about which writes a node behind the
+// company's configuration may decide.
+func (p QueueProposal) JudgesChart() bool {
+	return p.Enqueue != nil || p.Land != nil || (p.Dequeue != nil && p.Asker.Kind.readsChart())
+}
 
-// queueDecidedRows is the most rows a queue record makes its apply touch: the
-// entry's row and the repository's.
-const queueDecidedRows = 2
+// queueDecidedRows is the most rows an enqueue or a dequeue makes its apply
+// touch: the entry's row and the repository's — and a dequeue's of an entry
+// a train is testing, the train it abandons ([trainRows]).
+const queueDecidedRows = 2 + trainRows
+
+// trainRows is the most rows abandoning one train touches: its candidates
+// removed and its other entries waiting again — [MaxQueueDepth] and
+// [MaxCandidateEntries] at most.
+const trainRows = MaxQueueDepth + MaxCandidateEntries
+
+// rows is the most rows p's record makes its apply touch, as the committer
+// charges its queued item: an enqueue's or a dequeue's [queueDecidedRows], and
+// each of the queue's own records its own bound.
+func (p QueueProposal) rows() int {
+	switch {
+	case p.Candidate != nil:
+		return candidateDecidedRows
+	case p.Eject != nil:
+		return ejectDecidedRows(len(p.Eject.Entries))
+	case p.Land != nil:
+		return landRecordRows(len(p.Land.Entries))
+	case p.Green != nil:
+		return greenDecidedRows
+	case p.Broken != nil:
+		return brokenDecidedRows
+	}
+	return queueDecidedRows
+}
 
 // ProposeQueue decides one write of a target's queue as a batch of its own in
 // the repository's queue — the push's queue and bounds ([Committer.Propose]),
@@ -538,7 +685,7 @@ func (c *Committer) ProposeQueue(ctx context.Context, p QueueProposal) (QueueRes
 		return QueueResult{}, err
 	}
 	deadline, _ := ctx.Deadline()
-	a := c.queue(ctx, &queued{queueWrite: &p, bytes: bytes, rows: queueDecidedRows, arrived: c.clock(),
+	a := c.queue(ctx, &queued{queueWrite: &p, bytes: bytes, rows: p.rows(), arrived: c.clock(),
 		deadline: deadline, gone: ctx.Done(), answer: make(chan answered, 1)})
 	c.countQueue(p, a.queue, a.err)
 	return a.queue, a.err
@@ -571,6 +718,7 @@ type queueDecision struct {
 	refusal MergeRefusal
 	detail  string
 	unmet   []Precondition
+	refused []RefusedEntry
 	payload any
 	version int64
 }
@@ -587,9 +735,10 @@ func (d queueDecision) refuse(code MergeRefusal, detail string) (queueDecision, 
 // limits its code.limits, whose merge_by floor the gate holds a merger to;
 // retention its code.deleted_retention_days, which a repo_deleted refusal
 // names; capacity the waiting entries a target's queue holds
-// (MaxQueueEntries).
+// (MaxQueueEntries); now the decide's clock, which a pack's upload is judged
+// by.
 func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRules, limits Limits,
-	retention time.Duration, capacity int) (queueDecision, error) {
+	retention time.Duration, capacity int, now time.Time) (queueDecision, error) {
 
 	repoID := p.RepoID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
@@ -616,8 +765,19 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 			"no chart to judge it by — the committer hands such a write to the repository's next committer",
 			repoID)
 	}
-	if p.Dequeue != nil {
+	switch {
+	case p.Dequeue != nil:
 		return decideDequeue(ctx, tx, p, repo, seats, d)
+	case p.Candidate != nil:
+		return decideCandidate(ctx, tx, *p.Candidate, repo, limits, now, d)
+	case p.Eject != nil:
+		return decideEject(ctx, tx, *p.Eject, repo, d)
+	case p.Land != nil:
+		return decideLand(ctx, tx, *p.Land, repo, seats, limits, now, d)
+	case p.Green != nil:
+		return decideGreen(ctx, tx, *p.Green, repo, d)
+	case p.Broken != nil:
+		return decideBroken(ctx, tx, *p.Broken, repo, d)
 	}
 	return decideEnqueue(ctx, tx, p, repo, seats, limits, capacity, d)
 }
@@ -753,15 +913,7 @@ func (c *Committer) queueWrite(repoID string, q *queued) {
 	op, _ := p.record()
 	retention, limits, capacity := c.retention(), c.limits(), c.queueEntries
 	subject := RepoSubject(repoID)
-	// THE SCOPE NAMES WHAT THE DECIDE READS (M5-D33), stated before it runs:
-	// an enqueue's gate reads the change's conversation and facts and the
-	// repository's checks beside the repository, so a node holding a deferred
-	// record of any of them decides no enqueue; a dequeue reads the
-	// repository's rows alone.
-	scope := []string{RepoPath(repoID)}
-	if p.Enqueue != nil {
-		scope = []string{RepoPath(repoID), ChecksPath(repoID), ChangePath(p.Enqueue.ChangeID)}
-	}
+	scope := p.scope()
 	var (
 		last    queueDecision
 		decided bool
@@ -771,7 +923,7 @@ func (c *Committer) queueWrite(repoID string, q *queued) {
 		OpID: p.OpID, Pattern: statelog.PatternArbitrated, Session: p.Seen,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			last, decided = queueDecision{}, false
-			d, err := decideQueue(ctx, tx, p, seats, limits, retention, capacity)
+			d, err := decideQueue(ctx, tx, p, seats, limits, retention, capacity, c.now())
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -794,6 +946,40 @@ func (c *Committer) queueWrite(repoID string, q *queued) {
 	})
 	out, answerErr := c.queueAnswer(ctx, p, last, decided, res, err)
 	q.answer <- answered{queue: out, err: answerErr}
+	// AN EJECTION IS ANNOUNCED once its own record applied here, never for a
+	// retry the ledger collapsed onto it — once its answer is handed back, so
+	// its asker waits on none of it.
+	if p.Eject != nil && answerErr == nil && out.Outcome == statelog.OutcomeApplied && !res.Collapsed {
+		c.announceEjected(*p.Eject, out.Position)
+	}
+}
+
+// scope is the scope p's record names: WHAT ITS DECIDE READS (M5-D33), stated
+// before it runs, so a node holding a deferred record of any of it decides
+// none. An enqueue's gate reads the change's conversation and facts and the
+// repository's checks beside the repository; a LANDING proves each entry's
+// gate, so it names each entry's change beside them — and, past
+// [MaxScopePaths], the whole domain, which covers them all; a green and a
+// broken read the repository's checks; a dequeue, a candidate and an eject
+// read the repository's rows alone.
+func (p QueueProposal) scope() []string {
+	repoID := p.RepoID()
+	switch {
+	case p.Enqueue != nil:
+		return []string{RepoPath(repoID), ChecksPath(repoID), ChangePath(p.Enqueue.ChangeID)}
+	case p.Land != nil:
+		scope := []string{RepoPath(repoID), ChecksPath(repoID)}
+		if len(scope)+len(p.Land.Entries) > MaxScopePaths {
+			return []string{DomainPath()}
+		}
+		for _, e := range p.Land.Entries {
+			scope = append(scope, ChangePath(e.ChangeID))
+		}
+		return scope
+	case p.Green != nil, p.Broken != nil:
+		return []string{RepoPath(repoID), ChecksPath(repoID)}
+	}
+	return []string{RepoPath(repoID)}
 }
 
 // queueAnswer is a queue proposal's answer from the publish's result and the
@@ -811,7 +997,7 @@ func (c *Committer) queueAnswer(ctx context.Context, p QueueProposal, last queue
 		}
 		if decided && last.refusal != "" {
 			return QueueResult{EntryID: p.EntryID(), Refusal: last.refusal, Detail: last.detail,
-				Unmet: last.unmet}, nil
+				Unmet: last.unmet, Refused: last.refused}, nil
 		}
 		return QueueResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no record, "+
 			"and its decide refused nothing", p.OpID)
@@ -828,6 +1014,9 @@ func (c *Committer) queueAnswer(ctx context.Context, p QueueProposal, last queue
 func (c *Committer) appliedQueue(ctx context.Context, p QueueProposal, at statelog.Position) (QueueResult,
 	error) {
 
+	if p.engines() {
+		return c.appliedQueueRecord(ctx, p, at)
+	}
 	var (
 		entry queueEntry
 		found bool

@@ -463,6 +463,17 @@ review_submitted           # a review of a change was given: the change and
                            # record; the reviewer's seat day counts it as
                            # `reviews_given`, the owner's its findings as
                            # `findings_received`. STORED AND FED
+code_queue_ejected         # a merge queue put an entry OUT: repository
+                           # by id and name, the entry, its change and
+                           # number, the branch, why (check_failed,
+                           # conflict, gate_unmet, head_moved,
+                           # not_fast_forward), the failed checks or the
+                           # conflicted paths, and who enqueued it.
+                           # Published ONCE an entry, by the data node whose
+                           # committer landed the eject record — never by an
+                           # applier, never for a retry its operation ledger
+                           # collapsed. STORED AND FED (code-host.md, "The
+                           # merge queue")
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its

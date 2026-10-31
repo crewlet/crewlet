@@ -765,20 +765,29 @@ func Catalogue() []Instrument {
 			Shows: "Writes of a target's merge queue this node's committer was " +
 				"asked to decide, by `op` (`enqueue`, a change put in its " +
 				"target's queue through its merge gate, and `dequeue`, an " +
-				"entry taken out at a principal's ask) and what became of each, " +
-				"by `outcome`: `applied`, its record landed and its entry's row " +
-				"says so; `pending` and `unknown`, its record was appended and " +
-				"is not yet known here to have applied; a refusal's own code — " +
-				"`gate_unmet`, `already_queued`, `queue_full`, `no_queue`, " +
-				"`no_auto_revert`, `head_moved`, `stale`, `change_not_open`, " +
-				"`change_draft`, `change_not_found`, `not_queued`, " +
-				"`not_permitted`, `repo_archived`, `repo_deleted`, `busy`, " +
-				"`not_applied`, `unavailable` — which decided nothing; " +
-				"`handed_on`, one this node decided nothing of for a reason " +
-				"about itself, which the estate asks the repository's runner-up; " +
-				"and `failed`, any other error. `gate_unmet` climbing is askers " +
-				"queueing changes before their gate is met; `queue_full`, a " +
-				"queue landing slower than it is fed.",
+				"entry taken out at a principal's ask; and the queue's own " +
+				"records its home asks: `candidate`, a train built onto the " +
+				"target's tip, `eject`, entries put out, `land`, entries " +
+				"landed with every one's gate proved again, `green` and " +
+				"`broken`, a landing its tip checks passed or failed) and what " +
+				"became of each, by `outcome`: `applied`, its record landed and " +
+				"the rows it wrote say so; `pending` and `unknown`, its record " +
+				"was appended and is not yet known here to have applied; a " +
+				"refusal's own code — `gate_unmet`, `already_queued`, " +
+				"`queue_full`, `no_queue`, `no_auto_revert`, `head_moved`, " +
+				"`stale`, `target_moved`, `change_not_open`, `change_draft`, " +
+				"`change_not_found`, `not_queued`, `not_permitted`, " +
+				"`not_green`, `not_red`, `no_landing`, `record_full`, " +
+				"`upload_expired`, `repo_size`, `compaction_behind`, " +
+				"`repo_archived`, `repo_deleted`, `busy`, `not_applied`, " +
+				"`unavailable` — which decided nothing; `handed_on`, one this " +
+				"node decided nothing of for a reason about itself, which the " +
+				"estate asks the repository's runner-up; and `failed`, any " +
+				"other error. `gate_unmet` climbing is askers queueing changes " +
+				"before their gate is met, or, on `land`, gates that stop " +
+				"holding between an enqueue and its landing; `queue_full`, a " +
+				"queue landing slower than it is fed; `target_moved` on " +
+				"`candidate` and `land`, a branch moving under its queue.",
 		},
 		{
 			Name: CodeMergeOutcomes, Kind: KindCounter, Unit: UnitCount,

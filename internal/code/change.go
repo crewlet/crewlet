@@ -70,8 +70,11 @@ const (
 	MergedViaDirect MergedVia = "direct"
 )
 
-// MergedVias is the closed set, in the order the ways were added.
-func MergedVias() []MergedVia { return []MergedVia{MergedViaPush, MergedViaDirect} }
+// MergedVias is the closed set, in the order the ways were added: a merge
+// queue's two ([MergedViaQueue], [MergedViaLane]) after a merge record's.
+func MergedVias() []MergedVia {
+	return []MergedVia{MergedViaPush, MergedViaDirect, MergedViaQueue, MergedViaLane}
+}
 
 // Valid reports a value this build knows.
 func (m MergedVia) Valid() bool { return slices.Contains(MergedVias(), m) }

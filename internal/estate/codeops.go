@@ -143,23 +143,28 @@ var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
 	judgesGrant(code.ChangeProposal.JudgesChart)
 
 // opCodeQueue is a write of a target's MERGE QUEUE — an enqueue of a change,
-// decided by its merge gate, or a dequeue of an entry — asked of the
-// repository's COMMITTER exactly as a change's write is: an IDEMPOTENT write
-// keyed by its operation id, which its asker minted once and the domain's
-// operation ledger collapses (an enqueue's entry id is derived from it, so no
-// retry queues a change twice), so an unanswered one is asked of the
-// repository's runner-up with the same id. On the proposals lane, because it
-// waits in the repository's one queue beside its pushes. No actor: the asker
-// travels inside the proposal, checked by its Validate on the node that
-// decides, which records it as who enqueued or dequeued.
+// decided by its merge gate, or a dequeue of an entry, and the queue's own
+// records its repository's home asks: a train, an ejection, a landing, a
+// green and a broken landing — asked of the repository's COMMITTER exactly as
+// a change's write is: an IDEMPOTENT write keyed by its operation id, which
+// its asker minted once and the domain's operation ledger collapses (an
+// enqueue's entry id, a train's and a landing's ids are derived from it, so no
+// retry queues a change or lands a train twice), so an unanswered one is
+// asked of the repository's runner-up with the same id. On the proposals
+// lane, because it waits in the repository's one queue beside its pushes. No
+// actor: the asker travels inside the proposal, checked by its Validate on
+// the node that decides, which records it as who enqueued or dequeued — and
+// the queue's own records name none, a landing landing each change as its
+// enqueuer.
 //
-// A WRITE THE CHART JUDGES — every enqueue, whoever asks, since its merge
-// gate counts each approval by who may approve the change, each owner's by
-// the lead chain above it and a seat's merge authority by its grant; and a
-// seat's dequeue, whose grant says whether it may take an entry out — is
-// declared so (code.QueueProposal.JudgesChart, the committer's own rule), and
-// a node behind the company's configuration answers none of it
-// ([op.judgesGrant]), even asked last; a person's dequeue consults no chart.
+// A WRITE THE CHART JUDGES — every enqueue and every landing, whoever asks,
+// since the merge gate each judges counts each approval by who may approve
+// the change, each owner's by the lead chain above it and a seat's merge
+// authority by its grant; and a seat's dequeue, whose grant says whether it
+// may take an entry out — is declared so (code.QueueProposal.JudgesChart, the
+// committer's own rule), and a node behind the company's configuration
+// answers none of it ([op.judgesGrant]), even asked last; a person's dequeue
+// and the queue's other records consult no chart.
 var opCodeQueue = define("code.queue", opIdempotentWrite, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, p code.QueueProposal) (code.QueueResult, error) {
 		if b.Code == nil {

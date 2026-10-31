@@ -20,8 +20,9 @@ import (
 )
 
 // THE RETENTION PASS: what removes a retired pack's row once its grace has
-// passed, an idle repository's check rows once they outlive CheckHistory, a
-// deleted repository for good once it has been deleted for longer than the
+// passed, an idle repository's check rows once they outlive CheckHistory, its
+// queue history once it outlives QueueHistory, a deleted repository for good
+// once it has been deleted for longer than the
 // company's code.deleted_retention_days, a renamed repository's old name once
 // its redirect has ended, and a seat's scratch repository once it has sat idle
 // code.scratch.idle_days — never one a live turn holds.
@@ -56,6 +57,17 @@ import (
 // behind — whose rows nothing else would ever remove. Its listing is a page at
 // a time over code_checks_recent_idx, oldest ending first, one entry an
 // instant and a repository rather than a row.
+//
+// Then the QUEUES: every repository holding queue history — an ended entry, or
+// a landing below its target's green row — from before the pass's clock less
+// [QueueHistory] less [QueueSweepGrace] is swept ([Store.QueueSweep]) back to
+// the history, one queue_sweep record on its own subject removing up to
+// [QueueSweepRows] rows, the repository stepped again while rows past the
+// history are left. A repository whose queues keep working removes its own
+// history with every candidate, ejection and landing; this is for one whose
+// queues stopped, or whose landings are a person's pushes and its merges'
+// alone. Its listing walks the repositories by their key, a page at a time,
+// two seeks each.
 //
 // Then every PURGING repository, whatever the retention: a purge once begun
 // is always finished, because its rows are already partly gone, its name is
@@ -225,6 +237,14 @@ type RetentionReport struct {
 	// ChecksSweptRows counts the check rows those records remove — each
 	// step's decide's own count of the rows that ended before its Through.
 	ChecksSweptRows int `json:"checks_swept_rows"`
+	// QueueSweeps counts the queue_sweep records the pass published, across
+	// every repository: each removing up to QueueSweepRows of one
+	// repository's ended queue entries and landings below their green row
+	// past QueueHistory.
+	QueueSweeps int `json:"queue_sweeps"`
+	// QueueSweptRows counts the rows those records remove — each step's
+	// decide's own count of the history before its Through.
+	QueueSweptRows int `json:"queue_swept_rows"`
 	// Purged names every repository whose purge the pass saw through and
 	// handed on — its last record applied in this node's rows and its name
 	// taken by OnPurged — in that order. A name an earlier pass purged and
@@ -288,8 +308,9 @@ type RetentionReport struct {
 }
 
 // Pass hands on what an earlier pass purged and could not, sweeps every
-// repository's retired pack rows past [RetireGrace] and an idle repository's
-// check rows past [CheckHistory] ([CheckSweepGrace]), then steps what is due
+// repository's retired pack rows past [RetireGrace], an idle repository's
+// check rows past [CheckHistory] ([CheckSweepGrace]) and its queue history
+// past [QueueHistory] ([QueueSweepGrace]), then steps what is due
 // a purge — every purging repository, then every one deleted past the current
 // retention, each oldest deletion first — until its purge is done, the pass's
 // budget runs out, or the context ends, pacing every step to the pass's share
@@ -355,14 +376,15 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 		return report, err
 	}
 	// THE STEPS IN ORDER, on one pacer and one budget: the retired packs'
-	// sweeps, the checks' sweeps, the purges, the old names' releases, the
-	// idle scratch repositories' expiry, and the idle seat branches' expiry
-	// LAST — a purge and a release free names, an expiry only room. Each
-	// stops the pass at the budget (Remain), and the next pass resumes every
-	// step from the rows.
+	// sweeps, the checks' sweeps, the queues' sweeps, the purges, the old
+	// names' releases, the idle scratch repositories' expiry, and the idle
+	// seat branches' expiry LAST — a purge and a release free names, an
+	// expiry only room. Each stops the pass at the budget (Remain), and the
+	// next pass resumes every step from the rows.
 	for _, step := range []func() (bool, error){
 		func() (bool, error) { return r.sweep(ctx, now, pace, &report) },
 		func() (bool, error) { return r.sweepChecks(ctx, now, pace, &report) },
+		func() (bool, error) { return r.sweepQueues(ctx, now, pace, &report) },
 		func() (bool, error) { return r.purges(ctx, now, retention, pace, &report, log) },
 		func() (bool, error) { return r.release(ctx, now, pace, &report) },
 		func() (bool, error) { return r.expireScratch(ctx, now, pace, &report, log) },
@@ -616,9 +638,46 @@ func (r *Retention) sweepChecks(ctx context.Context, now time.Time, pace *pacer,
 	}
 }
 
-// sweepRepo steps one repository's sweep — step, the retired packs' or the
-// checks', each of its rows past its own horizon — while rows past it are
-// left beyond what the last record removed, a step fails, the pass's budget
+// sweepQueues steps every repository the queue sweep's listing names — the
+// repositories holding queue history past [QueueHistory] by
+// [QueueSweepGrace] — back to the history, until nothing past the history and
+// the grace is left, the pass's budget runs out (stop) or the context ends
+// (the error).
+//
+// LISTED PAST THE GRACE, SWEPT TO THE HISTORY, for the checks' reason
+// ([Retention.sweepChecks]): a repository whose queues keep working removes
+// its own history with every candidate, ejection and landing, so it holds
+// none past the history by the grace and is not listed. The listing is a
+// stale read and each step decides again inside its own snapshot.
+func (r *Retention) sweepQueues(ctx context.Context, now time.Time, pace *pacer,
+	report *RetentionReport) (stop bool, err error) {
+
+	q := queueSweepQuery{cutoff: now.Add(-QueueHistory - QueueSweepGrace), limit: cmp.Or(r.page, retentionPage)}
+	for {
+		page, more, err := r.Reader.queueSweepDue(ctx, q)
+		if err != nil {
+			return false, err
+		}
+		for _, id := range page {
+			step := func(ctx context.Context) (SweepResult, error) { return r.Store.QueueSweep(ctx, id, now) }
+			if stop, err := r.sweepRepo(ctx, id, pace, report, step, func(res SweepResult) {
+				report.QueueSweeps++
+				report.QueueSweptRows += res.Rows
+			}); err != nil || stop {
+				return stop, err
+			}
+		}
+		if !more {
+			return false, nil
+		}
+		q.after = page[len(page)-1]
+	}
+}
+
+// sweepRepo steps one repository's sweep — step, the retired packs', the
+// checks' or the queues', each of its rows past its own horizon — while rows
+// past it are left beyond what the last record removed, a step fails, the
+// pass's budget
 // runs out (stop) or the context ends (the error); counted is told each step
 // that appended a record.
 //

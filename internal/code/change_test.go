@@ -30,7 +30,7 @@ func TestAChangesStatesAreAClosedSet(t *testing.T) {
 			t.Errorf("%s reports Live=%v, want %v", s, s.Live(), live)
 		}
 	}
-	if want := []code.MergedVia{"push", "direct"}; !slices.Equal(code.MergedVias(), want) {
+	if want := []code.MergedVia{"push", "direct", "queue", "lane"}; !slices.Equal(code.MergedVias(), want) {
 		t.Errorf("MergedVias = %v, want %v", code.MergedVias(), want)
 	}
 	for _, m := range code.MergedVias() {

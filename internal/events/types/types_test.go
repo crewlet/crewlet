@@ -62,7 +62,7 @@ func catalogue() []events.Payload {
 		// knowledge.go
 		KnowledgeRead{},
 		// code.go
-		CodeFetched{}, CodeCheckFinished{}, ChangeMerged{}, ChangeOpened{}, ReviewSubmitted{},
+		CodeFetched{}, CodeCheckFinished{}, ChangeMerged{}, ChangeOpened{}, ReviewSubmitted{}, CodeQueueEjected{},
 		// webhook.go
 		RawWebhook{}, InboundDelivery{},
 		// custody.go
@@ -111,6 +111,7 @@ var wireTypes = []string{
 	"change_opened",
 	"code_check_finished",
 	"code_fetched",
+	"code_queue_ejected",
 	"compaction_completed",
 	"compaction_requested",
 	"config_revision_activated",
@@ -368,6 +369,7 @@ var wireTags = map[string][]string{
 	"change_merged":                   {"change_id", "commit", "merged_by", "merged_by_kind", "method", "number", "override", "repo_id", "repo_name", "target"},
 	"change_opened":                   {"agent_id", "by_push", "change_id", "number", "owner", "owner_kind", "repo_id", "repo_name", "target_ref", "title"},
 	"review_submitted":                {"agent_id", "change_id", "findings", "number", "owner", "owner_agent_id", "owner_kind", "repo_id", "repo_name", "review_id", "reviewer", "reviewer_kind", "revision", "verdict"},
+	"code_queue_ejected":              {"change_id", "checks", "enqueued_by", "enqueued_by_kind", "entry_id", "number", "paths", "reason", "repo_id", "repo_name", "target"},
 	"prefetch_summary":                {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "duration_ms", "episode_recall_bytes", "episode_recall_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "started_at", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_embedding", "turn_id", "work_key"},
 	"counterparty_profile_updated":    {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id", "work_key"},
 	"skill_synthesized":               {"agent_handle", "agent_id", "cluster_size", "role", "skill_id", "skill_name", "tool_count", "trigger", "turn_id", "work_key"},

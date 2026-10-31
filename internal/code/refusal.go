@@ -132,13 +132,17 @@ const (
 	// revision a head move writes and the author it makes, a merge's and a
 	// close's row (revisions.go) — past [MaxRecordRows] even alone in its
 	// record: a push of hundreds of branches each heading a live change, in
-	// practice a bot's force-push of every change it rebased. Nothing of it
-	// was decided, and it lands as several pushes of fewer branches.
+	// practice a bot's force-push of every change it rebased. A person's push
+	// landing on hundreds of protected branches is refused the same way, each
+	// landing two rows of its own ([PushEntry.Landings]), its sentence naming
+	// them. Nothing of it was decided, and it lands as several pushes of fewer
+	// branches.
 	//
-	// The push decide refuses it, from the change rows its snapshot holds,
-	// counted as the record's apply will write them ([changeBook]); a push
-	// whose changes fit alone but not beside the entries before it is
-	// refused nothing — the committer carries it to lead its next record.
+	// The push decide refuses it, from the change rows and the protection
+	// rules its snapshot holds, counted as the record's apply will write them
+	// ([changeBook], [entryRows]); a push whose rows fit alone but not beside
+	// the entries before it is refused nothing — the committer carries it to
+	// lead its next record.
 	//
 	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]),
 	// as compaction_behind is: no field of the code domain's records and no
@@ -405,13 +409,17 @@ func ExpungingDetail(name string, checked, holds int64) string {
 }
 
 // tooManyChangesDetail is the sentence of a push refused too_many_changes: how
-// many live changes it moves, the rows a record of its own would hold with
-// their rows beside its own, and the bound. Formed by the push decide alone,
-// the one counter of a record's change rows.
-func tooManyChangesDetail(changes, rows int) string {
-	return fmt.Sprintf("this push moves %d live changes, and their rows beside its own would take its record "+
-		"to %d of the %d rows one record may write: nothing was decided; push their branches in fewer pushes",
-		changes, rows, MaxRecordRows)
+// many live changes it moves, how many protected branches it lands on where it
+// lands on any, the rows a record of its own would hold with their rows beside
+// its own, and the bound. Formed by the push decide alone, the one counter of
+// a record's change and landing rows.
+func tooManyChangesDetail(changes, landings, rows int) string {
+	moves := fmt.Sprintf("this push moves %d live changes", changes)
+	if landings > 0 {
+		moves += fmt.Sprintf(" and lands on %d protected branches", landings)
+	}
+	return fmt.Sprintf("%s, and their rows beside its own would take its record to %d of the %d rows one record "+
+		"may write: nothing was decided; push their branches in fewer pushes", moves, rows, MaxRecordRows)
 }
 
 // StatelessRefusal is the rules of the push decide that no state decides —
@@ -467,6 +475,12 @@ func reservedRef(ref string) bool {
 type Protections struct {
 	rules    []PushRule
 	patterns []gitref.Pattern
+}
+
+// protects reports a ref some rule of ps matches: one a push to lands on a
+// protected branch, where it is a branch ([PushEntry.Landings]).
+func (ps Protections) protects(ref string) bool {
+	return slices.ContainsFunc(ps.patterns, func(p gitref.Pattern) bool { return p.Match(ref) })
 }
 
 // ParseProtections reads rules for asking about many refs, refusing — rather

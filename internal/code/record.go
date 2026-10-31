@@ -456,9 +456,74 @@ const (
 	// Since: 2, Path: []string{"op"}, Equals: string(OpMarks)}, with the
 	// same companions. It is no gate.
 	OpMarks OpKind = "marks"
+
+	// OpCandidate records a pre_land queue's TRAIN ([Candidate]): the
+	// candidates its home built of a target's live entries onto the target's
+	// tip, each a merge of a batch of them on the one before, and the pack
+	// their objects are stored in — on the repository's own subject, decided
+	// by its committer alone ([Committer.ProposeQueue]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// candidate", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpCandidate)}, with the same companions. It is no gate.
+	OpCandidate OpKind = "candidate"
+
+	// OpEject puts live entries out of their queue ([Eject]) — a check failed
+	// on what they were tested in, their merge conflicted, their gate no
+	// longer holds — on the repository's own subject, decided by its
+	// committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op eject",
+	// Since: 2, Path: []string{"op"}, Equals: string(OpEject)}, with the
+	// same companions. It is no gate.
+	OpEject OpKind = "eject"
+
+	// OpLand lands a queue's entries on their target ([Land]) — a pre_land
+	// train's tested prefix, or a post_land lane's chain — merging each
+	// change and moving the target in ONE record whose decide proves every
+	// entry's gate again with its enqueuer as the merger, on the
+	// repository's own subject, decided by its committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op land",
+	// Since: 2, Path: []string{"op"}, Equals: string(OpLand)}, with the same
+	// companions. It is no gate.
+	OpLand OpKind = "land"
+
+	// OpGreen moves a protected target's green row onto a landing whose
+	// required checks passed ([Green]), on the repository's own subject.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op green",
+	// Since: 2, Path: []string{"op"}, Equals: string(OpGreen)}, with the
+	// same companions. It is no gate.
+	OpGreen OpKind = "green"
+
+	// OpBroken marks a landing above its target's green row broken, a
+	// required check of it having failed ([Broken]), on the repository's own
+	// subject.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// broken", Since: 2, Path: []string{"op"}, Equals: string(OpBroken)},
+	// with the same companions. It is no gate.
+	OpBroken OpKind = "broken"
+
+	// OpQueueSweep removes a repository's ended queue entries and its
+	// landings below their target's green row once they outlive
+	// [QueueHistory], where no record of its queues' own does ([QueueSweep])
+	// — the code-retention duty's, on the repository's own subject.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// queue_sweep", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpQueueSweep)}, with the same companions. It is no gate.
+	OpQueueSweep OpKind = "queue_sweep"
 )
 
-// OpKinds are the forty-three, in the order they are documented.
+// OpKinds are the forty-nine, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
@@ -466,7 +531,7 @@ var OpKinds = []OpKind{
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
 	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpMerge, OpEnqueue, OpDequeue,
-	OpMarks,
+	OpMarks, OpCandidate, OpEject, OpLand, OpGreen, OpBroken, OpQueueSweep,
 }
 
 // CheckOps are the ops of a repository's CHECKS, in [OpKinds]' order: every

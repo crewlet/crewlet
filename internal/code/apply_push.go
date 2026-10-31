@@ -234,6 +234,14 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	}
 	rows += changed
 
+	// THE LANDINGS ON PROTECTED BRANCHES its decide stamped, before any
+	// horizon too: their rows are the record's own ([entryRows]).
+	landedRows, err := writePushLandings(ctx, tx, at, p.RepoID, pushRows)
+	if err != nil {
+		return 0, err
+	}
+	rows += landedRows
+
 	// THE PUSH HISTORY FIRST, before any ref is written: what it removes is
 	// rows of the record's budget the tombstones cannot have, and the
 	// tombstones' removal backstop is decided from that budget before the
@@ -392,11 +400,14 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 }
 
 // packKind is what added e's pack, as its code_packs row names it: a merge
-// record's push its merge's pack ([PackMerge]), and every other push its own
-// ([PackPush]).
+// record's push its merge's pack ([PackMerge]), a land record's first push its
+// post_land chain's ([PackLand]), and every other push its own ([PackPush]).
 func (e PushEntry) packKind() PackKind {
-	if e.Via == ViaMerge {
+	switch e.Via {
+	case ViaMerge:
 		return PackMerge
+	case ViaQueue:
+		return PackLand
 	}
 	return PackPush
 }

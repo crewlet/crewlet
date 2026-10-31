@@ -555,6 +555,10 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	// THE REPOSITORY AS A GRANT READS IT, from the round's own row: its
 	// owner and its visibility, which a seat's relation is judged on.
 	ref := repo.grantRef(repoID)
+	// THE GATES OF THE BRANCHES A PUSH LANDS ON, read once a round and only
+	// for a round with a landing, since a push is judged by its rules'
+	// push half alone ([pushRulesIn]).
+	landingGates := pushGates{repoID: repoID}
 	for _, i := range open {
 		if carrying {
 			answers[i].carried = true
@@ -588,6 +592,12 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// THE BOOK ITSELF and taken back where it does not fit ([bookTrial]):
 		// what an entry costs is what its own commands reach.
 		entry := p.entryWith(cmds, quota.day.Label)
+		// AND THE LANDINGS IT MAKES on a protected branch — a person's own
+		// push, their recorded override — stamped from this snapshot's rules,
+		// so the apply matches no pattern.
+		if entry.Landings, err = landingGates.landings(ctx, tx, v.rules, cmds); err != nil {
+			return nil, nil, 0, 0, err
+		}
 		merged := len(book.writes.merged)
 		book.try()
 		book.move(entry)
@@ -611,7 +621,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			book.takeBack()
 			changeRows, moved := book.alone(entry)
 			if alone := recordRows(own + changeRows); alone > MaxRecordRows {
-				detail := tooManyChangesDetail(moved, alone)
+				detail := tooManyChangesDetail(moved, len(entry.Landings), alone)
 				answers[i].refused, answers[i].detail = RefusalTooManyChanges, detail
 				answers[i].commands = refuseEvery(p.Commands, RefusalTooManyChanges, detail)
 				continue

@@ -225,6 +225,13 @@ func RowBound(p Proposal) int { return rowBound(p) }
 // RecordRows is the row bound of a record whose entries bound rows rows.
 func RecordRows(rows int) int { return recordRows(rows) }
 
+// LandRecordRows is the most rows a land record of n entries makes its apply
+// write but the changes its pushes move.
+func LandRecordRows(n int) int { return landRecordRows(n) }
+
+// QueueScope is the scope p's record names.
+func QueueScope(p QueueProposal) []string { return p.scope() }
+
 // MergeRecordRows is the most rows one merge record makes its apply write
 // before its horizons.
 const MergeRecordRows = mergeRecordRows

@@ -263,6 +263,19 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 		if p.Pack != nil {
 			out = append(out, written(p.RepoID, []PackRef{*p.Pack})...)
 		}
+	case Candidate:
+		// A TRAIN'S PACK, the commits its candidates built, a live pack of
+		// the repository from its record on; a train of fast-forwards
+		// builds none.
+		if p.Pack != nil {
+			out = append(out, written(p.RepoID, []PackRef{*p.Pack})...)
+		}
+	case Land:
+		// A POST_LAND CHAIN'S PACK, which the landing's first push lands as
+		// a push lands its own; a pre_land landing's commits are its train's.
+		if p.Pack != nil {
+			out = append(out, written(p.RepoID, []PackRef{*p.Pack})...)
+		}
 	default:
 		return nil, fmt.Errorf("code: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
 	}
@@ -271,9 +284,9 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 
 // packOps are the ops whose records write or remove rows of code_packs that
 // a record names — a push's, a compaction's, an expunge's begin's and its
-// commit's, and a merge's; a purge removes rows its record does not list, and
-// answers none.
-var packOps = []OpKind{OpPush, OpCompact, OpExpungeBegin, OpExpungeCommit, OpMerge}
+// commit's, a merge's, a queue's candidate's and its landing's; a purge
+// removes rows its record does not list, and answers none.
+var packOps = []OpKind{OpPush, OpCompact, OpExpungeBegin, OpExpungeCommit, OpMerge, OpCandidate, OpLand}
 
 // written is the rows of code_packs refs write, each naming its object.
 func written(repoID string, refs []PackRef) []objstore.RecordReference {

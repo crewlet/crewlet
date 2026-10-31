@@ -6725,9 +6725,10 @@ export interface CodePushRow {
   actor_seat?: string;
   /**
    * `git` for what a client's git sent, `engine` for a commit the engine built
-   * from a tool's call, `merge` for a branch a change's merge record moved.
+   * from a tool's call, `merge` for a branch a change's merge record moved,
+   * `queue` for a branch a merge queue's landing moved, one push a change.
    */
-  via: "git" | "engine" | "merge" | (string & {});
+  via: "git" | "engine" | "merge" | "queue" | (string & {});
   /** A seat's push: the turn, its work item and its model. */
   run?: CodePushRun;
   node?: string;

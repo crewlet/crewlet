@@ -2159,7 +2159,7 @@ past.
 
 ## Retention and history
 
-Five horizons, each kept by records that apply it inside their own
+Six horizons, each kept by records that apply it inside their own
 repository, never by a node's own sweep:
 
 - **Push history** — a push row is kept **181 days**, the same horizon as the
@@ -2221,6 +2221,11 @@ repository, never by a node's own sweep:
   ending, by the `code-retention` duty's sweep record once a row has outlived
   the 30 days by a day ([How long a check is
   kept](#how-long-a-check-is-kept)).
+- **Queue history** — a merge queue's ended entries and a protected branch's
+  landings below its green row are kept 30 days, removed by each later train,
+  ejection and landing of the repository's queues and, where they stopped, by
+  the `code-retention` duty's `queue_sweep` record once a row has outlived the
+  30 days by a day ([The merge queue](#the-merge-queue)).
 - **A purge** — below.
 
 A pack a compaction retires is kept a day as a retired row, which the
@@ -5210,6 +5215,77 @@ the change dequeue it, each naming which, and a push that moves its head
 **ejects** it, `head_moved` — the queue would otherwise test a head nobody
 enqueued — or dequeues it where the push merged or closed the change.
 
+**The queue's own records** are what it does with what was enqueued — each a
+record on the repository's subject, built by the repository's [home git
+node](#the-home-git-node) and decided by its committer from one snapshot,
+naming no asker: the queue's work is the engine's, and a landing lands each
+change as whoever enqueued it.
+
+- A **candidate** records a `pre_land` queue's **train**: up to `depth`
+  candidates of up to `batch` live entries each — 64 entries at most — every
+  candidate its entries merged onto the one before, the first onto the
+  branch's tip, its own tip what the branch's required checks then run on.
+  Its commits are stored in ONE pack (`kind: candidate`), a live pack of the
+  repository, and a candidate is rows and that pack — never a ref, advertised
+  or not. A branch holds one train: a candidate abandons the one before it,
+  whose candidates are removed and whose entries wait again.
+- An **eject** puts live entries of one branch out — `check_failed` (naming
+  the checks), `conflict` (naming up to 100 paths), `gate_unmet`,
+  `head_moved` or `not_fast_forward` — and abandons the train they were in.
+  The node whose committer landed it announces a `code_queue_ejected` event
+  for each, fed to the activity feed. A dequeue of an entry a train tests
+  abandons the train too.
+- A **land** lands up to 64 entries in ONE record: a `pre_land` train's
+  tested **prefix** — its candidates from the first, in order, up to one
+  whose tip every required check passed on — or a `post_land` lane's chain,
+  landed ahead of its checks with a pack of its own (`kind: land`). **Its
+  decide proves every entry's gate again**, from its own snapshot, with the
+  entry's ENQUEUER as the merger: the enqueue was the gate, and the landing
+  is the record that moves the branch, so a review asking for changes, a
+  blocker or a merge authority lost since the enqueue keeps the whole landing
+  off the branch, its answer naming each entry it would not land for the home
+  to eject. Its apply marks each change **merged first** (`merged_via: queue`
+  or `lane`, merged by its enqueuer — the queue never acts on its own
+  account), lands **one push row `via: queue` a change**, naming the enqueuer,
+  so [which push landed a commit](#which-push-landed-a-commit) names each
+  change's own landing, deletes each source where the entry asked it and a
+  push deleting it as the enqueuer would be taken, and writes the branch's
+  landing rows in chain order — green, and the branch's green row moved to
+  the tip, where it lands `pre_land`.
+- A **green** moves a protected branch's **green row** onto a landing record
+  whose required checks passed on its tip — at the landing's own position, so
+  the `landings` read lists what came after it — and a **broken** marks a
+  landing above the green row broken, a required check having failed on it.
+  The green row **only ever advances on green**: no record moves it on red,
+  and none moves it back. It is the commit a mirror or a deploy follows.
+
+| Refusal | Why |
+|---|---|
+| `target_moved` | The branch is no longer at the tip the train or the landing was built onto: the home builds it again. |
+| `not_queued` | An entry is not live in the branch's queue — ended since, or another branch's. |
+| `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train, a policy the branch does not land by. |
+| `gate_unmet`, `head_moved`, `change_not_open` | An entry of a landing no longer meets its gate with its enqueuer as the merger, or its change moved or ended: the answer names each such entry. |
+| `not_green` | A `pre_land` landing's tip, or a green's landing, has a required check not passed by its latest attempt checked for the branch. |
+| `not_red`, `no_landing` | A broken names a check that did not fail, or a green or a broken names no landing above the branch's green row. |
+| `record_full` | A landing's rows — its own, its pushes' and the live changes they move — would pass a record's: land fewer at once. A green marking more than 2 000 landings names an earlier one first. |
+| `upload_expired`, `repo_size`, `compaction_behind` | The train's or the chain's pack, held to a push's rules: a busy queue waits for compaction rather than outrunning it. |
+
+**Every record that moves a protected branch leaves its landing row**: a
+merge's (`kind: direct`), a queue's (`pre_land`, `post_land`) and a person's
+own push under `direct_push: persons` (`kind: push`, naming their human seat)
+— green, and the branch's green row moved with it, where the branch's gate
+requires no check. The push's decide stamps its landings from the rules its
+snapshot holds, so every node's apply writes the same rows without matching a
+rule itself.
+
+**A queue's history keeps pace with its records.** Ended entries and the
+landings below each branch's green row are kept 30 days: every candidate,
+eject and land removes its repository's oldest past that, up to 128 rows a
+record — as many as a landing ends and lands. A repository whose queue
+stopped is the [code-retention duty](#retention-and-history)'s: a pass lists every
+repository holding such history past 30 days by a day's grace, and a
+`queue_sweep` record on its subject removes it, back to 30 days.
+
 Three reads answer a queue to a person or a seat, each held to the asker's
 grant on the repository: `queue`, the live entries of one repository's queues
 — or of one of its branches, or of every repository the asker reads — in
@@ -6424,7 +6500,7 @@ words, since git does not read the header.
 | The repository is taking pushes faster than its committer commits them | `(busy: <n> pushes are queued for this repository on this node, the most it holds)`, or the same of the bytes queued for it or held across the node's repositories; `(busy: the push's asker stops waiting in <t>, and a batch started now may take 30s and its answer 1s more; run git push again)`, or `(busy: the push waited <t> behind this repository's earlier pushes on this node, …)`; or `(busy: the repository kept changing for every round the write may take; run git push again)` | Run the push again; nothing of it landed. One repository's pushes meet at one node, which commits them a batch at a time ([The committer](#the-committer)). A full queue, a node at its whole bound, or a push that waited in the queue until its asker could wait no longer raises `code_commit_busy` on that node for fifteen minutes, naming the repository with the most refusals; a push that reached the committer with too little of its asker's attempt left raises nothing. |
 | A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home git node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
 | A seat's push past the pushes one seat may land in a day on the company's calendar, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has landed <n> pushes since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat land <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
-| A push moving the branches of more open changes than one record can carry beside its own refs — hundreds of change branches force-pushed at once ([Revisions](#revisions)) | `(too_many_changes: this push moves <n> live changes, and their rows beside its own would take its record to <rows> of the 4000 rows one record may write: nothing was decided; push their branches in fewer pushes)` | Push the branches in groups: each group's revisions are written in its own record. Nothing of the push was decided. A push whose changes fit a record of its own, but not beside the pushes batched before it, is never refused: the committer decides it first in its next record. |
+| A push moving the branches of more open changes than one record can carry beside its own refs — hundreds of change branches force-pushed at once ([Revisions](#revisions)) — or a person's push landing on hundreds of protected branches, each landing a row and its green row ([The merge queue](#the-merge-queue)) | `(too_many_changes: this push moves <n> live changes[ and lands on <m> protected branches], and their rows beside its own would take its record to <rows> of the 4000 rows one record may write: nothing was decided; push their branches in fewer pushes)` | Push the branches in groups: each group's revisions are written in its own record. Nothing of the push was decided. A push whose changes fit a record of its own, but not beside the pushes batched before it, is never refused: the committer decides it first in its next record. |
 | A push its node checked against the repository just before an expunge of the repository's unreachable objects began — which nothing in this build begins yet ([what it does not do yet](#what-it-does-not-do-yet)) | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
 | Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
 | The object store has no room — the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](object-store.md#an-s3-bucket--s3) | `(store_full: the object store has no room for the <size> this push stores, and nothing was stored; it lands only once <room>)`, the room the store names: on NATS, `an operator makes room — moves the files to a bucket (crewlet objects migrate -to s3), raises the bucket's byte reservation on an external broker, or lets the collector remove what nothing names`; on S3, `an operator makes room in the bucket — frees space on the storage its provider keeps it on, or raises the quota the provider holds it to — or lets the collector remove what nothing names` | Nothing was stored, and pushing again is refused the same until room is made: tell an operator. The node logs `code_push_store_full` at `WARN` with the store's own answer; on NATS, the [`objects_bucket_near_ceiling`](object-store.md#alarms) alarm says how full the bucket is. |

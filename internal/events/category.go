@@ -340,6 +340,12 @@ var categories = map[string]placement{
 	// each is a write a seat's or a person's credential asked.
 	"change_opened":    {"system", RateAuthenticated},
 	"review_submitted": {"system", RateAuthenticated},
+	// An entry a merge queue put out — a failed check, a conflict, a gate no
+	// longer met, a moved head — PERSISTED and FED: an ejection is what the
+	// change's authors and its enqueuer act on, beside the merge it did not
+	// become. AUTHENTICATED-rated: every one ends an enqueue a seat's or a
+	// person's credential asked, at most one ejection an enqueue.
+	"code_queue_ejected": {"system", RateAuthenticated},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that

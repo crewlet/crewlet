@@ -802,6 +802,65 @@ func registeredStatements() map[string]statement {
 			[]string{"sqlite_autoindex_code_landings_1 (repo_id=?)"}},
 		"purge all greens": {purgeAllGreenSQL, []any{"repo-1"},
 			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)"}},
+		// THE QUEUE'S OWN RECORDS (queuerecords.go, decide_queue.go,
+		// apply_queuerecords.go, queue_sweep.go): a list of entries by their
+		// key, driven from the list; an entry put in a candidate, ejected and
+		// landed by its key; a target's train abandoned — its testing entries
+		// over code_queue_live_idx, its candidates over
+		// code_candidates_train_idx — a train's landed candidates and its
+		// candidates at a record's position over the same; a train's pack's
+		// counters by the repository's key; a landing record's tip, a landing
+		// by its key, broken by it, and the landings between a green row and
+		// a landing counted and marked over the key's range; and the queue's
+		// history — ended entries counted and removed over
+		// code_queue_ended_idx, a target's landings below its green read and
+		// removed over the key's range — and the sweep's listing, a walk of
+		// the repositories by their key, two seeks each.
+		"entries named": {entriesNamedSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
+			[]string{"SCAN json_each AS j", "sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"test an entry": {testEntrySQL, []any{"train-1", "candidate-1", oid("m"), "repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"eject an entry": {ejectEntrySQL, []any{1, 1000, "check_failed", "", "repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"land an entry": {landEntrySQL, []any{1, 1000, oid("m"), "repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"abandon a train's entries": {resetTrainSQL, []any{"repo-1", "refs/heads/main"},
+			[]string{"code_queue_live_idx (repo_id=? AND target_ref=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"abandon a train's candidates": {dropTrainSQL, []any{"repo-1", "refs/heads/main"},
+			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"a train's landed candidates": {dropLandedSQL, []any{"repo-1", "refs/heads/main", "train-1", 2},
+			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=? AND train=? AND ordinal<=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"a train at a position": {trainAtSQL, []any{"repo-1", "refs/heads/main", "train-1", 1000},
+			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=? AND train=?)"}},
+		"a train's pack's counters": {queuePackCountersSQL, []any{1, 100, 1, 1000, "repo-1"},
+			[]string{repoKey + " (id=?)"}},
+		"a landing record's tip": {landingTipSQL, []any{"repo-1", "refs/heads/main", 1000},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=?)"}},
+		"a landing": {landingSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
+		"a landing broken": {landingBrokenSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
+		"break a landing": {brokenLandingSQL, []any{"repo-1", "refs/heads/main", 1000, 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position=? AND ordinal=?)"}},
+		"landings a green marks": {landingsGreenedSQL, []any{"repo-1", "refs/heads/main", 1000, 2000, 2001},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>? AND position<=?)"}},
+		"mark landings green": {greenLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 2000},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>? AND position<=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"ended entries before": {endedBeforeSQL, []any{"repo-1", 1000, QueueSweepRows + 1},
+			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
+		"sweep ended entries": {sweepEndedSQL, []any{"repo-1", 1000, QueueSweepRows},
+			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"landings below green": {landingsBelowSQL, []any{"repo-1", "refs/heads/main", 1000, QueueSweepRows + 1},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position<?)"}},
+		"sweep landings": {sweepLandingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, 2},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position<=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"queue sweep listing": {queueSweepDueSQL, []any{"", 1000, retentionPage},
+			[]string{repoKey + " (id>?)", "code_queue_ended_idx (repo_id=? AND ended_at<?)",
+				"sqlite_autoindex_code_green_1 (repo_id=?)",
+				"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position<?)"}},
 		"gate checks": {gateChecksSQL, []any{`[["repo-1","` + oid("c") + `","refs/heads/main","unit"],["repo-1","` +
 			oid("c") + `","refs/heads/main","lint"]]`}, []string{"SCAN json_each AS j",
 			checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
@@ -1285,16 +1344,9 @@ func claimedReads() map[string]statement {
 		// the walk of a git node that keeps indexes, and of a search across
 		// the company's repositories — its partial predicate repeated
 		// verbatim. Nothing in this build reads a repository by its mode.
-		// THE MERGE QUEUE'S INDEXES THEIR LATER READERS SEEK (replicated
-		// 0082): a repository's ended entries past the queue's horizon, the
-		// queue_sweep's, its partial predicate repeated verbatim; and a
-		// change's landings, a broken landing's authors' and the change
-		// page's. Nothing in this build ends a queue's history or reads a
-		// change's landings.
-		"code_queue_ended_idx": {`SELECT entry_id FROM code_queue INDEXED BY code_queue_ended_idx
-			WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at < ?
-			ORDER BY ended_at LIMIT ?`, []any{"repo-1", 1000, PurgePartRows},
-			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
+		// THE MERGE QUEUE'S INDEX ITS LATER READERS SEEK (replicated 0082):
+		// a change's landings, a broken landing's authors' and the change
+		// page's. Nothing in this build reads a change's landings.
 		"code_landings_change_idx": {`SELECT repo_id, target_ref, position, ordinal FROM code_landings
 			INDEXED BY code_landings_change_idx WHERE change_id = ? AND change_id != ''`,
 			[]any{"repo-1-change-000001"}, []string{"code_landings_change_idx (change_id=?)"}},

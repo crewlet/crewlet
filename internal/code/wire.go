@@ -507,17 +507,26 @@ const (
 	// repository's idle clock, and refuse its row's via as a way it does not
 	// know (scanPush).
 	ViaExpiry PushVia = "expiry"
+	// ViaQueue is a push a LAND RECORD lands ([Land]), one for each change a
+	// merge queue landed: its target moved from what the change before it
+	// left onto the commit the queue built of it — and, where it deletes its
+	// source, the source deleted — naming the change's ENQUEUER, since the
+	// queue never acts on its own account. No proposal of a push names it: a
+	// landing is decided through each change's gate.
+	//
+	// BASE FORMAT, under the condition queuerecords.go's head states.
+	ViaQueue PushVia = "queue"
 )
 
 // PushVias is the closed set, in its documented order.
-func PushVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaMerge, ViaExpiry} }
+func PushVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaMerge, ViaExpiry, ViaQueue} }
 
 // Valid reports a way this build knows.
 func (v PushVia) Valid() bool { return slices.Contains(PushVias(), v) }
 
 // proposedVias is the ways a push PROPOSAL may name — git's, the engine's and
-// the ref expiry's — in [PushVias]' order: a merge's push is written by its
-// record alone ([ViaMerge]).
+// the ref expiry's — in [PushVias]' order: a merge's push and a landing's are
+// written by their records alone ([ViaMerge], [ViaQueue]).
 func proposedVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaExpiry} }
 
 // proposed reports a way a push proposal may name ([proposedVias]).

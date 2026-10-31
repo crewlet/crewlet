@@ -91,10 +91,21 @@ func (a *Applier) applyDequeue(ctx context.Context, tx *sql.Tx, at applyContext,
 		d.RepoID, d.EntryID); err != nil {
 		return 0, fmt.Errorf("code: dequeue entry %s at %s: %w", d.EntryID, at.position, err)
 	}
+	rows := 2
+	// AN ENTRY A TRAIN TESTS TAKES THE TRAIN WITH IT: every candidate from
+	// its own on merged it, so none of them is what would land now, and a
+	// train is abandoned whole (apply_queuerecords.go).
+	if entry.State == QueueTesting {
+		abandoned, err := abandonTrainOn(ctx, tx, d.RepoID, entry.TargetRef)
+		if err != nil {
+			return 0, fmt.Errorf("code: abandon %s's train at %s: %w", entry.TargetRef, at.position, err)
+		}
+		rows += abandoned
+	}
 	if _, err := tx.ExecContext(ctx, touchedSQL, at.packed, d.RepoID); err != nil {
 		return 0, fmt.Errorf("code: move %s's version at %s: %w", d.RepoID, at.position, err)
 	}
-	return 2, nil
+	return rows, nil
 }
 
 // endLiveEntryOf ends changeID's live entry, if its queue holds one — state

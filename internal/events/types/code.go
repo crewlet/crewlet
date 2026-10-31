@@ -64,6 +64,7 @@ func init() {
 	events.Register[ChangeMerged]()
 	events.Register[ChangeOpened]()
 	events.Register[ReviewSubmitted]()
+	events.Register[CodeQueueEjected]()
 }
 
 // CodeFetchedVia is how a unit repository's contents were read.
@@ -497,6 +498,69 @@ func (e ReviewSubmitted) SummaryFor(actor string) string {
 		what += ", 1 finding"
 	default:
 		what += ", " + strconv.FormatInt(e.Findings, 10) + " findings"
+	}
+	return lead(actor, what)
+}
+
+// CodeQueueEjected records that a merge queue put an entry OUT (internal/code's
+// Eject): the change it held will not land through this enqueue — a required
+// check failed on what it was tested in, its merge onto what was before it
+// conflicted, its merge gate no longer holds with its enqueuer as the merger,
+// its head moved, or its fast-forward is none. Published ONCE an entry, by the
+// data node whose committer landed the eject record, on that record's apply —
+// never by an applier, which every data node runs, and never for a retry its
+// operation ledger collapsed onto the record.
+//
+// # Fed, and stored
+//
+// An ejection is what the change's authors and its enqueuer act on — fix the
+// change, or enqueue it again — and a queue ejects few of what it lands, so it
+// joins the activity feed beside the merge it did not become, in the `system`
+// category. What it carries is what a reader acts on: which change, out of
+// which branch's queue, why, and the failed checks or the conflicted paths it
+// names.
+type CodeQueueEjected struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when the eject applied.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// EntryID is the queue entry that was put out; ChangeID the change it
+	// held, Number its number on the repository — web!42's 42 — and Target
+	// the branch whose queue it was in.
+	EntryID  string `json:"entry_id"`
+	ChangeID string `json:"change_id"`
+	Number   int64  `json:"number"`
+	Target   string `json:"target"`
+
+	// Reason is why (internal/code's EjectReasons: check_failed, conflict,
+	// gate_unmet, head_moved, not_fast_forward); Checks the required checks
+	// that failed, for check_failed, and Paths the conflicted paths, for
+	// conflict.
+	Reason string   `json:"reason"`
+	Checks []string `json:"checks,omitempty"`
+	Paths  []string `json:"paths,omitempty"`
+
+	// EnqueuedBy is who enqueued it — a seat by its handle, or a person by
+	// the human seat they hold — and EnqueuedByKind which (internal/code's
+	// PartyKind: agent, person).
+	EnqueuedBy     string `json:"enqueued_by"`
+	EnqueuedByKind string `json:"enqueued_by_kind"`
+}
+
+// EventType is the "code_queue_ejected" wire type.
+func (CodeQueueEjected) EventType() string { return "code_queue_ejected" }
+
+// SummaryFor names the change by its reference (web!42), the branch whose
+// queue put it out, and why.
+func (e CodeQueueEjected) SummaryFor(actor string) string {
+	what := "ejected " + e.RepoName + "!" + strconv.FormatInt(e.Number, 10) + " from " +
+		strings.TrimPrefix(e.Target, "refs/heads/") + "'s merge queue (" + e.Reason + ")"
+	switch {
+	case len(e.Checks) > 0:
+		what += ": " + strings.Join(e.Checks, ", ") + " failed"
+	case len(e.Paths) > 0:
+		what += ": " + strconv.Itoa(len(e.Paths)) + " paths conflicted"
 	}
 	return lead(actor, what)
 }

@@ -579,6 +579,18 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case Dequeue:
 		payloadRepo = p.RepoID
+	case Candidate:
+		payloadRepo = p.RepoID
+	case Eject:
+		payloadRepo = p.RepoID
+	case Land:
+		payloadRepo = p.RepoID
+	case Green:
+		payloadRepo = p.RepoID
+	case Broken:
+		payloadRepo = p.RepoID
+	case QueueSweep:
+		payloadRepo = p.RepoID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a repository "+
 			"(the record at %s)", at.record.Op, at.position)
@@ -635,6 +647,18 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.applyEnqueue(ctx, tx, at, p)
 	case Dequeue:
 		return a.applyDequeue(ctx, tx, at, p)
+	case Candidate:
+		return a.applyCandidate(ctx, tx, at, p)
+	case Eject:
+		return a.applyEject(ctx, tx, at, p)
+	case Land:
+		return a.applyLand(ctx, tx, at, p)
+	case Green:
+		return a.applyGreen(ctx, tx, at, p)
+	case Broken:
+		return a.applyBroken(ctx, tx, at, p)
+	case QueueSweep:
+		return a.applyQueueSweep(ctx, tx, at, p)
 	}
 	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
 }
