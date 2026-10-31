@@ -12,6 +12,8 @@
 
 import { toggleStar } from "~/lib/starred.ts";
 import { noteReader } from "~/lib/reader.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
+import { setRailShape } from "./sidebar/railShape.ts";
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
@@ -1386,24 +1388,42 @@ describe("where the peek is a column", () => {
   });
 });
 
-// BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and the keyboard reaches
-// it: Mod+\ opens it, and above the breakpoint — where the sidebar is always
-// on screen — the chord does nothing at all.
-describe("the drawer's key", () => {
+// THE SIDEBAR'S KEY AND ITS TWO SHAPES. Where the sidebar stands beside the
+// page, Mod+\ and the kit's fold control fold it to the compact rail and back,
+// and the reader's choice is kept for them. Below the shell breakpoint the
+// sidebar is a drawer, which is always the full list, and the key opens it.
+describe("the sidebar's key and shape", () => {
   function press(): void {
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "\\", ctrlKey: true }));
     });
   }
 
+  async function mountAt(width: number) {
+    const win = installWindow(width);
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    return win;
+  }
+
+  const shape = () =>
+    document.querySelector(".crewlet-app-shell")?.getAttribute("data-rail") ?? "full";
+  const kept = (reader: string) => localStorage.getItem(`${STORAGE_KEYS.railShape}${reader}`);
+
+  afterEach(() => {
+    // The store is the tab's; a case that folded it hands the next one the
+    // full sidebar it starts from.
+    setRailShape("full");
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
   // AT THE BREAKPOINT'S OWN EDGE, both sides: 1023 is the widest drawer and
-  // 1024 the narrowest window the sidebar is always on screen in.
+  // 1024 the narrowest window the sidebar stands beside the page in.
   test("Mod+\\ opens the sidebar's drawer below the shell breakpoint", async () => {
-    const win = installWindow(1023);
+    const win = await mountAt(1023);
     try {
-      const { store, socket } = answering({});
-      mountShell(store, socket);
-      await settle();
       const sidebar = document.querySelector(".crewlet-app-shell__rail");
       expect(sidebar?.getAttribute("data-open")).not.toBe("true");
       press();
@@ -1413,16 +1433,145 @@ describe("the drawer's key", () => {
     }
   });
 
-  test("and does nothing where the sidebar is already on screen", async () => {
-    const win = installWindow(1024);
+  test("and folds the sidebar where it stands beside the page, and unfolds it again", async () => {
+    const win = await mountAt(1024);
     try {
-      const { store, socket } = answering({});
-      mountShell(store, socket);
-      await settle();
+      expect(shape()).toBe("full");
+      expect(screen.getByRole("link", { name: /^Principles/ })).toBeDefined();
       press();
+      expect(shape()).toBe("compact");
       expect(
         document.querySelector(".crewlet-app-shell__rail")?.getAttribute("data-open"),
       ).not.toBe("true");
+      // FOLDED, the Company group is one tile and its places wait in its flyout.
+      expect(screen.getByRole("button", { name: /^Company/ })).toBeDefined();
+      expect(screen.queryByRole("link", { name: /^Principles/ })).toBeNull();
+      press();
+      expect(shape()).toBe("full");
+      expect(screen.getByRole("link", { name: /^Principles/ })).toBeDefined();
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("the fold control folds it too, and the reader's choice is theirs to keep", async () => {
+    noteReader("p-1");
+    const win = await mountAt(1280);
+    try {
+      act(() => screen.getByRole("button", { name: "Collapse the sidebar" }).click());
+      expect(shape()).toBe("compact");
+      expect(kept("p-1")).toBe(JSON.stringify("compact"));
+      // THE SAME CONTROL, in the same place, unfolds it.
+      expect(screen.getByRole("button", { name: "Expand the sidebar" })).toBeDefined();
+
+      // A RELOAD comes back folded.
+      cleanup();
+      const { store, socket } = answering({});
+      mountShell(store, socket);
+      await settle();
+      expect(shape()).toBe("compact");
+
+      // AND SOMEBODY ELSE AT THIS BROWSER starts from the full sidebar.
+      act(() => noteReader("p-2"));
+      expect(shape()).toBe("full");
+      expect(kept("p-1")).toBe(JSON.stringify("compact"));
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("the drawer is the full list whatever the reader chose, and the choice is kept", async () => {
+    noteReader("p-1");
+    setRailShape("compact");
+    const win = await mountAt(1023);
+    try {
+      expect(shape()).toBe("full");
+      press();
+      expect(document.querySelector(".crewlet-app-shell__rail")?.getAttribute("data-open")).toBe(
+        "true",
+      );
+      expect(screen.getByRole("link", { name: /^Principles/ })).toBeDefined();
+      expect(kept("p-1")).toBe(JSON.stringify("compact"));
+      // Widened, the sidebar is folded again, as the reader left it.
+      win.set(1024);
+      expect(shape()).toBe("compact");
+    } finally {
+      win.restore();
+    }
+  });
+});
+
+// FOLDED, THE SIDEBAR IS THE SAME PLACES: Search, the places about you, one
+// tile per named group whose flyout lists its places, and Settings and the
+// reader's face under the foot's rule.
+describe("the compact sidebar", () => {
+  async function folded(hash = "#/") {
+    setRailShape("compact");
+    location.hash = hash;
+    const win = installWindow(1280);
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    return win;
+  }
+
+  afterEach(() => {
+    setRailShape("full");
+  });
+
+  test("lists the places about you, each a link to where its row goes", async () => {
+    const win = await folded();
+    try {
+      const nav = screen.getByRole("navigation", { name: "Navigation" });
+      for (const name of ["Home", "Inbox", "My work"]) {
+        expect(within(nav).getByRole("link", { name: new RegExp(`^${name}`) })).toBeDefined();
+      }
+      expect(within(nav).getByRole("link", { name: /^Home/ }).getAttribute("href")).toBe("#/home");
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("folds a named group into one tile whose flyout lists its places", async () => {
+    const win = await folded("#/live");
+    try {
+      const tile = screen.getByRole("button", { name: /^Workspace/ });
+      act(() => tile.click());
+      const flyout = await screen.findByRole("menu", { name: "Workspace" });
+      const live = within(flyout).getByRole("menuitem", { name: /^Live/ });
+      expect(live.getAttribute("href")).toBe("#/live");
+      // THE PAGE ON SCREEN IS ONE OF ITS PLACES, and the flyout says which.
+      expect(live.getAttribute("aria-current")).toBe("page");
+      for (const name of ["Worklet", "Chatlet", "Doclet", "Artifacts"]) {
+        expect(
+          within(flyout).getByRole("menuitem", { name: new RegExp(`^${name}`) }),
+        ).toBeDefined();
+      }
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("Search opens the palette the full sidebar's field opens", async () => {
+    const win = await folded();
+    try {
+      act(() => screen.getByRole("button", { name: /^Search/ }).click());
+      expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("keeps Settings in the foot, and the face's menu opens the preferences", async () => {
+    const win = await folded();
+    try {
+      expect(screen.getByRole("link", { name: /^Settings/ }).getAttribute("href")).toBe(
+        "#/settings/models",
+      );
+      act(() => screen.getByRole("button", { name: /^Ada Lovelace/ }).click());
+      act(() => screen.getByRole("menuitem", { name: /^Preferences/ }).click());
+      const dialog = await screen.findByRole("dialog", { name: "Preferences" });
+      expect(within(dialog).getByRole("radiogroup", { name: "Mode" })).toBeDefined();
     } finally {
       win.restore();
     }

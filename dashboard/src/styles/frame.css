@@ -421,6 +421,12 @@
   padding: var(--spacing-3);
 }
 
+/* IN A DIALOG, the folded sidebar's way to them (the reader's menu), the
+   dialog's body brings the inset, so the rows stand on that one. */
+.preferences--bare {
+  padding: 0;
+}
+
 /* A LABEL COLUMN AND A CONTROL COLUMN, and the three controls are ONE WIDTH:
    the two switchers share one box, three cells each, which the kit's `fill`
    divides evenly, so a row of glyphs and a row of letters are the same

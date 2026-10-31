@@ -65,6 +65,11 @@ export const STORAGE_KEYS = {
    */
   homeBoard: "crewlet_home_board/",
   /**
+   * The PREFIX of each reader's sidebar shape, `full` or `compact`
+   * (`app/sidebar/railShape.ts`): the reader's id follows it.
+   */
+  railShape: "crewlet_rail_shape/",
+  /**
    * Which principal this TAB was last read by, in `sessionStorage` rather
    * than `localStorage` — it describes one tab, and goes with everything else
    * the tab holds (`lib/reader.ts`).

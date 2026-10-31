@@ -744,6 +744,28 @@ opened (the kit's `IconButtonLink`, current on a Settings page), Preferences
 its popover. The head carries the company's lockup and, at the end of its
 line, the **engine panel**'s compact status.
 
+**The sidebar folds to a compact rail.** Above the shell breakpoint the kit's
+fold control, or `Mod+\`, folds the sidebar to the kit's 76 px rail and back,
+and the choice is the reader's, kept per reader in this browser
+(`app/sidebar/railShape.ts`), as their Home board is. Folded, it is the kit's
+`CompactNav`: **Search** (the palette the full sidebar's field opens), then
+Home, Inbox and My work, each its glyph over its name, then ONE tile for
+Company and one for Workspace, each opening a flyout of its places beside the
+rail on a point, a press or the arrow keys; the tile carries its places'
+badges and is marked current when the page on screen is one of them. Under
+the foot's rule stand the engine's status (its dot and alarms), **Settings**
+as a tile, and the reader's face alone, which opens the same menu the user
+block's row does, with **Preferences** in it, opening as a dialog of the same
+three controls. Both shapes are drawn from one list of places, so they cannot
+list a place with a different link, lock or figure. The live shortcuts
+(Pinned, Starred, Running) are the full sidebar's, and a shortcut is never
+current in the folded rail, so the place holding the page keeps the mark. The
+company's mark and the fold control stand in the same place in both shapes,
+the mark in the head's row and the control in the row under it, so neither
+moves when the sidebar folds. Below the breakpoint the sidebar is the drawer,
+which is always the full list, and the stored choice comes back when the
+window widens.
+
 **Every "New task" is one sheet.** A work screen's
 page-bar New task (Home, the Tasks lens, every lens of a project) and a board lane's `+` all open the
 frame's single New task sheet (`dashboard/src/routes/worklet/NewTask.tsx`, mounted
@@ -1981,8 +2003,9 @@ rounded, with ONE scroller inside it. Below the kit's `breakpoint.shell`
 (1024 px) the sheet is the whole window and the sidebar is a modal drawer that
 takes Escape, traps Tab, hands focus back to its toggle and closes on a
 navigation — opened from the bar's toggle or with `Mod+\` (`⌘\` on a Mac,
-`Ctrl+\` elsewhere), a chord that does nothing above the breakpoint, where the
-sidebar is always on screen; the skip link precedes everything and lands on
+`Ctrl+\` elsewhere), the chord that above the breakpoint, where the sidebar is
+always on screen, folds it to its compact rail and back
+([The sidebar](#the-sidebar)); the skip link precedes everything and lands on
 the scroller. None of that is written in this repository, because a second
 copy of it is how the two drift. What `dashboard/src/app/` owns:
 
@@ -2129,7 +2152,7 @@ for the keys is the reader who does not know `?` yet.
 
 | Where it is live | Keys |
 |---|---|
-| Anywhere | `Mod+K` search (the same chord closes it), `Mod+.` Ask Crewlet (pressed inside it, it closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Worklet's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
+| Anywhere | `Mod+K` search (the same chord closes it), `Mod+.` Ask Crewlet (pressed inside it, it closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Worklet's trail on its scope pages, centred everywhere else), `Mod+\` folds the sidebar to its compact rail and back, and opens the navigation drawer on a narrow window |
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |

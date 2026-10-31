@@ -57,13 +57,36 @@
  * Worklet asks none of them (`lib/useInboxCounts.ts`, `lib/useQueueCount.ts`,
  * [PinnedSection]): a figure beside a lock would be a refusal drawn as a
  * number.
+ *
+ * # Two shapes from one list
+ *
+ * Above the shell breakpoint the reader can fold the sidebar to the kit's
+ * compact rail and back, with the kit's fold control or `Mod+\`, and the
+ * choice is theirs to keep (`railShape.ts`). FOLDED, it is the kit's
+ * `CompactNav`: Search, then the places about you, each its glyph over its
+ * name, then each named group folded into ONE tile (Company, Workspace) whose
+ * flyout lists its places; Settings and the reader's face stand under the
+ * foot's rule, and the engine's status at the top of the foot. Both shapes
+ * are drawn from [placeOf], so they list the same places with the same
+ * figures, links and locks, and a group's tile carries its places' badges and
+ * says when the page on screen is one of them. The live shortcuts (Pinned,
+ * Starred, Running) are the full sidebar's: the folded rail is the places,
+ * and one press unfolds the rest.
+ *
+ * Below the breakpoint the sidebar is the kit's drawer, which has the room
+ * for the full list, so it is always the full shape there and the key opens
+ * it.
  */
 
-import { useMemo } from "react";
+import { Fragment, useMemo } from "react";
 import {
   AppShell,
   ArtifactKindGlyph,
   BrandLockup,
+  CompactNav,
+  CompactNavGroup,
+  CompactNavItem,
+  CompactNavSeparator,
   Kbd,
   SearchTrigger,
   SidebarNav,
@@ -71,7 +94,7 @@ import {
   useAppShell,
   type NavItemProps,
 } from "@crewlethq/ui";
-import { ActivityGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { ActivityGlyph, PinGlyph, SearchGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { href, samePath, useRoute } from "~/app/router.tsx";
 import {
   SIDEBAR_GROUPS,
@@ -101,7 +124,7 @@ import { pageCount, viewRun } from "~/lib/work.ts";
 import { useStarred } from "~/lib/starred.ts";
 import { artifactPath } from "~/app/routes.ts";
 import { usePins } from "~/lib/artifacts/pins.ts";
-import { capsOf, keyRow, useKeymap } from "../keymap.ts";
+import { ariaKeysOf, capsOf, keyRow, pressText, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { attentionFigure, useChatAttention } from "~/lib/chatRooms.ts";
 import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
@@ -111,6 +134,7 @@ import { preload } from "../lazyScreen.ts";
 import { UserBlock, type FootPlace } from "./UserBlock.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import { useKeyHints } from "~/app/layout.ts";
+import { toggleRailShape } from "./railShape.ts";
 
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
@@ -129,14 +153,18 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
     return held !== null && backups !== undefined && sectionOpen(backups, held);
   }, [held]);
 
-  // BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and Mod+\ opens it —
-  // the reader's way to it without reaching for the toggle in the bar. Only
-  // there: above the breakpoint the sidebar is always on screen and there is
-  // nothing to open. It OPENS rather than toggles, because an open drawer is
-  // a modal layer that owns the keyboard (`lib/keys.ts` stands aside for
-  // one), and the drawer's own Escape is what closes it.
+  // MOD+\ IS THE SIDEBAR'S KEY IN EITHER SHAPE OF THE FRAME. Where the
+  // sidebar stands beside the page it folds it and unfolds it, as the kit's
+  // fold control does. Below the shell breakpoint the sidebar is a drawer, and
+  // the key OPENS it rather than toggling it, because an open drawer is a
+  // modal layer that owns the keyboard (`lib/keys.ts` stands aside for one),
+  // and the drawer's own Escape is what closes it; the stored shape is left
+  // alone there, since the drawer has nothing to fold.
   const shell = useAppShell();
-  useKeymap({ drawer: { run: shell.openDrawer, when: shell.narrow } });
+  useKeymap({ sidebar: () => (shell.narrow ? shell.openDrawer() : toggleRailShape()) });
+  // THE SHAPE DRAWN NOW, which is the kit's to say: the reader's choice above
+  // the breakpoint, and always the full list in the drawer.
+  const compact = shell.rail === "compact";
   const keyHints = useKeyHints();
   const org = useOrg();
   const agents = useAgents();
@@ -240,49 +268,57 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   // ONE CURRENT ROW. A pin, a star or a running turn that opens exactly this
   // page is the row the reader followed, and the workspace row containing it
   // gives the mark up: both carried the current fill and `aria-current`.
+  // FOLDED, NO SHORTCUT IS DRAWN, so none takes the mark from its place, and
+  // the pins are not asked for until the sidebar unfolds to draw them.
   const viewKey = route.query.get("view") ?? "";
   const pinned = usePinned({
     owner: viewer.owner,
     worklet: viewer.worklet && runs.tracker,
-    enabled: !unserved,
+    enabled: !unserved && !compact,
   });
   // NOT A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR: its star's row is
   // drawn nowhere, and the star is kept until it runs it again.
   const stars = useStarred().filter((s) => pathShown(s.path, runs));
   const shortcutHere =
-    (!unserved && pinnedHere(pinned, route.path, viewKey)) ||
-    stars.some((s) => samePath(route.path, s.path)) ||
-    running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path));
+    !compact &&
+    ((!unserved && pinnedHere(pinned, route.path, viewKey)) ||
+      stars.some((s) => samePath(route.path, s.path)) ||
+      running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path)));
 
   const lockOf = (ws: WorkspaceRow) => lockReason(held === null ? [] : workspaceMissing(ws, held));
+  // ONE PLACE, AS EVERY SHAPE DRAWS IT: the full row, the compact tile and a
+  // folded group's flyout link all spread this, so the two shapes cannot list
+  // a place with a different link, lock or figure.
+  const placeOf = (ws: WorkspaceRow) => ({
+    label: ws.label,
+    // LOCKED, NEVER HIDDEN, by the one rule every lock is drawn by; in a
+    // group the reader holds none of, the group's label carries the key.
+    locked: lockOf(ws),
+    icon: <WorkspaceGlyph icon={ws.icon} />,
+    // WHERE THE ROW OPENS for this reader ([landingPath]): Settings' row
+    // opens the first of its sections the reader may open.
+    ...linkTo(landingPath(ws, held, runs)),
+    current: here === ws.key && !shortcutHere,
+    ...figures[ws.key],
+  });
   const footPlace = (ws: WorkspaceRow): FootPlace => {
-    const lock = lockOf(ws);
+    const { label, locked, icon, href, onPrefetch, current } = placeOf(ws);
     return {
       key: ws.key,
-      label: ws.label,
-      icon: <WorkspaceGlyph icon={ws.icon} />,
-      ...linkTo(landingPath(ws, held, runs)),
-      current: here === ws.key && !shortcutHere,
-      title: lock ? `${ws.label}. ${lock}` : ws.label,
+      label,
+      icon,
+      href,
+      onPrefetch,
+      current,
+      locked,
+      title: locked ? `${label}. ${locked}` : label,
     };
   };
-  const row = (ws: WorkspaceRow) => {
-    return (
-      <SidebarNav.Item
-        key={ws.key}
-        label={ws.label}
-        // LOCKED, NEVER HIDDEN, by the one rule every lock is drawn by; in a
-        // group the reader holds none of, the group's label carries the key.
-        locked={lockOf(ws)}
-        icon={<WorkspaceGlyph icon={ws.icon} />}
-        // WHERE THE ROW OPENS for this reader ([landingPath]): Settings' row
-        // opens the first of its sections the reader may open.
-        {...linkTo(landingPath(ws, held, runs))}
-        current={here === ws.key && !shortcutHere}
-        {...figures[ws.key]}
-      />
-    );
-  };
+  const row = (ws: WorkspaceRow) => <SidebarNav.Item key={ws.key} {...placeOf(ws)} />;
+  // THE NAMED GROUPS ARE PARTED FROM THE PLACES ABOUT YOU BY ONE RULE, named
+  // for the groups it introduces.
+  const named = SIDEBAR_GROUPS.filter((group) => group.label !== "");
+  const palette = keyRow("palette").presses[0]!;
 
   return (
     <AppShell.Rail
@@ -304,7 +340,8 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           mark={<img src="/static/dashboard/crewlet-icon.svg" alt="" />}
         />
       }
-      // THE RAIL'S FIELD, in the kit's own slot on the nav's columns.
+      // THE RAIL'S FIELD, in the kit's own slot on the nav's columns. The
+      // compact rail draws no field: its Search tile opens the same palette.
       search={
         <SearchTrigger
           variant="rail"
@@ -315,13 +352,13 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           // A KEYCAP ONLY FOR A READER WITH KEYS (`useKeyHints`): in the
           // phone's drawer "Ctrl + K" named a key nobody there has, and cut
           // the trigger's own label to "Ask or jump t…".
-          shortcut={
-            keyHints ? <Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle /> : undefined
-          }
+          shortcut={keyHints ? <Kbd keys={capsOf(palette)} subtle /> : undefined}
         />
       }
       // THE ENGINE'S STATE ON THE NAME'S LINE, compact: a dot and the
-      // alarms, its words in its name and title, the panel below it.
+      // alarms, its words in its name and title, the panel below it. In the
+      // compact rail the kit stands it at the top of the foot, and the panel
+      // opens above it.
       status={
         <RailBoundary label="Engine" resetKey={at} compact>
           <EnginePanel
@@ -335,6 +372,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
             })}
             readsReport={readsReport}
             onSignIn={goSignIn}
+            side={compact ? "top" : "bottom"}
           />
         </RailBoundary>
       }
@@ -344,37 +382,72 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       // fetching it on the pointer, and naming its lock, never hidden.
       footer={
         <RailBoundary label="You" resetKey={at}>
-          <UserBlock viewer={viewer} seatName={seatName} places={shown("foot").map(footPlace)} />
+          <UserBlock
+            viewer={viewer}
+            seatName={seatName}
+            places={shown("foot").map(footPlace)}
+            compact={compact}
+          />
         </RailBoundary>
       }
     >
-      <SidebarNav label="Navigation">
-        {SIDEBAR_GROUPS.map((group) => (
-          <SidebarNav.Group
-            key={group.place}
-            {...(group.label ? { label: group.label } : {})}
-            // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on its label.
-            locked={groupLock(shown(group.place).map(lockOf))}
-          >
-            {shown(group.place).map(row)}
-          </SidebarNav.Group>
-        ))}
-        {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
+      {compact ? (
+        <CompactNav label="Navigation">
+          {/* SEARCH FIRST, where the full sidebar's field stands: the same
+              palette, named by the same words, with its key in the tip. */}
+          <CompactNavItem
+            label="Search"
+            icon={<SearchGlyph size="sm" />}
+            title={keyHints ? `Ask or jump to… (${pressText(palette)})` : "Ask or jump to…"}
+            keyshortcuts={ariaKeysOf(palette)}
+            onClick={onSearch}
+          />
+          {SIDEBAR_GROUPS.map((group) =>
+            group.label === "" || !group.icon ? (
+              shown(group.place).map((ws) => <CompactNavItem key={ws.key} {...placeOf(ws)} />)
+            ) : (
+              <Fragment key={group.place}>
+                {group === named[0] && (
+                  <CompactNavSeparator label={named.map((g) => g.label).join(" and ")} />
+                )}
+                <CompactNavGroup
+                  label={group.label}
+                  icon={<WorkspaceGlyph icon={group.icon} />}
+                  links={shown(group.place).map((ws) => ({ key: ws.key, ...placeOf(ws) }))}
+                />
+              </Fragment>
+            ),
+          )}
+        </CompactNav>
+      ) : (
+        <SidebarNav label="Navigation">
+          {SIDEBAR_GROUPS.map((group) => (
+            <SidebarNav.Group
+              key={group.place}
+              {...(group.label ? { label: group.label } : {})}
+              // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on its label.
+              locked={groupLock(shown(group.place).map(lockOf))}
+            >
+              {shown(group.place).map(row)}
+            </SidebarNav.Group>
+          ))}
+          {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
-        {!unserved && (
-          <RailBoundary label="Pinned" resetKey={at}>
-            <PinnedSection path={route.path} viewKey={viewKey} pinned={pinned} />
+          {!unserved && (
+            <RailBoundary label="Pinned" resetKey={at}>
+              <PinnedSection path={route.path} viewKey={viewKey} pinned={pinned} />
+            </RailBoundary>
+          )}
+          <RailBoundary label="Starred" resetKey={at}>
+            <StarredSection path={route.path} stars={stars} />
           </RailBoundary>
-        )}
-        <RailBoundary label="Starred" resetKey={at}>
-          <StarredSection path={route.path} stars={stars} />
-        </RailBoundary>
-        {/* LAST, so a turn starting or ending moves nothing above it. */}
-        <RailBoundary label="Running" resetKey={at}>
-          <RunningSection path={route.path} running={running} names={names} avatars={avatars} />
-        </RailBoundary>
-      </SidebarNav>
+          {/* LAST, so a turn starting or ending moves nothing above it. */}
+          <RailBoundary label="Running" resetKey={at}>
+            <RunningSection path={route.path} running={running} names={names} avatars={avatars} />
+          </RailBoundary>
+        </SidebarNav>
+      )}
     </AppShell.Rail>
   );
 }

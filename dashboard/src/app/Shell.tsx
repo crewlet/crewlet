@@ -123,7 +123,8 @@ import { useToastInset } from "./toastInset.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
-import { useKeymap } from "./keymap.ts";
+import { capsOf, keyRow, useKeymap } from "./keymap.ts";
+import { setRailShape, useRailShape } from "./sidebar/railShape.ts";
 import { useModalLayerOpen } from "~/lib/keys.ts";
 import { runningTarget } from "~/lib/turns.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
@@ -518,6 +519,9 @@ function Frame({ children }: { children: ReactNode }) {
   // the frame subscribes and re-renders; the screen is a child of this render
   // and re-renders with it.
   const prefs = useViewerPrefs();
+  // THE SIDEBAR'S SHAPE, as this reader left it (`sidebar/railShape.ts`). The
+  // kit draws it above the shell breakpoint and the drawer below it.
+  const railShape = useRailShape();
 
   // OPEN OR NOT: ⌘K opens it on All, and so does every other way in.
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -863,6 +867,13 @@ function Frame({ children }: { children: ReactNode }) {
             fill={filling}
             navigationKey={route.hash}
             toggleLabel="Navigation"
+            // THE SIDEBAR FOLDS TO THE KIT'S COMPACT RAIL. The kit draws the
+            // one fold control, pinned in the same place in both shapes, and
+            // names the table's key in its tip; the key itself is bound by
+            // the sidebar, which opens the drawer with it on a narrow window.
+            rail={railShape}
+            onRailChange={setRailShape}
+            railFoldKeys={RAIL_FOLD_KEYS}
             sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} />}
             topbar={
               ownHeader ? (
@@ -936,6 +947,9 @@ function Frame({ children }: { children: ReactNode }) {
     </NewTaskOpener.Provider>
   );
 }
+
+/** The sidebar's key as the fold control's tip draws it, off the key table. */
+const RAIL_FOLD_KEYS = capsOf(keyRow("sidebar").presses[0]!);
 
 /** The New task sheet, out of the Worklet chunk. See [LayerBoundary]. */
 const NewTaskSheet = lazyScreen("worklet", (module) => module.NewTaskSheet);

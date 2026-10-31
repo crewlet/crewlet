@@ -136,11 +136,15 @@ export type SectionRenderer = "tabs" | "lenses" | "column" | "rail" | "none";
  */
 export type SidebarPlace = "you" | "company" | "workspace" | "foot" | "menu";
 
-/** The sidebar's labelled groups, in the order they are drawn, and the words over each. */
-export const SIDEBAR_GROUPS: readonly { place: SidebarPlace; label: string }[] = [
+/**
+ * The sidebar's labelled groups, in the order they are drawn, the words over
+ * each, and a named group's glyph: the ONE tile the compact sidebar folds the
+ * group into (`sidebar/Sidebar.tsx`), whose flyout lists its places.
+ */
+export const SIDEBAR_GROUPS: readonly { place: SidebarPlace; label: string; icon?: GlyphName }[] = [
   { place: "you", label: "" },
-  { place: "company", label: "Company" },
-  { place: "workspace", label: "Workspace" },
+  { place: "company", label: "Company", icon: "building-complex" },
+  { place: "workspace", label: "Workspace", icon: "layout-grid" },
 ];
 
 /**

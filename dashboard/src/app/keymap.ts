@@ -197,11 +197,15 @@ const FRAME: KeyRow[] = [
     by: "dashboard",
     whileTyping: true,
   },
+  // ONE PRESS FOR THE SIDEBAR IN EITHER SHAPE OF THE FRAME: it folds the
+  // sidebar to its compact rail and back where the sidebar stands beside the
+  // page, and below the shell breakpoint, where the sidebar is a drawer with
+  // nothing to fold, it opens the drawer (`sidebar/Sidebar.tsx`).
   {
-    id: "drawer",
+    id: "sidebar",
     scope: "frame",
     presses: [{ key: "\\", mod: true }],
-    does: "Open the navigation",
+    does: "Fold or unfold the sidebar, or open it on a narrow window",
     by: "dashboard",
     whileTyping: true,
   },

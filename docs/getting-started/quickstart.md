@@ -606,7 +606,10 @@ The sidebar reads top to bottom: Home, Inbox and My work; the Company group
 Workspace group (Worklet, Chatlet, Doclet, Artifacts and Live); and Settings at
 its foot. Each workspace's sections are tabs in its page header, or Chatlet's
 rail beside its rooms. `g` then a letter jumps between them, and `?` lists
-every key.
+every key. The control under the company's mark (or `⌘\`, `Ctrl+\` off a
+Mac) folds the sidebar to a narrow rail of icons, with Company and Workspace
+each one icon whose places open beside it, and the sidebar stays as you left
+it.
 While an agent is working, the Live row counts the seats at work and a
 **Running** group under the sidebar's shortcuts (after Projects, Pinned and
 Starred) lists up to four running turns. Press one to watch it — its

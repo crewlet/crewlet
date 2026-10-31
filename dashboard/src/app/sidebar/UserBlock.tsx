@@ -117,15 +117,28 @@
  * THE THEME ROW PREVIEWS. Its list repaints the whole frame in the theme the
  * highlight rests on, and puts back the theme in effect when the list closes
  * or the pointer leaves it; Enter or a click applies (see `app/appearance.tsx`).
+ *
+ * # Folded, the foot is the places and the reader's face
+ *
+ * In the compact sidebar (`railShape.ts`) the foot has no room for a name, so
+ * the places stand as tiles of the kit's `CompactNav` above the reader's face,
+ * and the face alone is the kit's compact `AccountRow`: the same menu button,
+ * named by the same words, which it says in its tooltip. Preferences has no
+ * glyph of its own there, so the reader's menu offers it, and it opens as a
+ * dialog holding the same three controls: a choice the full sidebar keeps one
+ * press away is never lost by folding it.
  */
 
 import { useState, type ReactNode } from "react";
 import {
   AccountRow,
+  CompactNav,
+  CompactNavItem,
   DensitySwitcher,
   DescriptionList,
   IconButton,
   IconButtonLink,
+  Modal,
   Popover,
   Select,
   Tag,
@@ -285,21 +298,27 @@ export interface FootPlace {
   current: boolean;
   /** The hint, and a lock's reason, after the name in the tooltip. */
   title?: string | undefined;
+  /** Why the reader cannot open it, as a nav row names its lock; absent when they can. */
+  locked?: string | undefined;
 }
 
 export function UserBlock({
   viewer,
   seatName,
   places = [],
+  compact = false,
 }: {
   viewer: ViewerState;
   /** The name of the seat this principal is bound to, from the org chart. */
   seatName: string;
   /** The places drawn as icons beside the row, before Preferences. */
   places?: readonly FootPlace[];
+  /** Whether the sidebar is folded to its compact rail (see the file's doc). */
+  compact?: boolean;
 }) {
   const route = useRoute();
   const [everywhere, setEverywhere] = useState(false);
+  const [preferences, setPreferences] = useState(false);
   // THE FRAME'S ONE READ, asked again when the tab comes back: for the people
   // the socket refuses it is the ONLY way to the sign-outs, so a request lost
   // on the way must not leave them none until a reload.
@@ -330,12 +349,44 @@ export function UserBlock({
   const via = resolved ? viaLine(login) : "";
   const credential = via !== "";
 
-  const menu = useAccountMenu(account, who.grants, () => setEverywhere(true), via);
+  const menu = useAccountMenu(
+    account,
+    who.grants,
+    () => setEverywhere(true),
+    via,
+    // FOLDED, THE MENU IS THE WAY TO PREFERENCES (see the file's doc).
+    compact ? () => setPreferences(true) : undefined,
+  );
 
   return (
     <>
       {everywhere && <SignOutEverywhereDialog onClose={() => setEverywhere(false)} />}
+      {/* OPEN UNTIL CLOSED, whatever shape the sidebar takes meanwhile: a
+          window resized into the drawer's width keeps the dialog it opened. */}
+      {preferences && (
+        <Modal open size="sm" title="Preferences" onClose={() => setPreferences(false)}>
+          <Preferences bare />
+        </Modal>
+      )}
+      {compact && places.length > 0 && (
+        // THE PLACES AS TILES OVER THE FACE, each the same link its glyph is
+        // in the full foot, naming its lock the way a nav row does.
+        <CompactNav label="Settings">
+          {places.map((place) => (
+            <CompactNavItem
+              key={place.key}
+              label={place.label}
+              icon={place.icon}
+              href={place.href}
+              current={place.current}
+              locked={place.locked}
+              onPrefetch={place.onPrefetch}
+            />
+          ))}
+        </CompactNav>
+      )}
       <AccountRow
+        compact={compact}
         avatar={
           // RINGED IN THE ACCENT ONCE THE ENGINE HAS SAID WHO THIS IS: this
           // one badge IS the reader, which is the single use `ring="brand"`
@@ -366,46 +417,50 @@ export function UserBlock({
         // reach the whole line without opening the menu.
         title={menu ? (via ? `Signed in ${via}. ${MENU_TITLE}` : MENU_TITLE) : undefined}
         linkSuffix=", your menu"
+        // FOLDED, THE FACE STANDS ALONE: the places are tiles above it and
+        // Preferences is in its menu.
         actions={
-          <>
-            {places.map((place) => (
-              <IconButtonLink
-                key={place.key}
-                label={place.label}
-                title={place.title}
-                href={place.href}
-                icon={place.icon}
-                size="sm"
-                variant="ghost"
-                current={place.current}
-                onPointerEnter={place.onPrefetch}
-                onFocus={place.onPrefetch}
-              />
-            ))}
-            {/* START-ALIGNED, OPENING INTO THE ROOM TO ITS RIGHT. The trigger
+          compact ? undefined : (
+            <>
+              {places.map((place) => (
+                <IconButtonLink
+                  key={place.key}
+                  label={place.label}
+                  title={place.title}
+                  href={place.href}
+                  icon={place.icon}
+                  size="sm"
+                  variant="ghost"
+                  current={place.current}
+                  onPointerEnter={place.onPrefetch}
+                  onFocus={place.onPrefetch}
+                />
+              ))}
+              {/* START-ALIGNED, OPENING INTO THE ROOM TO ITS RIGHT. The trigger
                 sits at the sidebar's inner edge, a couple of hundred pixels
                 from the left of the window, so an end-aligned panel would have
                 to be slid back across the window edge to fit at all; the test
                 beside this block lays the sidebar out at its real
                 coordinates. */}
-            <Popover
-              label="Preferences"
-              side="top"
-              align="start"
-              trigger={(open, toggle) => (
-                <IconButton
-                  label="Preferences"
-                  icon={<PaletteGlyph size="sm" />}
-                  size="sm"
-                  variant="ghost"
-                  aria-expanded={open}
-                  onClick={toggle}
-                />
-              )}
-            >
-              <Preferences />
-            </Popover>
-          </>
+              <Popover
+                label="Preferences"
+                side="top"
+                align="start"
+                trigger={(open, toggle) => (
+                  <IconButton
+                    label="Preferences"
+                    icon={<PaletteGlyph size="sm" />}
+                    size="sm"
+                    variant="ghost"
+                    aria-expanded={open}
+                    onClick={toggle}
+                  />
+                )}
+              >
+                <Preferences />
+              </Popover>
+            </>
+          )
         }
       />
     </>
@@ -466,14 +521,34 @@ export function useAccountMenu(
    * said under the access, since the row says only its kind. Empty for a person.
    */
   via = "",
+  /**
+   * Open the reader's preferences, where the menu is the way to them: the
+   * folded sidebar's, which has no room for their glyph beside the face.
+   */
+  onPreferences?: () => void,
 ): AccountRowMenu | undefined {
   const toast = useToast();
   const { socket } = useClient();
   const nav = useNavigator();
   if (account === null) return undefined;
+  // PREFERENCES ARE THE BROWSER'S, so they are offered whoever this is.
+  const preferences: MenuEntry[] = onPreferences
+    ? [
+        {
+          key: "preferences",
+          label: "Preferences",
+          description: "Mode, density and theme",
+          icon: <PaletteGlyph />,
+          onSelect: onPreferences,
+        },
+      ]
+    : [];
   if (account.kind === "nobody") {
     return {
-      items: [{ key: "sign-in", label: "Sign in", icon: <LogInGlyph />, onSelect: goSignIn }],
+      items: [
+        ...preferences,
+        { key: "sign-in", label: "Sign in", icon: <LogInGlyph />, onSelect: goSignIn },
+      ],
     };
   }
   // A FAILED SIGN-OUT IS SAID, and the page stays: see `signOut` for why a
@@ -497,6 +572,7 @@ export function useAccountMenu(
         nav.to(ws.path);
       },
     })),
+    ...preferences,
     { kind: "separator", key: "session" },
     {
       key: "sign-out",
@@ -548,13 +624,14 @@ export function useAccountMenu(
 
 /**
  * The per-browser preferences. Exported for its suite, which drives each
- * control and reads `lib/prefs.ts` back.
+ * control and reads `lib/prefs.ts` back. `bare` drops the inset the popover's
+ * body stands on, for a dialog whose body brings its own.
  */
-export function Preferences() {
+export function Preferences({ bare = false }: { bare?: boolean }) {
   const prefs = useViewerPrefs();
   const applyTheme = useApplyTheme();
   return (
-    <div className="preferences">
+    <div className={bare ? "preferences preferences--bare" : "preferences"}>
       {/* EVERY CONTROL NAMES ITSELF: each switcher is a radio group carrying
           its own label and the select is named Theme, so a second label round
           one would be read twice. The two switchers FILL one box of one width,

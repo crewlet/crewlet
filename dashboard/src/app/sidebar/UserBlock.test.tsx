@@ -614,10 +614,7 @@ describe("what the account offers", () => {
   // gesture to the menu and the item list goes red.
   test("the menu opens the Account page and holds no proof gesture of its own", async () => {
     actions({ kind: "session", login: "ada.lovelace" });
-    const labels = screen
-      .getAllByRole("menuitem")
-      .map((item) => item.querySelector(".crewlet-menu__label")?.textContent);
-    expect(labels).toEqual(["Account", "Sign out", "Sign out everywhere"]);
+    expect(menuLabels()).toEqual(["Account", "Sign out", "Sign out everywhere"]);
     // SIGNING OUT EVERYWHERE SAYS WHAT IT ENDS, in the danger ink.
     const everywhere = screen.getByRole("menuitem", { name: /^Sign out everywhere/ });
     expect(everywhere.textContent).toContain("Every device, and stops your tokens");
@@ -625,6 +622,19 @@ describe("what the account offers", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: /^Account/ }));
     await waitFor(() => expect(location.hash).toBe("#/account"));
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  // FOLDED, THE FACE HAS NO GLYPH BESIDE IT, so its menu is the way to the
+  // preferences, for whoever this is: they are the browser's, not a session's.
+  test("folded, the menu offers the preferences to a reader and to nobody", () => {
+    const onPreferences = vi.fn();
+    actions(signedIn, onPreferences);
+    expect(menuLabels()).toEqual(["Account", "Preferences", "Sign out", "Sign out everywhere"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Preferences/ }));
+    expect(onPreferences).toHaveBeenCalledTimes(1);
+    cleanup();
+    actions({ kind: "nobody" }, onPreferences);
+    expect(menuLabels()).toEqual(["Preferences", "Sign in"]);
   });
 });
 
@@ -646,16 +656,21 @@ function heldSocket() {
 function MenuRow({
   account,
   onSignOutEverywhere,
+  onPreferences,
 }: {
   account: Account;
   onSignOutEverywhere: () => void;
+  onPreferences?: () => void;
 }) {
-  const menu = useAccountMenu(account, "Worklet", onSignOutEverywhere);
+  const menu = useAccountMenu(account, "Worklet", onSignOutEverywhere, "", onPreferences);
   return <AccountRow avatar={<span />} name="Ada Lovelace" menu={menu} />;
 }
 
-/** The account's menu, drawn on its own with a toaster to report into, and opened. */
-function actions(account: Account) {
+/**
+ * The account's menu, drawn on its own with a toaster to report into, and
+ * opened. `onPreferences` is the folded sidebar's way to the preferences.
+ */
+function actions(account: Account, onPreferences?: () => void) {
   const onSignOutEverywhere = vi.fn();
   const client = heldSocket();
   render(
@@ -663,7 +678,11 @@ function actions(account: Account) {
       <Router>
         <ToastProvider>
           <LayerHost>
-            <MenuRow account={account} onSignOutEverywhere={onSignOutEverywhere} />
+            <MenuRow
+              account={account}
+              onSignOutEverywhere={onSignOutEverywhere}
+              onPreferences={onPreferences}
+            />
           </LayerHost>
         </ToastProvider>
       </Router>
@@ -671,6 +690,13 @@ function actions(account: Account) {
   );
   fireEvent.click(screen.getByRole("button", { name: /Ada Lovelace/ }));
   return { onSignOutEverywhere, asked: client.asked };
+}
+
+/** The menu's items, by the words each one says. */
+function menuLabels(): (string | null | undefined)[] {
+  return screen
+    .getAllByRole("menuitem")
+    .map((item) => item.querySelector(".crewlet-menu__label")?.textContent);
 }
 
 /** The confirmation signing out everywhere asks, drawn on its own. */
@@ -967,5 +993,59 @@ describe("the preferences", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// FOLDED, THE FOOT IS THE PLACES AS TILES AND THE READER'S FACE ALONE, and
+// nothing the full foot offers is lost: Settings is a tile, the face opens the
+// same menu, and the preferences open from it as a dialog.
+describe("the folded foot", () => {
+  const settings = {
+    key: "settings",
+    label: "Settings",
+    icon: <span />,
+    href: "#/settings/models",
+    onPrefetch: () => {},
+    current: false,
+  };
+
+  function folded() {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <SessionReading>
+          <Router>
+            <ToastProvider>
+              <LayerHost>
+                <UserBlock viewer={ada} seatName="" places={[settings]} compact />
+              </LayerHost>
+            </ToastProvider>
+          </Router>
+        </SessionReading>
+      </ClientContext.Provider>,
+    );
+  }
+
+  test("draws each place as a tile linked where its glyph goes", () => {
+    folded();
+    const nav = screen.getByRole("navigation", { name: "Settings" });
+    expect(
+      within(nav)
+        .getByRole("link", { name: /^Settings/ })
+        .getAttribute("href"),
+    ).toBe("#/settings/models");
+    // THE PREFERENCES' GLYPH IS NOT DRAWN: the face's menu holds them.
+    expect(screen.queryByRole("button", { name: "Preferences" })).toBeNull();
+  });
+
+  test("opens the preferences from the face's menu, as a dialog of the same controls", async () => {
+    folded();
+    fireEvent.click(await screen.findByRole("button", { name: /^Ada Lovelace/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Preferences/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Preferences" });
+    expect(within(dialog).getByRole("radiogroup", { name: "Mode" })).toBeDefined();
+    expect(within(dialog).getByRole("radiogroup", { name: "Density" })).toBeDefined();
+    expect(within(dialog).getByRole("combobox", { name: "Theme" })).toBeDefined();
   });
 });
