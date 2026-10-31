@@ -79,7 +79,8 @@ export interface AnsweredGroup {
   onOpenChange: (open: boolean) => void;
   /**
    * The key of the row that has just arrived here, which washes the group's
-   * heading (and the row, when the group is open). Absent on a first draw.
+   * heading (and the row, when the group is open). Absent on a first draw,
+   * and once the arrival has been seen.
    */
   arrived?: string | undefined;
 }
@@ -157,6 +158,12 @@ export function InboxColumn({
   elsewhere?: string | null;
 }) {
   const [closing, closed] = useClosing(needs);
+  // AN ARRIVAL IS WASHED WHERE IT IS SEEN TO LAND. One the list is first
+  // drawn with landed before it was there (in one pane, while the open row
+  // stood in its place), and is in Answered's count rather than washed again
+  // on every way back to the list.
+  const [landedBefore] = useState(answered.arrived);
+  const arrived = answered.arrived === landedBefore ? undefined : answered.arrived;
   const item = (
     row: InboxRow,
     how: { arrived?: boolean; onClosed?: (key: string) => void } = {},
@@ -205,9 +212,9 @@ export function InboxColumn({
           collapsible
           open={answered.open}
           onOpenChange={answered.onOpenChange}
-          arrived={answered.arrived}
+          arrived={arrived}
         >
-          {answered.rows.map((row) => item(row, { arrived: row.key === answered.arrived }))}
+          {answered.rows.map((row) => item(row, { arrived: row.key === arrived }))}
         </InboxGroup>
       )}
       {loading && <Skeleton variant="text" rows={5} label="Loading the inbox" />}

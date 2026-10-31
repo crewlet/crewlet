@@ -951,10 +951,12 @@ describe("the pane", () => {
 
   // THE MOVE IS SEEN AND THE READER IS CARRIED ON: Answered's heading takes
   // the kit's arrival wash only when an answer lands in it (never on a first
-  // draw, where nothing arrived), the row itself washes when the group is
-  // open, and the pane plays the next item in with focus on its title, since
-  // the pressed button left with the answered one. Mutation: pass the token
-  // on a first draw, or drop the pane's content key, and this goes red.
+  // draw, where nothing arrived), and the pane plays the next item in with
+  // focus on its title, since the pressed button left with the answered one.
+  // THE ARRIVAL IS WASHED ONCE: opened afterwards, the group draws the row
+  // without a wash of its own, since the heading's was its arrival. Mutation:
+  // pass the token on a first draw, drop the pane's content key, or keep the
+  // token after the group is opened, and this goes red.
   test("an answer lands in Answered with a wash, and focus moves to the next title", async () => {
     const next = askItem({ ...DECISION, question: "Freeze the API for the release?" });
     const second = {
@@ -975,11 +977,66 @@ describe("the pane", () => {
     expect(document.activeElement?.textContent).toContain("Freeze the API for the release?");
     expect(document.activeElement?.classList.contains("crewlet-reading-pane__title")).toBe(true);
     fireEvent.click(group);
-    expect(
-      within(screen.getByRole("region", { name: "Answered, 1" }))
-        .getByRole("button", { name: /Answered$/ })
-        .closest(".crewlet-inbox-row--arrived"),
-    ).toBeTruthy();
+    const answered = screen.getByRole("region", { name: "Answered, 1" });
+    expect(answered.querySelector(".crewlet-inbox-row--arrived")).toBeNull();
+    expect(document.querySelector(".crewlet-inbox-list__arrival")).toBeNull();
+  });
+
+  // A ROW THAT LANDS IN AN OPEN GROUP WASHES ITSELF, where it is seen to
+  // land, and only then: the group closed and opened again draws it plainly.
+  // Mutation: keep the token for good, and the row washes again on reopening.
+  test("a row landing in an open Answered washes once, not again on reopening", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem(), second),
+        answered_decisions: { handle: "jane", items: [answeredItem()] },
+      },
+    });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    const landed = () =>
+      screen
+        .getByRole("region", { name: "Answered, 2" })
+        .querySelector(".crewlet-inbox-row--arrived");
+    expect(landed()?.textContent).toContain("You chose Hold release");
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 2" }));
+    expect(landed()).toBeNull();
+  });
+
+  // ONE PANE AT A TIME, the list is drawn afresh on the way back to it, and
+  // an answer that landed while it was away is in its count, not washed
+  // again on every return. Mutation: wash whatever token the list is drawn
+  // with, and the heading washes on the way back.
+  test("in one pane, the list drawn again on Back does not wash an earlier arrival", async () => {
+    const narrow = installScreen(443);
+    try {
+      const second = {
+        ...askItem(),
+        at: new Date(Date.now() - 60 * 60_000).toISOString(),
+        ask: { ...askItem().ask, comment: "c-13", question: undefined },
+      };
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ shell: true, answers: { decisions: decisionsOf(askItem(), second) } });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+      await settle();
+      expect(location.hash).toContain("row=ask%3Ac-13");
+      fireEvent.click(screen.getByRole("button", { name: "Back to the inbox" }));
+      await settle();
+      expect(screen.getByRole("button", { name: "Answered, 1" })).toBeTruthy();
+      expect(document.querySelector(".crewlet-inbox-list__arrival")).toBeNull();
+    } finally {
+      narrow.restore();
+    }
   });
 
   // A ROW CHOSEN IN THE LIST KEEPS THE READER IN THE LIST: the pane plays the

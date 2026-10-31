@@ -240,6 +240,13 @@ export function Inbox() {
     pollMs: INBOX_POLL_MS,
   });
   const [answeredOpen, setAnsweredOpen] = useState(false);
+  // A TOGGLE OF ANSWERED IS THE ARRIVAL SEEN: opened, the group draws the row
+  // that landed in it without a wash of its own, and closed, it has nothing
+  // new left to show.
+  const toggleAnswered = useCallback((open: boolean) => {
+    setAnsweredOpen(open);
+    setArrived(undefined);
+  }, []);
   // THE SNOOZE BOUND, so a preset the engine would refuse is never offered.
   const person = useQuery("work_person", notices ? { handle: owner } : undefined, {
     enabled: notices,
@@ -270,7 +277,8 @@ export function Inbox() {
   const updates = useStableList(rows.updates, rowKeyOf);
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
   // THE ROW THAT HAS JUST LANDED IN ANSWERED, which washes the group's
-  // heading: set by an answer, never on a first draw.
+  // heading (and the row, where the group is open): set by an answer, never
+  // on a first draw, and spent once the reader opens or closes the group.
   const [arrived, setArrived] = useState<string | undefined>(undefined);
   // ANSWERED BEFORE THIS VISIT: a question answered here is in Needs you,
   // and one answered before it is under Answered, never in both places.
@@ -559,7 +567,7 @@ export function Inbox() {
             answered={{
               rows: answered,
               open: answeredOpen,
-              onOpenChange: setAnsweredOpen,
+              onOpenChange: toggleAnswered,
               arrived,
             }}
             reader={owner}
