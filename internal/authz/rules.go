@@ -132,6 +132,12 @@ const (
 	// the socket, ONE verb asked two ways — whose answer names the persons,
 	// the credentials and the seats that read it and how much.
 	ActionCodeRepoReaders Action = "code_repo_readers"
+	// ActionCodeMarkInbox is a person's gesture over their own CODE notices
+	// — the operator tool `code_mark_inbox` — the code log's half of what
+	// `mark_inbox` is on the tracker's: marks are kept by each domain on its
+	// own log (internal/inbox), so each domain's are written by a verb of
+	// its own.
+	ActionCodeMarkInbox Action = "code_mark_inbox"
 
 	// THE CODE WRITE TOOLS, a seat's and a person's assistant's, named after
 	// the tools and decided as the git transport's push is: admitted for
@@ -822,6 +828,13 @@ var rules = map[Action]rule{
 	// code is an audit of those colleagues, which the company gives with the
 	// admin permission and not with a place on the chart.
 	ActionCodeRepoReaders: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyAny},
+	// AND A PERSON'S CODE MARKS ARE THEIR OWN, as their tracker marks are
+	// ([ActionInboxMark]): marking somebody's mail read is a gesture nobody
+	// asked a lead to make. HUMAN-ONLY, since a seat has no inbox to mark —
+	// it is woken, never shown a list — and NO APP: every person reads every
+	// repository (ADR-0058), so the code half of an inbox is every person's,
+	// where the tracker's half takes the tracker.
+	ActionCodeMarkInbox: {class: ClassOwnRecord, humanOnly: true, recency: iam.RecencyAny},
 
 	// `write_project` IS TWO GESTURES AND ONLY ONE IS THE LEAD'S, which is
 	// what internal/tracker's own tag rule has always said: adding a label

@@ -766,13 +766,24 @@ func (d WorkDeps) personWriter(ctx context.Context, turn *turnctx.Turn,
 	return actor, d.PersonWriter(actor), nil
 }
 
-// inboxGesture reads mark_inbox's arguments, or the sentence refusing them.
+// inboxGesture reads mark_inbox's arguments, or the sentence refusing them —
+// [gestureOf] over the tracker's reasons.
+func inboxGesture(args map[string]any) (inbox.Gesture[tracker.Reason], string) {
+	return gestureOf(args, tracker.Reasons, reasonList())
+}
+
+// gestureOf reads an inbox mark's arguments — `read`, `unread`, `unsnooze`,
+// `snooze`, `read_through` and `primary_reasons` — as one gesture over a
+// domain's reasons, or the sentence refusing them: ONE PARSER for every
+// domain's mark tool (mark_inbox, code_mark_inbox), so a schema they share
+// is read the one way and refused in the same words.
 //
 // PRESENCE, NOT VALUE, decides `primary_reasons`: an empty list is a choice —
 // the shipped default — and an absent one leaves the person's choice alone,
-// which a nil slice could not tell apart.
-func inboxGesture(args map[string]any) (inbox.Gesture[tracker.Reason], string) {
-	var g inbox.Gesture[tracker.Reason]
+// which a nil slice could not tell apart. reasons are the domain's, which a
+// declared reason must be one of, and list names them as one sentence.
+func gestureOf[R ~string](args map[string]any, reasons []R, list string) (inbox.Gesture[R], string) {
+	var g inbox.Gesture[R]
 	g.Read = argStrings(args, "read")
 	g.Unread = argStrings(args, "unread")
 	g.Unsnooze = argStrings(args, "unsnooze")
@@ -808,16 +819,16 @@ func inboxGesture(args map[string]any) (inbox.Gesture[tracker.Reason], string) {
 		g.ReadThrough = &at
 	}
 	if _, held := args["primary_reasons"]; held {
-		reasons := []tracker.Reason{}
+		declared := []R{}
 		for _, raw := range argStrings(args, "primary_reasons") {
-			reason := tracker.Reason(strings.TrimSpace(raw))
-			if !slices.Contains(tracker.Reasons, reason) {
+			reason := R(strings.TrimSpace(raw))
+			if !slices.Contains(reasons, reason) {
 				return g, fmt.Sprintf("%q is not a wake reason. The reasons "+
-					"are: %s.", raw, reasonList())
+					"are: %s.", raw, list)
 			}
-			reasons = append(reasons, reason)
+			declared = append(declared, reason)
 		}
-		g.PrimaryReasons = &reasons
+		g.PrimaryReasons = &declared
 	}
 	if g.Empty() {
 		return g, "Name what to mark: `read`, `unread`, `snooze` or " +

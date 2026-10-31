@@ -86,6 +86,14 @@ var ReproducibleTables = []string{
 	// replay rebuilds it from those records alone.
 	"code_repo_kinds",
 
+	// A person's marks over their code notices — how far they have read on
+	// this log, what they marked out of order or put off, which reasons are
+	// theirs — written by the records on the person's own subject alone,
+	// each a gesture applied to the row its predecessor left, at the
+	// record's broker instant (marks.go): state a replay rebuilds like any
+	// other. Not a repository's, so no purge removes it.
+	"code_person_marks",
+
 	// The activation fence: the configuration activation every
 	// config-managed record is held to.
 	"code_activation",

@@ -37,6 +37,7 @@ const (
 	pathActivation = "a"
 	pathChange     = "c"
 	pathChecks     = "k"
+	pathPerson     = "p"
 )
 
 // NamePath is a repository name's claim.
@@ -70,6 +71,14 @@ func ChangePath(id string) string { return pathDomain + "/" + pathChange + "/" +
 // and the deletion gate reads the repository off the subject alone
 // ([gatedRepo]).
 func ChecksPath(repoID string) string { return pathDomain + "/" + pathChecks + "/" + repoID }
+
+// PersonPath is one person's code inbox: the marks a record on their subject
+// writes, and nothing else. BESIDE the repositories' and the changes' paths,
+// as a change's is beside its repository's: a mark's decide reads the notices
+// it names, which the records on changes' subjects write, but a mark makes
+// none of them stale, and the inbox reads the domain's path, which covers
+// both.
+func PersonPath(handle string) string { return pathDomain + "/" + pathPerson + "/" + handle }
 
 // ActivationPath is the activation fence's row.
 func ActivationPath() string { return pathDomain + "/" + pathActivation }

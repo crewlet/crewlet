@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -253,6 +254,12 @@ func suitePayload(kind code.ObjectKind, id string) (code.Subject, code.OpKind, a
 			Def:      &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600},
 			QueuedAt: suiteAt,
 		}, code.Scope{code.ChecksPath(id)}
+	case code.KindPerson:
+		// A PERSON'S MARK, on their own subject: read through a position on
+		// the code log, which names no notice and so carries no positions.
+		through := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}
+		return code.PersonSubject(id), code.OpMarks, code.PersonMarks{Handle: id,
+			Gesture: code.MarkGesture{ReadThrough: &through}}, code.Scope{code.PersonPath(id)}
 	}
 	return code.Subject{Kind: kind, ID: id}, code.OpCreate, nil, code.Scope{code.DomainPath()}
 }

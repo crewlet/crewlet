@@ -34,6 +34,7 @@ type CodeServer interface {
 	ProposeQueue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
 	ProposeMerge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error)
 	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
+	Mark(ctx context.Context, w code.MarkWrite) (code.MarkResult, error)
 	PublishChecks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
 	Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error)
 	Snapshot(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
@@ -224,6 +225,26 @@ var opCodeConversation = define("code.conversation", opIdempotentWrite, codeDoma
 		return res, ranNothing(err)
 	}).keyedBy(code.ConversationWrite.RepoID).answeredOn(laneProposals).
 	judgesGrant(code.ConversationWrite.JudgesChart)
+
+// opCodeMark is a person's gesture over their own code notices — a notice
+// read, unread, snoozed or unsnoozed, their position on the code log read
+// through, their primary reasons — published on the person's own subject by
+// WHICHEVER DATA NODE IT IS ASKED OF (code.Marks): UNKEYED, since a mark
+// contends with nothing but the same person's other marks, which the broker
+// arbitrates on that subject, and no repository's committer has a reason to
+// decide it. An IDEMPOTENT write keyed by its operation id, which its asker
+// minted once and the domain's operation ledger collapses, so an unanswered
+// one is asked of the next data node with the same id. No actor: the person
+// travels inside the write, checked by its writer, which refuses a mark of
+// anybody's record but the asker's own. It judges no chart.
+var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, w code.MarkWrite) (code.MarkResult, error) {
+		if b.Code == nil {
+			return code.MarkResult{}, errNoHalf
+		}
+		res, err := b.Code.Mark(ctx, w)
+		return res, ranNothing(err)
+	})
 
 // opCodeChecks is a write of a repository's CHECKS — an attempt queued by the
 // repository's home, a claim of one by the git node that runs it, its holder's

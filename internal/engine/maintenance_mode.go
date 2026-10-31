@@ -317,6 +317,7 @@ type writeSet struct {
 	committer *code.Committer
 	changes   *code.ChangeWriter
 	checks    *code.ChecksWriter
+	marks     *code.Marks
 	code      *code.Store
 }
 
@@ -340,7 +341,7 @@ func (e *Engine) writeSide() writeSet {
 		return writeSet{}
 	}
 	return writeSet{tracker: n.writer, pages: n.pages, committer: n.committer, changes: n.changeWriter,
-		checks: n.checksWriter, code: n.codeStore}
+		checks: n.checksWriter, marks: n.marks, code: n.codeStore}
 }
 
 // Mode is what this node started for.

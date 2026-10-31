@@ -223,6 +223,8 @@ var subjectOf = map[string]subject{
 	"my_work":    {kind: authz.KindPerson},
 	"mark_inbox": {kind: authz.KindPerson},
 	"set_pins":   {kind: authz.KindPerson},
+	// AND THE CODE LOG'S HALF OF AN INBOX'S MARKS, a person's own alike.
+	"code_mark_inbox": {kind: authz.KindPerson},
 
 	// AND THE ONES THAT DO ARE DECIDED ON WHOSE RECORD THE NAME IS, NOT ON
 	// WHAT WAS TYPED. Each tool resolves its `handle` first

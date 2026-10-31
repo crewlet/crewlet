@@ -5146,6 +5146,7 @@ land, and nothing a call does not name changes:
 | Tool | Arguments |
 |---|---|
 | `mark_inbox` | `read`, `unread`, `unsnooze` — lists of the `record_id`s `work_inbox` returns; `snooze` — `[{record_id, until}]`, `until` RFC3339, in the future and at most a year away; `read_through` — a log position, `<stream>@<generation>:<sequence>`, that only ever moves forward; `primary_reasons` — omitted leaves the choice, `[]` takes the default back. A notice named twice in one call is refused `invalid`; a list the call would leave past 256 entries is refused `inbox_full`. |
+| `code_mark_inbox` | The same arguments as `mark_inbox`, over your own CODE notices — the `record_id`s `inbox` answers under `source: "code"`, and a `read_through` on the code log (`CREWLET_CODE_LOG@<generation>:<sequence>`); `primary_reasons` names the code host's reasons (`mention`, `review_requested`, `changes_requested`, `conflicted`, `finding_replied`, `ready_to_merge`, `merged`, `review_submitted`, `re_review`, `thread`, `watcher`, `lead_fallback`). Each domain keeps the marks over its own notices on its own log, so a position on one says nothing of the other's. Your own record alone, as the human seat you hold: a mark of anybody else's — whatever authority the caller holds — and a record that reached somebody else are refused. Offered where the company hosts code. |
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
@@ -5159,7 +5160,8 @@ Plus **seventeen no seat is given**: `list_work_views`, `save_work_view`,
 [`steer_turn`](#steering-a-running-turn),
 [`answer_knowledge`](#answering-a-question-from-the-companys-knowledge), and
 — beside the code reads, on their terms — [`code_repo_readers`](#get-codereposnamereaders),
-who read a `visibility: unit` repository. A view is furniture — a name, a shape
+who read a `visibility: unit` repository, and beside the code writes `code_mark_inbox`, a person's marks
+over their own code notices: a seat is woken, never shown an inbox, so it has none to mark. A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own

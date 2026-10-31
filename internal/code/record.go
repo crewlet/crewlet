@@ -444,9 +444,21 @@ const (
 	// dequeue", Since: 2, Path: []string{"op"}, Equals: string(OpDequeue)},
 	// with the same companions. It is no gate.
 	OpDequeue OpKind = "dequeue"
+
+	// OpMarks moves one person's marks over their code notices by one
+	// gesture ([PersonMarks], marks.go) — read, unread, snoozed, read
+	// through a position on this log, their primary reasons — on the
+	// person's own subject ([KindPerson]), written by whichever data node
+	// the mark is asked of ([Marks]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op marks",
+	// Since: 2, Path: []string{"op"}, Equals: string(OpMarks)}, with the
+	// same companions. It is no gate.
+	OpMarks OpKind = "marks"
 )
 
-// OpKinds are the forty-two, in the order they are documented.
+// OpKinds are the forty-three, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
@@ -454,6 +466,7 @@ var OpKinds = []OpKind{
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
 	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpMerge, OpEnqueue, OpDequeue,
+	OpMarks,
 }
 
 // CheckOps are the ops of a repository's CHECKS, in [OpKinds]' order: every

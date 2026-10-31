@@ -138,6 +138,10 @@ func (h *codeWriteHost) Converse(context.Context, code.ConversationWrite) (code.
 	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(23)}, nil
 }
 
+func (h *codeWriteHost) Mark(context.Context, code.MarkWrite) (code.MarkResult, error) {
+	return code.MarkResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(24)}, nil
+}
+
 // writesAsked is the engine writes the host was asked, copied under its lock.
 func (h *codeWriteHost) writesAsked() []code.EngineWrite {
 	h.mu.Lock()

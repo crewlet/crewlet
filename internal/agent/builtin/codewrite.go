@@ -144,12 +144,14 @@ func CodeWritesWithheld(tier code.Tier) []string {
 // estate.CodeSeam, declared here by its consumer: an engine write asked of
 // the repository's home git node, a lifecycle request asked of a data node,
 // and a write of a change — its lifecycle asked of the repository's
-// committer, its conversation of the change writer beside it.
+// committer, its conversation of the change writer beside it — and a person's
+// marks over their own code notices, asked of any data node.
 type CodeWriter interface {
 	GitWrite(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
 	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
 	Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
 	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
+	Mark(ctx context.Context, w code.MarkWrite) (code.MarkResult, error)
 }
 
 // codeWriteTools are the writes over deps, in [CodeWrites]' order.

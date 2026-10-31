@@ -136,6 +136,10 @@ func (*writingHost) Converse(context.Context, code.ConversationWrite) (code.Conv
 	return code.ConversationResult{}, code.ErrNotServing
 }
 
+func (*writingHost) Mark(context.Context, code.MarkWrite) (code.MarkResult, error) {
+	return code.MarkResult{}, code.ErrNotServing
+}
+
 // THE CODE WRITES ARE SERVED WHERE THE CODE HOST'S WRITES ARE, AND A PERSON MAY
 // PRESS THEM: the catalogue holds the code writes beside the reads exactly
 // while the call's code half carries the code host's writes, advertises each

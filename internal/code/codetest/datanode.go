@@ -123,7 +123,10 @@ type dataIncarnation struct {
 	changes *code.ChangeWriter
 	// checks is the checks writer beside the committer, over the same fault
 	// publisher, for the change writer's reason.
-	checks    *code.ChecksWriter
+	checks *code.ChecksWriter
+	// marks is the writer of persons' code inbox marks, as the engine builds
+	// it beside the committer.
+	marks     *code.Marks
 	lifecycle *code.Store
 	operator  *code.Store
 
@@ -339,6 +342,12 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the checks writer: %v", d.o.ID, err)
 	}
+	if p.marks, err = code.NewMarks(code.MarksOptions{
+		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
+		DB:        p.estate.Reader(), NodeID: d.o.ID,
+	}); err != nil {
+		t.Fatalf("codetest: %s: build the marks writer: %v", d.o.ID, err)
+	}
 	if p.lifecycle, err = code.NewStore(code.StoreOptions{Publisher: pub, DB: p.estate.Reader(),
 		NodeID: d.o.ID}); err != nil {
 		t.Fatalf("codetest: %s: build the lifecycle store: %v", d.o.ID, err)
@@ -370,7 +379,8 @@ func (d *DataNode) Served() code.Served {
 	if p == nil {
 		return code.Served{}
 	}
-	return code.Served{Committer: p.committer, ChangeWriter: p.changes, ChecksWriter: p.checks, Reader: p.reader}
+	return code.Served{Committer: p.committer, ChangeWriter: p.changes, ChecksWriter: p.checks, Reader: p.reader,
+		Marks: p.marks}
 }
 
 // Store is the node's lifecycle store, publishing under its own id.

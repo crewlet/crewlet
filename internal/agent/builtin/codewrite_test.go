@@ -46,6 +46,7 @@ type codeWrites struct {
 	lifecycles []code.LifecycleRequest
 	changes    []code.ChangeProposal
 	converses  []code.ConversationWrite
+	marks      []code.MarkWrite
 	write      func(w code.EngineWrite) (code.EngineWriteResult, error)
 	life       func(r code.LifecycleRequest) (code.LifecycleResult, error)
 	change     func(p code.ChangeProposal) (code.ChangeResult, error)
@@ -116,6 +117,14 @@ func (c *codeWrites) Change(_ context.Context, p code.ChangeProposal) (code.Chan
 	}
 	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 7,
 		Version: p.ExpectedVersion + 1, Position: codeAt(15)}, nil
+}
+
+// Mark answers a person's mark as applied.
+func (c *codeWrites) Mark(_ context.Context, w code.MarkWrite) (code.MarkResult, error) {
+	c.mu.Lock()
+	c.marks = append(c.marks, w)
+	c.mu.Unlock()
+	return code.MarkResult{Outcome: statelog.OutcomeApplied, Position: codeAt(17)}, nil
 }
 
 // Converse answers a write of a change's conversation as applied, unless a

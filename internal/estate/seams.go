@@ -948,6 +948,19 @@ func (c CodeSeam) Converse(ctx context.Context, w code.ConversationWrite) (code.
 	return out, err
 }
 
+// Mark asks a data node to decide a person's gesture over their own code
+// notices, and raises this node's SESSION floor past the record it landed in —
+// the person's own write, which their next read of their inbox must see on
+// whichever node answers it. A mark answered UNCHANGED landed no record, and
+// raises nothing.
+func (c CodeSeam) Mark(ctx context.Context, w code.MarkWrite) (code.MarkResult, error) {
+	out, err := call(ctx, c.r, opCodeMark, nil, w)
+	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
+		c.r.Observe(out.Position)
+	}
+	return out, err
+}
+
 // Checks asks the repository's committing data node to decide a write of the
 // repository's checks, and raises this node's SESSION floor past the record it
 // landed in — this node's own write, which its next read of the attempt must

@@ -20,7 +20,7 @@ import (
 // and the deferral this build files it under is formed from that literal.
 type ObjectKind string
 
-// The nine kinds.
+// The ten kinds.
 //
 // EXPORTED AND ENUMERATED because the readers that compare against them cannot
 // see each other: the publisher builds the subject, the applier's dispatch
@@ -110,9 +110,32 @@ const (
 	// "k"}, Equals: string(KindChecks)} with the same companions as
 	// [KindChange]. It is no gate.
 	KindChecks ObjectKind = "checks"
+
+	// KindPerson is one PERSON'S CODE INBOX, by the human seat they hold
+	// (person.<handle>): the subject the marks they lay over their code
+	// notices are written on ([OpMarks], marks.go) — how far they have read
+	// on this log, what they marked out of order, what they put off and
+	// which reasons are theirs to act on. ITS OWN SUBJECT, NEVER A
+	// CHANGE'S OR A REPOSITORY'S: a mark is about the person's own
+	// bookkeeping across every change that reached them, and decided on a
+	// change's subject it would contend with that change's conversation
+	// over rows it never writes. ARBITRATED, so two screens marking two
+	// notices at once both land — each gesture resolved against the record
+	// its own decide reads (internal/inbox's Gesture) — and published by
+	// whichever data node a mark is asked of ([Marks]): the marks are the
+	// person's, kept beside the notices they mark on THIS log, because a
+	// position is a coordinate on one stream and a person's tracker marks
+	// count in another (internal/inbox's package doc). A table is written
+	// by the records of ONE subject: code_person_marks by this one's.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [KindChange] states it: once a
+	// build without it has run, it takes {Name: "Subject.Kind person",
+	// Since: 2, Path: []string{"subject", "k"}, Equals: string(KindPerson)}
+	// with the same companions. It is no gate.
+	KindPerson ObjectKind = "person"
 )
 
-// ObjectKinds are the nine, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the ten, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies.
@@ -120,12 +143,12 @@ const (
 // repository; a push on that repository; and an eviction. A push on a
 // repository no create made is a malformed record under a strict replay, so
 // the repository before its name would certify a failure. A kind added later
-// is APPENDED, so the three never move: a change's subject and a repository's
-// checks are last, and a record on either needs what no record of the suite's
-// opens.
+// is APPENDED, so the three never move: a change's subject, a repository's
+// checks and a person's code inbox are last, and a record on any of them needs
+// what no record of the suite's opens.
 var ObjectKinds = []ObjectKind{
 	KindName, KindRepo, KindEviction, KindGeneration, KindCompany,
-	KindBarrier, KindTrimmed, KindChange, KindChecks,
+	KindBarrier, KindTrimmed, KindChange, KindChecks, KindPerson,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -134,7 +157,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// SIX OF NINE DO. The barrier shares one subject across the whole domain, so
+// SEVEN OF TEN DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one; a trimmed record REMOVES anchors, so an anchor of its own would
 // be the one row it exists not to leave behind (ADR-0050); and a repository's
@@ -198,6 +221,10 @@ func ChangeSubject(id string) Subject { return Subject{Kind: KindChange, ID: id}
 // ChecksSubject is one repository's checks — what every record of them is
 // published on, by the repository's id.
 func ChecksSubject(repoID string) Subject { return Subject{Kind: KindChecks, ID: repoID} }
+
+// PersonSubject is one person's code inbox — what every record of their marks
+// arbitrates on, by the human seat they hold.
+func PersonSubject(handle string) Subject { return Subject{Kind: KindPerson, ID: handle} }
 
 // EvictionSubject is one node's standing on this log, so an eviction and the
 // readmission that inverts it contend with each other and with nothing else.

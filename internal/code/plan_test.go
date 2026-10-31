@@ -934,6 +934,22 @@ func registeredStatements() map[string]statement {
 			[]string{reviewsGivenKey + " (reviewer=?)"}},
 		"reviews given after": {reviewsGivenAfterSQL, []any{"seat-0", 3000, 50},
 			[]string{reviewsGivenKey + " (reviewer=? AND position<?)"}},
+		// ONE PERSON'S CODE INBOX (inboxread.go, marks.go): a range of their
+		// notices newest first, every filter bound; each change the page
+		// names by its key and its body by its own; each one's open agent
+		// findings, a range of the raiser index; the person's marks by their
+		// key; and where one notice of theirs sits, by the notice's key.
+		"an inbox page": {inboxScanSQL, []any{"founder", int64(1) << 62, 0, 0, "[]", 0, "[]", "[]", "", 0,
+			"exclude", "[]", "[]", 50},
+			[]string{"code_notifications_inbox_idx (recipient=? AND log_seq>? AND log_seq<?)"}},
+		"the changes an inbox page names": {noticeChangesSQL, []any{`["repo-1-change-000001"]`},
+			[]string{"SCAN json_each AS j", changeKey + " (id=?)", bodyKey + " (change_id=?)"}},
+		"the agent findings an inbox page names": {noticeFindingsSQL, []any{`["repo-1-change-000001"]`, "open",
+			"agent"}, []string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=?)"}},
+		"a person's code marks": {personMarksSQL, []any{"founder"},
+			[]string{"sqlite_autoindex_code_person_marks_1 (handle=?)"}},
+		"where a person's notice sits": {noticePositionSQL, []any{"record-1", "founder"},
+			[]string{"sqlite_autoindex_code_notifications_1 (record_id=? AND recipient=?)"}},
 		"whom a change reached": {changeNoticesSQL, []any{"repo-1-change-000001"},
 			[]string{"code_notifications_change_idx (change_id=?)"}},
 		"whom a change reached after": {changeNoticesAfterSQL, []any{"repo-1-change-000001", 3000},

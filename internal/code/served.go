@@ -38,6 +38,23 @@ type Served struct {
 	ChecksWriter *ChecksWriter
 	Reader       *Reader
 	Store        *Store
+	// Marks is the writer of persons' code inbox marks, beside the
+	// committer on every node that publishes, and nil where the committer
+	// is: a mark is then refused [ErrNotServing], as a proposal is, and the
+	// router asks the next data node.
+	Marks *Marks
+}
+
+// Mark decides one gesture over a person's code notices on this node's marks
+// writer — see [Marks.Mark] — and, on a node that publishes nothing, refuses
+// it as a proposal is refused there: the router asks the next data node with
+// the same operation id.
+func (s Served) Mark(ctx context.Context, w MarkWrite) (MarkResult, error) {
+	if s.Marks == nil {
+		return MarkResult{}, fmt.Errorf("%w: this node publishes nothing, so it writes no person's marks",
+			ErrNotServing)
+	}
+	return s.Marks.Mark(ctx, w)
 }
 
 // Lifecycle decides one lifecycle request on this node's lifecycle store —

@@ -37,12 +37,12 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxRecordBytes: CodeLogMaxRecordBytes,
 		Duplicates:     CodeLogDuplicates,
 		Replay:         statelog.ReplayStrict,
-		// SIX OF THE NINE KINDS — see [ObjectKind.Arbitrated].
+		// SEVEN OF THE TEN KINDS — see [ObjectKind.Arbitrated].
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
 
-// arbitratedKinds is the six of nine, derived from the enum rather than typed again:
+// arbitratedKinds is the seven of ten, derived from the enum rather than typed again:
 // a list written twice is a kind that arbitrates in one place and not the
 // other, which wedges that subject the first time a gate drops a record.
 func arbitratedKinds() []string {

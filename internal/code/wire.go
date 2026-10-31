@@ -948,6 +948,11 @@ const (
 	// revision it heads — read in the same snapshot and held to the asker's
 	// grant on the repository.
 	ReadCommit ReadKind = "commit"
+	// ReadInbox is ONE PERSON'S CODE INBOX (inboxread.go): their notices,
+	// newest first on the code log, filtered in the scan by their own marks
+	// and the query's narrowing, each marked and carrying what its change
+	// says — held to the asker's grant on each notice's repository.
+	ReadInbox ReadKind = "inbox"
 )
 
 // ReadKinds is the closed set.
@@ -964,14 +969,15 @@ const (
 // [ReadQuery.CheckBox], `checks_running` the only one that reads
 // [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
 // that read [ReadQuery.Target], `queue_due` the only one that reads
-// [ReadQuery.QueueDue], and `commit` the only one that reads
-// [ReadQuery.Commit].
+// [ReadQuery.QueueDue], `commit` the only one that reads
+// [ReadQuery.Commit], and `inbox` the only one that reads
+// [ReadQuery.Inbox].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadChangesDue,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
-		ReadQueueDue, ReadLandings, ReadGreen}
+		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox}
 }
 
 // Valid reports a kind this build knows.
@@ -1216,6 +1222,10 @@ type ReadQuery struct {
 	// predates the kinds refuses the read as a kind it does not know.
 	Target   string         `json:"target,omitempty"`
 	QueueDue *QueueDueQuery `json:"queue_due,omitempty"`
+
+	// Inbox is an `inbox` read's question: whose inbox, and how it is
+	// narrowed ([InboxQuery]). Only that kind reads it.
+	Inbox *InboxQuery `json:"inbox,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -1308,7 +1318,9 @@ type ReadAnswer struct {
 	Landings []LandingRow   `json:"landings,omitempty"`
 	Green    []GreenRow     `json:"green,omitempty"`
 	// Commit is a `commit` read's changes of its commit, beside Repo.
-	Commit   *CommitChanges     `json:"commit,omitempty"`
+	Commit *CommitChanges `json:"commit,omitempty"`
+	// Inbox is an `inbox` read's page: the person's notices and their marks.
+	Inbox    *InboxPage         `json:"inbox,omitempty"`
 	Next     string             `json:"next,omitempty"`
 	Position statelog.Position  `json:"position"`
 	Level    statelog.ReadLevel `json:"level"`

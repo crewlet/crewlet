@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -321,6 +322,7 @@ func everyReadAsked(id string) map[code.ReadKind]code.ReadQuery {
 		code.ReadQueueDue:      {QueueDue: &code.QueueDueQuery{}},
 		code.ReadLandings:      {Asker: asker, Repo: "web", Target: "refs/heads/main"},
 		code.ReadGreen:         {Asker: asker, Repo: "web"},
+		code.ReadInbox:         {Asker: asker, Inbox: &code.InboxQuery{Handle: "founder", Snoozed: inbox.SnoozeExclude}},
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -1541,6 +1542,14 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// again by the repository's committer from its own snapshot.
 		query = q.queueQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.queueDue(ctx, tx, q, &out) }
+	case ReadInbox:
+		// A SET READ OF THE DOMAIN, as a listing of changes across
+		// repositories is: the notices are written by the records of every
+		// change's subject and the marks by the person's own, so a record a
+		// deferral holds back of either is read as the rows stand
+		// (inboxread.go).
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.inbox(ctx, tx, q, chart, &out) }
 	case ReadExpungeTips:
 		// A POINT READ OF THE REPOSITORY, as an `introduced` read is: a
 		// record this node deferred on the repository may carry a drop the
@@ -1636,6 +1645,8 @@ func (q ReadQuery) validate() error {
 	case q.QueueDue != nil:
 		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
 			"in", ErrInvalid)
+	case q.Inbox != nil && q.Kind != ReadInbox:
+		return fmt.Errorf("%w: inbox: only an inbox read names whose inbox it reads", ErrInvalid)
 	case q.Target != "" && q.Kind != ReadQueue && q.Kind != ReadLandings && q.Kind != ReadGreen:
 		return fmt.Errorf("%w: target: only a queue, a landings or a green read names a branch's queue",
 			ErrInvalid)
@@ -1685,11 +1696,13 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: commit: only a commit read names a commit", ErrInvalid)
 	}
 	switch {
+	case q.Kind == ReadInbox && q.Repo != "":
+		return fmt.Errorf("%w: repo: an inbox is read across every repository the asker may read", ErrInvalid)
 	case q.Kind == ReadReviews && q.Repo != "":
 		return fmt.Errorf("%w: repo: a reviewer's reviews are listed across every repository the asker may "+
 			"read, and a change's own reviews are a change read's part", ErrInvalid)
 	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "", q.Kind == ReadChecks && q.Repo == "",
-		q.Kind == ReadQueue && q.Repo == "", q.Kind == ReadReviews:
+		q.Kind == ReadQueue && q.Repo == "", q.Kind == ReadReviews, q.Kind == ReadInbox:
 	case !ValidName(q.Repo):
 		return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
 	}
@@ -1719,6 +1732,10 @@ func (q ReadQuery) validate() error {
 		if err := q.validateCommit(); err != nil {
 			return err
 		}
+	case ReadInbox:
+		if err := q.validateInbox(); err != nil {
+			return err
+		}
 	case ReadChecks, ReadCheck:
 		if err := q.validateChecks(); err != nil {
 			return err
@@ -1731,7 +1748,8 @@ func (q ReadQuery) validate() error {
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
 		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage(),
 		ReadChangeRouting: MaxRoutedRecordsPerPage, ReadReviews: MaxReviewsPerPage,
-		ReadChecks: MaxChecksPerPage, ReadQueue: MaxQueueRowsPerPage, ReadLandings: MaxLandingsPerPage}[q.Kind]
+		ReadChecks: MaxChecksPerPage, ReadQueue: MaxQueueRowsPerPage, ReadLandings: MaxLandingsPerPage,
+		ReadInbox: inbox.MaxRows}[q.Kind]
 	switch {
 	case q.Limit < 0:
 		return fmt.Errorf("%w: limit: %d", ErrInvalid, q.Limit)

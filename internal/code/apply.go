@@ -195,6 +195,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return a.applyChange(ctx, tx, at)
 	case KindChecks:
 		return a.applyChecks(ctx, tx, at)
+	case KindPerson:
+		return a.applyMarks(ctx, tx, at)
 	}
 	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD AT
 	// A VERSION IT CAN READ, which is a writer publishing a kind it never

@@ -202,6 +202,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// rest are not.
 		{&codeRepoReaders{code: deps.Code, deps: deps.Readers},
 			deps.Code.serves() && deps.Readers.Readers != nil},
+		// NOR THIS: a person's marks over their own code notices — a seat
+		// is woken, never shown an inbox, so it has none to mark. See
+		// codemarks.go. Beside the code writes, on their terms: a surface
+		// that changes none of the company's code marks none of it either.
+		{&codeMarkInbox{deps: deps.Code}, deps.Code.serves() && deps.Code.Writer != nil},
 	}
 	candidates = slices.Concat(candidates,
 		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps),

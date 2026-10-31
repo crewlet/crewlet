@@ -239,6 +239,16 @@ var codeLogNegligible = map[code.OpKind]string{
 		"at most code.MaxExpungeInputs packs it retires and code.MaxExpungeOutputs it writes",
 	code.OpExpungeCommit: "the commit that ends an expunge its begin opened: one a begin, " +
 		"retiring its dropping packs and adding their rescue, each at most code.MaxExpungeOutputs",
+	// A PERSON'S MARK is their own gesture, never a seat's: code_mark_inbox
+	// is human-only and the operator catalogue's alone, so its rate is the
+	// presses of a person's Inbox buttons and their assistant's calls — and the
+	// reference company's day, whose changes are its seats', reaches its few
+	// persons as notices, not as records of theirs.
+	code.OpMarks: "a person's gesture over their own code notices — a notice read, unread, " +
+		"snoozed or unsnoozed, or everything read through a position — one record a press of " +
+		"an Inbox button or an assistant's call, persons only: a person marking their day's " +
+		"notices one at a time writes tens of them, each a gesture and the positions of the " +
+		"notices it names, a few hundred bytes for the one or two a press names",
 }
 
 // codeLogUnwritten is every op of the code domain that no node of this build
@@ -606,6 +616,7 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindChecks: "a repository's checks: an attempt queued, a head's dispatch, an attempt's claim, its " +
 		"ending and the sweep of an idle repository's past the history, which ride a live change's making " +
 		"(codeLogRiders)",
+	code.KindPerson: "a person's marks over their own code notices (codeLogNegligible)",
 }
 
 // The reference company's chart, as a seat's tools hold it. Its work is filed

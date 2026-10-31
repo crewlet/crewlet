@@ -148,11 +148,13 @@ type native struct {
 	// checksWriter are the committer's siblings, built and handed out with
 	// it: the writers of changes' conversations, each on the change's own
 	// subject, and of repositories' checks, each on its repository's checks
-	// subject.
+	// subject; and marks the writer of persons' code inbox marks, each on the
+	// person's own subject.
 	codeStore    *code.Store
 	committer    *code.Committer
 	changeWriter *code.ChangeWriter
 	checksWriter *code.ChecksWriter
+	marks        *code.Marks
 
 	// codeHost is this node's git surface (internal/code/host) — its cache,
 	// its git pool, the hook relay, and the engine writes it builds — built
@@ -477,6 +479,15 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code checks writer: %w", err)
+			}
+			// AND THE WRITER OF PERSONS' CODE INBOX MARKS, which the estate
+			// asks a mark of on any node that publishes: a mark judges no
+			// chart — it is the person's own, refused for anybody else —
+			// so it needs neither the epoch's chart nor the posture gate.
+			if n.marks, err = code.NewMarks(code.MarksOptions{
+				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
+			}); err != nil {
+				return fmt.Errorf("engine: code marks writer: %w", err)
 			}
 		}
 		// AND ITS GIT SURFACE, on a node with the git role: the cache it

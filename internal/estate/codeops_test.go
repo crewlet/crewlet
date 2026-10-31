@@ -149,6 +149,21 @@ func (f *fakeNode) Converse(_ context.Context, w code.ConversationWrite) (code.C
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
+// Mark is a marks writer that writes every mark it is given at the next
+// position on the code log — or refuses every one with codeErr.
+func (f *fakeNode) Mark(_ context.Context, w code.MarkWrite) (code.MarkResult, error) {
+	f.note("code.mark")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.marks = append(f.marks, w)
+	if f.codeErr != nil {
+		return code.MarkResult{}, f.codeErr
+	}
+	f.codeSeq++
+	return code.MarkResult{Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
+}
+
 // PublishChecks is a checks writer that writes every write of a repository's
 // checks it is given at the next position on the code log — or refuses every
 // one with codeErr.
@@ -544,6 +559,7 @@ type codeAnswers struct {
 	merged    code.MergeResult
 	lifecycle code.LifecycleResult
 	conversed code.ConversationResult
+	marked    code.MarkResult
 	checked   code.ChecksResult
 	wrote     code.EngineWriteResult
 	previewed code.MergePreviewAnswer
@@ -607,6 +623,11 @@ func (d *codeDesk) ProposeMerge(_ context.Context, p code.MergeProposal) (code.M
 func (d *codeDesk) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
 	held, err := d.took(w)
 	return held.conversed, err
+}
+
+func (d *codeDesk) Mark(_ context.Context, w code.MarkWrite) (code.MarkResult, error) {
+	held, err := d.took(w)
+	return held.marked, err
 }
 
 func (d *codeDesk) PublishChecks(_ context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
