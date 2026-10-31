@@ -842,7 +842,11 @@ export function ItemsView({
   };
 
   return (
-    <>
+    // ONE BOX, WHATEVER HOSTS IT: the row of shapes and search, the band that
+    // cuts the answer and the answer stack on this box's own rhythm
+    // (`.work-view`). Returned as loose rows, each host spread them by its own
+    // gap, the content column's on My work and `.work-main`'s on Worklet.
+    <div className="work-view">
       {/* THE FIRST ROW: what is drawn. The shape switch, then (on the screens
           that ARE this list, never on a host, whose own tabs already name the
           page) the container's own list, the views this reader pinned, a way
@@ -972,18 +976,20 @@ export function ItemsView({
         </div>
       </div>
 
-      {data?.groups_overlap && (
-        <Callout variant="info">Items can appear in more than one column.</Callout>
-      )}
-      {data?.groups_dropped ? (
-        <Callout variant="warning">
-          {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} hidden. Narrow the
-          list to see them.
-        </Callout>
-      ) : null}
-
       <div className="work-body">
         <div className="col gap-4" style={{ minWidth: 0 }}>
+          {/* WHAT IS TRUE OF THE ANSWER IS SAID WITH THE ANSWER, spaced from
+              it by the body's own gap rather than standing between the band
+              and the list. */}
+          {data?.groups_overlap && (
+            <Callout variant="info">Items can appear in more than one column.</Callout>
+          )}
+          {data?.groups_dropped ? (
+            <Callout variant="warning">
+              {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} hidden. Narrow
+              the list to see them.
+            </Callout>
+          ) : null}
           {loading && !data && <Skeleton variant="text" rows={6} label="Loading the work" />}
 
           {/* THE EMPTY STATE IS RENDERED HERE rather than through
@@ -1116,7 +1122,7 @@ export function ItemsView({
           )}
         </div>
       </div>
-    </>
+    </div>
   );
 }
 

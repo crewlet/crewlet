@@ -3957,6 +3957,18 @@ a.knowledge-reader-how:hover {
   min-width: 0;
 }
 
+/* THE WORK LIST IS ONE BOX, on Worklet, a project and My work alike: its row
+   of shapes and search, the band that cuts the answer and the answer, stacked
+   with nothing between them. The band's own padding is the space either side
+   of its controls, the dense toolbar's rhythm. Left to its hosts the rows took
+   the host's gap, 20px on My work and 16px on Worklet, and the band stood in
+   28px of empty space above and below its controls. */
+.work-view {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 /* ---- The first row: shapes, views, search and Display ------------------- */
 
 /* WHAT IS DRAWN, as one row: the shapes and the saved views, each a kit
