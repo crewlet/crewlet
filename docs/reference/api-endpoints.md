@@ -6213,7 +6213,7 @@ land, and nothing a call does not name changes:
 | `set_pins` | `views` and `favorites`, each `{add, remove}` or `{set}` — never both, and a bare list is refused naming the shape. The caps are held against the list the change would leave. |
 | `set_priorities` | `handle`, `items` — the whole order, most important first — and `if_match`, the `version` `get_person` answered: given, a reorder against an older record is refused `stale_version`. |
 
-Plus **twenty-three no seat is given**: `list_work_views`, `save_work_view`,
+Plus **twenty-four no seat is given**: `list_work_views`, `save_work_view`,
 `write_work_catalogue`, `get_person`, `work_inbox`,
 `mark_inbox`, `set_pins`, `set_priorities`,
 `remove_work_item`, `restore_work_item`,
@@ -6222,7 +6222,7 @@ Plus **twenty-three no seat is given**: `list_work_views`, `save_work_view`,
 [`pause_seat` and `resume_seat`](#pausing-and-resuming-a-seat),
 [`steer_turn`](#steering-a-running-turn),
 [`answer_knowledge`](#answering-a-question-from-the-companys-knowledge), and
-[the seven chat gestures only a person makes](#the-chat-gestures-only-a-person-makes). A view is furniture — a name, a shape
+[the eight chat gestures only a person makes](#the-chat-gestures-only-a-person-makes). A view is furniture — a name, a shape
 and a filter, arranged so a person finds the same question tomorrow — and a
 seat's job is the work rather than the furniture around it. And the
 catalogue is the company's own vocabulary: a seat adding a type so its own

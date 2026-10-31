@@ -80,6 +80,7 @@ var everyWriteCall = map[string]map[string]any{
 	chatlet.UpdateChannelTool: {"channel": chatRoomID, "topic": "the launch"},
 	chatlet.SetChannelMembersTool: {"channel": chatRoomID, "members": []any{"jane",
 		map[string]any{"handle": "agent-ceo", "follow_all": true}}},
+	chatlet.AddChannelMembersTool: {"channel": chatRoomID, "members": []any{"agent-ceo"}},
 	chatlet.MarkChatReadTool: {"cursors": map[string]any{chatRoomID: 12.0},
 		"mute": []any{chatRoomID}},
 }

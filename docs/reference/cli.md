@@ -1865,7 +1865,10 @@ message's number in the room, when it was said, **its id** — what
 [`chatlet erase`](#crewlet-chatlet-erase) takes — who said it and, for a reply, the
 root it hangs under (`↳<id>`). A message of several lines keeps them under
 its own heading, its links are printed beneath it, an edited one says so and
-a taken-back one reads `(deleted)`. The page ends where the room does or at
+a taken-back one reads `(deleted)`. A [room event](../concepts/chatlet.md#a-room-says-what-changed-in-it)
+prints what changed in brackets, under whoever changed it (`(joined: ana, ravi)`,
+`(set the topic: …)`), and a room whose page holds nothing else is said to have
+no messages. The page ends where the room does or at
 `-limit`, and prints the `-before` cursor that reads the page before it. A
 room the seat may not read answers exactly as a room that does not exist.
 

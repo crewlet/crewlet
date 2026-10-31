@@ -1268,6 +1268,7 @@ func TestEveryChatToolCarriesItsOwnAnnotations(t *testing.T) {
 		chatlet.OpenDMTool:            stated,
 		chatlet.UpdateChannelTool:     restated,
 		chatlet.SetChannelMembersTool: restated,
+		chatlet.AddChannelMembersTool: stated,
 		chatlet.EditMessageTool:       restated,
 		chatlet.DeleteMessageTool:     restated,
 		chatlet.MarkChatReadTool:      own,
@@ -1805,6 +1806,9 @@ var operatorChatWrites = map[string]map[string]any{
 	chatlet.OpenDMTool:        {"to": []any{"bob"}},
 	chatlet.UpdateChannelTool: {"channel": chatRoomID, "topic": "the launch"},
 	chatlet.SetChannelMembersTool: {
+		"channel": chatRoomID, "members": []any{"jane"},
+	},
+	chatlet.AddChannelMembersTool: {
 		"channel": chatRoomID, "members": []any{"jane"},
 	},
 	chatlet.EditMessageTool:   {"channel": chatRoomID, "message_id": "m1", "body": "fixed"},

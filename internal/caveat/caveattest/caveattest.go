@@ -99,9 +99,10 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// and the answer's own delivery, which a screen finds on the run's record.
 	"launch_id", "answer_id",
 	// A CHAT GESTURE'S ROOM AND MESSAGE, by the ids a screen opens them by,
-	// the handles a membership names, the emoji a reaction is, and the topic
-	// and purpose people gave a room, shown as they were given.
-	"channel", "message_id", "members", "emoji", "topic", "purpose"}
+	// the handles a membership names or an add put in, the emoji a reaction
+	// is, and the topic and purpose people gave a room, shown as they were
+	// given.
+	"channel", "message_id", "members", "added", "emoji", "topic", "purpose"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product
