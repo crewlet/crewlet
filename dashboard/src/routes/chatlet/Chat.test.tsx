@@ -393,18 +393,28 @@ describe("the Rooms panel", () => {
   // panel away on the press and the first expectation goes red; hand the dock
   // no way back and the focus one does; ignore the motion and the last does.
   test("unpinning keeps the panel, inert, until its column has eased shut", async () => {
+    // THE COLUMN'S OWN WIDTH TRANSITION, as a browser reports it (a
+    // `CSSTransition` on the column, running, with its end ahead): the kit
+    // waits on that motion and no other.
     let close = () => {};
     const finished = new Promise<void>((resolve) => (close = resolve));
-    const motion = {
-      playState: "running",
-      effect: { getComputedTiming: () => ({ endTime: 300 }) },
-      finished,
-    } as unknown as Animation;
+    const motion = { playState: "running" };
     const had = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "getAnimations");
     Object.defineProperty(HTMLElement.prototype, "getAnimations", {
       configurable: true,
       value(this: HTMLElement) {
-        return this.classList.contains("chat-dock") ? [motion] : [];
+        if (!this.classList.contains("chat-dock")) return [];
+        return [
+          {
+            get playState() {
+              return motion.playState;
+            },
+            transitionProperty: "width",
+            currentTime: 0,
+            effect: { target: this, getComputedTiming: () => ({ endTime: 300 }) },
+            finished,
+          } as unknown as Animation,
+        ];
       },
     });
     try {
@@ -421,7 +431,7 @@ describe("the Rooms panel", () => {
         screen.getByRole("button", { name: /^Menu/ }),
       );
       await flush(async () => {
-        (motion as { playState: string }).playState = "finished";
+        motion.playState = "finished";
         close();
       });
       await waitFor(() =>
