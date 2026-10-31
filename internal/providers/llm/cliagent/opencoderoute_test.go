@@ -94,7 +94,7 @@ func opencodeServer(script fakeScript) {
 	}
 	code := playAs(script, &opencodeRecorder{out: events}, cs, nil)
 	_ = os.WriteFile(fakeDoneFile, []byte(strconv.Itoa(code)), 0o600)
-	select {}
+	park(false)
 }
 
 // opencodeServerOrExit checks a client was handed the server's address and its

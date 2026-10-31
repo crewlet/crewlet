@@ -7,10 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -154,10 +152,7 @@ func playAs(script fakeScript, rec fakeRecorder, cs *sdk.ClientSession, meta fun
 		fmt.Fprint(os.Stderr, script.Stderr)
 	}
 	if script.Hang || script.HangUnsignalled {
-		if script.HangUnsignalled {
-			signal.Ignore(syscall.SIGTERM, syscall.SIGINT)
-		}
-		select {}
+		park(script.HangUnsignalled)
 	}
 	if script.ResultUsage != nil {
 		total = *script.ResultUsage
