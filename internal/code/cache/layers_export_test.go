@@ -227,13 +227,13 @@ func TailPacks(c *Cache, repoID string) int {
 // TipCharge is what the node's tip over repoID's current incarnation's tail
 // is admitted at, spelled from the constants rather than read from the
 // declaration it holds to: TipGraphBytesPerObject an object of the tail,
-// TipGraphBaseBytes whatever the tail, and room for a clone of the whole
+// GraphBaseBytes whatever the tail, and room for a clone of the whole
 // repository.
 func TipCharge(c *Cache, repoID string) int64 {
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return chargeOver(e.current.tail.objects, TipGraphBytesPerObject, e.current.objects) + TipGraphBaseBytes
+	return chargeOver(e.current.tail.objects, TipGraphBytesPerObject, e.current.objects) + GraphBaseBytes
 }
 
 // TailObjects is the objects repoID's current incarnation's tail holds: the

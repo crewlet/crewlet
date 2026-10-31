@@ -839,7 +839,8 @@
 // The maintainer writes a multi-pack-index with its bitmap — the bitmap
 // carrying git's lookup table, so a request that opens it loads only the
 // bitmaps it asks for (ServeConfig) — and a commit-graph with version-2
-// changed-path filters, at most [MaxNewFilters] new ones a write, so a
+// changed-path filters, every one its commits lack (the first write
+// computes them all, and every later one reads them back), so a
 // path's log and a file's blame skip every commit that did not touch the
 // path — or, on a copy serving from an installed chain, the node's TIP
 // commit-graph over it alone (below, "The installed chain") —
@@ -875,8 +876,10 @@
 // [FsckBytesPerObject] — so each is charged its own figure an object of what
 // it walks — the repository's, but for the node's tip, which walks only the
 // commits an installed chain lacks and is charged by the tail's objects
-// ([TipGraphBytesPerObject]) beside the fixed part its filters' bound sets
-// ([TipGraphBaseBytes]) — and room beside it for one transfer of the whole
+// ([TipGraphBytesPerObject]) — beside the fixed part a write holds whatever
+// it covers (every commit-graph's [GraphBaseBytes], the trees its
+// changed-path filters' diffs keep in git's delta base cache up to its cap;
+// the index's [IndexBaseBytes]) — and room beside it for one transfer of the whole
 // repository (gitproc.TransferBytesPerObject; Write.charge), against the
 // node's BUDGET: its memory as the git pool read it (the least of
 // the machine's and every cgroup limit above the process, v2's and v1's),
@@ -1436,8 +1439,11 @@
 // object), with its bitmap 158 MiB and 812 MiB (560 and 287 — some 86 MiB
 // and about 257 bytes an object past it, where git 2.43 held 136 and
 // 1 985 MiB, 484 and 702, more an object the larger the history), the
-// commit-graph with its changed-path filters 15.6 and 126 MiB (55 and 45;
-// 12.7 and 112 MiB without them on git 2.43). The rest on git 2.43
+// commit-graph with 1 024 new changed-path filters 15.6 and 126 MiB (55 and
+// 45; 12.7 and 112 MiB without them on git 2.43) — and computing every
+// filter, as each graph's first write does, 112.8 and 250.1 MiB over a
+// deeper tree's 481 160 and 4 198 280 objects (internal/code/query's own/
+// arms, 2026-10-31), the delta base cache's 96 MiB of it. The rest on git 2.43
 // (BenchmarkMidx's memory arms): the connectivity check 110 and 452 MiB (390
 // and 160), and a clone of main 132 MiB and 670 MiB walking the history with
 // no bitmap, 36 and 330 MiB counting from the maintainer's — the figures BitmapBytesPerObject,

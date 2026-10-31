@@ -1522,11 +1522,12 @@ func Catalogue() []Instrument {
 				"engine. `bitmap` (600 bytes an object of the repository): " +
 				"the repository is indexed without one, and a clone walks its " +
 				"history; `index` (80): it is served from its packs' own " +
-				"indexes, a round's index included; `graph` (67): its walks go " +
+				"indexes, a round's index included; `graph` (67, and 100 MiB " +
+				"whatever the repository's size for its changed-path filters): its walks go " +
 				"by date, and a push of a commit dated before its parent walks " +
 				"every commit; `tip-graph` (50 an object of the tail, the " +
 				"packs pushed since the repository's last publication, and " +
-				"2 MiB whatever its length): a copy " +
+				"100 MiB whatever its length): a copy " +
 				"serving from a published chain walks those packs' commits by " +
 				"date. Slower, never wrong. `compact` (550 bytes an object of " +
 				"the packs merged, beside a transfer's room of them — 240 " +

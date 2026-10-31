@@ -545,12 +545,14 @@ type Write struct {
 	// holds.
 	BytesPerObject int64
 	// BaseBytes is the write's own memory WHATEVER it covers, charged beside
-	// BytesPerObject's: zero for a write over the whole repository, whose
-	// per-object figure folds any fixed part into the repository's many
-	// objects, and set where a write covers few objects and holds a part that
-	// does not follow them — the node's tip, whose changed-path filters are
-	// bounded by MaxNewFilters rather than by its tail (TipGraphBaseBytes).
-	// Zero for an in-process write.
+	// BytesPerObject's: set where a write holds a part that does not follow
+	// the objects it covers — every commit-graph write, whose changed-path
+	// filters' diffs fill git's delta base cache up to its cap whatever the
+	// commits (GraphBaseBytes), and the multi-pack-index without a bitmap,
+	// whose merge holds a part a small repository's objects carry past their
+	// figure (IndexBaseBytes) — and zero where the per-object figure folds any
+	// fixed part into the repository's many objects. Zero for an in-process
+	// write.
 	BaseBytes int64
 	Writer    Writer
 	// Args is the argument list its writer hands git: one of the writer
@@ -870,8 +872,9 @@ func DerivedFiles() []Derived {
 		Name:   DerivedGraph,
 		Inputs: []Input{InputPacks, InputRefs},
 		Writes: []Write{{Step: StepGraph, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance,
-			Deadline: maintained, BytesPerObject: GraphBytesPerObject, Writer: Writer{maintainFile, procGraph},
-			Args: graphArgs, Holds: []FilePattern{{"objects/info", graphLock()}}}},
+			Deadline: maintained, BytesPerObject: GraphBytesPerObject, BaseBytes: GraphBaseBytes,
+			Writer: Writer{maintainFile, procGraph}, Args: graphArgs,
+			Holds: []FilePattern{{"objects/info", graphLock()}}}},
 		Owns:      []Owned{{FilePattern: FilePattern{"objects/info", graphMain()}, File: "commit-graph", Main: true}},
 		Check:     CheckTrailer,
 		Part:      gitproc.PartCommitGraph,
@@ -984,12 +987,12 @@ func DerivedFiles() []Derived {
 			// the tail's — its packs, their objects and their bytes — since a
 			// split write walks only the commits no layer beneath it holds, so
 			// its time and its own memory follow the tail, never the history,
-			// beside a fixed part its filters' bound sets (TipGraphBaseBytes).
+			// beside the fixed part its filters' diffs hold (GraphBaseBytes).
 			{Step: StepTipGraph, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance,
 				Deadline: func(c Covers) time.Duration {
 					return gitproc.PackWorkDeadline(c.DiskBytes) + gitproc.HistoryWalk(c.Objects)
 				},
-				BytesPerObject: TipGraphBytesPerObject, BaseBytes: TipGraphBaseBytes,
+				BytesPerObject: TipGraphBytesPerObject, BaseBytes: GraphBaseBytes,
 				Writer: Writer{maintainFile, procGraph}, Args: tipGraphArgs,
 				Holds: []FilePattern{{graphLayersDir, graphChainLock()}, {graphLayersDir, tmpGraph()}}},
 		},

@@ -377,7 +377,9 @@ func IndexCharge(c *Cache, repoID string) int64 {
 }
 
 // GraphCharge is the commit-graph's charge (BitmapCharge).
-func GraphCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, GraphBytesPerObject, 0) }
+func GraphCharge(c *Cache, repoID string) int64 {
+	return chargeOf(c, repoID, GraphBytesPerObject, GraphBaseBytes)
+}
 
 // FsckCharge is Verify's connectivity check's charge (BitmapCharge).
 func FsckCharge(c *Cache, repoID string) int64 { return chargeOf(c, repoID, FsckBytesPerObject, 0) }
@@ -1216,6 +1218,26 @@ func HoldersOf(rel string) []DerivedName {
 		}
 	}
 	return out
+}
+
+// NoFixedParts opens a cache over DerivedFiles() with every write's fixed part
+// dropped (Write.BaseBytes: the index's IndexBaseBytes and every
+// commit-graph's GraphBaseBytes, which a publication's graph layer is charged
+// too, read from the graph's declaration), so a case's repositories of a few
+// objects are charged in the order a large repository's are — the bitmap the
+// largest of its steps, the graph the smallest — as MidxPacksAt lowers a
+// threshold: the case reaches one step refused beside the others without
+// pushing the two hundred thousand objects past which a real repository is.
+// A case about a fixed part itself opens a cache without it.
+func NoFixedParts() func(*Options) {
+	decls := DerivedFiles()
+	for i := range decls {
+		decls[i].Writes = slices.Clone(decls[i].Writes)
+		for j := range decls[i].Writes {
+			decls[i].Writes[j].BaseBytes = 0
+		}
+	}
+	return WithDerived(decls)
 }
 
 // WithDerived opens a cache over decls in place of DerivedFiles(): a case

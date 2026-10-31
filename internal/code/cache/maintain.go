@@ -68,7 +68,7 @@ import (
 // time (a cold sync, a rebuild, a node that just joined), or its graph swept
 // with a pack — is due for its graph AT ONCE: no debounce and no interval,
 // ahead of every index and bitmap in the pass, admitted on the graph's own
-// charge (GraphBytesPerObject) beside the runs in flight, and — for the graph
+// charge (GraphBytesPerObject and GraphBaseBytes) beside the runs in flight, and — for the graph
 // ALONE — in any slot of the lane, the one kept for a person's verify
 // included. Without a graph every walk git makes over the repository goes by
 // date, and a push of a commit dated before its parent — a person's skewed
@@ -125,11 +125,27 @@ import (
 // <path>` or a blame then skips every commit whose filter says the path did
 // not change rather than diffing it — 0.044 s with them against 0.399 s with
 // no commit-graph, over a synthetic history of 40 000 commits on git 2.56.0 —
-// and a write computes at most MaxNewFilters new ones (--max-new-filters), so
-// what one write spends on filters is bounded whatever the history it walks:
-// own mode's whole graph keeps every filter the graph it replaces holds, and
-// the next write computes more; the tip computes its own afresh at each
-// write (constants.go says what that leaves of a long tail).
+// and a write computes EVERY filter its commits lack, with no
+// --max-new-filters: own mode's whole graph once, its first write, after
+// which each write reads them back from the graph it replaces; the tip
+// afresh at each write, over its tail. A bound bought nothing. It never
+// bounded what a write holds: a filter's diff reads its trees through git's
+// delta base cache, which keeps them up to its 96 MiB cap whatever the
+// filters' number, and the cap is what a write is charged (GraphBaseBytes).
+// And it cost every reader: own mode's graph computed the bound's filters a
+// run, so a gigabyte's 455 680 commits took over four thousand runs at 100
+// a write, the reads diffing every commit still without one meanwhile —
+// internal/code/query's BenchmarkBlame and BenchmarkLogPath (tree=deep, the
+// gigabyte; git 2.56.0, one bounded run of each arm, 2026-10-31) answered a
+// blame in 0.98 s and a page of a path's log in 2.51 s after own mode's
+// first write at a bound of 100, 0.98 and 2.40 s at 1 024, and 0.073 and
+// 0.116 s with every filter; over a tip on a tail of
+// compact.PublishTailObjects, 0.66 and 0.71 s at 100, 0.60 and 0.66 s at
+// 1 024, and 0.065 and 0.103 s with every filter. What every filter costs
+// is the write's time: own mode's first graph 33.5 s at that gigabyte where
+// 100 new filters took 3.0, once, inside its deadline
+// (gitproc.PackWorkDeadline over the repository's bytes); the tip 0.70 s
+// over that tail where 100 took 0.07, at each write.
 //
 // THE TIP. In CHAIN mode — an installed published chain (layers.go) — the
 // maintainer writes no own-mode file; its one write is the node's TIP
@@ -148,11 +164,12 @@ import (
 // chain git writes over and its file is expired by git's own write, rather
 // than a new tip stacked on the old one — a stack would grow without bound
 // while the tail waits for its publication — and a whole rewrite costs only
-// the tail's commits (on git 2.56.0, 0.01–0.03 s over a tail of 64 pushes and
-// 0.12 s over one of 90 909 objects outside a gigabyte's published layer,
-// BenchmarkMidx's step=tip-graph and tail= arms), charged at
-// TipGraphBytesPerObject an object of the tail, TipGraphBaseBytes for its
-// filters whatever its length, and room for a clone of the whole repository
+// the tail's commits (on git 2.56.0, 0.01–0.03 s over a tail of 64 pushes,
+// BenchmarkMidx's step=tip-graph, and 0.70 s computing every filter of one of
+// 90 909 objects outside a gigabyte's published layer of a deep tree,
+// internal/code/query's tip arms), charged at
+// TipGraphBytesPerObject an object of the tail, GraphBaseBytes for its
+// filters' diffs whatever its length, and room for a clone of the whole repository
 // beside it (Write.charge). A tip's failure costs speed and never an answer:
 // the tail's commits are read from their packs, as they are before the tip
 // is written.
@@ -1265,20 +1282,20 @@ const maintainFile = "internal/code/cache/maintain.go"
 // index, the maintainer's index with its bitmap and without one, own mode's
 // graph and the node's tip over an installed chain — spelled as literals in
 // the file that runs them, which is how TestNothingButSyncWritesACache reads
-// which git writer a file runs. Both graphs carry changed-path filters, at
-// most MaxNewFilters new ones a write: its flag is spelled whole for the same
-// reason, and TestTheFilterFlagIsTheConstant holds it to the constant. The
-// tip is a SPLIT write that never merges (--split=no-merge): one layer of the
-// commits the installed layers lack, over exactly those layers — merging, it
-// would write the published layers again into a layer of the node's own.
+// which git writer a file runs. Both graphs compute every changed-path
+// filter their commits lack (--changed-paths, no --max-new-filters: EVERY
+// GRAPH CARRIES CHANGED-PATH FILTERS, above, says why), held so by
+// TestEveryGraphWriteComputesEveryFilterAndIsChargedItsTrees. The tip is a
+// SPLIT write that never merges (--split=no-merge): one layer of the commits
+// the installed layers lack, over exactly those layers — merging, it would
+// write the published layers again into a layer of the node's own.
 var (
 	roundIndexArgs = []string{"multi-pack-index", "write", "--stdin-packs", "--no-progress"}
 	bitmapArgs     = []string{"multi-pack-index", "write", "--bitmap", "--no-progress"}
 	plainArgs      = []string{"multi-pack-index", "write", "--no-progress"}
-	graphArgs      = []string{"commit-graph", "write", "--reachable", "--changed-paths", "--max-new-filters=100",
+	graphArgs      = []string{"commit-graph", "write", "--reachable", "--changed-paths", "--no-progress"}
+	tipGraphArgs   = []string{"commit-graph", "write", "--reachable", "--split=no-merge", "--changed-paths",
 		"--no-progress"}
-	tipGraphArgs = []string{"commit-graph", "write", "--reachable", "--split=no-merge", "--changed-paths",
-		"--max-new-filters=100", "--no-progress"}
 )
 
 // maintWrites is the maintainer's declared writes — every Write of the

@@ -2561,18 +2561,24 @@ changed-path filters, one a commit: a `git log -- <path>` or a blame skips
 each commit whose filter says the path did not change rather than diffing it
 against its parent — 0.044 seconds with them against 0.399 with no
 commit-graph, for one path over a synthetic history of 40 000 commits on git
-2.56.0. One write computes at most 100 new filters, so what it spends on
-them is bounded whatever the history — about 5 ms and 0.4 MiB; a commit
-without one is diffed as before. Over a gigabyte's 455 680 commits, a page
-of a path's log answered in 70 ms and a file's blame in 40 ms with a tail of
-90 909 objects outside the published layer and 100 new filters a tip — 68 and
-44 ms with 1 024, 47 and 18 ms with every one, 96 and 51 ms with none — all
-under a hundredth of the 10 seconds a read is given, so the bound is the
-smallest of the three. A copy's own graph keeps every filter the graph it replaces holds,
-so its background indexing's next write computes more; a node's tip over a
-published chain ([Published layers](#published-layers)) computes its own
-afresh at each write, so the commits of a tail longer than that go without
-one until a publication covers them. They are git's version 2:
+2.56.0. Every write computes every filter its commits lack: a copy's own
+graph computes them all at its first write and reads them back from the
+graph it replaces at every write after, and a node's tip over a published
+chain ([Published layers](#published-layers)) computes its tail's afresh at
+each write. No write bounds how many it computes, because a bound saves the
+write little and costs every read: what a write holds for its filters is
+the trees their diffs read, which git keeps up to its delta base cache's
+96 MiB however few filters it computes, and a commit without a filter is
+diffed by every read that passes it. Over a gigabyte's 455 680 commits whose
+every commit rewrites a directory of a thousand entries four levels down, a
+file's blame answered in 0.073 seconds and a page of a path's log in 0.116
+once a copy's own graph held every filter, against 0.98 and 2.51 seconds
+after a first write of 100 — a bound of 100 a write would have needed over
+four thousand writes to reach every commit — and over a tip on a tail of
+90 909 objects, 0.065 and 0.103 seconds against 0.66 and 0.71 with 100 new
+filters a tip. Computing every filter took that copy's first write 33.5
+seconds where 100 took 3.0, once, and the tip 0.70 seconds where 100 took
+0.07. They are git's version 2:
 version 1 hashes a path by whether the platform's `char` is signed, so its
 filters disagree between an `amd64` and an `arm64` build for every path
 outside ASCII, and every git a node runs reads and writes version 2.
@@ -2726,17 +2732,22 @@ check and a clone on git 2.43: about 600 bytes an object for the bitmap (388
 over 32 300 objects, 560 over 296 000 and 287 over three million: a share
 that rises to 100 MB and falls past it, with no fixed part at the small end),
 80 for the index without one and 1 MiB beside it whatever the repository's
-size, 67 for the commit-graph, 192 for `crewlet code verify`'s
+size, 67 for the commit-graph and 100 MiB beside it whatever the
+repository's size, 192 for `crewlet code verify`'s
 connectivity check, and a clone about 240 more than the 224 MiB its git
 transfer slot keeps for it — the clone of a repository with no bitmap walks
-its whole history. The commit-graph's figure includes its changed-path
-filters. The node's tip over a published chain is the one step
+its whole history. The commit-graph's 100 MiB are its changed-path filters':
+each filter is a diff of a commit against its parent, whose trees git keeps
+in its delta base cache up to that cache's 96 MiB cap — 112.8 MiB in all
+over a 100 MB history whose every commit rewrites a directory of a thousand
+entries, and 250.1 MiB over a gigabyte of it, a line meeting no objects at
+95 MiB. The node's tip over a published chain is the one step
 that walks less than the whole history, the commits the chain lacks, so it is
 charged by the tail rather than the repository: 50 bytes an object of the
-tail and 2 MiB whatever its length, for its changed-path filters — measured on
+tail and 100 MiB whatever its length, for its changed-path filters — measured on
 git 2.56.0 over tails of 23 000 to 364 000 objects outside a gigabyte's
-published layer, 2.4 to 16.7 MiB at 100 new filters a write (5.8 to 20.4 MiB
-at 1 024), and 0.4 to 0.9 MiB over a tail of 64 commits. A
+published layer, 2.4 to 16.7 MiB with 100 new filters a write, and 102.3 MiB
+computing every filter of a tail of 90 909 objects of that deeper history. A
 [compaction](#compaction)'s build walks no history, only the packs it merges,
 and is charged by them: 550 bytes an object merged, 240 more an object merged
 for a transfer's room beside them, and six times
@@ -2748,7 +2759,8 @@ objects the layer adds — when the layer is the chain's root, and 350 when it
 is written over a base, every publication after the first (a later layer's
 bitmap held 176, 312 and 90 bytes an object at 10 MB, 100 MB and a gigabyte,
 a root's 384, 560 and 287); 350 an object of the layer for its commit-graph
-layer; and a compaction's for its repack. A repository is placed on the node
+layer, and 100 MiB beside it for its changed-path filters' diffs; and a
+compaction's for its repack. A repository is placed on the node
 that maintains it by its root's charge, which its maintainer must be able to
 hold. A git node reads its
 memory — the least of the machine's and any cgroup limit set on its
@@ -3188,8 +3200,9 @@ adds and switches off nothing beneath it, so each node's background indexing
 writes one over the chain, the copy's **tip**: git's own split write of just
 the commits the installed graph layers lack, over exactly those layers, with
 changed-path filters — on git 2.56.0, 0.01 to 0.03 seconds over a tail of 64
-pushes, and 0.12 over one of 90 909 objects outside a gigabyte's published
-layer. A copy holding no tip gets one at once, as a copy
+pushes, and 0.70 computing every filter of one of 90 909 objects outside a
+gigabyte's published layer, whose every commit rewrites a directory of a
+thousand entries. A copy holding no tip gets one at once, as a copy
 with no graph does ([The commit-graph first](#the-cache-on-a-git-node)); once
 the tail's packs change, the tip is written again by the background indexing's
 usual pace, **whole** — over the installed layers alone and every commit of the

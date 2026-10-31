@@ -36,7 +36,9 @@ func objectsOf(pushes []pushed) int64 {
 // for a root, PublishTailBytesPerObject for a layer over a base — the
 // commit-graph layer — GraphLayerBytesPerObject an object of the layer — and
 // its repack — CompactBytesPerObject an object of what it merges, and the
-// delta window.
+// delta window. The layer's fixed part has a case of its own (below): the
+// repository here is a few objects, so the cache drops it (NoFixedParts), as
+// a large repository's steps outweigh it.
 //
 // Mutations: charge the bitmap by the layer's objects, and a layer of one
 // object over a repository of many fits a budget that holds no bitmap of it;
@@ -47,7 +49,7 @@ func TestAPublicationIsChargedByItsLargestStep(t *testing.T) {
 	w := newSyncWorld(t, onMemory)
 	repo := w.repo(t, 1)
 	objects := objectsOf(w.pushN(t, repo, 3))
-	c := w.open(t)
+	c := w.open(t, cache.NoFixedParts())
 	s := w.sync(t, c, repo)
 	defer s.Release()
 	clone := objects * gitproc.TransferBytesPerObject
@@ -66,21 +68,58 @@ func TestAPublicationIsChargedByItsLargestStep(t *testing.T) {
 		{name: "the repack and its window", layer: 1, repack: 100 * objects,
 			charge: 100*objects*cache.CompactBytesPerObject + clone + cache.CompactWindowBytes(limits)},
 	} {
-		cache.SetMaintenanceBudget(c, c2.charge-1)
-		_, err := c.AdmitPublication(s, c2.base, c2.layer, c2.repack, limits)
-		if !errors.Is(err, cache.ErrNoMemory) || !strings.Contains(err.Error(), fmt.Sprintf("needs about %d bytes",
-			c2.charge)) {
-			t.Errorf("%s: a publication on a budget a byte under its charge %d = %v, want ErrNoMemory at that "+
-				"charge", c2.name, c2.charge, err)
-		}
-		cache.SetMaintenanceBudget(c, c2.charge)
-		adm, err := c.AdmitPublication(s, c2.base, c2.layer, c2.repack, limits)
-		if err != nil {
-			t.Errorf("%s: the same publication on a budget of exactly its charge = %v, want it admitted", c2.name, err)
-			continue
-		}
-		adm.Release()
+		admittedAtItsCharge(t, c, s, c2.name, c2.base, c2.layer, c2.repack, c2.charge, limits)
 	}
+}
+
+// A PUBLICATION'S GRAPH LAYER IS CHARGED THE TREES ITS FILTERS' DIFFS HOLD:
+// its commit-graph layer computes every changed-path filter of the layer's
+// commits, as the maintainer's own graph does, so beside its figure an
+// object of the layer it is charged that graph's fixed part (GraphBaseBytes,
+// read from the graph's declaration) — the trees git's delta base cache
+// keeps up to its cap, which a layer of a few objects over wide trees fills
+// as a large one does. Over a repository of a few objects that part
+// outweighs every other step.
+//
+// Mutation: charge the layer by its objects alone, and a budget a byte under
+// its charge admits it.
+func TestAPublicationsGraphLayerIsChargedTheTreesItsFiltersHold(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	objects := objectsOf(w.pushN(t, repo, 3))
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	charge := cache.GraphLayerBytesPerObject + cache.GraphBaseBytes + objects*gitproc.TransferBytesPerObject
+	if bitmap := objects * (cache.PublishBytesPerObject + gitproc.TransferBytesPerObject); bitmap >= charge {
+		t.Fatalf("the premise: a root's bitmap over %d objects is charged %d, past the layer's %d", objects, bitmap,
+			charge)
+	}
+	admittedAtItsCharge(t, c, s, "a layer over one object", 0, 1, 0, charge, code.Limits{MaxBlobBytes: 1 << 20})
+}
+
+// admittedAtItsCharge holds a publication — a layer over layer objects on
+// base layers, after a repack of repack — to charge: refused for memory at
+// that charge a byte past the budget, and admitted on a budget of exactly it.
+func admittedAtItsCharge(t *testing.T, c *cache.Cache, s cache.Synced, name string, base int,
+	layer, repack, charge int64, limits code.Limits) {
+
+	t.Helper()
+	cache.SetMaintenanceBudget(c, charge-1)
+	_, err := c.AdmitPublication(s, base, layer, repack, limits)
+	if !errors.Is(err, cache.ErrNoMemory) || !strings.Contains(err.Error(), fmt.Sprintf("needs about %d bytes",
+		charge)) {
+		t.Errorf("%s: a publication on a budget a byte under its charge %d = %v, want ErrNoMemory at that "+
+			"charge", name, charge, err)
+	}
+	cache.SetMaintenanceBudget(c, charge)
+	adm, err := c.AdmitPublication(s, base, layer, repack, limits)
+	if err != nil {
+		t.Errorf("%s: the same publication on a budget of exactly its charge = %v, want it admitted", name, err)
+		return
+	}
+	adm.Release()
 }
 
 // A MAINTAINER IS PLACED BY THE LARGEST CHARGE ITS STEPS ARE ADMITTED AT: a
@@ -162,7 +201,7 @@ func TestAPublicationsChargeMovesInItsOwnSlot(t *testing.T) {
 	w := newSyncWorld(t, onMemory)
 	repo := w.repo(t, 1)
 	objects := objectsOf(w.pushN(t, repo, 3))
-	c := w.open(t)
+	c := w.open(t, cache.NoFixedParts())
 	s := w.sync(t, c, repo)
 	defer s.Release()
 	limits := code.Limits{MaxBlobBytes: 1 << 20}
@@ -241,7 +280,7 @@ func TestAPublicationPastTheBudgetIsRefusedOnceAndRaisesTheAlarm(t *testing.T) {
 	// A CHAINED COPY, every pack in its chain: its own maintenance takes no
 	// step, so what the walk counts is the publication alone.
 	w.log.publish(repo, w.buildChain(t, p), nil)
-	c := w.open(t)
+	c := w.open(t, cache.NoFixedParts())
 	s := w.sync(t, c, repo)
 	defer func() { s.Release() }()
 	if got := cache.Installed(c, repo); len(got) != 1 {

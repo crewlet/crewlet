@@ -395,7 +395,12 @@ const MidxMinInterval = 10 * time.Minute
 // defaults admit (code.DefaultRepoMaxBytes, 20 GiB), at the 5 GB arm's rate
 // and its growth, runs about a quarter of an hour and is rebuilt at most
 // every two and a half; under 3 GB a repository is rebuilt at most every
-// MidxMinInterval.
+// MidxMinInterval. Those runs' graphs computed at most 100 new changed-path
+// filters; a repository's FIRST graph computes every one (graphArgs), which
+// internal/code/query's own/ arms measured at 0.77 s against 0.19 s over
+// 100 MB and 33.5 s against 3.0 s over a gigabyte of a deeper tree
+// (2026-10-31) — once, since each later write reads them back — and the
+// interval after that run stretches by the same rule.
 const MidxDutyCycle = 10
 
 // THE MEMORY OF EACH WHOLE-REPOSITORY PROCESS, an object of its repository —
@@ -464,61 +469,79 @@ const IndexBytesPerObject = 80
 const IndexBaseBytes = 1 << 20
 
 // GraphBytesPerObject is the memory the commit-graph holds for every object of
-// its repository.
+// its repository, beside the fixed part its changed-path filters' diffs hold
+// (GraphBaseBytes, its declaration's Write.BaseBytes).
 //
 // 67 BYTES, a fifth past the larger measurement of the maintainer's own write
-// — its version-2 changed-path filters, 1 024 of them new a write, more than
-// the MaxNewFilters it computes since: 15.6 MiB over 100 MB (55 bytes an
-// object) and 126 MiB over the gigabyte (45). It reads every commit, a
-// seventh of a source repository's objects, so it is charged by the objects
-// the rows count, as the rest are.
-// The filters add a bounded amount a write rather than an amount an object:
-// a write computes at most MaxNewFilters new ones, and reads every filter an
-// earlier write left from the graph it replaces, which git maps rather than
-// holds. 56, the figure this replaced, was git 2.43's graph without filters
-// (12.7 and 112 MiB, 45 and 39.5 bytes an object).
+// with few new filters: 15.6 MiB over 100 MB (55 bytes an object) and 126 MiB
+// over the gigabyte (45), BenchmarkMidx's step=whole with 1 024 new filters a
+// write. It reads every commit, a seventh of a source repository's objects,
+// so it is charged by the objects the rows count, as the rest are. The write
+// computes EVERY filter its commits lack (maintain.go's graphArgs), and what
+// that adds follows the commits only by the filters' own bytes, tens an
+// object: internal/code/query's own/max-new-filters=all arms (tree=deep, the
+// whole graph over a repository with none; git 2.56.0, one bounded run of
+// each arm — -benchtime 1x, one count — on two E-cores of an Intel Core Ultra
+// 7 265U, 2026-10-31) held 112.8 MiB over 481 160 objects and 250.1 MiB over
+// 4 198 280, a line of 38.7 bytes an object that meets a repository of no
+// objects at 95 MiB — the delta base cache GraphBaseBytes charges — and every
+// later write reads the filters back from the graph it replaces rather than
+// computing them again. 56, the figure before this one, was git 2.43's graph
+// without filters (12.7 and 112 MiB, 45 and 39.5 bytes an object).
 const GraphBytesPerObject = 67
 
 // TipGraphBytesPerObject is the memory the node's TIP commit-graph layer
 // (maintain.go) holds for every object of the TAIL it is written over — the
-// packs no installed published layer names — beside its fixed part
-// (TipGraphBaseBytes) and the room for one clone of the whole repository
+// packs no installed published layer names — beside the fixed part its
+// filters' diffs hold (GraphBaseBytes) and the room for one clone of the whole repository
 // every whole-repository step is charged (memory.go's chargeOver): a split
 // write walks only the commits no layer beneath it holds, so its own memory
 // follows the tail, and the clone it shares the node with is of the
 // repository.
 //
-// 50 BYTES, MEASURED (BenchmarkMidx's tail= arms, op=tip-graph — the
-// declaration's own write, MaxNewFilters new filters at most — over tails of
-// 22 722, 90 909 and 363 636 objects outside a gigabyte's published root:
-// git 2.56.0, one bounded run of each arm — -benchtime 1x, one count — on
-// two E-cores of an Intel Core Ultra 7 265U, 2026-10-30): it held 2.4, 5.0
-// and 16.7 MiB, 40 to 45 bytes an object of the tail past the shortest (37
-// to 47 when the write computed 1 024 filters), the larger rounded up to the
-// next ten. 1 700, the provisional figure this replaced, was 40 MiB over
-// 5 000 commits with every filter computed, divided by the tail's objects:
-// what it held was the filters, which a write bounds whatever its tail
-// (TipGraphBaseBytes).
+// 50 BYTES, MEASURED (BenchmarkMidx's tail= arms, op=tip-graph/filters=100 —
+// the declaration's write bounded to 100 new filters — over tails of 22 722,
+// 90 909 and 363 636 objects outside a gigabyte's published root: git
+// 2.56.0, one bounded run of each arm — -benchtime 1x, one count — on two
+// E-cores of an Intel Core Ultra 7 265U, 2026-10-30): it held 2.4, 5.0 and
+// 16.7 MiB, 40 to 45 bytes an object of the tail past the shortest (37 to 47
+// when the write computed 1 024 filters), the larger rounded up to the next
+// ten. The write computes every filter its tail's commits lack, and what
+// that adds past this is the trees their diffs read, which the delta base
+// cache holds up to its cap whatever the tail (GraphBaseBytes). 1 700, the
+// provisional figure before, was 40 MiB over 5 000 commits with every filter
+// computed, divided by the tail's objects: what it held was that cache.
 const TipGraphBytesPerObject = 50
 
-// TipGraphBaseBytes is the memory the node's tip holds WHATEVER its tail's
-// length, charged beside TipGraphBytesPerObject's (its declaration's
-// Write.BaseBytes): the write's own fixed part and its changed-path filters,
-// at most MaxNewFilters of them held until it ends.
+// GraphBaseBytes is the memory a commit-graph write that computes changed-path
+// filters holds WHATEVER it covers, charged beside its figure an object (its
+// declarations' Write.BaseBytes — own mode's whole graph and the node's tip —
+// and a publication's graph layer, Cache.AdmitPublication): a filter is a
+// diff of a commit against its first parent, which reads the trees along
+// every path it changed through git's DELTA BASE CACHE, and the cache keeps
+// what it read up to core.deltaBaseCacheLimit, git's default of 96 MiB, which
+// nothing the engine runs lowers. So it grows with the filters a write
+// computes and the size of the trees they diff, and never past the cap.
 //
-// TWO MEBIBYTES, MEASURED (the same arms, and step=tip-graph's tail of 64
-// pushes, 64 commits under each filter bound): the line through the three
-// long tails meets a tail of no objects at 1.1–1.6 MiB, by which pair of
-// them it is drawn through, and a tail of 64 commits held 0.4 MiB over
-// 100 MB and 0.9 over the gigabyte — the part a write holds whatever its
-// tail — rounded up to the next whole MiB past a fifth more. It is the
-// filters' part: computing 1 024 a write, the same three tails held 5.8, 8.2
-// and 20.4 MiB, a line meeting no tail at 4.2–4.6 MiB, about 4 KiB a filter.
-// Added because it is past a tenth of what TipGraphBytesPerObject charges a
-// tail of compact.PublishTailObjects (4.5 MB), the rule its arms set:
-// charged by its tail alone, a short tail's tip would be admitted at a
-// fraction of what it holds. It follows MaxNewFilters, and moves with it.
-const TipGraphBaseBytes = 2 << 20
+// 100 MIB: the cache's 96 MiB and 4 MiB of the write's own, MEASURED
+// (internal/code/query's BenchmarkBlame and BenchmarkLogPath: git 2.56.0, one
+// bounded run of each arm — -benchtime 1x, one count — on two E-cores of an
+// Intel Core Ultra 7 265U, 2026-10-31; tree=deep, a history whose every
+// commit rewrites a directory of a thousand entries four levels down): the
+// node's tip over a tail of compact.PublishTailObjects with every filter held
+// 101.7 MiB beside 100 MB and 102.3 beside the gigabyte, 98 MiB past what
+// TipGraphBytesPerObject charges its tail — where at a bound of 100 new
+// filters it held 7.7 and at 1 024 39.6, the cache filled as far as the
+// diffs went — and own mode's whole graph meets a repository of no objects at
+// 95 MiB (GraphBytesPerObject). The 4 MiB are twice the 2.0 MiB the tip held
+// past the cache and its charge an object; a tip over 64 pushes held 0.4 MiB
+// over 100 MB and 0.9 over the gigabyte of the shallower history
+// (BenchmarkMidx's step=tip-graph), its trees few. 2 MiB, the figure before,
+// was what the tip held at a bound of 100 new filters over a history whose
+// trees are a root of thirty directories: a bound on the filters bounds the
+// cache only as far as the trees are small, and a directory ten times as wide
+// fills it at a hundred.
+const GraphBaseBytes = 100 << 20
 
 // PublishBytesPerObject is the memory a ROOT publication's multi-pack-index
 // layer and its bitmap hold for every object of the WHOLE repository
@@ -575,47 +598,21 @@ const PublishTailBytesPerObject = 350
 // `commit-graph write --stdin-packs --split=no-merge --changed-paths`, every
 // changed-path filter computed, since it runs once for the fleet — holds for
 // every object of the LAYER it covers (Cache.AdmitPublication), beside the
-// room for one clone of the repository: a split layer reads only the commits
-// of its own packs.
+// fixed part its filters' diffs hold (GraphBaseBytes) and the room for one
+// clone of the repository: a split layer reads only the commits of its own
+// packs.
 //
 // 350 BYTES, MEASURED (BenchmarkMidx's step=publish/layer=root, as
 // PublishBytesPerObject is): the root publication's graph layer over every
 // commit of the history held 89 MiB over 100 MB (317 bytes an object of the
 // layer) and 261 MiB over the gigabyte (92), the node floor's build the same —
-// a part of it fixed, which a small layer's few objects carry alone (0.4 MiB
-// over a tail of sixty-four pushes, whose charge the clone's room beside it
-// covers many times) — the larger rounded up to the next 50. 700, the
+// a part of it the delta base cache's, which GraphBaseBytes charges beside
+// it, so a small layer whose few objects carry that part alone (0.4 MiB over
+// a tail of sixty-four pushes of a shallow tree, and up to the cache's cap
+// over a wide one) is charged it too — the larger rounded up to the next 50. 700, the
 // provisional figure this replaced, was 117 MiB over 35 000 commits (620
 // bytes an object) rounded up.
 const GraphLayerBytesPerObject = 350
-
-// MaxNewFilters is the most changed-path filters one commit-graph write
-// computes — the node's tip and own mode's whole graph alike, git's
-// --max-new-filters, spelled whole in the argument lists that run it
-// (maintain.go's graphArgs and tipGraphArgs, held to this by
-// TestTheFilterFlagIsTheConstant). A commit without a filter is answered by
-// `git log -- <path>` diffing it, as every commit was before the filters. Own
-// mode's whole graph keeps every filter the graph it replaces holds, so each
-// write computes up to this many more until every commit has one. The node's
-// tip is written whole over the installed layers alone, so it computes its
-// filters afresh at every write, and a tail of more commits than this leaves
-// the rest without one until a publication covers them.
-//
-// 100, MEASURED, the smallest of 100, 1 024 and every filter that keeps a
-// path's log and a file's blame under half of gitproc.ReadDeadline with a
-// tail of the publication's bound outside the chain (internal/code/query's
-// BenchmarkBlame and BenchmarkLogPath: the gigabyte's 455 680 commits under a
-// published graph layer, compact.PublishTailObjects objects outside it under
-// the node's tip; git 2.56.0, one bounded run of each arm — -benchtime 1x,
-// one count — on two E-cores of an Intel Core Ultra 7 265U, 2026-10-29): a
-// blame took 40 ms with 100 new filters, 44 ms with 1 024 and 18 ms with
-// every one, a page of a path's log 70, 68 and 47 ms, and with no filter at
-// all 51 and 96 ms — every one under a hundredth of the deadline. What the
-// bound buys is the write's: a filter is a diff of a commit against its
-// first parent, about 0.05 ms and 4 KiB held until the write ends
-// (TipGraphBaseBytes), so 100 are some 5 ms and 0.4 MiB where 1 024, the
-// provisional bound this replaced, were 50 ms and 4 MiB.
-const MaxNewFilters = 100
 
 // FsckBytesPerObject is the memory Verify's connectivity check (fsck
 // --connectivity-only) holds for every object of its repository.

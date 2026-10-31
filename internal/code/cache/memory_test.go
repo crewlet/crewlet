@@ -42,7 +42,7 @@ func TestABitmapTheNodesMemoryCannotHoldIsReplacedByAnIndexWithoutOne(t *testing
 	repo := w.repo(t, 1)
 	w.push(t, repo, "refs/heads/main", nil)
 	w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t, clk.on)
+	c := w.open(t, clk.on, cache.NoFixedParts())
 	defer w.sync(t, c, repo).Release()
 	bitmap := cache.BitmapCharge(c, repo)
 	cache.SetMaintenanceBudget(c, bitmap-1)
@@ -123,9 +123,9 @@ func TestABitmapTheNodesMemoryCannotHoldIsReplacedByAnIndexWithoutOne(t *testing
 // refused — a push of a commit dated before its parent walks every commit —
 // so the refusal is logged and counted once for the incarnation and kept on
 // the refused gauge under its own step while it stands, beside the bitmap's;
-// the alarm stands for it, since no repository is refused its graph and not
-// its bitmap. At a budget of the graph's charge the graph is written first,
-// and the gauge's graph falls back.
+// the alarm stands for the repository refused both. At a budget of the
+// graph's charge the graph is written first, and the gauge's graph falls
+// back.
 //
 // Mutation: count no refused graph in refusalWalk.note, or set the gauge for
 // bitmaps alone in noteRefusals, and the graph's gauge stays at zero.
@@ -139,10 +139,13 @@ func TestAGraphTheNodesMemoryCannotHoldIsGaugedAsABitmapIs(t *testing.T) {
 	c := w.open(t, clk.on)
 	defer w.sync(t, c, repo).Release()
 	graph := cache.GraphCharge(c, repo)
-	cache.SetMaintenanceBudget(c, graph-1)
+	// A budget short of the bitmap too, the cheaper of the two over a
+	// repository this small, whose graph's fixed part (GraphBaseBytes)
+	// outweighs a bitmap of its few objects.
+	cache.SetMaintenanceBudget(c, min(graph, cache.BitmapCharge(c, repo))-1)
 	for range 2 {
 		if ran := cache.MaintainerPass(c); len(ran) != 0 {
-			t.Fatalf("on a budget a byte short of the graph's charge the maintainer ran %v", ran)
+			t.Fatalf("on a budget a byte short of the graph's charge and the bitmap's the maintainer ran %v", ran)
 		}
 		clk.Add(cache.MidxMinInterval)
 	}
@@ -188,7 +191,7 @@ func TestAGraphTheNodesMemoryCannotHoldIsGaugedAsABitmapIs(t *testing.T) {
 // A TIP THE NODE'S MEMORY CANNOT HOLD IS GAUGED, AND RAISES NOTHING. A copy
 // serving from an installed chain writes one thing of its own, its tip over
 // the tail, charged TipGraphBytesPerObject an object of the tail and
-// TipGraphBaseBytes whatever its length, with room for a clone of the whole
+// GraphBaseBytes whatever its length, with room for a clone of the whole
 // repository beside it (Write.charge). Past the budget it never runs: its
 // refusal is logged and counted once for the incarnation and kept on the
 // refused gauge under its own step while it stands — and the alarm, which
@@ -219,11 +222,11 @@ func TestATipTheNodesMemoryCannotHoldIsGaugedAndRaisesNoAlarm(t *testing.T) {
 			objects)
 	}
 	room := objects * gitproc.TransferBytesPerObject
-	if repoWide := objects*cache.TipGraphBytesPerObject + cache.TipGraphBaseBytes + room; tip >= repoWide ||
-		tip <= cache.TipGraphBaseBytes+room {
+	if repoWide := objects*cache.TipGraphBytesPerObject + cache.GraphBaseBytes + room; tip >= repoWide ||
+		tip <= cache.GraphBaseBytes+room {
 		t.Fatalf("the tip's charge is %d over a repository of %d objects: want its figure over the tail alone, "+
 			"under %d, beside its fixed part and the clone's room over the whole repository, %d", tip, objects,
-			repoWide, cache.TipGraphBaseBytes+room)
+			repoWide, cache.GraphBaseBytes+room)
 	}
 	cache.SetMaintenanceBudget(c, tip-1)
 	for range 2 {
@@ -300,7 +303,7 @@ func TestARefusedRepositoryKeepsItsPushesIndexed(t *testing.T) {
 	repo := w.repo(t, 1)
 	w.push(t, repo, "refs/heads/main", nil)
 	w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t, clk.on, cache.MidxPacksAt(2))
+	c := w.open(t, clk.on, cache.MidxPacksAt(2), cache.NoFixedParts())
 	w.sync(t, c, repo).Release()
 	cache.SetMaintenanceBudget(c, cache.BitmapCharge(c, repo)-1)
 	clk.Add(cache.MidxDebounce)
@@ -349,7 +352,7 @@ func TestAStaleBitmapIsKeptUntilMidxRoundPacksGatherOutsideIt(t *testing.T) {
 	repo := w.repo(t, 1)
 	w.push(t, repo, "refs/heads/main", nil)
 	w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t, clk.on, cache.MidxPacksAt(2))
+	c := w.open(t, clk.on, cache.MidxPacksAt(2), cache.NoFixedParts())
 	w.sync(t, c, repo).Release()
 	cache.SetRoundPacks(c, 4)
 	clk.Add(cache.MidxDebounce)
@@ -387,12 +390,14 @@ func TestAStaleBitmapIsKeptUntilMidxRoundPacksGatherOutsideIt(t *testing.T) {
 }
 
 // EACH STEP IS ADMITTED ON ITS OWN CHARGE. A run's steps run one after the
-// other and hold their own memory, so a budget past the graph's charge and
-// short of the index's writes the graph alone, and one short of every step
-// runs nothing — each step refused counted and logged once, under its name.
+// other and hold their own memory, so a budget past the bitmap's charge and
+// short of the graph's — over repositories this small, whose graph's fixed
+// part (GraphBaseBytes) outweighs a bitmap of their few objects — writes the
+// index with its bitmap alone, and one short of every step runs nothing —
+// each step refused counted and logged once, under its name.
 //
-// Mutation: refuse a run whole when its bitmap is refused, and the small
-// repository's graph is never written.
+// Mutation: refuse a run whole when its graph is refused, and the small
+// repository's index is never written.
 func TestEachStepIsAdmittedOnItsOwnCharge(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -405,31 +410,33 @@ func TestEachStepIsAdmittedOnItsOwnCharge(t *testing.T) {
 	c := w.open(t, clk.on)
 	w.sync(t, c, small).Release()
 	w.sync(t, c, large).Release()
-	graph := cache.GraphCharge(c, small)
-	if cache.IndexCharge(c, small) <= graph || cache.GraphCharge(c, large) <= graph {
-		t.Fatalf("charges: the small repository's index %d and the large one's graph %d, want both past the small "+
-			"one's graph %d", cache.IndexCharge(c, small), cache.GraphCharge(c, large), graph)
+	bitmap := cache.BitmapCharge(c, small)
+	if cache.GraphCharge(c, small) <= bitmap || cache.BitmapCharge(c, large) <= bitmap ||
+		cache.IndexCharge(c, large) <= bitmap {
+		t.Fatalf("charges: the small repository's graph %d and the large one's bitmap %d and index %d, want each "+
+			"past the small one's bitmap %d", cache.GraphCharge(c, small), cache.BitmapCharge(c, large),
+			cache.IndexCharge(c, large), bitmap)
 	}
-	cache.SetMaintenanceBudget(c, graph)
+	cache.SetMaintenanceBudget(c, bitmap)
 	clk.Add(cache.MidxDebounce)
 
 	if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != small {
-		t.Fatalf("the pass ran %v, want the small repository's graph alone", ran)
+		t.Fatalf("the pass ran %v, want the small repository's bitmap alone", ran)
 	}
-	if packs, _, written := cache.Indexed(c, small); packs != 0 || !written {
-		t.Errorf("the small repository holds an index over %d packs and graph %v, want no index and the graph",
-			packs, written)
+	if packs, withBitmap, written := cache.Indexed(c, small); packs != 1 || !withBitmap || written {
+		t.Errorf("the small repository holds an index over %d packs (bitmap %t) and graph %t, want its one pack "+
+			"indexed with a bitmap, and no graph", packs, withBitmap, written)
 	}
 	if packs, _, written := cache.Indexed(c, large); packs != 0 || written {
 		t.Errorf("the large repository holds an index over %d packs and graph %v, want nothing", packs, written)
 	}
-	for step, want := range map[string]uint64{"bitmap": 2, "index": 2, "graph": 1} {
+	for step, want := range map[string]uint64{"bitmap": 1, "index": 1, "graph": 2} {
 		if got := counter(w.rec, metrics.CodeCacheMaintenanceRefusals, "step", step); got != want {
 			t.Errorf("%s{step=%s} = %d, want %d", metrics.CodeCacheMaintenanceRefusals, step, got, want)
 		}
 	}
-	if got := len(w.logs.lines(t, "code_cache_maintenance_refused")); got != 5 {
-		t.Errorf("the refusals were logged %d times, want one a step of each repository, 5", got)
+	if got := len(w.logs.lines(t, "code_cache_maintenance_refused")); got != 4 {
+		t.Errorf("the refusals were logged %d times, want one a step refused of each repository, 4", got)
 	}
 }
 
@@ -527,7 +534,7 @@ func TestTheFirstRepositoryHeldBackIsGivenTheRoomItNeeds(t *testing.T) {
 	}
 	cFirst, cLarge, cSmall := pushed(first, 1), pushed(large, 6), pushed(small, 1)
 	release := make(chan struct{})
-	c := w.open(t, clk.on, func(o *cache.Options) {
+	c := w.open(t, clk.on, cache.NoFixedParts(), func(o *cache.Options) {
 		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
 			if step != "multi-pack-index" {
 				return
@@ -592,7 +599,7 @@ func TestTheRunsInFlightFitTheBudgetTogether(t *testing.T) {
 	w.push(t, b, "refs/heads/main", nil)
 	w.push(t, b, "refs/heads/main", nil)
 	release := make(chan struct{})
-	c := w.open(t, clk.on, func(o *cache.Options) {
+	c := w.open(t, clk.on, cache.NoFixedParts(), func(o *cache.Options) {
 		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
 			if step != "multi-pack-index" {
 				return
@@ -643,7 +650,7 @@ func TestTheMemoryIsReadAgainAtEveryPass(t *testing.T) {
 	clk := newClock()
 	repo := w.repo(t, 1)
 	w.push(t, repo, "refs/heads/main", nil)
-	c := w.open(t, clk.on)
+	c := w.open(t, clk.on, cache.NoFixedParts())
 	defer w.sync(t, c, repo).Release()
 	clk.Add(cache.MidxDebounce)
 	resized := cache.MemoryReserved(c) + cache.BitmapCharge(c, repo) - 1
@@ -987,7 +994,7 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 // too, since a retune of it once left them stating the old figure.
 //
 // Mutation: change IndexBytesPerObject, GraphBytesPerObject,
-// TipGraphBytesPerObject, TipGraphBaseBytes, CompactBytesPerObject,
+// TipGraphBytesPerObject, GraphBaseBytes, CompactBytesPerObject,
 // CompactWindowBytes' multiple, PublishBytesPerObject or MidxDebounce, and the
 // catalogue no longer says what the cache does.
 func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
@@ -1014,9 +1021,10 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 		metrics.CodeCacheMaintenanceRefusals: {
 			bitmap, transfer,
 			fmt.Sprintf("`index` (%d)", cache.IndexBytesPerObject),
-			fmt.Sprintf("`graph` (%d)", cache.GraphBytesPerObject),
+			fmt.Sprintf("`graph` (%d, and %s whatever the repository's size for its changed-path filters)",
+				cache.GraphBytesPerObject, amount(t, cache.GraphBaseBytes)),
 			fmt.Sprintf("`tip-graph` (%d an object of the tail", cache.TipGraphBytesPerObject),
-			fmt.Sprintf("and %s whatever its length", amount(t, cache.TipGraphBaseBytes)),
+			fmt.Sprintf("and %s whatever its length", amount(t, cache.GraphBaseBytes)),
 			fmt.Sprintf("`compact` (%d bytes an object of the packs merged, beside a transfer's room of them — %d "+
 				"bytes an object merged, never of the whole repository, whose size alone would refuse every merge "+
 				"of a large one — and %s times max_blob_bytes for the build's delta search)",
@@ -1056,7 +1064,7 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 //
 // Mutation: change any constant the page names — BitmapBytesPerObject,
 // FsckBytesPerObject, gitproc.TransferMemory, MaintenanceMemoryPerCore,
-// MidxPacks, TipGraphBytesPerObject, TipGraphBaseBytes, MaxNewFilters,
+// MidxPacks, TipGraphBytesPerObject, GraphBaseBytes, GraphLayerBytesPerObject,
 // CompactBytesPerObject, CompactWindowBytes' multiple — and the page no
 // longer says what the cache does.
 func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
@@ -1088,7 +1096,8 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 			spaced(cache.BitmapBytesPerObject)),
 		fmt.Sprintf("about %s bytes an object for the bitmap", spaced(cache.BitmapBytesPerObject)),
 		fmt.Sprintf("%d for the index without one and %s beside it whatever the repository's size, %d for the "+
-			"commit-graph,", cache.IndexBytesPerObject, amount(t, cache.IndexBaseBytes), cache.GraphBytesPerObject),
+			"commit-graph and %s beside it whatever the repository's size,", cache.IndexBytesPerObject,
+			amount(t, cache.IndexBaseBytes), cache.GraphBytesPerObject, amount(t, cache.GraphBaseBytes)),
 		fmt.Sprintf("%d for `crewlet code verify`'s connectivity check, and a clone about %d more than the %s its "+
 			"git transfer slot keeps for it", cache.FsckBytesPerObject, gitproc.TransferBytesPerObject,
 			amount(t, gitproc.TransferMemory)),
@@ -1116,13 +1125,13 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 		fmt.Sprintf("until %d packs have gathered outside it", cache.MidxRoundPacks),
 		fmt.Sprintf("holding %d packs or more gets an index", cache.MidxRoundPacks),
 		fmt.Sprintf("charged by the tail rather than the repository: %s bytes an object of the tail and %s "+
-			"whatever its length", spaced(cache.TipGraphBytesPerObject), amount(t, cache.TipGraphBaseBytes)),
+			"whatever its length", spaced(cache.TipGraphBytesPerObject), amount(t, cache.GraphBaseBytes)),
 		fmt.Sprintf("it is charged the largest of theirs: %s bytes an object of the whole repository for its bitmap",
 			spaced(cache.PublishBytesPerObject)),
 		fmt.Sprintf("when the layer is the chain's root, and %s when it is written over a base",
 			spaced(cache.PublishTailBytesPerObject)),
-		fmt.Sprintf("%s an object of the layer for its commit-graph layer", spaced(cache.GraphLayerBytesPerObject)),
-		fmt.Sprintf("One write computes at most %s new filters", spaced(cache.MaxNewFilters)),
+		fmt.Sprintf("%s an object of the layer for its commit-graph layer, and %s beside it for its changed-path "+
+			"filters' diffs", spaced(cache.GraphLayerBytesPerObject), amount(t, cache.GraphBaseBytes)),
 		// A COMPACTION'S BUILD, charged as its admission charges it, in the
 		// section that runs it and in the Memory paragraph beside every
 		// other step.

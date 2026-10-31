@@ -82,7 +82,7 @@ func TestACompactionLeavesTheMaintainersReservedSlot(t *testing.T) {
 			w.push(t, repo, "refs/heads/main", nil)
 		}
 		release := make(chan struct{})
-		c := w.open(t, clk.on, held(release))
+		c := w.open(t, clk.on, held(release), cache.NoFixedParts())
 		if got := w.pool.Slots(gitproc.ClassMaintenance); got != 2 {
 			t.Fatalf("the pool has %d maintenance slots, want 2", got)
 		}
@@ -129,7 +129,7 @@ func TestACompactionLeavesTheMaintainersReservedSlot(t *testing.T) {
 		w.push(t, b, "refs/heads/main", nil)
 		w.push(t, b, "refs/heads/main", nil)
 		release := make(chan struct{})
-		c := w.open(t, clk.on, held(release))
+		c := w.open(t, clk.on, held(release), cache.NoFixedParts())
 		w.sync(t, c, a)
 		sb := w.sync(t, c, b)
 		ea, eb := cache.BitmapCharge(c, a), cache.BitmapCharge(c, b)

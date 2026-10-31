@@ -16,11 +16,13 @@ import (
 // WHOLE repository: the maintainer's multi-pack-index with its bitmap
 // (BitmapBytesPerObject an object), the same index without one — the
 // maintainer's where the bitmap cannot be had, and a full round's own
-// (IndexBytesPerObject) — the commit-graph (GraphBytesPerObject), and
-// Verify's connectivity check (FsckBytesPerObject). A fifth, the node's TIP
-// commit-graph over an installed chain (TipGraphBytesPerObject), holds memory
-// in proportion to the TAIL it covers — the commits no installed layer holds
-// — beside a fixed part its filters' bound sets (TipGraphBaseBytes), and is
+// (IndexBytesPerObject, beside IndexBaseBytes) — the commit-graph
+// (GraphBytesPerObject, beside GraphBaseBytes for the trees its changed-path
+// filters' diffs keep in git's delta base cache), and Verify's connectivity
+// check (FsckBytesPerObject). A fifth, the node's TIP commit-graph over an
+// installed chain (TipGraphBytesPerObject), holds memory in proportion to the
+// TAIL it covers — the commits no installed layer holds — beside the same
+// fixed part for its filters' diffs (GraphBaseBytes), and is
 // charged so (Write.charge), with the room for a clone of the whole
 // repository beside it that every step keeps; a compaction's build, which
 // the cache admits to a slot of the maintenance lane (background.go), in
@@ -29,7 +31,8 @@ import (
 // whole repository, below — and its delta window (CompactWindowBytes); and a
 // publication's, admitted there too at the largest of its steps' charges —
 // its layer's bitmap over the whole repository (PublishBytesPerObject), its
-// commit-graph layer over the layer's packs (GraphLayerBytesPerObject) and
+// commit-graph layer over the layer's packs (GraphLayerBytesPerObject, beside
+// GraphBaseBytes) and
 // its repack, a compaction's build over the packs it repacks — each with the
 // room for a clone of the whole repository beside it. Each write's figures
 // are its declaration's own (derived.go, Write.BytesPerObject and
@@ -105,8 +108,14 @@ import (
 // commit dated before its parent walks its whole history — and a refused
 // bitmap or publication raises code_maintenance_refused, whose threshold is
 // the budget: a measurement, never a knob. The alarm stands for a refused
-// graph too, since a graph's charge is a fraction of the bitmap's over the
-// same objects: no repository is refused its graph and not its bitmap. A
+// graph too wherever it matters: past about 200 000 objects a graph's charge
+// is under the bitmap's over the same objects, so no such repository is
+// refused its graph and not its bitmap. Under it the graph's fixed part
+// (GraphBaseBytes) outweighs the bitmap, and a node whose background budget
+// is under that part can refuse a repository its graph alone — one whose
+// walk by date costs at most about two seconds (gitproc.WalkPerObject an
+// object), which the gauge says and the alarm, whose meaning is a
+// repository served without a bitmap, does not. A
 // refused TIP raises nothing: its copy is served through its installed
 // chain's bitmap and its commit-graph layers, and only the commits pushed
 // since the last publication walk by date — those of the tail, which a

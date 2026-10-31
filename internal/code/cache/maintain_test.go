@@ -1044,7 +1044,7 @@ func TestMaintenanceRunsBesideTheLargestAsMemoryAllows(t *testing.T) {
 		w.push(t, repo, "refs/heads/main", nil)
 	}
 	release := make(chan struct{})
-	c := w.open(t, clk.on, func(o *cache.Options) {
+	c := w.open(t, clk.on, cache.NoFixedParts(), func(o *cache.Options) {
 		cache.BeforeMaintaining(o, func(ctx context.Context, step string) {
 			if step != "multi-pack-index" {
 				return
@@ -1752,18 +1752,22 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 	layout.Release()
 }
 
-// THE FILTER FLAG IS THE CONSTANT: every commit-graph write the cache
-// declares — own mode's whole graph and the node's tip — computes changed-path
-// filters (--changed-paths), at most MaxNewFilters new ones a write, spelled
-// in its argument list as the one --max-new-filters the writers gate reads
-// where git runs it. The flag and the constant are one figure, so a
-// re-derivation of either moves both.
+// EVERY GRAPH WRITE COMPUTES EVERY FILTER, AND IS CHARGED ITS TREES: every
+// commit-graph write the cache declares — own mode's whole graph and the
+// node's tip — computes the changed-path filter of every commit it covers
+// that lacks one (--changed-paths, and no --max-new-filters: a bound left a
+// large repository's reads diffing most of its history for thousands of
+// writes and bounded nothing a write holds), and is charged, whatever it
+// covers, the trees its filters' diffs keep in git's delta base cache up to
+// that cache's cap (Write.BaseBytes, GraphBaseBytes) — a figure an object
+// alone admits a short tail's tip or a small repository's graph at a fraction
+// of what it holds.
 //
-// Mutations: change the constant alone, or the flag in either argument list
-// alone, or drop --changed-paths from one — each is red.
-func TestTheFilterFlagIsTheConstant(t *testing.T) {
+// Mutations: bound either write's filters (--max-new-filters=100 in its
+// argument list); drop --changed-paths from one; drop the fixed part from
+// either declaration — each is red.
+func TestEveryGraphWriteComputesEveryFilterAndIsChargedItsTrees(t *testing.T) {
 	t.Parallel()
-	want := "--max-new-filters=" + strconv.Itoa(cache.MaxNewFilters)
 	graphs := 0
 	for _, d := range cache.DerivedFiles() {
 		for _, wr := range d.Writes {
@@ -1771,17 +1775,18 @@ func TestTheFilterFlagIsTheConstant(t *testing.T) {
 				continue
 			}
 			graphs++
-			var flags []string
 			for _, a := range wr.Args {
 				if strings.HasPrefix(a, "--max-new-filters") {
-					flags = append(flags, a)
+					t.Errorf("%s's %s write spells %q: it computes every filter its commits lack", d.Name,
+						wr.Step, a)
 				}
-			}
-			if !slices.Equal(flags, []string{want}) {
-				t.Errorf("%s's %s write spells %q, want the one %q", d.Name, wr.Step, flags, want)
 			}
 			if !slices.Contains(wr.Args, "--changed-paths") {
 				t.Errorf("%s's %s write %q writes no changed-path filters", d.Name, wr.Step, wr.Args)
+			}
+			if wr.BaseBytes != cache.GraphBaseBytes {
+				t.Errorf("%s's %s write is charged %d whatever it covers, want GraphBaseBytes, %d, for the trees "+
+					"its filters' diffs hold", d.Name, wr.Step, wr.BaseBytes, cache.GraphBaseBytes)
 			}
 		}
 	}
@@ -1835,7 +1840,17 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 		for range caseRoundPacks {
 			w.push(t, indexed, "refs/heads/main", nil)
 		}
-		w.push(t, plain, "refs/heads/main", nil)
+		// plain holds some two thousand objects: past them its index without a
+		// bitmap — IndexBaseBytes beside an amount an object — fits a budget
+		// a byte short of its bitmap's, where a smaller repository's bitmap
+		// is the cheaper of the two (840 bytes an object against 320 and a
+		// mebibyte: past about 2 020 objects).
+		const plainFiles = 2200
+		files := make(map[string]string, plainFiles)
+		for i := range plainFiles {
+			files["f"+strconv.Itoa(i)] = strconv.Itoa(i) + "\n"
+		}
+		w.push(t, plain, "refs/heads/main", files)
 		w.push(t, plain, "refs/heads/main", nil)
 		c := w.open(t, clk.on, cache.RoundPacksAt(caseRoundPacks))
 
@@ -1845,22 +1860,29 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 		if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != indexed {
 			t.Fatalf("the first pass ran %v, want %s", ran, indexed)
 		}
-		// An index without a bitmap and a graph: the bitmap a byte past
-		// what the node can give.
+		// An index without a bitmap: the bitmap a byte past what the node
+		// can give, and the graph, whose fixed part (GraphBaseBytes) is far
+		// past it, refused beside it — own mode's graph ran for indexed.
 		w.sync(t, c, plain).Release()
-		cache.SetMaintenanceBudget(c, cache.BitmapCharge(c, plain)-1)
+		budget := cache.BitmapCharge(c, plain) - 1
+		if cache.IndexCharge(c, plain) > budget {
+			t.Fatalf("the premise: %s's index without a bitmap is charged %d, past the budget %d a byte short of "+
+				"its bitmap's: push it more objects", plain, cache.IndexCharge(c, plain), budget)
+		}
+		cache.SetMaintenanceBudget(c, budget)
 		clk.Add(cache.MidxDebounce)
 		if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != plain {
 			t.Fatalf("the second pass ran %v, want %s", ran, plain)
 		}
-		if packs, bitmap, graph := cache.Indexed(c, plain); packs != 2 || bitmap || !graph {
-			t.Fatalf("%s holds an index over %d packs (bitmap %t) and graph %t; the case needs both packs "+
-				"indexed without a bitmap, and the graph", plain, packs, bitmap, graph)
+		if packs, bitmap, _ := cache.Indexed(c, plain); packs != 2 || bitmap {
+			t.Fatalf("%s holds an index over %d packs (bitmap %t); the case needs both packs indexed without a "+
+				"bitmap", plain, packs, bitmap)
 		}
 		// And the node's tip over an installed chain, on a budget of its own
-		// charge: the fixed part its filters hold (TipGraphBaseBytes) is past
-		// the budget that refused plain's bitmap, and plain, indexed a moment
-		// ago, is not due again whatever the budget.
+		// charge: plain, indexed a moment ago, is not due again whatever the
+		// budget, and its graph's charge — its fixed part beside its two
+		// thousand objects — is past the tip's, its fixed part beside a tail
+		// of a few.
 		chained := w.repo(t, 3)
 		p := w.pushN(t, chained, 3)
 		w.log.publish(chained, w.buildChain(t, p[:2]), nil)

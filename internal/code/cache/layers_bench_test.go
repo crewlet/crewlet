@@ -156,22 +156,18 @@ func declaredArgs(b *testing.B, step cache.Step, trigger cache.Trigger) []string
 	return nil
 }
 
-// tipGraphArgs is the node's tip as the cache declares it, computing at most
-// filters new changed-path filters (-1: every one): its --max-new-filters
-// replaced, or dropped for every filter.
+// tipGraphArgs is the node's tip as the cache declares it — every filter its
+// commits lack — or, at filters of 0 or more, bounded to that many new
+// changed-path filters (--max-new-filters before its last argument), the
+// bounds the declaration's every-filter write is measured against.
 func tipGraphArgs(b *testing.B, filters int) []string {
 	b.Helper()
-	var out []string
-	for _, a := range declaredArgs(b, cache.StepTipGraph, cache.TriggerMaintainer) {
-		if !strings.HasPrefix(a, "--max-new-filters=") {
-			out = append(out, a)
-			continue
-		}
-		if filters >= 0 {
-			out = append(out, "--max-new-filters="+strconv.Itoa(filters))
-		}
+	declared := declaredArgs(b, cache.StepTipGraph, cache.TriggerMaintainer)
+	if filters < 0 {
+		return declared
 	}
-	return out
+	n := len(declared)
+	return append(append(slices.Clone(declared[:n-1]), "--max-new-filters="+strconv.Itoa(filters)), declared[n-1])
 }
 
 // packList is packs as git's --stdin-packs reads them, ext the file each
@@ -760,10 +756,11 @@ func (p *layerArms) published(b *testing.B, git string, inputs []string, fixture
 
 // tipGraph is THE NODE'S TIP COMMIT-GRAPH over the tail of
 // compact.PublishPacks pushes, on the published graph layer — the
-// declaration's own write, its --max-new-filters at each bound
-// cache.MaxNewFilters is chosen from, 100 and 1 024, and dropped (every
-// filter): a small tail's figure is the write's fixed part, which
-// cache.TipGraphBaseBytes charges beside the tail= arms' slope.
+// declaration's own write, every filter (filters=all), beside the same write
+// bounded to 100 and 1 024 new filters: a small tail's figure is the write's
+// fixed part, which cache.GraphBaseBytes charges beside the tail= arms' slope
+// with the delta base cache's cap (internal/code/query's tree=deep arms
+// measure it filled).
 func (p *layerArms) tipGraph(b *testing.B) {
 	k := compact.PublishPacks
 	for _, filters := range []int{100, 1024, -1} {
@@ -1032,12 +1029,15 @@ var tailArms = []struct {
 // root layer and its graph layer over the rest — and every request and write
 // that walks them: op=clone, op=fetch (main's newest commit), op=canary
 // (every object through the chain, the installer's read) and op=tip-graph
-// (the node's tip over them, the declaration's own write). walk-us/object is
+// (the node's tip over them: filters=all the declaration's own write, and
+// filters=100 the same bounded to 100 new filters). walk-us/object is
 // the canary's and the clone's seconds over the tail's objects:
 // compact.PublishTailObjects is a second of it at gitproc.WalkPerObject, and
-// is re-derived where the canary walks slower; tip-graph's B/obj-new across
-// the three tails is cache.TipGraphBytesPerObject's slope, and its figure over
-// a small tail (step=tip-graph) the fixed part beside it.
+// is re-derived where the canary walks slower; filters=100's B/obj-new across
+// the three tails is cache.TipGraphBytesPerObject's slope — the bound keeps
+// the delta base cache's part small, which filters=all fills toward its cap
+// and cache.GraphBaseBytes charges — and its figure over a small tail
+// (step=tip-graph) the write's own fixed part.
 func (p *layerArms) tails(b *testing.B) {
 	for _, arm := range tailArms {
 		b.Run("tail="+arm.name, func(b *testing.B) {
@@ -1066,22 +1066,25 @@ func (p *layerArms) tails(b *testing.B) {
 			served("clone", clone, "refs/heads/main\n")
 			served("fetch", clone, "refs/heads/main\n^refs/heads/main~1\n")
 			served("canary", []string{"rev-list", "--objects", "--use-bitmap-index", "--count", "--all"}, "")
-			b.Run("op=tip-graph", func(b *testing.B) {
-				args := declaredArgs(b, cache.StepTipGraph, cache.TriggerMaintainer)
-				var s steps
-				for b.Loop() {
-					b.StopTimer()
-					fresh := linkScratch(b, p.root, "tail-graph", dir, func(string) bool { return true })
-					copyRefs(b, dir, fresh)
-					b.StartTimer()
-					s.run(b, p.w.pool, gitproc.Cmd{Dir: fresh, Args: args, Config: p.c.ServeConfig(),
-						Class: gitproc.ClassMaintenance, Deadline: time.Hour})
-					b.StopTimer()
-					removeAll(b, fresh)
-					b.StartTimer()
-				}
-				report(b, &s)
-			})
+			for _, filters := range []int{100, -1} {
+				name := map[bool]string{true: "all", false: strconv.Itoa(filters)}[filters < 0]
+				b.Run("op=tip-graph/filters="+name, func(b *testing.B) {
+					args := tipGraphArgs(b, filters)
+					var s steps
+					for b.Loop() {
+						b.StopTimer()
+						fresh := linkScratch(b, p.root, "tail-graph", dir, func(string) bool { return true })
+						copyRefs(b, dir, fresh)
+						b.StartTimer()
+						s.run(b, p.w.pool, gitproc.Cmd{Dir: fresh, Args: args, Config: p.c.ServeConfig(),
+							Class: gitproc.ClassMaintenance, Deadline: time.Hour})
+						b.StopTimer()
+						removeAll(b, fresh)
+						b.StartTimer()
+					}
+					report(b, &s)
+				})
+			}
 		})
 	}
 }

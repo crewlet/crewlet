@@ -187,14 +187,7 @@ func expungeCharge(inputs, objects int64, limits code.Limits) int64 {
 // pushes once code.MaxPacksPerRepo gathers. The window follows the epoch's
 // limits, so the charge does too.
 func (c *Cache) MaintenanceCharge(n int64, limits code.Limits) int64 {
-	return maintenanceCharge(n, limits)
-}
-
-// maintenanceCharge is [Cache.MaintenanceCharge]'s figure: every admission's
-// charge at its worst for a repository of n objects — each step over all of
-// them.
-func maintenanceCharge(n int64, limits code.Limits) int64 {
-	return max(publicationCharge(n, 0, n, n, limits), compactionCharge(n, limits), expungeCharge(n, n, limits))
+	return max(c.publicationCharge(n, 0, n, n, limits), compactionCharge(n, limits), expungeCharge(n, n, limits))
 }
 
 // publishCharge is a publication's charge for its multi-pack-index layer and
@@ -225,7 +218,8 @@ func publishCharge(n int64, base int) int64 {
 //     PLACED by ([Cache.MaintenanceCharge]): its maintainer must be able to
 //     publish a root, and does whenever a whole chain is replaced;
 //   - the commit-graph layer with every changed-path filter,
-//     GraphLayerBytesPerObject an object of the layer;
+//     GraphLayerBytesPerObject an object of the layer and GraphBaseBytes
+//     for the trees its filters' diffs hold, whatever the layer's size;
 //   - the repack, a compaction's build over its inputs — CompactBytesPerObject
 //     an object of them and the delta window, CompactWindowBytes — beside the
 //     whole repository's room, not a compaction's room of its inputs: a
@@ -251,7 +245,7 @@ func (c *Cache) AdmitPublication(s Synced, base int, layerObjects, repackObjects
 			ErrInvalid, layerObjects, base, repackObjects)
 	}
 	adm, err := c.admitBackground(s, stepPublishWork, func(objects int64) int64 {
-		return publicationCharge(objects, base, layerObjects, repackObjects, limits)
+		return c.publicationCharge(objects, base, layerObjects, repackObjects, limits)
 	})
 	if err == nil {
 		s.entry.mu.Lock()
@@ -264,9 +258,15 @@ func (c *Cache) AdmitPublication(s Synced, base int, layerObjects, repackObjects
 // publicationCharge is what a publication over a repository of objects
 // objects holds — a layer over layerObjects written over base layers, after a
 // repack of repackObjects (0 for none): the largest of its steps' charges
-// ([Cache.AdmitPublication]).
-func publicationCharge(objects int64, base int, layerObjects, repackObjects int64, limits code.Limits) int64 {
-	mem := max(publishCharge(objects, base), chargeOver(layerObjects, GraphLayerBytesPerObject, objects))
+// ([Cache.AdmitPublication]). Its commit-graph layer computes changed-path
+// filters as the maintainer's own graph does, so it is charged that write's
+// fixed part, read from the graph's declaration (Write.BaseBytes,
+// GraphBaseBytes) as every declared figure is.
+func (c *Cache) publicationCharge(objects int64, base int, layerObjects, repackObjects int64,
+	limits code.Limits) int64 {
+
+	mem := max(publishCharge(objects, base),
+		chargeOver(layerObjects, GraphLayerBytesPerObject, objects)+c.mw.all[c.mw.index(c.mw.graph)].BaseBytes)
 	if repackObjects > 0 {
 		mem = max(mem, chargeOver(repackObjects, CompactBytesPerObject, objects)+CompactWindowBytes(limits))
 	}
@@ -315,7 +315,7 @@ func (a *Admission) RechargePublication(s Synced, base int, layerObjects, repack
 	s.entry.mu.Lock()
 	objects := s.inc.objects
 	s.entry.mu.Unlock()
-	mem := publicationCharge(objects, base, layerObjects, repackObjects, limits)
+	mem := c.publicationCharge(objects, base, layerObjects, repackObjects, limits)
 	switch c.maint.recharge(&a.mem, mem, c.maintMemory) {
 	case admitted:
 		s.entry.mu.Lock()

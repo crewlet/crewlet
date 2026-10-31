@@ -102,6 +102,60 @@ var historySeed = [32]byte{3}
 // every HistorySessions-th commit.
 func History(t testing.TB, c *Client, size int64) (string, []string) {
 	t.Helper()
+	return history(t, c, size, flatLayout)
+}
+
+// DeepHistory is History's commits — the same files, versions and bytes —
+// with every file at DeepPath, four levels down, and a WIDE TREE of wide
+// files beside them from the first commit on, which no later commit changes:
+// src/a0000/f000000 and on, a hundred to a directory, so src/ lists a
+// thousand directories at 100 000 of them, every one named to sort before
+// core/. Every commit rewrites src/, as a monorepo's every commit rewrites the
+// directory its code lives under, so a read of one path that diffs a commit —
+// one with no changed-path filter — reads src/ in both commits and walks its
+// listing past every wide directory to the path's entry, where in a History
+// it compares one entry of a root tree of thirty directories. What a filter
+// saves a read is that walk, which a History cannot show. A commit
+// writes four trees where a History's writes two (the root, src/, src/core/
+// and its directory), so it adds nine objects (DeepObjectsPerCommit).
+func DeepHistory(t testing.TB, c *Client, size int64, wide int) (string, []string) {
+	t.Helper()
+	return history(t, c, size, historyLayout{path: DeepPath, wide: wide})
+}
+
+// DeepPath is where DeepHistory writes its f-th file.
+func DeepPath(f int) string { return fmt.Sprintf("src/core/d%03d/f%05d", f/historyDirFiles, f) }
+
+// HistoryObjectsPerCommit and DeepObjectsPerCommit are what one commit of a
+// History and of a DeepHistory adds after the first: the commit, its trees —
+// two and four — and historyFilesPerCommit blobs.
+const (
+	HistoryObjectsPerCommit = 1 + 2 + historyFilesPerCommit
+	DeepObjectsPerCommit    = 1 + 4 + historyFilesPerCommit
+)
+
+// historyLayout is where a history's files go: path names the f-th, and wide
+// is how many files of the wide tree the first commit adds beside them.
+type historyLayout struct {
+	path func(f int) string
+	wide int
+}
+
+// flatLayout is History's: every file in one of a few directories at the
+// root, and no wide tree.
+var flatLayout = historyLayout{path: func(f int) string { return fmt.Sprintf("d%03d/f%05d", f/historyDirFiles, f) }}
+
+// wideDirFiles is how many files a directory of a DeepHistory's wide tree
+// holds: a hundred, as internal/code/host's tree fixture's directories do.
+const wideDirFiles = 100
+
+// widePath is the f-th file of a DeepHistory's wide tree.
+func widePath(f int) string { return fmt.Sprintf("src/a%04d/f%06d", f/wideDirFiles, f) }
+
+// history fast-imports a history of about size bytes, laid out as layout
+// says.
+func history(t testing.TB, c *Client, size int64, layout historyLayout) (string, []string) {
+	t.Helper()
 	files := max(1, int(size/HistorySessions/historyBytesPerFile))
 	cur := make([][]byte, files)
 	for f := range cur {
@@ -111,7 +165,7 @@ func History(t testing.TB, c *Client, size int64) (string, []string) {
 	draw := rand.New(bytes)
 	src := Empty(t)
 	for s := range HistorySessions {
-		FastImport(t, c, src, historyStream(s, s*historyCommits(files), cur, bytes, draw))
+		FastImport(t, c, src, historyStream(s, s*historyCommits(files), cur, bytes, draw, layout))
 	}
 	return src, strings.Fields(c.Run(t, src, "rev-list", "--reverse", "main"))
 }
@@ -122,9 +176,11 @@ func historyCommits(files int) int {
 }
 
 // historyStream is the fast-import stream of session s over cur, every file's
-// content as the session before left it. Its commits are the history's
-// first-th and on, each stamped historyEpoch and its number.
-func historyStream(s, first int, cur [][]byte, bytes *rand.ChaCha8, draw *rand.Rand) func(*bufio.Writer) error {
+// content as the session before left it, laid out as layout says. Its
+// commits are the history's first-th and on, each stamped historyEpoch and
+// its number.
+func historyStream(s, first int, cur [][]byte, bytes *rand.ChaCha8, draw *rand.Rand,
+	layout historyLayout) func(*bufio.Writer) error {
 	return func(w *bufio.Writer) error {
 		for f := range cur {
 			for v := range historyVersions {
@@ -150,8 +206,14 @@ func historyStream(s, first int, cur [][]byte, bytes *rand.ChaCha8, draw *rand.R
 				if s > 0 && n == first {
 					_, _ = w.WriteString("from refs/heads/main^0\n")
 				}
+				if n == 0 {
+					for f := range layout.wide {
+						content := fmt.Sprintf("%06d\n", f)
+						fmt.Fprintf(w, "M 100644 inline %s\ndata %d\n%s\n", widePath(f), len(content), content)
+					}
+				}
 				for f := lo; f < min(lo+historyFilesPerCommit, len(cur)); f++ {
-					fmt.Fprintf(w, "M 100644 :%d d%03d/f%05d\n", f*historyVersions+v+1, f/historyDirFiles, f)
+					fmt.Fprintf(w, "M 100644 :%d %s\n", f*historyVersions+v+1, layout.path(f))
 				}
 				if err := w.WriteByte('\n'); err != nil {
 					return err
