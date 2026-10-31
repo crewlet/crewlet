@@ -514,7 +514,7 @@ func (wr *writing) resync() *costlimit.Refusal {
 	if p.Kind != code.PrincipalAgent {
 		return nil
 	}
-	return wr.s.o.Resyncs.Take(p.Seat, p.Run.TurnID, 1)
+	return wr.s.o.Resyncs.Turn(p.Seat, p.Run.TurnID)
 }
 
 // rules judges the write's one command on the synced row, before any git

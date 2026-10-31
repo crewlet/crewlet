@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
-	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -259,14 +258,16 @@ type Options struct {
 	// node (code.GitShare): an engine write's build holds one unit of it,
 	// given back before its landing.
 	Share *code.GitShare
-	// Resyncs is the node's buckets for its seats' TOOLS' re-syncs at the
-	// log's head (code.NewResyncs) — the query server's own, ONE a node: an
-	// engine write's one re-judgement at linearizable of a seat's refusal
-	// draws on the seat's bucket there as a git read's second look does, and
-	// past it the refusal is answered from the seat's session, saying so. A
-	// coding box's re-syncs are the node's other surface, whose buckets the
-	// Server keeps itself (boxlimit.go).
-	Resyncs *costlimit.Limiter
+	// Resyncs is the node's ONE set of re-sync buckets at the log's head
+	// (code.NewResyncs) — the query server's own: an engine write's one
+	// re-judgement at linearizable of a seat's refusal draws on its turn's
+	// bucket on its seat as a git read's second look does, and past it the
+	// refusal is answered from the seat's session, saying so; a coding box's
+	// re-syncs draw on its run's on the same seat's bucket, and a check's
+	// box's on its attempt's (boxlimit.go). ONE, because the census gives a
+	// seat one term on the log: a box's buckets apart from its turns' tools'
+	// were twice that term on every git node.
+	Resyncs *code.Resyncs
 	// Current reports whether this node serves the company's configuration:
 	// false on a node confirmed behind it, which builds no SEAT's write and
 	// admits no coding box from the chart the fleet replaced
@@ -352,13 +353,8 @@ type Server struct {
 	// scale them (export_test.go).
 	syncWait, buildBudget time.Duration
 
-	// boxResyncs is the node's buckets for its coding boxes' re-syncs at the
-	// log's head, a run on its seat (boxlimit.go): the node's other
-	// code.NewResyncs surface beside its seats' tools' (Options.Resyncs), so
-	// a seat's box looping on what its floor lacks spends its own bucket and
-	// never its turns' tools'. runRequests is every coding run's requests in
-	// flight here, by its launch, under runsMu.
-	boxResyncs  *costlimit.Limiter
+	// runRequests is every coding run's requests in flight here, by its
+	// launch, under runsMu (boxlimit.go).
 	runsMu      sync.Mutex
 	runRequests map[string]int
 }
@@ -407,7 +403,6 @@ func New(o Options) (*Server, error) {
 	if s.now == nil {
 		s.now = time.Now
 	}
-	s.boxResyncs = code.NewResyncs(s.now)
 	transfers := o.Git.Slots(gitproc.ClassTransfer)
 	s.heads = newAllowance(RequestMemoryAllowance(transfers))
 	s.spools = newSpools(spoolSizesFor(transfers))

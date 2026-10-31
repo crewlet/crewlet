@@ -332,7 +332,7 @@ func newReadRig(b *testing.B, src *readSource, objects objstore.Backend) *readRi
 	n := f.Nodes()[0]
 	server := func(c query.Cache) *query.Server {
 		s, err := query.New(query.Options{NodeID: n.ID(), Cache: c, Git: n.Pool(),
-			Share: code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil), Resyncs: code.NewResyncs(nil),
+			Share: code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil), Resyncs: code.NewResyncs(nil, nil),
 			Roster: func() code.Roster { return nil }, Fetched: noFetched})
 		if err != nil {
 			b.Fatal(err)
@@ -517,7 +517,7 @@ func (r *readRig) floored(b *testing.B, f readFloor) {
 func (r *readRig) server() *query.Server {
 	n := r.f.Nodes()[0]
 	s, err := query.New(query.Options{NodeID: n.ID(), Cache: n.Cache(), Git: n.Pool(),
-		Share: code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil), Resyncs: code.NewResyncs(nil),
+		Share: code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil), Resyncs: code.NewResyncs(nil, nil),
 		Roster: func() code.Roster { return nil }, Fetched: noFetched})
 	if err != nil {
 		panic(err) // the options are the rig's own, valid once
@@ -541,7 +541,7 @@ func (r *readRig) cold(b *testing.B) {
 		g.Restart(b)
 		n := g.Node()
 		s, err := query.New(query.Options{NodeID: n.ID(), Cache: n.Cache(), Git: n.Pool(),
-			Share: code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil), Resyncs: code.NewResyncs(nil),
+			Share: code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil), Resyncs: code.NewResyncs(nil, nil),
 			Roster: func() code.Roster { return nil }, Fetched: noFetched})
 		if err != nil {
 			b.Fatal(err)

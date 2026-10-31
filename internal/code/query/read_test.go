@@ -509,7 +509,7 @@ func TestASeatPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
 		defer mu.Unlock()
 		return at
 	}
-	s := x.server(0, query.Options{Cache: counting, Roster: company, Resyncs: code.NewResyncs(clock)})
+	s := x.server(0, query.Options{Cache: counting, Roster: company, Resyncs: code.NewResyncs(clock, nil)})
 	missing := strings.Repeat("cd", 20)
 	// read is who's read of missing in turn: whether it synced at the log's
 	// head, and its refusal.

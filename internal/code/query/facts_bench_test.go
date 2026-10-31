@@ -146,7 +146,7 @@ func newFactsRig(b *testing.B, files int) *factsRig {
 	}
 	n := f.Nodes()[0]
 	s, err := query.New(query.Options{NodeID: n.ID(), Cache: n.Cache(), Git: n.Pool(),
-		Share: code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil), Resyncs: code.NewResyncs(nil),
+		Share: code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil), Resyncs: code.NewResyncs(nil, nil),
 		Roster: func() code.Roster { return nil }, Fetched: noFetched})
 	if err != nil {
 		b.Fatal(err)

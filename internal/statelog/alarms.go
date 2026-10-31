@@ -287,10 +287,13 @@ type Census struct {
 	// what it asks for is not there. And the re-syncs a seat's work may
 	// append at will are HELD to the seats' term, not merely counted in it: a
 	// box's, a turn's code tools' second look and an engine write's
-	// re-judgement each draw on a bucket of its run or its turn and its seat
-	// on the git node that answers — LinearizableReadsPerSeatDay a day, after
-	// a burst of code.ResyncBurst (internal/code's NewResyncs) — and past it
-	// are answered at the seat's floor with no barrier.
+	// re-judgement each draw on a bucket of its run or its turn and on its
+	// seat's ONE bucket of the git node that answers, which all three pay —
+	// LinearizableReadsPerSeatDay a day, after a burst of code.ResyncBurst
+	// (internal/code's NewResyncs) — and past it are answered at the seat's
+	// floor with no barrier. A check's box's re-syncs are no seat's and no
+	// client's: bounded alike by its repository's checks on each git node,
+	// and counted in no term here.
 	Clients int
 }
 

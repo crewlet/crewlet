@@ -320,13 +320,17 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// epoch's chart and refusing one while this node is behind the company's
 	// configuration — both read per read, never captured. It holds no
 	// goroutine of its own, so nothing stops it but the cache's stop.
-	// THE SEATS' TOOLS' RE-SYNCS beside the share, ONE a node for the same
-	// reason: a seat's git read's second look at the log's head and an
-	// engine write's re-judgement there each pay its turn's bucket on its
-	// seat (code.NewResyncs), so a turn cannot spend the code log's census
-	// through one server while the other's buckets stay full.
+	// THE RE-SYNC BUCKETS beside the share, ONE set a node for the same
+	// reason, which the query server and the code host both draw on: a
+	// seat's git read's second look at the log's head and an engine write's
+	// re-judgement there each pay its turn's bucket on its seat, a coding
+	// box's re-syncs its run's on the same seat, and a check's box its
+	// attempt's whether its transfer or its /box/code/ read asks
+	// (code.NewResyncs). One set, because the census gives a seat one term on
+	// the log: a seat cannot spend it through one server, or through its
+	// boxes, while another surface's buckets stay full.
 	share := code.NewGitShare(nodeID, pool.Slots(gitproc.ClassRead), e.metrics)
-	resyncs := code.NewResyncs(time.Now)
+	resyncs := code.NewResyncs(time.Now, e.metrics)
 	reads, err := query.New(query.Options{
 		NodeID: nodeID, Cache: c, Git: pool, Share: share, Resyncs: resyncs,
 		Roster: e.codeRoster, Current: e.admits, Fetched: e.recordCodeRead,

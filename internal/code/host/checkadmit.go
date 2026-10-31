@@ -250,7 +250,7 @@ func (s *Server) checkRow(ctx context.Context, key code.CheckKey) (code.CheckRow
 
 	for _, level := range []statelog.ReadLevel{statelog.ReadStale, statelog.ReadLinearizable} {
 		if level == statelog.ReadLinearizable {
-			if spent := s.drawResync(key.Resyncs()); spent != nil {
+			if spent := s.o.Resyncs.Box(key.Resyncs()); spent != nil {
 				return code.CheckRow{}, false, spent, nil
 			}
 		}

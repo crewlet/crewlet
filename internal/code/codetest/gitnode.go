@@ -26,7 +26,6 @@ import (
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -213,6 +212,11 @@ type GitOptions struct {
 	// its reads by (cache.Options.Fleet); nil is a node with no fleet, one of
 	// each.
 	Fleet cache.Fleet
+	// ResyncClock is the clock of the node's ONE set of re-sync buckets
+	// (code.NewResyncs), which its code host and its query server both draw
+	// on; nil is the wall clock. A case passing a refill hands one it moves
+	// by hand; every incarnation reads it.
+	ResyncClock func() time.Time
 }
 
 // rowsOf is the rows' side of a git node's cache (cache.Fetcher): its
@@ -271,7 +275,7 @@ type gitIncarnation struct {
 	metrics *metrics.Recorder
 	host    *host.Server
 	share   *code.GitShare
-	resyncs *costlimit.Limiter
+	resyncs *code.Resyncs
 	query   *query.Server
 	// previews answers the node's merge previews, built beside the query
 	// server over the same cache, pool and share, as the engine builds them.
@@ -403,8 +407,9 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	// ONE share of the pool's read lane, as the engine builds one: the query
 	// server's reads and the host's engine writes draw on it alike.
 	n.share = code.NewGitShare(n.id, n.pool.Slots(gitproc.ClassRead), n.metrics)
-	// And ONE set of the seats' tools' re-sync buckets, which both draw on.
-	n.resyncs = code.NewResyncs(time.Now)
+	// And ONE set of re-sync buckets — the boxes', the checks' and the seats'
+	// tools' — which both draw on, as the engine builds one.
+	n.resyncs = code.NewResyncs(g.o.ResyncClock, n.metrics)
 	if n.host, err = host.New(host.Options{
 		Cache: n.cache, Git: n.pool, Estate: g.o.Estate, Objects: objects,
 		Audit: audit, Fetched: fetched, Limits: limits,

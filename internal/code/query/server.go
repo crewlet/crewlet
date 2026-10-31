@@ -73,14 +73,16 @@ type Options struct {
 	// pool's read lane), ONE a node: whatever else of a seat's git work the
 	// node runs draws on the same.
 	Share *code.GitShare
-	// Resyncs is the node's buckets for its seats' tools' re-syncs at the
-	// log's head (code.NewResyncs), ONE a node — the code host's engine
-	// writes draw on the same (host.Options.Resyncs): a SEAT'S read whose
-	// refusal would be judged again at linearizable (step 7) pays its turn's
-	// bucket on its seat, and past it is answered from the copy at the seat's
-	// floor, saying so — and so does a read made for a CHECK, its attempt on
-	// its repository's checks (code.CheckKey.Resyncs), keys no seat spells.
-	Resyncs *costlimit.Limiter
+	// Resyncs is the node's ONE set of re-sync buckets at the log's head
+	// (code.NewResyncs) — the code host's draw on the same
+	// (host.Options.Resyncs), its engine writes and its boxes alike: a SEAT'S
+	// read whose refusal would be judged again at linearizable (step 7) pays
+	// its turn's bucket on its seat — the seat's bucket its boxes on this
+	// node pay too — and past it is answered from the copy at the seat's
+	// floor, saying so; and so does a read made for a CHECK, its attempt on
+	// its repository's checks (code.CheckKey.Resyncs), the bucket the
+	// check's own transfers at this node's code host pay.
+	Resyncs *code.Resyncs
 	// Roster is the chart a seat's grant is judged by: the serving node's
 	// CURRENT epoch's, read per read. A nil answer is a node with no chart
 	// yet, which judges no seat (code.UnreadyNoChart).
@@ -792,16 +794,16 @@ func (r *read) objects(ctx context.Context) (found, error) {
 // resync draws the read's one second look at the log's head from this node's
 // buckets: a SEAT'S read, its turn on its seat; a read made FOR A CHECK — a
 // check's box's at /box/code/ — its attempt on its repository's checks
-// (code.CheckKey.Resyncs), as the box's git is charged at the code host. Nil
+// (code.CheckKey.Resyncs) — the one bucket the box's transfers pay at this
+// node's code host, and counted with them (crewlet.code.box.resyncs). Nil
 // where it is taken, or for a read charged to nobody: a person's, and the
 // engine's own on its own account.
 func (r *read) resync() *costlimit.Refusal {
 	switch {
 	case r.q.Check != nil:
-		scope, principal := r.q.Check.Resyncs()
-		return r.s.o.Resyncs.Take(scope, principal, 1)
+		return r.s.o.Resyncs.Box(r.q.Check.Resyncs())
 	case r.q.Asker.Kind == code.PrincipalAgent:
-		return r.s.o.Resyncs.Take(r.q.Asker.Seat, r.q.Turn, 1)
+		return r.s.o.Resyncs.Turn(r.q.Asker.Seat, r.q.Turn)
 	}
 	return nil
 }

@@ -147,9 +147,11 @@ const GitReadsShare = 10
 // its coding boxes', none of which is a git client's here. Those a seat's
 // work can repeat at will — a box's read past its run's floor, a tool's
 // second look at the head, an engine write's re-judgement — are HELD to the
-// seats' term on each git node by a bucket of the run or the turn and its
-// seat ([NewResyncs]), so no seat can push its own barriers into this term's
-// allowance. At the 1 GiB
+// seats' term on each git node by a bucket of the run or the turn and the
+// seat's ONE bucket there, which its boxes and its tools both pay
+// ([NewResyncs]), so no seat can push its own barriers into this term's
+// allowance. A check's box's are not this term's either: they are held by its
+// repository's checks' bucket on each git node ([CheckKey.Resyncs]). At the 1 GiB
 // floor and the default seven days it is 87 154 a day — about 60 a minute
 // fleet-wide: that CI, thirty developers fetching every three minutes and
 // 3 000 pushes a day, three times over.

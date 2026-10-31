@@ -1,6 +1,7 @@
 package host_test
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // A CHECK'S BOX PAST ITS RE-SYNCS IS ANSWERED AT ITS SESSION, as a coding
@@ -22,14 +24,14 @@ import (
 // was not judged again — a box whose attempt was swept asking in a loop paid
 // one barrier a request before.
 //
-// Mutations: no bucket for a check (resyncKey answering false for one) — the
+// Mutations: no bucket for a check (boxResync answering nil for one) — the
 // seventeenth fetch appends a barrier — red; the attempt's second read taken
 // without the bucket — the unknown attempt is read through the barrier — red.
 func TestACheckBoxPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
-	c, head := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: rec.wrap}})
-	host.SetBoxResyncClock(c.Fleet.Nodes()[0].Host(), (&manualClock{t: time.Now()}).now)
+	c, head := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: rec.wrap},
+		ResyncClock: (&manualClock{t: time.Now()}).now})
 	f := c.Fleet.(*codetest.SoloFleet)
 	rows := c.Rows()
 	tokens := codetest.NewCheckTokens(t)
@@ -82,5 +84,55 @@ func TestACheckBoxPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
 		if r.level == statelog.ReadLinearizable {
 			t.Error("an attempt the rows do not hold was read through the barrier past the checks' re-syncs")
 		}
+	}
+}
+
+// A CHECK HAS ONE BURST ON A NODE, ITS TRANSFERS' AND ITS /box/code/ READS'
+// TOGETHER: a check whose box spent its attempt's re-syncs on a node fetching
+// the commit it checks, which nobody pushed, has its read of that commit at
+// /box/code/, answered by the same node, answered at its session — no
+// barrier, saying the check's re-syncs are spent — and that read counted with
+// the box's re-syncs (crewlet.code.box.resyncs{outcome=spent}), because the
+// code host and the query server draw on the node's ONE set of buckets.
+//
+// Mutations: the code host keeping its boxes' buckets apart from the query
+// server's — the read takes a barrier at the head — red; the query server's
+// check draws uncounted — red.
+func TestACheckHasOneBurstOnANode(t *testing.T) {
+	t.Parallel()
+	rec := &recording{}
+	c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: rec.wrap},
+		ResyncClock: (&manualClock{t: time.Now()}).now})
+	f := c.Fleet.(*codetest.SoloFleet)
+	node := c.Fleet.Nodes()[0]
+	missing := randomOID()
+	key := code.CheckKey{RepoID: c.Rows().Repo.ID, OID: missing, Target: "refs/heads/main", Name: "unit",
+		Attempt: 1}
+	queueCheck(t, f, key)
+	token := codetest.NewCheckTokens(t).Mint(host.CheckRunRef{Attempt: key, Repo: codetest.RepoName},
+		10*time.Minute)
+	for i := range code.ResyncBurst {
+		before := rec.linearizable()
+		resp, body := boxDo(t, c, 0, codetest.RepoName, boxUploadPack, host.CheckUser, token, v2,
+			fetchWants([]string{missing}))
+		if resp.StatusCode != http.StatusOK || rec.linearizable() == before || !strings.Contains(body, "not our ref") {
+			t.Fatalf("re-sync %d of the check's %d answered %d %q with %d barriers, want one and git's own not "+
+				"our ref", i+1, code.ResyncBurst, resp.StatusCode, short(body), rec.linearizable()-before)
+		}
+	}
+
+	before, spent := rec.linearizable(), counted(node.Metrics(), metrics.CodeBoxResyncs, "spent")
+	_, err := node.GitRead(t.Context(), code.GitQuery{Kind: code.GitTree, RepoID: key.RepoID, Check: &key,
+		Home: true, Tree: &code.TreeQuery{Rev: missing}})
+	if !errors.Is(err, code.ErrObjectNotFound) ||
+		!strings.Contains(err.Error(), "(not re-judged at linearizable: this check's re-syncs are spent until ") ||
+		rec.linearizable() != before {
+		t.Errorf("the check's read of %s at /box/code/ on the node its box spent the attempt's re-syncs on = %v "+
+			"with %d barriers, want it answered at its session, saying the check's re-syncs are spent, with none",
+			missing, err, rec.linearizable()-before)
+	}
+	if got := counted(node.Metrics(), metrics.CodeBoxResyncs, "spent") - spent; got != 1 {
+		t.Errorf("the check's read past its re-syncs counted %s{outcome=spent} %d times, want once",
+			metrics.CodeBoxResyncs, got)
 	}
 }

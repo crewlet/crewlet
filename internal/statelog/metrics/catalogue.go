@@ -2071,10 +2071,12 @@ func Catalogue() []Instrument {
 				"this node — a fetch whose want the node's copy lacked, a " +
 				"request past the bound its admitted row set, a repository " +
 				"its run was given that its run's floor would refuse, a run " +
-				"whose row names no floor — and a check's box's alike, each " +
+				"whose row names no floor — and a check's box's alike, its " +
+				"reads at /box/code/ this node answers among them, each " +
 				"a barrier on the code log, " +
 				"by `outcome`: `taken`, paid from its run's bucket on its " +
-				"seat — a check's attempt's on its repository's checks — " +
+				"seat — the seat bucket its turns' code tools on this node " +
+				"pay too — or a check's attempt's on its repository's checks " +
 				"(16 at once, one more every 11.5 minutes: the census's " +
 				"125 a seat-day); `spent`, answered at the run's floor " +
 				"instead, the box told what it asked for is not there and " +

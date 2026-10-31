@@ -1,6 +1,7 @@
 package host_test
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -52,10 +53,10 @@ func TestABoxPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
 	var lines logs
-	c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: rec.wrap}, Logger: lines.logger()})
-	node := c.Fleet.Nodes()[0]
 	clock := &manualClock{t: time.Now()}
-	host.SetBoxResyncClock(node.Host(), clock.now)
+	c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: rec.wrap}, Logger: lines.logger(),
+		ResyncClock: clock.now})
+	node := c.Fleet.Nodes()[0]
 	runs := c.Fleet.Runs()
 	first, _ := c.LaunchBox(codetest.FixtureAlice, code.AccessRead)
 	missing := randomOID()
@@ -114,6 +115,48 @@ func TestABoxPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
 	}
 }
 
+// A SEAT HAS ONE TERM ON A NODE, ITS BOXES' AND ITS TOOLS' TOGETHER: a seat
+// whose coding box spent its seat's re-syncs on a node, asking for an object
+// nobody pushed, has its turn's read of the same object on that node answered
+// at its floor — no barrier, saying the SEAT's re-syncs are spent — because
+// the code host's boxes and the query server's reads draw on the node's ONE
+// set of buckets (code.NewResyncs), and the census gives the seat one term
+// however its work reaches the log's head.
+//
+// Mutation: the code host keeping its boxes' buckets apart from the query
+// server's — the turn's read takes a barrier at the head — red.
+func TestASeatsBoxAndItsTurnShareItsTermOnANode(t *testing.T) {
+	t.Parallel()
+	rec := &recording{}
+	c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: rec.wrap},
+		ResyncClock: (&manualClock{t: time.Now()}).now})
+	node := c.Fleet.Nodes()[0]
+	runs := c.Fleet.Runs()
+	ref, _ := c.LaunchBox(codetest.FixtureAlice, code.AccessRead)
+	missing := randomOID()
+	for i := range code.ResyncBurst {
+		before := rec.linearizable()
+		resp, body := boxDo(t, c, 0, codetest.RepoName, boxUploadPack, host.BoxUser, runs.Token(ref), v2,
+			fetchWants([]string{missing}))
+		if resp.StatusCode != http.StatusOK || rec.linearizable() == before || !strings.Contains(body, "not our ref") {
+			t.Fatalf("re-sync %d of the box's %d answered %d %q with %d barriers, want one and git's own not "+
+				"our ref", i+1, code.ResyncBurst, resp.StatusCode, short(body), rec.linearizable()-before)
+		}
+	}
+
+	before := rec.linearizable()
+	_, err := node.GitRead(t.Context(), code.GitQuery{Kind: code.GitTree, RepoID: c.Rows().Repo.ID, Home: true,
+		Asker: code.Principal{Kind: code.PrincipalAgent, Seat: codetest.FixtureAlice}, Turn: "turn-1",
+		Tree: &code.TreeQuery{Rev: missing}})
+	if !errors.Is(err, code.ErrObjectNotFound) ||
+		!strings.Contains(err.Error(), "(not re-judged at linearizable: this seat's re-syncs are spent until ") ||
+		rec.linearizable() != before {
+		t.Errorf("the seat's turn's read of %s on the node its box spent the seat's re-syncs on = %v with %d "+
+			"barriers, want it answered at its floor, saying the seat's re-syncs are spent, with none", missing,
+			err, rec.linearizable()-before)
+	}
+}
+
 // A BARRIER A BOX TAKES RAISES ITS FLOOR: a box fetching, through a git node
 // whose copy is behind, a commit a person pushed through another takes one
 // barrier, and its run's floor is raised to the copy it was served from, which
@@ -159,8 +202,8 @@ func TestABoxsBarrierRaisesItsFloor(t *testing.T) {
 func TestABoxsRefusedRepositoryIsJudgedAgainWhileItsResyncsLast(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
-	c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: rec.wrap}})
-	host.SetBoxResyncClock(c.Fleet.Nodes()[0].Host(), (&manualClock{t: time.Now()}).now)
+	c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: rec.wrap},
+		ResyncClock: (&manualClock{t: time.Now()}).now})
 	runs := c.Fleet.Runs()
 	ref, _ := c.LaunchBox(codetest.FixtureAlice, code.AccessRead)
 	c.Fleet.Remove(t, codetest.RepoName)

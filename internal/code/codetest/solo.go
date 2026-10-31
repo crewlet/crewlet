@@ -255,6 +255,9 @@ type SoloOptions struct {
 	// node downloads, apart from what every other does through the same
 	// store.
 	WrapObjects func(id string, b objstore.Backend) objstore.Backend
+	// ResyncClock is every git node's re-sync buckets' clock
+	// (GitOptions.ResyncClock); nil is the wall clock.
+	ResyncClock func() time.Time
 }
 
 // Reads is a git node's read of the code host's rows (GitOptions.Reads).
@@ -356,6 +359,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 			Faults: o.Faults, Credentials: f.creds, Runs: f.runs, Audit: f.record, Fetched: f.recordFetched,
 			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, CacheMaxBytes: o.CacheMaxBytes,
 			GitPath: o.GitPath, Logger: o.Logger, Roster: o.Roster, Current: o.Current, QueryPool: o.QueryPool,
+			ResyncClock: o.ResyncClock,
 		}))
 	}
 	f.route(t)

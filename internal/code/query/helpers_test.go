@@ -92,7 +92,7 @@ func (x *fixture) server(i int, o query.Options) *query.Server {
 		o.Share = code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil)
 	}
 	if o.Resyncs == nil {
-		o.Resyncs = code.NewResyncs(nil)
+		o.Resyncs = code.NewResyncs(nil, nil)
 	}
 	if o.Roster == nil {
 		o.Roster = func() code.Roster { return nil }

@@ -2241,9 +2241,15 @@ log's head for an object its home's copy lacks — are counted in its 125 a day,
 as every log's are, and are no part of that term; nor are its coding boxes',
 which read at their run's floor. The ones a seat's work can repeat at will —
 a box's read past its run's floor, a tool's look at the head, an engine
-write's second judgement there — are held to that 125 on each git node, 16 at
-once and one every 11.5 minutes after, and answered at the seat's floor past
-it ([a box's re-syncs](../concepts/code-host.md#a-boxs-re-syncs-and-requests-in-flight)).
+write's second judgement there — are held to that 125 on each git node,
+together, 16 at once and one every 11.5 minutes after: one bucket of the seat
+on each git node, which its boxes and its turns' tools both pay. Past it they
+are answered at the seat's floor
+([a box's re-syncs](../concepts/code-host.md#a-boxs-re-syncs-and-requests-in-flight)).
+A check's box's re-syncs are bounded the same way, by its repository's
+checks rather than by a seat — 16 at once and 125 a day for each repository
+on each git node, its transfers and its reads together — and are in neither
+term: a looping checks file adds at most that to the log.
 That term belongs to the log rather than to the company's current
 configuration, so it is counted whether or not `code.native` is set: the log
 keeps its ceiling either way, and the rate it is held against is every node's

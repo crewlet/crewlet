@@ -335,19 +335,20 @@ func (a admission) holdRefs(ctx context.Context, runs Runs, cmds []parsedCommand
 }
 
 // resyncKey is whose re-syncs at the log's head the request's linearizable
-// reads draw on (boxlimit.go), as the node's boxes' buckets key them: a
-// CODING BOX's run, by its launch, on its seat; a CHECK'S BOX's attempt on its
-// repository's checks (code.CheckKey.Resyncs) — its repository's checks file
-// is code nobody vouches for as much as a seat's; and false for a person's
-// request, whose reads of refs are linearizable by right and whose barriers
-// are the census's clients' term.
+// reads draw on (boxlimit.go), as the node's re-sync buckets key them: a
+// CODING BOX's run, by its launch, on its seat (code.RunResyncs); a CHECK'S
+// BOX's attempt on its repository's checks (code.CheckKey.Resyncs) — its
+// repository's checks file is code nobody vouches for as much as a seat's;
+// and false for a person's request, whose reads of refs are linearizable by
+// right and whose barriers are the census's clients' term.
 func (a admission) resyncKey() (scope, principal string, ok bool) {
 	switch {
 	case a.check != nil:
 		scope, principal = a.check.Resyncs()
 		return scope, principal, true
 	case a.box != nil:
-		return a.box.Seat, a.box.Ref.LaunchID, true
+		scope, principal = code.RunResyncs(a.box.Seat, a.box.Ref.LaunchID)
+		return scope, principal, true
 	}
 	return "", "", false
 }

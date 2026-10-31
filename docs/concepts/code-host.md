@@ -2002,7 +2002,9 @@ does not hold. Keyed by the repository, the checks one push fans out share one
 term, as they share one turn of the transfer lane. At most **16** of an
 attempt's git requests are in flight on a node (`503 run_busy`), and its reads
 at `/box/code/` pay the same attempt's bucket at the git node that answers
-them.
+them: a node keeps one set of buckets for its git and its reads alike, so an
+attempt has one burst on a node, not one for each, and its reads past it are
+counted in `crewlet.code.box.resyncs` with its git's.
 
 **Reading a commit without a clone.** A check whose file says `checkout: none`
 reads what it needs of its commit by object id at `/box/code/<name>/…`, with
@@ -3689,7 +3691,8 @@ that its floor would refuse, and every read of a run whose row names no floor
 — appends a barrier to the code log, which the log's census sizes at 125 a
 day for each agent seat. Each is paid from the run's **bucket** on the node:
 **16** at once, one more every **11.5 minutes** (the census's 125 a seat-day),
-and paid as well from its **seat's** bucket on that node, of the same size, so
+and paid as well from its **seat's** bucket on that node, of the same size —
+the one its seat's code tools on that node pay too (below) — so
 a seat with several coding runs live on one node shares its census term
 there. A barrier a fetch takes raises the run's floor to it, so the box's next
 request, on any node, pays none for the same objects. Past either bucket, the request is answered at the run's floor — what it has
@@ -3710,13 +3713,17 @@ memory, so a box whose requests spread over several git nodes has a burst on
 each, and the log's barriers from boxes are bounded by the fleet's git nodes.
 `crewlet.code.box.resyncs{outcome}` counts them, `taken` or `spent`, and every
 `spent` answer is logged `code_box_resyncs_spent` with the bucket's scope (the
-seat), its principal (the run's launch) and the object.
+seat), its principal (`run <launch id>`) and the object.
 
 A seat's code tools are bounded the same way on the git node that answers
 them: a [server-side read](#server-side-reads)'s one second look at the log's
 head, and an [engine write](#repositories-made-by-tools)'s one re-judgement of
 a refusal there, are paid from its **turn's** bucket and its seat's — the git
-node's one set for both, 16 and 11.5 minutes as a box's — and past them the
+node's ONE set of buckets, which its boxes pay too, 16 and 11.5 minutes as a
+box's. The seat's bucket on a node is one, whether its boxes or its turns
+reach the log's head through it: the census gives a seat one term, and a box
+looping on what nobody pushed spends what its turns' tools have left on that
+node, and the other way round. Past them the
 read is answered from the copy at the seat's floor, and the write's refusal
 from its session, each ending `(not re-judged at linearizable: this turn's
 re-syncs are spent until <instant>)`.
@@ -6274,7 +6281,7 @@ line says and push the branch's next commit with `-o change`.
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none) — for a [coding box](#coding-boxes)'s, no credential, the seat whose run it is, and the run's `turn_id` and `launch_id` — the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
 | `code_box_challenged` | `DEBUG` | A [coding box](#coding-boxes)'s request presented no credential this fleet signed — none (`reason`: `none`), a user name other than `run` (`user`), or a token that does not verify (`token`) — and was challenged `401`, with its `path`: by the code host's admission, or, under the component `api`, by a node serving none of the code host now, which tells a box why only past this challenge. Debug, because the route is public and anybody who reaches it can produce one. |
 | `code_box_refused`, `code_box_unavailable` | `INFO`, `WARN` | A coding box's signed token was refused `403` (`reason`: `run_unknown`, `run_superseded`, `run_ended`, `not_granted`, `read_only`, `seat_stopped`, `not_permitted`, `holds_full`), or answered `503` because this node could not judge it or hold what its push names (`run_unread`, `pauses_unread`, `no_chart`, `behind_config`, `floor_unraised`, `holds_unwritten`) or its run had sixteen requests in flight here (`run_busy`, before the run's row is read, so with no `seat`): with the run's `turn_id` and `launch_id`, the `seat` and the `repo`, never the token. |
-| `code_box_resyncs_spent` | `INFO` | A coding box's fetch wanted an object its run's floor does not hold, and its run's — or its seat's — re-syncs at the log's head on this node were spent, so it was answered at its floor with no barrier: the `repo`, the bucket's `scope` (the seat, or `check:<repository id>` for a check's box) and `principal` (the run's launch, or the check's attempt: its commit, target, name and number), the `oid` and the bucket's `retry_after` ([a box's re-syncs](#a-boxs-re-syncs-and-requests-in-flight)). |
+| `code_box_resyncs_spent` | `INFO` | A coding box's fetch wanted an object its run's floor does not hold, and its run's — or its seat's — re-syncs at the log's head on this node were spent, so it was answered at its floor with no barrier: the `repo`, the bucket's `scope` (the seat, or `check:<repository id>` for a check's box) and `principal` (`run <launch id>`, or the check's attempt: its commit, target, name and number), the `oid` and the bucket's `retry_after` ([a box's re-syncs](#a-boxs-re-syncs-and-requests-in-flight)). |
 | `code_box_floor_unraised` | `WARN` | A coding box's push applied, and its run's floor could not be raised to the push's row in the run store: the push was answered `ok` all the same, and what the box may read behind is its own push, whose objects it holds. Or a box's fetch took a barrier for a want its floor lacked, and its floor could not be raised to it: the fetch was served all the same, and the box's next fetch of those objects on another node may take a barrier again. |
 | `code_box_floor_unreadable` | `WARN` | Under the component `engine`: a coding run's row names a code-log floor this build cannot read, or one on another log, so its box reads through the barrier until its next answer raises the row to a readable one. |
 | `code_write` | `INFO` | One [engine-built commit](#engine-built-commits) this node was asked for, whatever became of it: the repository, the write's `kind`, who wrote it (`principal_kind`; the `seat` it is the commit's author for — a person's human seat, or the agent's own — with the credential a person came through, `operator_id`, or the turn behind a seat's, `turn_id`), the `push_id` it lands under, the `outcome` (`applied`, `pending`, `unknown` from its push's row; `refused`; `unready`, this node could not answer and another git node is asked; `failed`), any `refusal` of the change or of its push, and how long it spent in `sync_ms`, `build_ms`, `land_ms` and `total_ms`. No `operator_acted` is recorded for it: a person's tool call is one already, and a seat's write is its push row. |

@@ -24,8 +24,11 @@ import (
 // (boundOf), and the admission's second resolve of a repository its run was
 // given that the session answer would refuse — and a run whose row names no
 // floor reads every ref there. Each appends a barrier to the code log. Every
-// one draws from the run's bucket on its seat (code.NewResyncs: code.ResyncBurst
-// a run and a seat on this node, refilled at the census's seat term) — and a
+// one draws from the run's bucket on its seat in the node's ONE set of
+// re-sync buckets (Options.Resyncs, code.NewResyncs: code.ResyncBurst a run
+// and a seat on this node, refilled at the census's seat term) — the seat's
+// bucket its turns' code tools on this node draw on too, so a seat's box and
+// its tools together hold the seat to its one census term — and a
 // fetch's barrier raises the run's floor to the copy it is served from, so its
 // next request on any node pays none for the same objects — and past it the
 // request is answered AT ITS RUN'S FLOOR: a want the floor's copy lacks
@@ -61,8 +64,11 @@ import (
 // same refill, and past them are answered at its session saying so; and at
 // most MaxRunRequests of the attempt's git requests are in flight on a node.
 // Its reads at /box/code/ pay the same attempt's bucket at the git node that
-// answers them (internal/code/query). Keyed by the repository, the dozen
-// checks one push fans out share one term, as their transfers share one turn.
+// answers them (internal/code/query): the query server draws on the node's
+// one Resyncs too, so on a node whose code host serves the check's git and
+// answers its reads, the attempt has ONE burst, not one a server. Keyed by
+// the repository, the dozen checks one push fans out share one term, as
+// their transfers share one turn.
 
 // MaxRunRequests is how many of one coding run's requests may be in flight on
 // one node at once.
@@ -75,31 +81,19 @@ import (
 // flight on one node is a loop, not a checkout.
 const MaxRunRequests = 16
 
-// boxResync draws one linearizable re-sync of adm's request from its run's
-// bucket on its seat, counted by outcome: nil, taken; or the refusal, its
-// read to be answered at the run's floor. A person's request is never
-// charged: its reads of refs are linearizable by right, its barriers the
-// census's clients' term (code.GitReadsPerDay).
+// boxResync draws one linearizable re-sync of adm's request from the node's
+// re-sync buckets (Options.Resyncs) — a coding run's on its seat, a check's
+// attempt on its repository's checks (admission.resyncKey) — counted by
+// outcome there: nil, taken; or the refusal, its read to be answered at the
+// box's floor. A person's request is never charged: its reads of refs are
+// linearizable by right, its barriers the census's clients' term
+// (code.GitReadsPerDay).
 func (s *Server) boxResync(adm admission) *costlimit.Refusal {
 	scope, principal, ok := adm.resyncKey()
 	if !ok {
 		return nil
 	}
-	return s.drawResync(scope, principal)
-}
-
-// drawResync draws one re-sync from principal's bucket on scope and scope's,
-// counted by outcome (crewlet.code.box.resyncs).
-func (s *Server) drawResync(scope, principal string) *costlimit.Refusal {
-	refused := s.boxResyncs.Take(scope, principal, 1)
-	if s.o.Metrics != nil {
-		outcome := "taken"
-		if refused != nil {
-			outcome = "spent"
-		}
-		s.o.Metrics.Add(metrics.CodeBoxResyncs, 1, metrics.Attrs{"outcome": outcome})
-	}
-	return refused
+	return s.o.Resyncs.Box(scope, principal)
 }
 
 // notRejudged is the clause a box's answer at its floor carries: its run's
