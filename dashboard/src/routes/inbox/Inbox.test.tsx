@@ -12,7 +12,7 @@
  * promised nothing.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Announcer, AppShell, LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -1106,6 +1106,52 @@ describe("the pane", () => {
     await settle();
     expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
     expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
+  });
+
+  // NEVER LEFT OVER NOTHING, even where the row's motion never reports an end
+  // (a tab put away mid motion): the kit's wait is bounded by the motion's
+  // own length, and the row is told closed when it runs out. Mutation: hold
+  // the group until the row is heard closing by any other means, and the
+  // heading stays.
+  test("the last row's group goes even where its motion never reports an end", async () => {
+    const motion = fakeTransition(".crewlet-inbox-row", "grid-template-rows");
+    try {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ answers: { decisions: decisionsOf(askItem()) } });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+      await settle();
+      expect(screen.getByRole("region", { name: /^Needs you/ })).toBeTruthy();
+      await waitFor(() => expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull(), {
+        timeout: 2_000,
+      });
+      expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
+    } finally {
+      motion.restore();
+    }
+  });
+
+  // A LIST DRAWN AGAIN HOLDS NOTHING OPEN: in one pane, the row an answer
+  // moved left Needs you while the open row stood in the list's place, so
+  // the list drawn on the way back has no row closing and no heading over
+  // nothing. Mutation: count a row moved before the list was drawn as still
+  // closing, and the empty heading stays.
+  test("in one pane, the list drawn after the last answer has no Needs you heading", async () => {
+    const narrow = installScreen(443);
+    try {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ shell: true, answers: { decisions: decisionsOf(askItem()) } });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Back to the inbox" }));
+      await settle();
+      expect(screen.getByRole("navigation", { name: "Inbox" })).toBeTruthy();
+      expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
+      expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
+    } finally {
+      narrow.restore();
+    }
   });
 
   // THE LAST ANSWER STAYS IN SIGHT: with nothing left to open, the row stays

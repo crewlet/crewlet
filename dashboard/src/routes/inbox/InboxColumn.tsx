@@ -70,6 +70,11 @@ import { runAskTexts } from "~/lib/runs.ts";
 export interface Settled {
   label: string;
   answer?: AskAnswer;
+  /**
+   * Settled for good and moved into Answered: on its way out of Needs you,
+   * or gone from it. Absent for an answer held where it stands.
+   */
+  moved?: boolean;
 }
 
 /** The closed group of what was answered, here and before this visit. */
@@ -157,7 +162,7 @@ export function InboxColumn({
    */
   elsewhere?: string | null;
 }) {
-  const [closing, closed] = useClosing(needs);
+  const [closing, closed] = useClosing(settled);
   // AN ARRIVAL IS WASHED WHERE IT IS SEEN TO LAND. One the list is first
   // drawn with landed before it was there (in one pane, while the open row
   // stood in its place), and is in Answered's count rather than washed again
@@ -187,7 +192,7 @@ export function InboxColumn({
   return (
     <InboxList label="Inbox" className="inbox-list">
       {refusal}
-      {(needs.length > 0 || closing.size > 0) && (
+      {(needs.length > 0 || closing) && (
         // THE COUNT IS WHAT IS STILL OPEN: an answer held where it stands
         // until the engine settles it is not waiting on the reader. THE GROUP
         // OUTLIVES ITS LAST ROW only while that row closes, then goes.
@@ -218,7 +223,7 @@ export function InboxColumn({
         </InboxGroup>
       )}
       {loading && <Skeleton variant="text" rows={5} label="Loading the inbox" />}
-      {quiet && closing.size === 0 && (
+      {quiet && !closing && (
         // AFTER THE LAST ROW HAS CLOSED, never under it as it closes.
         <EmptyState size="compact" title={quiet.title} description={quiet.hint} />
       )}
@@ -261,37 +266,29 @@ export function InboxColumn({
 }
 
 /**
- * The keys of rows that have left a group and are still closing in it, and
- * what to call as each one closes. The kit's group keeps drawing a row on its
+ * Whether a row an answer moved out of Needs you is still closing in it, and
+ * what to call as each one closes. A moved row ([Settled.moved]) leaves Needs
+ * you in the commit that settles it; the kit's group keeps drawing it on its
  * way out until its height has closed, then says so through the row's
- * `onLeft`. Held beside the group rather than with the answer that moved the
- * row, so a row taken away by any means is waited out the same way, and
- * nothing outlives the list if it is put away mid close.
+ * `onLeft`. What moved is the screen's own record, and what has closed is
+ * all this keeps, so nothing is worked out again from the rows' comings and
+ * goings, and nothing is set while drawing.
+ *
+ * NEVER LEFT OPEN. A row moved before the list was drawn has gone already (in
+ * one pane, while the open row stood in the list's place), so it counts as
+ * closed from the start. The kit lets a row it holds go without its `onLeft`
+ * only when the row comes back, which a moved row never does, and its wait
+ * for the motion is bounded by the motion's own length, so every row it
+ * holds is told closed.
  */
-function useClosing(rows: readonly InboxRow[]): [ReadonlySet<string>, (key: string) => void] {
-  const [held, setHeld] = useState<{ rows: readonly InboxRow[]; keys: ReadonlySet<string> }>(
-    () => ({ rows, keys: new Set() }),
-  );
-  let now = held;
-  if (held.rows !== rows) {
-    const present = new Set(rows.map((row) => row.key));
-    const keys = new Set(
-      [...held.keys, ...held.rows.map((row) => row.key)].filter((key) => !present.has(key)),
-    );
-    now = { rows, keys };
-    setHeld(now);
-  }
-  const closed = useCallback(
-    (key: string) =>
-      setHeld((was) => {
-        if (!was.keys.has(key)) return was;
-        const keys = new Set(was.keys);
-        keys.delete(key);
-        return { ...was, keys };
-      }),
+function useClosing(settled: ReadonlyMap<string, Settled>): [boolean, (key: string) => void] {
+  const moved = [...settled].flatMap(([key, s]) => (s.moved ? [key] : []));
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set(moved));
+  const close = useCallback(
+    (key: string) => setClosed((was) => (was.has(key) ? was : new Set(was).add(key))),
     [],
   );
-  return [now.keys, closed];
+  return [moved.some((key) => !closed.has(key)), close];
 }
 
 /** The rows a quiet link opened, named for a screen reader by the link's own words. */

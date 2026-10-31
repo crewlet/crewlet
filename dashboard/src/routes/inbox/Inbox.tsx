@@ -503,10 +503,12 @@ export function Inbox() {
   const given = useMemo(
     () =>
       new Map(
-        [...settled].map(
-          ([key, s]) =>
-            [key, s.answer ? { label: s.label, answer: s.answer } : { label: s.label }] as const,
-        ),
+        [...settled].map(([key, s]) => {
+          const told: Given = { label: s.label };
+          if (s.answer) told.answer = s.answer;
+          if (s.moved) told.moved = true;
+          return [key, told] as const;
+        }),
       ),
     [settled],
   );
