@@ -1433,13 +1433,17 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	// the surface exists.
 	var surface *tools.Surface
 	if discovers(ph) {
-		for _, tool := range DiscoveryTools(func() *tools.Surface { return surface }) {
+		// AS THE ENTRIES DiscoveryTools BUILDS, hints and all: rewrapped
+		// here, the pair would reach the surface unannotated, and a
+		// person's stop would refuse a detached run's discovery as a
+		// write it could not classify.
+		for _, entry := range DiscoveryTools(func() *tools.Surface { return surface }) {
 			var err error
-			snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin})
+			snapshot, err = snapshot.With(entry)
 			if err != nil {
 				return nil, fmt.Errorf("runner: %s: %w", ph, err)
 			}
-			active = append(active, tool.Name())
+			active = append(active, entry.Name())
 		}
 	}
 

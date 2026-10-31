@@ -288,6 +288,8 @@ MCP tools (Jira, Slack, GitHub, and so on) are discovered from the configured MC
 
 Both meta-tools are available to the executor and to the onboarding pass. A worker cannot use the parent's pair (`activate_tool` and `list_mcp_server_tools` are on the worker denylist, because they would activate tools onto the parent's surface); it gets a pair of its own, bound to its filtered grant, so it can discover and activate only read-only tools the parent could already reach.
 
+Both are marked read-only (and idempotent, and reaching nothing outside the engine), and the marks are part of the tools rather than something the phase adds: listing reads the phase's own catalogue, and activating changes only which of the seat's tools the phase is offered, never anything done as the seat. A tool it activates is still called under its own marks. That is what lets a [stopped](#pausing-a-seat) detached run still discover and activate the reads it needs over the [tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box), while every write it activates is refused for as long as the stop stands.
+
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](code-sandbox.md). See [GitHub Integration](../integrations/github.md).
 
 ---

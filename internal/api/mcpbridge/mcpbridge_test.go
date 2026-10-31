@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
@@ -658,6 +659,86 @@ func TestAStoppedSeatsBridgedWritesAreRefused(t *testing.T) {
 	}
 	if seen := f.byName["post_message"].seen(); len(seen) != 1 || seen[0]["text"] != "resumed" {
 		t.Errorf("a write of a seat nobody stopped reached its tool as %+v, want it once", seen)
+	}
+}
+
+// A STOPPED RUN STILL DISCOVERS, AND WHAT IT ACTIVATES IS FENCED BY ITS OWN
+// HINTS. The fence refuses every call the surface has not proven read-only,
+// and the runner's discovery pair reaches a phase's surface without the
+// registry, so it carries only the hints [runner.DiscoveryTools] gives it.
+// Given none, as it once was, a stopped run could neither list an MCP
+// server's tools nor activate a read it had not activated yet — while the
+// pause promised its reads still answer. Built here from the runner's own
+// pair, added to the snapshot as the runner adds it, so the case reads the
+// real hints rather than a stand-in's: listing and activating answer while
+// the seat is stopped, the activated read runs, and the activated write is
+// still refused paused and never reaches its tool. Only the write asks.
+//
+// Mutations: give the pair no hints in DiscoveryTools — the listing is
+// refused paused — red; give activate_tool ReadOnly No — the activation is
+// refused — red.
+func TestAStoppedSeatStillDiscoversAndActivatesItsReads(t *testing.T) {
+	t.Parallel()
+	reg := tools.NewRegistry()
+	read := &stubTool{name: "wiki_read"}
+	write := &stubTool{name: "wiki_edit"}
+	for tool, hints := range map[*stubTool]tools.Annotations{
+		read:  {ReadOnly: crewletmcp.Yes, Idempotent: crewletmcp.Yes},
+		write: {ReadOnly: crewletmcp.No, Destructive: crewletmcp.No, OpenWorld: crewletmcp.Yes},
+	} {
+		if err := reg.RegisterWith(tool, crewletmcp.Origin("wiki"), hints); err != nil {
+			t.Fatalf("Register(%s): %v", tool.name, err)
+		}
+	}
+	snapshot := reg.Snapshot()
+	var surface *tools.Surface
+	var active []string
+	for _, entry := range runner.DiscoveryTools(func() *tools.Surface { return surface }) {
+		next, err := snapshot.With(entry)
+		if err != nil {
+			t.Fatalf("With(%s): %v", entry.Name(), err)
+		}
+		snapshot = next
+		active = append(active, entry.Name())
+	}
+	surface = tools.NewSurface("execute", snapshot, active).ForTurn(seatTurn())
+
+	f := newFixture(t)
+	stop := &stopCheck{}
+	stop.set("jane", nil)
+	f.session.Surface = surface
+	f.session.Stopped = stop.stopped
+	sess := dial(t, f.open(t))
+
+	res := callTool(t, sess, runner.ListMCPToolsTool, map[string]any{"server": "wiki"})
+	if res.IsError || !strings.Contains(text(res), "wiki_read") || !strings.Contains(text(res), "wiki_edit") {
+		t.Fatalf("a stopped seat's listing answered (failed %v) %q, want the server's tools",
+			res.IsError, text(res))
+	}
+	for _, name := range []string{"wiki_read", "wiki_edit"} {
+		if res := callTool(t, sess, runner.ActivateTool, map[string]any{"name": name}); res.IsError {
+			t.Fatalf("a stopped seat could not activate %s: %s", name, text(res))
+		}
+	}
+	if res := callTool(t, sess, "wiki_read", map[string]any{}); res.IsError {
+		t.Errorf("a stopped seat's activated read was refused: %s", text(res))
+	}
+	if got := read.seen(); len(got) != 1 {
+		t.Errorf("the activated read ran %d times, want 1", len(got))
+	}
+	res = callTool(t, sess, "wiki_edit", map[string]any{"text": "after the stop"})
+	if !res.IsError || !strings.Contains(text(res), "paused by jane") {
+		t.Fatalf("a stopped seat's activated write answered (failed %v) %q, want it refused paused",
+			res.IsError, text(res))
+	}
+	if got := write.seen(); len(got) != 0 {
+		t.Fatalf("a stopped seat's activated write reached its tool: %+v", got)
+	}
+	if rows := f.ledger.rows(); len(rows) == 0 || rows[len(rows)-1].Refusal() != tools.RefusalPaused {
+		t.Errorf("the refused write is not recorded as paused: %+v", rows)
+	}
+	if got := stop.seats(); !slices.Equal(got, []string{"dev"}) {
+		t.Errorf("the stop check was asked about %v, want it asked once, for the write alone", got)
 	}
 }
 

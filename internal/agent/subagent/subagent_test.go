@@ -206,8 +206,8 @@ func (a *activator) Call(_ context.Context, args map[string]any) (tools.Result, 
 	return tools.Result{Output: "no tool named " + name, Failed: true}, nil
 }
 
-func discovery(get func() *tools.Surface) []tools.Callable {
-	return []tools.Callable{&activator{surface: get}}
+func discovery(get func() *tools.Surface) []tools.Entry {
+	return []tools.Entry{{Tool: &activator{surface: get}, Origin: tools.OriginBuiltin}}
 }
 
 // --- fixtures --------------------------------------------------------------
@@ -628,8 +628,8 @@ func TestAChildWhoseDiscoveryToolWasDroppedIsNotToldToDiscover(t *testing.T) {
 	w := newWorld(t)
 	p := &provider{name: "sub"}
 	cfg := baseConfig(t, w, p)
-	cfg.Discovery = func(get func() *tools.Surface) []tools.Callable {
-		return []tools.Callable{&shadowedActivator{activator{surface: get}}}
+	cfg.Discovery = func(get func() *tools.Surface) []tools.Entry {
+		return []tools.Entry{{Tool: &shadowedActivator{activator{surface: get}}, Origin: tools.OriginBuiltin}}
 	}
 
 	res := one(t, cfg, request("read_file"))

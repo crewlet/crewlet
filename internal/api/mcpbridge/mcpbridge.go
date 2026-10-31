@@ -776,6 +776,12 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 // what it cannot classify admits every under-annotated write
 // ([crewletmcp.ReadOnlyProven]).
 //
+// THE RUNNER'S DISCOVERY PAIR IS A READ HERE, because its own entries say so
+// ([github.com/crewlet/crewlet/internal/agent/runner.DiscoveryTools]): activating changes only which of the seat's
+// tools this run is offered, never anything done as the seat, so a stopped run
+// can still find and activate a read it needs — and a write it activates is
+// asked about when it is called, under that write's own hints.
+//
 // THREE ANSWERS, and the third is not the second: a person stopped the seat
 // ([crewletmcp.RefusalPaused], naming them), nobody did (the call runs), or
 // this node cannot tell — it has not read the pauses yet — which refuses the

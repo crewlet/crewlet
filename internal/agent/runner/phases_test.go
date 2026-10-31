@@ -356,8 +356,13 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 		t.Errorf("surface deliveries = %v, want slack_post on its own server",
 			surface.Deliveries)
 	}
-	if !slices.Equal(surface.KnownReads, []string{"slack_history"}) {
-		t.Errorf("surface known reads = %v", surface.KnownReads)
+	// The discovery pair is among them: its own entries prove it read-only
+	// ([runner.DiscoveryTools]), which is what a stopped bridged run reads
+	// too. The ledger skips the pair by name, so marking it a read renders
+	// nothing new.
+	want := []string{"slack_history", runner.ListMCPToolsTool, runner.ActivateTool}
+	if !slices.Equal(surface.KnownReads, want) {
+		t.Errorf("surface known reads = %v, want %v", surface.KnownReads, want)
 	}
 }
 

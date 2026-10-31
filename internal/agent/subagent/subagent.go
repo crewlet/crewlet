@@ -296,7 +296,12 @@ type Config struct {
 	// they are in its snapshot. Nil leaves the child frozen to what it was
 	// granted, which is the right shape for a caller that does not want a
 	// worker widening itself at all.
-	Discovery func(surface func() *tools.Surface) []tools.Callable
+	//
+	// ENTRIES, so the meta-tools arrive carrying their own hints and are
+	// added to the child's universe as they come: a bare tool wrapped here
+	// would reach the surface unannotated, read by every classifier as a
+	// tool nobody can prove read-only.
+	Discovery func(surface func() *tools.Surface) []tools.Entry
 
 	// Compact is the PARENT seat's compactor, which rewrites a dependency's
 	// answer that will not fit its share of a dependent task's prompt — see
@@ -680,7 +685,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		discovers = len(metas) > 0
 		for _, meta := range metas {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			next, err := universe.With(tools.Entry{Tool: meta, Origin: tools.OriginBuiltin})
+			next, err := universe.With(meta)
 			if err != nil {
 				// A meta-tool colliding with a granted name would shadow the
 				// real tool: the model's call would reach the meta-tool while

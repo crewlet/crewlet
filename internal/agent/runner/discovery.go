@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -43,11 +44,35 @@ const (
 // sub-agent's own prompt tells it to call list_mcp_server_tools and
 // activate_tool, so a nil Discovery makes that prompt a lie and costs a wasted
 // round every time the child obeys it.
-func DiscoveryTools(surface func() *tools.Surface) []tools.Callable {
-	return []tools.Callable{
-		&listMCPTools{surface: surface},
-		&activateTool{surface: surface},
+//
+// ENTRIES, CARRYING THEIR OWN HINTS, rather than bare tools a caller wraps:
+// the pair never passes through the registry, so whatever entry its caller
+// built was all anything downstream could read — and both callers built one
+// with no annotations. An unannotated tool is one no reader can prove
+// read-only, so a person's stop refused a stopped detached run's discovery
+// over the bridge (api/mcpbridge fences every call not proven read-only),
+// and the run could neither list an MCP server's tools nor activate a read it
+// had not activated yet. Built here, the hints cannot be dropped by a caller.
+//
+// READ-ONLY, both of them. Listing reads the phase's own universe. Activating
+// changes only which of the universe's tools THIS phase is offered — state
+// the phase owns, never anything done as the seat — and grants nothing: the
+// universe is already the seat's grant, and the activated tool is called
+// under its own hints, so a write it activates is still refused by a stop
+// and still classified by every other reader. IDEMPOTENT, both: a second
+// listing answers the same, and a second activation of an active tool is a
+// no-op ([tools.Surface.Activate]). CLOSED-WORLD, both: neither leaves the
+// process.
+func DiscoveryTools(surface func() *tools.Surface) []tools.Entry {
+	return []tools.Entry{
+		{Tool: &listMCPTools{surface: surface}, Origin: tools.OriginBuiltin, Annotations: discoveryHints},
+		{Tool: &activateTool{surface: surface}, Origin: tools.OriginBuiltin, Annotations: discoveryHints},
 	}
+}
+
+// discoveryHints are the pair's behavioural hints; see [DiscoveryTools].
+var discoveryHints = tools.Annotations{
+	ReadOnly: mcp.Yes, Destructive: mcp.No, Idempotent: mcp.Yes, OpenWorld: mcp.No,
 }
 
 type listMCPTools struct{ surface func() *tools.Surface }

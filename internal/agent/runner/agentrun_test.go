@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -90,6 +91,39 @@ func TestAnAgentModeExecutorLaunchesAndSuspends(t *testing.T) {
 	}
 	if !published {
 		t.Error("the bridged surface does not publish submit_work, so the run cannot say what it did")
+	}
+}
+
+// THE DISCOVERY PAIR REACHES THE BRIDGED SURFACE PROVEN READ-ONLY. A
+// person's stop refuses a detached run's bridged call of every tool its
+// surface has not proven read-only, and the pair never passes through the
+// registry: it carries only the hints [runner.DiscoveryTools] gives it, and
+// only if the phase surface adds it as built. Unannotated, a stopped run could
+// not list an MCP server's tools or activate a read — while its reads were
+// promised to answer. Read off the surface the launch hands the bridge, which
+// is the one the fence reads.
+//
+// Mutation: rewrap the pair in surfaceWith as a bare builtin entry — both
+// tools read unproven — red.
+func TestTheBridgedDiscoveryPairIsProvenReadOnly(t *testing.T) {
+	t.Parallel()
+	launcher := &recordingLauncher{}
+	r := agentFixture(t, launcher, nil)
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if launcher.req.Surface == nil {
+		t.Fatal("the run was launched with no tool surface")
+	}
+	for _, name := range []string{runner.ListMCPToolsTool, runner.ActivateTool} {
+		if !slices.Contains(launcher.req.Surface.Active(), name) {
+			t.Errorf("%s is not on the bridged surface", name)
+			continue
+		}
+		if hints := launcher.req.Surface.AnnotationsOf(name); !mcp.ReadOnlyProven(hints) {
+			t.Errorf("%s reaches the bridged surface as %+v, not proven read-only, so a person's "+
+				"stop refuses it", name, hints)
+		}
 	}
 }
 
