@@ -146,6 +146,7 @@ func TestTheOperatorsChatGesturesAreNoSeatsAndArePinned(t *testing.T) {
 		"open_dm":             chatlet.OpenDMTool,
 		"update_channel":      chatlet.UpdateChannelTool,
 		"set_channel_members": chatlet.SetChannelMembersTool,
+		"add_channel_members": chatlet.AddChannelMembersTool,
 		"mark_chat_read":      chatlet.MarkChatReadTool,
 	}
 	for spelling, constant := range want {
@@ -179,10 +180,10 @@ func TestTheOperatorsChatGesturesAreNoSeatsAndArePinned(t *testing.T) {
 func TestAMembershipSetIsCountedWithJoinAndLeave(t *testing.T) {
 	t.Parallel()
 	for _, tool := range []string{chatlet.JoinChannelTool, chatlet.LeaveChannelTool,
-		chatlet.SetChannelMembersTool} {
+		chatlet.SetChannelMembersTool, chatlet.AddChannelMembersTool} {
 		family := chatlet.CallFamily(tool)
 		for _, member := range []string{chatlet.JoinChannelTool, chatlet.LeaveChannelTool,
-			chatlet.SetChannelMembersTool} {
+			chatlet.SetChannelMembersTool, chatlet.AddChannelMembersTool} {
 			if !slices.Contains(family, member) {
 				t.Errorf("%s is counted among %v, without %s", tool, family, member)
 			}

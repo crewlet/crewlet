@@ -257,6 +257,19 @@ func readPost(channelID, messageID, author, body string,
 		}, chatlet.ScopeSet{Subject: true}, author)
 }
 
+// said is a page's messages without its room events: what people said, which
+// is what a case about messages counts. A named room's create writes a
+// `joined` line, and every room here is made by one.
+func said(views []chatlet.MessageView) []chatlet.MessageView {
+	out := make([]chatlet.MessageView, 0, len(views))
+	for _, view := range views {
+		if view.Message.Event == nil {
+			out = append(out, view)
+		}
+	}
+	return out
+}
+
 // session is a read that names this node's own applied position as its floor,
 // which is what every case here wants: the rows it has just applied.
 func (h *readHarness) session() statelog.Freshness {
@@ -624,7 +637,7 @@ func TestACursorSpansAReanchor(t *testing.T) {
 		if err != nil {
 			t.Fatalf("transcript page %d: %v", page, err)
 		}
-		for _, view := range got.Messages {
+		for _, view := range said(got.Messages) {
 			seen = append(seen, view.Message.ID)
 		}
 		if cursor = got.NextCursor; cursor == "" {
@@ -749,9 +762,9 @@ func TestAReadNamesItsOwnWritePositionAsAFloor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a read floored at its own write: %v", err)
 	}
-	if len(got.Messages) != 1 || got.Messages[0].Message.ID != "msg-1" {
+	if msgs := said(got.Messages); len(msgs) != 1 || msgs[0].Message.ID != "msg-1" {
 		t.Fatalf("a read floored at its own write answered %d messages, want "+
-			"the one it just wrote", len(got.Messages))
+			"the one it just wrote", len(msgs))
 	}
 	if got.Position.Packed() < at.Packed() {
 		t.Errorf("the answer reports position %s, which is before the floor "+
@@ -810,9 +823,9 @@ func TestABehindNodeSaysSoRatherThanAnsweringEmpty(t *testing.T) {
 		t.Fatalf("an unbounded stale read on a behind node: %v — a node that "+
 			"is behind is still a node that can answer", err)
 	}
-	if len(got.Messages) != 1 {
+	if msgs := said(got.Messages); len(msgs) != 1 {
 		t.Fatalf("an unbounded stale read answered %d messages, want the one "+
-			"this node has", len(got.Messages))
+			"this node has", len(msgs))
 	}
 	if got.LogLag == nil || *got.LogLag != 500 {
 		t.Errorf("the answer reports lag %v, want 500 — an answer that does "+
@@ -897,7 +910,7 @@ func TestAPageOfLongMessagesFitsOneReplyAndPagesOn(t *testing.T) {
 				"the rest of the reply rides with it", pages, len(wire),
 				len(got.Messages))
 		}
-		for _, view := range got.Messages {
+		for _, view := range said(got.Messages) {
 			seen = append(seen, view.Message.ID)
 		}
 		if cursor = got.NextCursor; cursor == "" {

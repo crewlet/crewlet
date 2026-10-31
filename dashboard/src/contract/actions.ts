@@ -391,11 +391,23 @@ export const ACTIONS = {
     scope: "person",
   },
   update_channel: {
-    // A ROOM'S "TOPIC" DIALOG: the topic and the purpose, and only what moved.
-    // Archiving is not offered there — it closes the room for everybody in it
-    // and is its creator's, its unit's lead's or an admin's — and neither is
-    // how long the room keeps what is said, which is an admin's own gesture.
-    args: ["channel", "topic", "purpose"],
+    // A ROOM'S TOPIC AND DESCRIPTION DIALOGS, and only what moved; the
+    // template a person set them from, which the transcript records as one
+    // line; and an administrator's auto-join switch in Add people. Archiving
+    // is not offered there (it closes the room for everybody in it and is its
+    // creator's, its unit's lead's or an admin's), and neither is how long the
+    // room keeps what is said, which is an admin's own gesture.
+    args: ["channel", "topic", "purpose", "template", "auto_join"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  add_channel_members: {
+    // "ADD PEOPLE": the people and agents to put in the room, and nobody
+    // taken out. The engine decides it against the room as it stands, so two
+    // people adding at once both land.
+    args: ["channel", "members"],
     domain: "chat",
     apps: ["chatlet"],
     refreshes: [],

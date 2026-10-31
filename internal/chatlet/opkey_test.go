@@ -427,7 +427,7 @@ func TestAKeyOutsideTheGrammarIsRefused(t *testing.T) {
 		t.Fatalf("a key outside the grammar answered %v, want a refusal of "+
 			"actor.op_key", err)
 	}
-	if got := r.count(`SELECT COUNT(*) FROM chat_messages`); got != 0 {
+	if got := r.count(`SELECT COUNT(*) FROM chat_messages WHERE event = ''`); got != 0 {
 		t.Fatalf("a refused post left %d message(s)", got)
 	}
 }

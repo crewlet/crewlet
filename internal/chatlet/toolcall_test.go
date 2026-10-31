@@ -55,7 +55,7 @@ func TestASeatsTurnSaysEverythingItSaidOnce(t *testing.T) {
 	}
 	messages := func() int {
 		t.Helper()
-		return r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`, room)
+		return r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`, room)
 	}
 
 	run("run-1")

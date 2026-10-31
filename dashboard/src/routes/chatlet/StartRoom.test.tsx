@@ -78,7 +78,7 @@ test("a topic past its cap is held here, as the room's own Topic dialog holds it
   fireEvent.change(topic, { target: { value: "🙂".repeat(MAX_TOPIC_CHARS / 4) } });
   await waitFor(() => expect(create().getAttribute("aria-disabled")).not.toBe("true"));
   fireEvent.change(topic, { target: { value: "x".repeat(MAX_TOPIC_CHARS + 1) } });
-  expect(screen.getByText(/257 bytes, but a topic holds at most 256/)).toBeTruthy();
+  expect(screen.getByText(/251 bytes, but a topic holds at most 250/)).toBeTruthy();
   expect(create().getAttribute("aria-disabled")).toBe("true");
   expect(create().getAttribute("title")).toBe("Shorten the topic first.");
   fireEvent.click(create());

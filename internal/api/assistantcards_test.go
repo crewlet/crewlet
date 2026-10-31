@@ -411,6 +411,11 @@ func (filledChat) RoomNames(context.Context, string, statelog.Freshness) (
 	return filled[chatlet.RoomNames](), nil
 }
 
+func (filledChat) Directory(context.Context, string, statelog.Freshness) (
+	chatlet.Directory, error) {
+	return filled[chatlet.Directory](), nil
+}
+
 // Search answers filled hits, each said in a room the answer names, as the
 // serving node names every room its hits were said in.
 func (c filledChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {

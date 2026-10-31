@@ -529,6 +529,11 @@ func (parityChat) RoomNames(context.Context, string, statelog.Freshness) (
 	return chatlet.RoomNames{}, nil
 }
 
+func (parityChat) Directory(context.Context, string, statelog.Freshness) (
+	chatlet.Directory, error) {
+	return chatlet.Directory{}, nil
+}
+
 func (parityChat) Messages(_ context.Context, viewer string, q chatlet.TranscriptQuery,
 	_ statelog.Freshness) (chatlet.Transcript, error) {
 	if q.ChannelID != assistanttest.RecordID {

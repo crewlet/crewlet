@@ -161,6 +161,11 @@ func (quietChat) RoomNames(context.Context, string,
 	return chatlet.RoomNames{}, nil
 }
 
+func (quietChat) Directory(context.Context, string,
+	statelog.Freshness) (chatlet.Directory, error) {
+	return chatlet.Directory{}, nil
+}
+
 func (quietChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {
 	return estate.ChatSearchAnswer{}, nil
 }

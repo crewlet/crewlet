@@ -3946,14 +3946,7 @@ export interface ChatMessage {
  *  - `template`: the author set the room up from the template named `text`,
  *    one line in place of a `topic` and a `description` line. */
 export type ChatEventKind =
-  | "joined"
-  | "added"
-  | "left"
-  | "removed"
-  | "description"
-  | "topic"
-  | "template"
-  | (string & {});
+  "joined" | "added" | "left" | "removed" | "description" | "topic" | "template" | (string & {});
 
 /** A room's own change, as its transcript row carries it. */
 export interface ChatRoomEvent {

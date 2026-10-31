@@ -104,7 +104,7 @@ test("emptying a field is a change rather than a field left out", async () => {
 test("a topic past its cap is refused here rather than cut to fit", async () => {
   mount();
   fireEvent.change(topic(), { target: { value: "x".repeat(MAX_TOPIC_CHARS + 1) } });
-  expect(screen.getByText(/257 bytes, but a topic holds at most 256/i)).toBeTruthy();
+  expect(screen.getByText(/251 bytes, but a topic holds at most 250/i)).toBeTruthy();
   expect(held()).toBe(true);
   fireEvent.click(save());
   await new Promise((r) => setTimeout(r, 20));

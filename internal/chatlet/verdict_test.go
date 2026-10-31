@@ -250,7 +250,7 @@ func TestAPostIntoARoomArchivedAheadOfItIsRefusedAndSoIsItsRetry(t *testing.T) {
 		chatlet.ChannelPatch{V: chatlet.DocumentVersion, Archived: &archived}), post)
 	refused(t, r, "a post into a room archived ahead of it", got, err, chatlet.ErrArchived,
 		chatlet.VerdictArchived)
-	if n := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if n := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		room.Channel.ID); n != 0 {
 		t.Fatalf("the archived room holds %d messages", n)
 	}
@@ -302,7 +302,7 @@ func TestAPostByAnAuthorTakenOutOfAPrivateRoomAheadOfItIsRefused(t *testing.T) {
 		strings.Contains(said, room.Channel.ID) {
 		t.Errorf("the refusal reads %q, want it to name #deal-room and no id", said)
 	}
-	if n := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ?`,
+	if n := r.count(`SELECT COUNT(*) FROM chat_messages WHERE channel_id = ? AND event = ''`,
 		room.Channel.ID); n != 0 {
 		t.Fatalf("the private room holds %d messages from an author not in it", n)
 	}
