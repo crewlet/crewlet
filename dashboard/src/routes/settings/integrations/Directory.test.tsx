@@ -334,6 +334,27 @@ test("the home shows only what is in use, each a compact card with one action", 
   expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 6");
 });
 
+// EVERY STATE IS DRAWN ONE WAY: a service's "In use" and an app's
+// "Connected" are each the tone's dot and the word, on the tile and on the
+// directory's row alike. A service's was a pill beside the apps' dots.
+// Mutation: hand a service's tile or row a Tag again and this goes red.
+test("a service's state and an app's are drawn the same way, tile and row", async () => {
+  mount(ADMIN);
+  const inUse = await screen.findByRole("region", { name: /^In use/ });
+  for (const name of ["Worklet", "Datadog"]) {
+    const card = within(inUse).getByRole("link", { name }).closest(".crewlet-catalog-tile")!;
+    const state = card.querySelector(".crewlet-catalog-tile__status")!;
+    expect(state.querySelector(".crewlet-status-dot"), name).toBeTruthy();
+    expect(card.querySelector(".crewlet-tag"), name).toBeNull();
+  }
+  expect(inUse.querySelector(".crewlet-catalog-tile__status")?.textContent?.trim()).toBe("In use");
+  for (const name of [/Worklet/, /Datadog/]) {
+    const row = await line(name);
+    expect(row.querySelector(".crewlet-status-dot"), String(name)).toBeTruthy();
+    expect(row.querySelector(".crewlet-tag"), String(name)).toBeNull();
+  }
+});
+
 // EVERY CARD'S ACTION NAMES ITS CARD: a reader listing the links in In use
 // meets "Open Worklet" and "Replace key GitLab", never a column of
 // "Open". Mutation: drop the action's aria-label and the names repeat.

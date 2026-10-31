@@ -590,6 +590,12 @@
 
 /* Activity: the list beside the reading pane, filling the view. */
 .chat-activity {
+  /* THE CHAT FRAME'S SIDE LINE IS THE INSET. The kit's detail pads its end
+     by the page's side inset (a page's two edges match), but Activity stands
+     in the flush chat frame, where the reading context pads both its sides by
+     `--crewlet-chat-pad-x`; the page's inset on top of it put the end twice
+     as far in as the start. */
+  --crewlet-list-detail-end: 0px;
   flex: 1;
   min-height: 0;
 }

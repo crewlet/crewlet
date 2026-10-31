@@ -243,11 +243,13 @@ describe("the frame's layout", () => {
     expect(block(sheet("base.css"), "::-webkit-scrollbar")).toMatch(
       new RegExp(`width:\\s*${SCROLLBAR_GUTTER}px`),
     );
-    // The screen's padding: the kit's content column, and the section body
-    // beside Settings' column, which takes the kit's back and gives the same.
+    // The screen's padding: the kit's content column, by the shell's own
+    // side inset (20px at this width), and the section body beside Settings'
+    // column, which takes the kit's back and gives the same.
     expect(block(kit, ".crewlet-app-shell__content")).toMatch(
-      /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
+      /padding:\s*var\(--crewlet-app-shell-inset\);/,
     );
+    expect(kit).toMatch(/--crewlet-app-shell-inset:\s*var\(--spacing-5\);/);
     expect(block(kit, ".crewlet-section-frame__body")).toMatch(
       /padding:\s*var\(--spacing-5\) var\(--spacing-5\)/,
     );

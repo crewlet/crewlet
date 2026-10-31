@@ -74,7 +74,7 @@ import { AppPane } from "./AppPane.tsx";
 import { DIRECTORY, entryOf, type Line } from "./categories.ts";
 import { Landing } from "./Landing.tsx";
 import { ServicePane } from "./ServicePane.tsx";
-import { ServiceMark, ServiceState, useDisconnect } from "./parts.tsx";
+import { ServiceDot, ServiceMark, useDisconnect } from "./parts.tsx";
 
 /** Which line a route segment selects: Atlassian and its relay select Jira's. */
 function selects(line: Line, kind: string | undefined): boolean {
@@ -175,7 +175,7 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
               mark: <ServiceMark service={s} size="md" />,
               label: s.name,
               ...(s.vendor ? { hint: s.vendor } : {}),
-              status: <ServiceState service={s} />,
+              status: <ServiceDot service={s} />,
             };
           }
           const app = entryOf(line)!;

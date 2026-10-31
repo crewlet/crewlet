@@ -16,6 +16,7 @@ import {
   StatusDot,
   Tag,
   Text,
+  type CatalogTileStatus,
 } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
 import { ProductMark } from "@crewlethq/icons/product-mark";
@@ -68,21 +69,39 @@ export function BucketTag({ tool }: { tool: Tool }) {
   );
 }
 
-/** The state pill a built-in service carries everywhere it is named. */
+/**
+ * A built-in service's state, in the words and tone every place that names
+ * it draws: the catalogue's tile and the directory's row as a dot and the
+ * word, the detail's header as its pill ([ServiceState]). An app's state is
+ * the same shape (`BUCKET_WORDS`), so "In use" and "Connected" are drawn one
+ * way side by side.
+ *
+ * NOTHING UNTIL THE ENGINE HAS SAID: "Not in use" on a node running no company
+ * would be a guess. A SERVICE IS IN USE, never connected: it is Crewlet's own,
+ * so there is nothing to connect.
+ */
+export function serviceStatus(service: BuiltInService): CatalogTileStatus | undefined {
+  if (!service.known) return undefined;
+  return service.on
+    ? { tone: "success", label: "In use" }
+    : { tone: "neutral", label: "Not in use" };
+}
+
+/** A service's state as the detail header's pill. */
 export function ServiceState({ service }: { service: BuiltInService }) {
-  // NOTHING UNTIL THE ENGINE HAS SAID: "Not in use" on a node running no
-  // company would be a guess. A SERVICE IS IN USE, never connected: it is
-  // Crewlet's own, so there is nothing to connect.
-  if (!service.known) return null;
-  return service.on ? (
-    <Tag size="sm" variant="success">
-      In use
-    </Tag>
-  ) : (
-    <Tag size="sm" variant="neutral" appearance="outline">
-      Not in use
+  const status = serviceStatus(service);
+  if (!status) return null;
+  return (
+    <Tag size="sm" variant={status.tone} appearance={service.on ? undefined : "outline"}>
+      {status.label}
     </Tag>
   );
+}
+
+/** A service's state as a dot and the word, as an app's row draws its own. */
+export function ServiceDot({ service }: { service: BuiltInService }) {
+  const status = serviceStatus(service);
+  return status ? <StatusDot tone={status.tone}>{status.label}</StatusDot> : null;
 }
 
 /** One issue, with who owes the next move and the control that makes it. */
