@@ -261,8 +261,8 @@ func TestHermesRecordsTheNameTheModelAskedFor(t *testing.T) {
 		{Text: "done", Usage: fakeUsage{Input: 12, Output: 1}},
 	}}, func(c *Config) { c.Auth = Auth{Mode: AuthSubscription} })
 	host := newTestHost(t, "search")
-	host.handle("search", func(context.Context, map[string]any) (string, bool) {
-		host.awaitRecorded("serch")
+	host.handle("search", func(ctx context.Context, _ map[string]any) (string, bool) {
+		host.awaitRecorded(ctx, "serch")
 		return "3 results", false
 	})
 	if _, err := p.Complete(t.Context(), phase(host)); err != nil {

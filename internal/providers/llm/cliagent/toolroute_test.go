@@ -164,8 +164,8 @@ func TestEachRequestIsChargedAsItIsReadAndTheTotalSettlesTheRest(t *testing.T) {
 	host := newTestHost(t, "search")
 	var spentBeforeCall llm.Usage
 	recorded := false
-	host.handle("search", func(context.Context, map[string]any) (string, bool) {
-		recorded = host.awaitRecorded("search")
+	host.handle("search", func(ctx context.Context, _ map[string]any) (string, bool) {
+		recorded = host.awaitRecorded(ctx, "search")
 		_, _, spentBeforeCall, _ = host.snapshot()
 		return "ok", false
 	})
@@ -270,10 +270,10 @@ func TestARecordWithoutCountsIsChargedAnEstimateAsItGoes(t *testing.T) {
 	host := newTestHost(t, "search")
 	var before llm.Usage
 	var estimated bool
-	host.handle("search", func(context.Context, map[string]any) (string, bool) {
+	host.handle("search", func(ctx context.Context, _ map[string]any) (string, bool) {
 		// As the tool loop's host does before it runs a call: the call and
 		// the record race, and the request is charged as the record shows it.
-		if !host.awaitRecorded("search") {
+		if !host.awaitRecorded(ctx, "search") {
 			t.Error("the record never showed the request that asked for the call")
 		}
 		_, _, before, _ = host.snapshot()
@@ -697,15 +697,10 @@ func TestARecordInAFileIsFollowedAsItIsWritten(t *testing.T) {
 	})
 	host := newTestHost(t, "search")
 	var seenAtCall int
-	host.handle("search", func(context.Context, map[string]any) (string, bool) {
-		// As the tool loop's host does, a call waits a moment for the
-		// record of the request that asked for it: the call and the record
-		// race, and the file is read every recordPoll.
-		deadline := time.Now().Add(2 * time.Second)
-		for seenAtCall = len(host.latestTurns()); seenAtCall == 0 && time.Now().Before(deadline); {
-			time.Sleep(10 * time.Millisecond)
-			seenAtCall = len(host.latestTurns())
-		}
+	host.handle("search", func(ctx context.Context, _ map[string]any) (string, bool) {
+		// The file is read every recordPoll, so the call and the record race.
+		host.awaitRecorded(ctx, "search")
+		seenAtCall = len(host.latestTurns())
 		return "ok", false
 	})
 	comp, err := p.Complete(t.Context(), phase(host))
