@@ -148,7 +148,7 @@ function mount(
       work_projects: { projects },
       work_project: project,
       colleague,
-      work_inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
+      inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
     };
     return Promise.resolve(answers[what] ?? {});
   }) as typeof socket.query;

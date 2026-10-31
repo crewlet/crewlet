@@ -48,7 +48,7 @@ afterEach(() => {
 /** What the engine answers the profile's other questions, in the wire's shapes. */
 const ANSWERS: Record<string, unknown> = {
   work_items: { items: [], total_hint: 0 },
-  work_inbox: { handle: "ana", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  inbox: { handle: "ana", notices: [], primary_reasons: [], unread: 0, primary: 0 },
   seat_activity: { since: "", until: "", days: 7, seats: [], quantile_resolution: 0.06 },
   turns: { turns: [], next: null },
   work_my_work: emptyDay("ceo"),

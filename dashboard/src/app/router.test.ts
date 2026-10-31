@@ -351,13 +351,7 @@ describe("the navigation grammar", () => {
       const section = sectionOf(path);
       return workspaceOpen(row, held) && (!section || sectionOpen(section, held));
     };
-    const TRACKER_ONLY = [
-      ["inbox"],
-      ["me"],
-      ["work"],
-      ["work", "tasks"],
-      ["settings", "spend", "tasks"],
-    ];
+    const TRACKER_ONLY = [["me"], ["work"], ["work", "tasks"], ["settings", "spend", "tasks"]];
     for (const path of TRACKER_ONLY) {
       expect(opens(path, ["tracker"]), path.join("/")).toBe(true);
       expect(opens(path, ["admin"]), path.join("/")).toBe(true);
@@ -396,6 +390,9 @@ describe("the navigation grammar", () => {
       // and the engine holds each answer to the reader's own grant.
       ["code", "repos"],
       ["code", "pushes"],
+      // NOR THE INBOX: it is composed from every native domain's notices,
+      // each read under its own permission on the engine's side.
+      ["inbox"],
       ["live"],
       ["live", "runs"],
       ["settings", "spend"],

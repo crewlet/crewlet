@@ -120,7 +120,7 @@ function mount() {
     const answers: Record<string, unknown> = {
       viewer: JANE,
       work_projects: { projects: [project("OPS")] },
-      work_inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
+      inbox: { handle: "jane", notices: [], unread: 0, primary: 0 },
     };
     return Promise.resolve(answers[what] ?? {});
   }) as typeof socket.query;

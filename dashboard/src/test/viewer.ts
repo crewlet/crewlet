@@ -21,12 +21,12 @@ export const ADMIN_VIEWER = {
 
 /**
  * What the frame itself asks of the socket on every screen, answered as the
- * engine answers an admin with nothing waiting: who is reading, and the inbox
- * and queue counts a reader holding Tracker is asked for. A suite's own
- * answers come first.
+ * engine answers an admin with nothing waiting: who is reading, the composed
+ * inbox's count every signed-in reader is asked for, and the queue count a
+ * reader holding Tracker is asked for. A suite's own answers come first.
  */
 export const FRAME_ANSWERS: Readonly<Record<string, unknown>> = {
   viewer: ADMIN_VIEWER,
-  work_inbox: { notices: [] },
+  inbox: { notices: [] },
   work_items: { items: [] },
 };

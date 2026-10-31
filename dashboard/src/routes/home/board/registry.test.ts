@@ -109,11 +109,23 @@ describe("who may add what", () => {
   });
 
   test("a reader without the tracker is offered none of the tracker's widgets", () => {
-    for (const key of ["inbox", "me", "work"] as const) {
+    for (const key of ["me", "work"] as const) {
       for (const def of AREAS.find((a) => a.key === key)!.widgets) {
         expect(canUse(def, ["knowledge"]), def.key).toBe(false);
         expect(canUse(def, ["tracker"]), def.key).toBe(true);
       }
+    }
+  });
+
+  // THE INBOX IS EVERY SIGNED-IN READER'S: its notices are composed from
+  // every native domain, each read under its own permission on the engine's
+  // side, so a reader without the tracker still hears about the changes they
+  // are asked to review. Mutation: give its widget the tracker's service
+  // back and a reader holding nothing is offered no Updates.
+  test("a reader holding no app is offered the inbox's widgets", () => {
+    for (const def of AREAS.find((a) => a.key === "inbox")!.widgets) {
+      expect(canUse(def, []), def.key).toBe(true);
+      expect(canUse(def, ["knowledge"]), def.key).toBe(true);
     }
   });
 });

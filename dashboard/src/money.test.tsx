@@ -476,7 +476,7 @@ const FRAME_ANSWERS: Record<string, unknown> = {
     kind: "human",
     acts: [],
   },
-  work_inbox: { notices: [] },
+  inbox: { notices: [] },
   work_items: { items: [] },
 };
 

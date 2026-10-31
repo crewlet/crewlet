@@ -194,11 +194,13 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   const rows = screen.getByRole("navigation", { name: "Navigation" });
   const row = (name: RegExp) => within(rows).getByRole("link", { name });
   await waitFor(() =>
-    expect(row(/^Inbox/).querySelector("[title='Needs Tracker access']")).not.toBeNull(),
+    expect(row(/^Work/).querySelector("[title='Needs Tracker access']")).not.toBeNull(),
   );
-  expect(row(/^Work/).querySelector("[title='Needs Tracker access']")).not.toBeNull();
   expect(row(/^Knowledge/).querySelector("[title='Needs Knowledge access']")).not.toBeNull();
   expect(row(/^Home/).querySelector(".crewlet-locked-label")).toBeNull();
+  // THE INBOX NAMES NO APP: it is composed from every native domain's
+  // notices, each read under its own permission.
+  expect(row(/^Inbox/).querySelector(".crewlet-locked-label")).toBeNull();
   expect(row(/^Principles/).querySelector(".crewlet-locked-label")).toBeNull();
   expect(row(/^Org chart/).querySelector(".crewlet-locked-label")).toBeNull();
   // NOTHING SAYS IT WAS REFUSED: there is no refusal to say.

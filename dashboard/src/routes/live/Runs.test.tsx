@@ -283,7 +283,7 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
     asked.push({ what, params: params ?? {} });
     const all: Record<string, unknown> = {
       viewer: JANE,
-      work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+      inbox: { handle: "jane", notices: [], primary_reasons: [] },
       ...answers,
     };
     // A FUNCTION ANSWERS FROM THE QUESTION, for a case whose answers move.

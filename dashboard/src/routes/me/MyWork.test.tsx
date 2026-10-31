@@ -1531,7 +1531,7 @@ test("what reached somebody is the Inbox, and is not drawn here", async () => {
   mount();
   await counts();
   expect(screen.queryByText("Reached you")).toBeNull();
-  expect(query.mock.calls.map((c) => c[0])).not.toContain("work_inbox");
+  expect(query.mock.calls.map((c) => c[0])).not.toContain("inbox");
   // And the way to it is a link rather than a copy.
   expect(screen.getByText("Inbox →")).toBeTruthy();
 });

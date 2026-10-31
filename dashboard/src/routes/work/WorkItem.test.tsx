@@ -152,7 +152,7 @@ type Answer = unknown | ((params: Record<string, unknown>) => Promise<unknown>);
 
 const QUIET: Record<string, Answer> = {
   // THE SHELL'S OWN READS — the inbox count the frame keeps.
-  work_inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
   decisions: { handle: "jane", items: [], total: 0, capped: false },
   work_item: detail(),
   work_project: project(),

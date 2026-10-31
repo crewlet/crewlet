@@ -96,7 +96,7 @@ const JANE = {
 /** What the frame itself reads, answered for every screen. */
 const FRAME: Record<string, unknown> = {
   viewer: JANE,
-  work_inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  inbox: { handle: "jane", notices: [], primary_reasons: [], unread: 0, primary: 0 },
   decisions: { handle: "jane", items: [], total: 0, capped: false },
 };
 

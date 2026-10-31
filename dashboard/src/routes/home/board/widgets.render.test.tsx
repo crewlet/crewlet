@@ -115,7 +115,7 @@ const QUIET: Record<string, unknown> = {
     complete: true,
   },
   sandbox_runs: { runs: [] },
-  work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+  inbox: { handle: "jane", notices: [], primary_reasons: [] },
 };
 
 beforeEach(() => {

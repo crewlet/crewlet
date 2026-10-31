@@ -117,7 +117,7 @@ function mount({
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
   const base: Record<string, Answer> = {
     viewer: JANE,
-    work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
+    inbox: { handle: "jane", notices: [], primary_reasons: [] },
     sandbox_runs: { runs: [] },
     phases: { phases: [], next: {}, exhausted: true },
     event_series: {

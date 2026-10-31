@@ -114,7 +114,7 @@ function mount() {
     switch (what) {
       case "viewer":
         return Promise.resolve(JANE);
-      case "work_inbox":
+      case "inbox":
         return Promise.resolve({
           handle: "jane",
           notices: [],

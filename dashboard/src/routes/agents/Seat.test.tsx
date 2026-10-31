@@ -221,7 +221,7 @@ const DEFAULTS: Record<string, unknown> = {
   },
   turns: { turns: [], next: null },
   agent: { llm_history: [], next: "" },
-  work_inbox: { handle: "", notices: [], primary_reasons: [], unread: 0, primary: 0 },
+  inbox: { handle: "", notices: [], primary_reasons: [], unread: 0, primary: 0 },
   work_my_work: emptyDay("swe"),
   tokens: {
     since: "2026-09-15T00:00:00Z",
@@ -1347,7 +1347,7 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
         name: "Jane Founder",
         acts: [],
       },
-      work_inbox: inboxPage(50, true),
+      inbox: inboxPage(50, true),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
@@ -1357,7 +1357,7 @@ test("your own day's Unread is the sidebar badge's count, and the day is yours",
   const row = within(nav).getByRole("link", { name: /Inbox/ });
   expect(row.textContent).toContain("50+");
   // ONE READING: the frame's, never a second read of the same inbox.
-  expect(askedFor("work_inbox")).toHaveLength(1);
+  expect(askedFor("inbox")).toHaveLength(1);
   expect(screen.getByText("Your day")).toBeTruthy();
   const day = screen.getByText("Your day").closest(".prof-day-head") as HTMLElement;
   expect(within(day).getByRole("link", { name: "Inbox" }).getAttribute("href")).toBe("#/inbox");
@@ -1402,13 +1402,13 @@ test("an operator reading a colleague's day asks that colleague's inbox", async 
         owner: "cto",
         acts: [],
       },
-      work_inbox: (p: Record<string, unknown>) =>
+      inbox: (p: Record<string, unknown>) =>
         p.handle === "jane" ? inboxPage(7, false) : inboxPage(0, false),
       work_person: { handle: "jane", unread: [], version: 1, held: true, complete: true },
     },
   });
   await waitFor(() => expect(tile("Unread").textContent).toContain("7"));
-  expect(askedFor("work_inbox").map((a) => a.params.handle)).toContain("jane");
+  expect(askedFor("inbox").map((a) => a.params.handle)).toContain("jane");
   expect(screen.getByText("Their day")).toBeTruthy();
   expect(tile("Unread").textContent).toContain("waiting on them");
 });
