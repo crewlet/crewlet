@@ -31,9 +31,10 @@
  *
  * The kit's `NavItem` takes a figure only with the words that name it, and
  * two kinds of figure are two props: a BADGE is how many things are waiting
- * on the reader (the Inbox's unread primary notices, the one accent fill in
- * the chrome), and a COUNT is how many of something a destination holds (the
- * turns Live is running, a pinned view's total). A
+ * on the reader (the Inbox's unread primary notices, the open work assigned
+ * to them on My work, the mentions and direct messages Chatlet holds for
+ * them), the accent's filled pill, and a COUNT is how many of something a
+ * destination holds (the turns Live is running, a pinned view's total). A
  * figure the engine did not answer is absent, never a zero.
  *
  * # A lock goes where the closed thing is, and a row is hidden only for a service
@@ -236,6 +237,8 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           },
         }
       : {},
+    // THE OPEN WORK ASSIGNED TO THE READER IS A BADGE, as the Inbox's is:
+    // it waits on them, so it is the same filled pill on the same end line.
     // NOTHING ON YOU IS NO FIGURE, as nothing waiting is no badge: a zero
     // beside the row is a mark a reader checks, and it would be there for
     // good on a quiet day.
@@ -245,7 +248,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           // `+` where the engine stopped counting: the row said "10000+"
           // beside a tab that said "10,000+".
           {
-            count: {
+            badge: {
               value: pageCount(queue.total, queue.capped === true),
               label: "open, assigned to you",
             },

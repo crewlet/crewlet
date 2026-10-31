@@ -694,6 +694,8 @@ describe("the sidebar's figures", () => {
     expect(asked.some((a) => a.what === "work_my_work")).toBe(false);
     const row = screen.getByRole("link", { name: /^My work/ });
     expect(row.textContent).toContain("3 open, assigned to you");
+    // THE INBOX'S PILL, not the quiet count: the work waits on the viewer.
+    expect(row.querySelector(".crewlet-nav-item__badge")?.textContent).toContain("3");
   });
 
   test("a count that stopped at the engine's ceiling is drawn as a floor", async () => {
