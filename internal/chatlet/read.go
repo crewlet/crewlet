@@ -555,10 +555,12 @@ type ChannelSummary struct {
 	// why it is here rather than on the channel.
 	FollowAll bool `json:"follow_all,omitempty"`
 
-	// Unread is how many messages sit above this viewer's cursor, counted
-	// to [UnreadLimit]. Their OWN messages and the tombstones do not
-	// count: a badge for something you said yourself, or for a body that
-	// is no longer there, is a badge nobody can clear by reading.
+	// Unread is how many room posts sit above this viewer's cursor, counted
+	// to [UnreadLimit]. A reply in a thread is not one: it is read in its
+	// thread, which the reader follows there. Their OWN messages and the
+	// tombstones do not count: a badge for something you said yourself, or
+	// for a body that is no longer there, is a badge nobody can clear by
+	// reading.
 	Unread int `json:"unread"`
 
 	// UnreadCapped says the count stopped at [UnreadLimit] — the "99+"
@@ -1139,9 +1141,10 @@ func lastMessage(ctx context.Context, tx *sql.Tx, channelID string) (
 // A MESSAGE YOU WROTE IS NOT ONE YOU HAVE NOT READ, and a tombstone is not a
 // message: both are excluded, because a badge nobody can clear by reading the
 // room is a badge that trains people to ignore the rail. Nor is a room event,
-// which is the room's change rather than anything said in it, so the window
-// is the room's newest [UnreadLimit] MESSAGES, stepping past events on the
-// same index.
+// which is the room's change rather than anything said in it, nor a reply in
+// a thread, which a reader follows in the thread rather than in the room: the
+// window is the room's newest [UnreadLimit] ROOM POSTS, stepping past events
+// and replies on the same index.
 //
 // # And the mentions among them, in the same statement
 //
@@ -1175,7 +1178,7 @@ const unreadStatement = `
 	                         THEN 1 ELSE 0 END), 0)
 	  FROM (SELECT id, version, author_handle, deleted_at, collective
 	          FROM chat_messages
-	         WHERE channel_id = ? AND event = ''
+	         WHERE channel_id = ? AND event = '' AND thread_root = ''
 	         ORDER BY channel_seq DESC
 	         LIMIT ?) t
 	  LEFT JOIN chat_mentions n ON n.message_id = t.id AND n.handle = ?

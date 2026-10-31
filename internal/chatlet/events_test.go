@@ -301,9 +301,10 @@ func TestARoomEventIsNotConversation(t *testing.T) {
 	}
 }
 
-// THE MENTION COUNT IS THE UNREAD MESSAGES THAT ASK FOR THE READER: those that
-// name them and those that name the whole room, never their own and never one
-// taken back, counted over the same messages as the unread count.
+// THE MENTION COUNT IS THE UNREAD ROOM POSTS THAT ASK FOR THE READER: those
+// that name them and those that name the whole room, never their own, never one
+// taken back and never a reply, which is read in its thread, counted over the
+// same posts as the unread count.
 //
 // Mutation: drop `t.collective = 1` from the count and the `@channel` message
 // is not counted; drop the LEFT JOIN's handle and every mention in the room
@@ -335,6 +336,13 @@ func TestTheMentionCountIsWhatAsksForTheReader(t *testing.T) {
 	r.drain()
 	post(person("bob"), "k-5", chatlet.NewMessage{Body: "@bob note to self",
 		Mentions: []string{"bob"}})
+	// A REPLY IS READ IN ITS THREAD, mention and all: it badges neither count.
+	if _, err := r.store.Reply(t.Context(), keyed(person("jane"), requested("k-6")), id,
+		taken.Message.ID, chatlet.NewMessage{Body: "@bob in the thread",
+			Mentions: []string{"bob"}}); err != nil {
+		t.Fatalf("reply in the thread: %v", err)
+	}
+	r.drain()
 
 	rail, err := r.reader().Channels(t.Context(), "bob", chatlet.ChannelsQuery{},
 		statelog.Freshness{Level: statelog.ReadStale})
@@ -344,8 +352,9 @@ func TestTheMentionCountIsWhatAsksForTheReader(t *testing.T) {
 	got := rail.Channels[0]
 	if got.Unread != 3 || got.Mentions != 2 {
 		t.Errorf("bob's badge reads unread %d, mentions %d, want 3 and 2: three "+
-			"messages somebody else said and nobody took back, one naming him and "+
-			"one naming the room", got.Unread, got.Mentions)
+			"room posts somebody else said and nobody took back, one naming him and "+
+			"one naming the room; the reply naming him is read in its thread",
+			got.Unread, got.Mentions)
 	}
 	jane, err := r.reader().Channels(t.Context(), "jane", chatlet.ChannelsQuery{},
 		statelog.Freshness{Level: statelog.ReadStale})

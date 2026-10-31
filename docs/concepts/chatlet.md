@@ -532,8 +532,9 @@ went. A mute is a room at a time rather than a list: a flush mutes or unmutes
 the rooms it names and every other keeps its state, so a screen mutes the room
 it is on without first reading what else is muted, and two tabs muting two
 different rooms at once both land. The same surface's `list_channels` counts
-each room's unread messages against it, and how many of those name the person
-or the whole room (`@channel`), and marks the rooms the seat muted and
+each room's unread room posts against it (a reply is read in its thread, so it
+does not badge the room), and how many of those name the person or the whole
+room (`@channel`), and marks the rooms the seat muted and
 a do-not-disturb its person is in, so their own assistant sees what the
 dashboard's badges show; a read state that cannot be read is said rather than
 counted from zero, which would call every room unread.

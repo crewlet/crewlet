@@ -4026,14 +4026,14 @@ export interface ChatChannelSummary {
   revision: number;
   /** THIS VIEWER'S membership flag: every message in the room reaches them. */
   follow_all?: boolean;
-  /** Messages above this viewer's cursor, counted to `chatlet.UnreadLimit`
-   *  (100). Their own messages, the tombstones and room events do not
-   *  count. */
+  /** Room posts above this viewer's cursor, counted to `chatlet.UnreadLimit`
+   *  (100). Their own messages, the tombstones, room events and replies in a
+   *  thread do not count: a reply is read in its thread. */
   unread: number;
   /** The count stopped at the limit — the "99+" case, stated rather than
    *  inferred from the number. */
   unread_capped?: boolean;
-  /** Of `unread`, the messages that name this viewer or the whole room
+  /** Of `unread`, the room posts that name this viewer or the whole room
    *  (`@channel`): the accent badge. Counted over the same messages, so it is
    *  never more than `unread` and it stopped where `unread_capped` says that
    *  did. A direct conversation is counted the same way; a screen that treats
