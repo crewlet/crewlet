@@ -53,7 +53,7 @@ import { NotifyLevels } from "./notify.tsx";
 import { ChatSidePanel } from "./PanePanel.tsx";
 import { useChatPeople, type ChatPerson } from "./people.ts";
 import { isDirect } from "~/lib/chatRooms.ts";
-import { knownKind, roomKindLabel, roomMark, roomTitle } from "./rooms.ts";
+import { knownKind, roomKindLabel, roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { SharedList } from "./Shared.tsx";
@@ -403,7 +403,7 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
         <EmptyState
           size="compact"
           title="Nobody matches"
-          description={`Nobody in ${direct ? "this conversation" : `#${channel.name}`} matches “${filter.trim()}”.`}
+          description={`Nobody in ${direct ? "this conversation" : roomWhere(channel.kind, channel.name ?? channel.id)} matches “${filter.trim()}”.`}
         />
       )}
       {(answer.members ?? []).length === 0 && q === "" && !canAdd && (

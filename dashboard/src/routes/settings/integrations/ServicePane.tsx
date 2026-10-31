@@ -1,7 +1,7 @@
 /**
  * The detail of a service built into Crewlet, laid out as a third-party
- * app's is (a header with its state and one line, the counts, and Overview,
- * Agents, Activity and Settings) and filled only with what the engine answers.
+ * app's is (a header with its state and one line, the counts, and Agents,
+ * Activity and Settings) and filled only with what the engine answers.
  *
  * WHAT EACH PART READS, and why it is honest:
  *
@@ -13,8 +13,11 @@
  *    the derived chart).
  *  - THE COUNTS. Projects and their open tasks (`work_projects`), spaces and
  *    their pages (`containers`), and the newest change on each log
- *    (`work_activity`, `page_activity`). No delivery count, because a
- *    built-in service has no inbound edge to count.
+ *    (`work_activity`, `page_activity`), in the header. The projects and the
+ *    spaces counted there link to the service's own list of them, which
+ *    names each with its counts: an Overview tab that listed them again here
+ *    was a second copy of that page. No delivery count, because a built-in
+ *    service has no inbound edge to count.
  *  - THE SETTINGS. The company document's `tracker` and `knowledge` blocks,
  *    with the engine's own defaults where a key is unset, read only by an
  *    Admin, as the `config` question is.
@@ -247,10 +250,10 @@ function verb(kind: string): string {
   return VERBS[kind] ?? kind.replace(/_/g, " ");
 }
 
-type Tab = "overview" | "agents" | "activity" | "settings";
+type Tab = "agents" | "activity" | "settings";
 
 function useTab(): [Tab, (t: string) => void] {
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>("agents");
   return [tab, (t) => setTab(t as Tab)];
 }
 
@@ -272,7 +275,6 @@ function ServiceTabs({
       value={tab}
       onValueChange={onTab}
       items={[
-        { value: "overview", label: "Overview" },
         { value: "agents", label: "Agents", count: agents },
         { value: "activity", label: "Activity" },
         { value: "settings", label: "Settings" },
@@ -378,6 +380,8 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
             ) : (
               <EmptyValue label="Reading" />
             ),
+            // WORKLET'S OWN LIST OF THEM, each with its open and done counts.
+            ...(service.open ? { path: service.open.path } : {}),
           },
           {
             label: "Open tasks",
@@ -393,112 +397,97 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
           },
         ],
       )}
-      <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
-      {tab === "overview" && (
-        <div className="int-tab">
-          <section aria-label="Projects">
-            <h3 className="t-label">Projects</h3>
-            <ul className="int-feed">
-              {rows.map((p) => (
-                <li key={p.key} className="int-feed-row">
-                  <a className="int-feed-what" href={href(["worklet", p.key])}>
-                    <strong>{p.name}</strong> <span className="mono">{p.key}</span>
-                  </a>
-                  <span className="t-caption int-feed-at">
-                    {p.task_counts.todo + p.task_counts.active} open · {p.task_counts.done} done
-                  </span>
-                </li>
-              ))}
-              {projects.data && rows.length === 0 && <li className="t-caption">No project yet.</li>}
-            </ul>
-          </section>
-        </div>
-      )}
-      {tab === "agents" && (
-        <div className="int-tab">
-          <p className="t-caption">
-            Every agent works in Worklet: it holds the Worklet app with its seat.
-          </p>
-          <div className="int-seats">
-            {agents.map((a) => {
-              const row = load.get(a.handle);
-              const home = homeOf(config.data, a.handle);
-              const detail = [
-                home.project ? `Files work in ${home.project}` : "",
-                row ? `${row.blocked} blocked · ${row.overdue} overdue` : "",
-              ]
-                .filter(Boolean)
-                .join(" · ");
-              return (
-                <AgentLine
-                  key={a.handle}
-                  seat={a}
-                  detail={detail || handleLabel(a.handle)}
-                  state={
-                    <Tag
-                      size="sm"
-                      variant={row && row.open > 0 ? "info" : "neutral"}
-                      appearance={row && row.open > 0 ? "soft" : "outline"}
-                    >
-                      {row && row.open > 0 ? `${row.open} open` : "Nothing open"}
-                    </Tag>
-                  }
-                />
-              );
-            })}
+      {/* THE TAB BAR AND ITS PANEL, one step apart (`.tab-detail`). */}
+      <div className="tab-detail">
+        <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
+        {tab === "agents" && (
+          <div className="int-tab">
+            <p className="t-caption">
+              Every agent works in Worklet: it holds the Worklet app with its seat.
+            </p>
+            <div className="int-seats">
+              {agents.map((a) => {
+                const row = load.get(a.handle);
+                const home = homeOf(config.data, a.handle);
+                const detail = [
+                  home.project ? `Files work in ${home.project}` : "",
+                  row ? `${row.blocked} blocked · ${row.overdue} overdue` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ");
+                return (
+                  <AgentLine
+                    key={a.handle}
+                    seat={a}
+                    detail={detail || handleLabel(a.handle)}
+                    state={
+                      <Tag
+                        size="sm"
+                        variant={row && row.open > 0 ? "info" : "neutral"}
+                        appearance={row && row.open > 0 ? "soft" : "outline"}
+                      >
+                        {row && row.open > 0 ? `${row.open} open` : "Nothing open"}
+                      </Tag>
+                    }
+                  />
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
-      {tab === "activity" && (
-        <div className="int-tab">
-          <ul className="int-feed">
-            {records.map((r) => (
-              <FeedRow
-                key={r.id}
-                who={nameOf(r.actor)}
-                what={
-                  <>
-                    {verb(r.kind)}{" "}
-                    <span className="mono">{r.subject_key ?? keys[r.subject_id] ?? "a task"}</span>
-                    {r.excerpt ? <span className="t-caption"> · {r.excerpt}</span> : null}
-                  </>
-                }
-                at={r.at}
-                now={now}
-              />
-            ))}
-            {feed.data && records.length === 0 && (
-              <li className="t-caption">Nothing has changed yet.</li>
-            )}
-          </ul>
-        </div>
-      )}
-      {tab === "settings" && (
-        <div className="int-tab">
-          <DescriptionList
-            dense
-            items={[
-              ["Work tracker", "Worklet"],
-              [
-                "Inbox keeps a row for",
-                viewer.admin ? retention : <EmptyValue label="Admins see this" />,
-              ],
-              [
-                "Projects the chart declares",
-                viewer.admin ? (
-                  documentUnits(config.data)
-                    .map((u) => u.project)
-                    .filter(Boolean)
-                    .join(", ") || <EmptyValue label="None" />
-                ) : (
-                  <EmptyValue label="Admins see this" />
-                ),
-              ],
-            ]}
-          />
-          <p className="t-caption">These live in the company document, under tracker.</p>
-        </div>
-      )}
+        )}
+        {tab === "activity" && (
+          <div className="int-tab">
+            <ul className="int-feed">
+              {records.map((r) => (
+                <FeedRow
+                  key={r.id}
+                  who={nameOf(r.actor)}
+                  what={
+                    <>
+                      {verb(r.kind)}{" "}
+                      <span className="mono">
+                        {r.subject_key ?? keys[r.subject_id] ?? "a task"}
+                      </span>
+                      {r.excerpt ? <span className="t-caption"> · {r.excerpt}</span> : null}
+                    </>
+                  }
+                  at={r.at}
+                  now={now}
+                />
+              ))}
+              {feed.data && records.length === 0 && (
+                <li className="t-caption">Nothing has changed yet.</li>
+              )}
+            </ul>
+          </div>
+        )}
+        {tab === "settings" && (
+          <div className="int-tab">
+            <DescriptionList
+              dense
+              items={[
+                ["Work tracker", "Worklet"],
+                [
+                  "Inbox keeps a row for",
+                  viewer.admin ? retention : <EmptyValue label="Admins see this" />,
+                ],
+                [
+                  "Projects the chart declares",
+                  viewer.admin ? (
+                    documentUnits(config.data)
+                      .map((u) => u.project)
+                      .filter(Boolean)
+                      .join(", ") || <EmptyValue label="None" />
+                  ) : (
+                    <EmptyValue label="Admins see this" />
+                  ),
+                ],
+              ]}
+            />
+            <p className="t-caption">These live in the company document, under tracker.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -555,6 +544,8 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
           {
             label: "Spaces",
             value: containers.data ? fmtCount(spaces.length) : <EmptyValue label="Reading" />,
+            // DOCLET'S OWN LIST OF THEM, each with its pages.
+            ...(service.open ? { path: service.open.path } : {}),
           },
           {
             label: "Pages",
@@ -566,120 +557,106 @@ function DocletPane({ service, head }: { service: BuiltInService; head: Head }) 
           },
         ],
       )}
-      <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
-      {tab === "overview" && (
-        <div className="int-tab">
-          <section aria-label="Spaces">
-            <h3 className="t-label">Spaces</h3>
-            <ul className="int-feed">
-              {spaces.map((c) => (
-                <li key={c.key} className="int-feed-row">
-                  <a className="int-feed-what" href={href(["doclet", c.key])}>
-                    <strong>{c.name || c.key}</strong> <span className="mono">{c.key}</span>
-                  </a>
-                  <span className="t-caption int-feed-at">{plural(c.pages, "page")}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-        </div>
-      )}
-      {tab === "agents" && (
-        <div className="int-tab">
-          <p className="t-caption">
-            Every agent reads and writes in Doclet: it holds the Doclet app with its seat.
-          </p>
-          <div className="int-seats">
-            {agents.map((a) => {
-              const home = homeOf(config.data, a.handle);
-              const space = home.space ? spaces.find((c) => c.key === home.space) : undefined;
-              const chain = chains.get(a.handle) ?? [];
-              return (
-                <AgentLine
-                  key={a.handle}
-                  seat={a}
-                  detail={
-                    [
-                      home.space
-                        ? `Writes in ${home.space}${space ? ` (${plural(space.pages, "page")})` : ""}`
-                        : "",
-                      chain.length > 0
-                        ? `Reads ${plural(chain.length, "onboarding page")} first`
-                        : "",
-                    ]
-                      .filter(Boolean)
-                      .join(" · ") || handleLabel(a.handle)
-                  }
-                  state={
-                    <StatusDot tone={home.space || !viewer.admin ? "success" : "neutral"}>
-                      {home.space
-                        ? "Has a space"
-                        : viewer.admin
-                          ? "No space of its own"
-                          : "Reads and writes"}
-                    </StatusDot>
-                  }
-                />
-              );
-            })}
+      {/* THE TAB BAR AND ITS PANEL, one step apart (`.tab-detail`). */}
+      <div className="tab-detail">
+        <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
+        {tab === "agents" && (
+          <div className="int-tab">
+            <p className="t-caption">
+              Every agent reads and writes in Doclet: it holds the Doclet app with its seat.
+            </p>
+            <div className="int-seats">
+              {agents.map((a) => {
+                const home = homeOf(config.data, a.handle);
+                const space = home.space ? spaces.find((c) => c.key === home.space) : undefined;
+                const chain = chains.get(a.handle) ?? [];
+                return (
+                  <AgentLine
+                    key={a.handle}
+                    seat={a}
+                    detail={
+                      [
+                        home.space
+                          ? `Writes in ${home.space}${space ? ` (${plural(space.pages, "page")})` : ""}`
+                          : "",
+                        chain.length > 0
+                          ? `Reads ${plural(chain.length, "onboarding page")} first`
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || handleLabel(a.handle)
+                    }
+                    state={
+                      <StatusDot tone={home.space || !viewer.admin ? "success" : "neutral"}>
+                        {home.space
+                          ? "Has a space"
+                          : viewer.admin
+                            ? "No space of its own"
+                            : "Reads and writes"}
+                      </StatusDot>
+                    }
+                  />
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
-      {tab === "activity" && (
-        <div className="int-tab">
-          <ul className="int-feed">
-            {changes.map((c) => (
-              <FeedRow
-                key={c.id}
-                who={nameOf(c.actor)}
-                what={
-                  <>
-                    {verb(c.kind)}{" "}
-                    <a className="prose-link" href={href(["doclet", "pages", c.page_id])}>
-                      {c.title || "a page"}
-                    </a>
-                    {c.container ? <span className="t-caption"> in {c.container}</span> : null}
-                  </>
-                }
-                at={c.at}
-                now={now}
-              />
-            ))}
-            {feed.data && changes.length === 0 && (
-              <li className="t-caption">No page has changed yet.</li>
-            )}
-          </ul>
-        </div>
-      )}
-      {tab === "settings" && (
-        <div className="int-tab">
-          <DescriptionList
-            dense
-            items={[
-              ["Knowledge base", "Doclet"],
-              ...(viewer.admin
-                ? ([
-                    [
-                      "Company pages",
-                      typeof knowledge.root_space === "string" ? knowledge.root_space : DEFAULT,
-                    ],
-                    ["Tool skills", skills === "" ? "Off" : (skills ?? DEFAULT)],
-                    ["Search reaches", scope.length > 0 ? scope.join(", ") : "Every space"],
-                    [
-                      "Search by meaning",
-                      knowledge.vectors === false
-                        ? "Off"
-                        : knowledge.vectors === true
-                          ? "On"
-                          : "When an embeddings provider is set",
-                    ],
-                  ] as [string, string][])
-                : ([["Everything else", "Admins see this"]] as [string, string][])),
-            ]}
-          />
-          <p className="t-caption">These live in the company document, under knowledge.</p>
-        </div>
-      )}
+        )}
+        {tab === "activity" && (
+          <div className="int-tab">
+            <ul className="int-feed">
+              {changes.map((c) => (
+                <FeedRow
+                  key={c.id}
+                  who={nameOf(c.actor)}
+                  what={
+                    <>
+                      {verb(c.kind)}{" "}
+                      <a className="prose-link" href={href(["doclet", "pages", c.page_id])}>
+                        {c.title || "a page"}
+                      </a>
+                      {c.container ? <span className="t-caption"> in {c.container}</span> : null}
+                    </>
+                  }
+                  at={c.at}
+                  now={now}
+                />
+              ))}
+              {feed.data && changes.length === 0 && (
+                <li className="t-caption">No page has changed yet.</li>
+              )}
+            </ul>
+          </div>
+        )}
+        {tab === "settings" && (
+          <div className="int-tab">
+            <DescriptionList
+              dense
+              items={[
+                ["Knowledge base", "Doclet"],
+                ...(viewer.admin
+                  ? ([
+                      [
+                        "Company pages",
+                        typeof knowledge.root_space === "string" ? knowledge.root_space : DEFAULT,
+                      ],
+                      ["Tool skills", skills === "" ? "Off" : (skills ?? DEFAULT)],
+                      ["Search reaches", scope.length > 0 ? scope.join(", ") : "Every space"],
+                      [
+                        "Search by meaning",
+                        knowledge.vectors === false
+                          ? "Off"
+                          : knowledge.vectors === true
+                            ? "On"
+                            : "When an embeddings provider is set",
+                      ],
+                    ] as [string, string][])
+                  : ([["Everything else", "Admins see this"]] as [string, string][])),
+              ]}
+            />
+            <p className="t-caption">These live in the company document, under knowledge.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

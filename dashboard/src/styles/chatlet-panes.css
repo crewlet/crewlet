@@ -68,6 +68,12 @@
   gap: var(--spacing-4);
   padding: var(--spacing-4);
 }
+/* A ROOM'S DETAILS ARE TABBED (the one pane whose body is
+   `.chat-pane-scroll`), and each tab's section starts the shared step under
+   the bar (`--tab-panel-gap`). */
+.chat-pane-scroll > .chat-pane-section:first-child {
+  padding-top: var(--tab-panel-gap);
+}
 
 .chat-pane-foot {
   display: flex;

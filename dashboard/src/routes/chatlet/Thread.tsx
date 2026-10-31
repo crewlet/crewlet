@@ -73,7 +73,6 @@ import { markRead, packPosition } from "./cursor.ts";
 import { continues } from "./days.ts";
 import { ChatFace, stackMember } from "./Face.tsx";
 import { useChatRead } from "~/lib/chatLive.ts";
-import { isDirect } from "~/lib/chatRooms.ts";
 import { useChatFrames, useChatPresence } from "./live.ts";
 import { MessageRow } from "./MessageRow.tsx";
 import { PendingRow } from "./Pending.tsx";
@@ -82,7 +81,7 @@ import { useChatFrame, useChatNav } from "./nav.tsx";
 import { PAGE } from "./page.ts";
 import { ChatSidePanel } from "./PanePanel.tsx";
 import { useChatPeople } from "./people.ts";
-import { roomTitle } from "./rooms.ts";
+import { roomTitle, roomWhere } from "./rooms.ts";
 import { useRoomDetail } from "./roomDetail.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 
@@ -212,7 +211,7 @@ function Thread({
         nameOf: people.nameOf,
       })
     : "";
-  const where = channel && !isDirect(channel.kind) ? `#${title}` : title;
+  const where = channel ? roomWhere(channel.kind, title) : title;
 
   return (
     <ChatSidePanel

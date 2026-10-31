@@ -111,16 +111,20 @@ describe("unread rooms", () => {
     await settle();
     expect(socket.query.mock.calls.map(([what]) => what)).toContain("chat_channels");
     expect(screen.getByText("Unread rooms · 2")).toBeTruthy();
-    expect(screen.getByText("#general")).toBeTruthy();
-    expect(screen.getByText("#launch")).toBeTruthy();
+    expect(screen.getByText("general")).toBeTruthy();
+    expect(screen.getByText("launch")).toBeTruthy();
     // THE CAP IS THE ENGINE'S: "99+" only where the answer says it stopped.
-    const row = (name: string) => screen.getByText(`#${name}`).closest("a")!;
+    const row = (name: string) => screen.getByText(name).closest("a")!;
     expect(within(row("launch")).getByText("99+")).toBeTruthy();
     expect(within(row("general")).getByText("2")).toBeTruthy();
-    expect(screen.queryByText("#quiet")).toBeNull();
-    expect(screen.queryByText("#noise")).toBeNull();
+    // ONE `#`: the row's glyph is the room's sigil, so its name is bare.
+    // Mutation: write the name as a sentence does and these go red.
+    expect(row("general").textContent).not.toContain("#");
+    expect(row("launch").textContent).not.toContain("#");
+    expect(screen.queryByText("quiet")).toBeNull();
+    expect(screen.queryByText("noise")).toBeNull();
     expect(screen.getByText("1 muted room with unread messages left out.")).toBeTruthy();
-    expect(screen.getByText("#general").closest("a")?.getAttribute("href")).toBe(
+    expect(screen.getByText("general").closest("a")?.getAttribute("href")).toBe(
       "#/chatlet/c-general",
     );
   });
@@ -133,7 +137,7 @@ describe("unread rooms", () => {
     await settle();
     expect(screen.getByText(/couldn’t be read/)).toBeTruthy();
     expect(screen.queryByText("You’re caught up")).toBeNull();
-    expect(screen.queryByText("#general")).toBeNull();
+    expect(screen.queryByText("general")).toBeNull();
   });
 
   test("a muted room is counted even when it is all that is unread", async () => {
@@ -152,7 +156,7 @@ describe("unread rooms", () => {
     expect(screen.queryByText("You’re caught up")).toBeNull();
     expect(screen.getByText(NOTHING_TO_LIST)).toBeTruthy();
     expect(screen.getByText("1 muted room with unread messages left out.")).toBeTruthy();
-    expect(screen.queryByText("#noise")).toBeNull();
+    expect(screen.queryByText("noise")).toBeNull();
   });
 
   test("a rail cut at the engine's bound says only its rooms are counted", async () => {
@@ -163,7 +167,7 @@ describe("unread rooms", () => {
       answers: { chat_channels: { ...RAIL, truncated: true } },
     });
     await settle();
-    expect(screen.getByText("#general")).toBeTruthy();
+    expect(screen.getByText("general")).toBeTruthy();
     expect(screen.getByText(cut)).toBeTruthy();
     cleanup();
 
@@ -202,7 +206,7 @@ describe("unread rooms, live", () => {
     const { socket, store } = mountHome(<Component params={{}} />, {
       answers: { chat_channels: RAIL },
     });
-    await waitFor(() => expect(screen.getByText("#general")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("general")).toBeTruthy());
     await pause(50);
     const before = asks(socket, "chat_channels");
     expect(before).toBe(1);
@@ -215,7 +219,7 @@ describe("unread rooms, live", () => {
     const { socket, store } = mountHome(<Component params={{}} />, {
       answers: { chat_channels: RAIL },
     });
-    await waitFor(() => expect(screen.getByText("#general")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("general")).toBeTruthy());
     await pause(50);
     // THE ANSWER'S OWN READ STATE SEEDS THE TAB'S, and that costs no second read.
     const before = asks(socket, "chat_channels");
@@ -242,7 +246,7 @@ describe("mentions", () => {
     expect(asked?.[1]).toMatchObject({ kind: "mention", limit: 5 });
     expect(screen.getByText(/@ada can you look\?/)).toBeTruthy();
     const link = screen
-      .getByText(/#general · in a thread/)
+      .getByText(/^general · in a thread/)
       .closest("a")
       ?.getAttribute("href");
     expect(link).toContain("#/chatlet/c-general?");
@@ -253,9 +257,10 @@ describe("mentions", () => {
     const { Component } = MENTIONS;
     mountHome(<Component params={{}} />, { answers: { chat_activity: FEED([mention()]) } });
     await settle();
-    expect(screen.getByText("#general").closest("a")?.getAttribute("href")).toBe(
-      "#/chatlet/c-general?message=m-2",
-    );
+    const row = screen.getByText("general").closest("a");
+    expect(row?.getAttribute("href")).toBe("#/chatlet/c-general?message=m-2");
+    // ONE `#`, the glyph's, as on the unread rooms beside it.
+    expect(row?.textContent).not.toContain("#");
   });
 
   test("a frame anywhere re-reads the newest page", async () => {

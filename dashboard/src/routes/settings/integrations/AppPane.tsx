@@ -222,117 +222,120 @@ export function AppPane({
   return (
     <>
       {header}
-      <Tabs
-        variant="underline"
-        ariaLabel={`${tool.entry.name} sections`}
-        value={tab}
-        onValueChange={setTab}
-        items={[
-          {
-            value: "agents",
-            label: "Agents",
-            // THE AGENTS THAT ARE ON, said once the access answer has.
-            ...(counts ? { count: counts.on } : {}),
-            ...(tool.issues.length > 0 || (counts?.waiting ?? 0) > 0 || data?.notice
-              ? { marker: { tone: "warning" as const, label: "Needs attention" } }
-              : {}),
-          },
-          { value: "activity", label: "Activity" },
-          { value: "settings", label: "Settings" },
-        ]}
-        actions={
-          model.guarded || !provisioned ? undefined : (
+      {/* THE TAB BAR AND ITS PANEL, one step apart (`.tab-detail`). */}
+      <div className="tab-detail">
+        <Tabs
+          variant="underline"
+          ariaLabel={`${tool.entry.name} sections`}
+          value={tab}
+          onValueChange={setTab}
+          items={[
+            {
+              value: "agents",
+              label: "Agents",
+              // THE AGENTS THAT ARE ON, said once the access answer has.
+              ...(counts ? { count: counts.on } : {}),
+              ...(tool.issues.length > 0 || (counts?.waiting ?? 0) > 0 || data?.notice
+                ? { marker: { tone: "warning" as const, label: "Needs attention" } }
+                : {}),
+            },
+            { value: "activity", label: "Activity" },
+            { value: "settings", label: "Settings" },
+          ]}
+          actions={
+            model.guarded || !provisioned ? undefined : (
+              <Button
+                size="small"
+                variant="ghost"
+                leadingIcon={<RotateCwGlyph size="sm" />}
+                loading={checking}
+                disabledReason={model.managed ?? (data?.syncing ? "A sync is running." : undefined)}
+                onClick={async () => {
+                  if (model.managed) return;
+                  setChecking(true);
+                  try {
+                    // A REFUSAL IS SAID in the loop's own words; the button's
+                    // own busy state is the rest of the answer.
+                    setRefused(await model.check(tool));
+                  } finally {
+                    void access.reload({ quiet: true });
+                    setChecking(false);
+                  }
+                }}
+              >
+                Check now
+              </Button>
+            )
+          }
+        />
+        {refused && (
+          <p className="t-caption" role="status">
+            {refused}
+          </p>
+        )}
+        {tab === "agents" && (
+          <div className="int-tab">
+            {issues.length > 0 && (
+              <div className="int-issues">
+                {issues.map((issue) => (
+                  <IssueRow key={issue.key} tool={tool} issue={issue} onFix={setOpen} />
+                ))}
+              </div>
+            )}
+            <QueryState
+              error={access.code}
+              refusal={access.refusal}
+              loading={access.loading && !data}
+            >
+              {data && (
+                <AgentsAccess
+                  kind={tool.entry.key}
+                  name={tool.entry.name}
+                  data={data}
+                  reload={() => void access.reload({ quiet: true })}
+                  held={held}
+                  readOnly={readOnly}
+                  avatarOf={model.avatarOf}
+                  onAnswer={access.adopt}
+                  onReplaceKey={() => setOpen("rotate")}
+                  stepFor={seatStepFor(tool, model)}
+                />
+              )}
+            </QueryState>
+            {/* ADVISORIES ARE SAID, never raised, and under the agents: the
+              tool works, and what the loop noticed is worth reading once. */}
+            <Notes notes={tool.notes} />
+          </div>
+        )}
+        {tab === "activity" && (
+          <div className="int-tab">
+            {kinds.length > 0 && (
+              <SetupPasses key={`passes:${tool.entry.key}`} entry={tool.entry} kinds={kinds} />
+            )}
+            {/* `forge` is a relay rather than a source: its events are filed
+              under the product they belong to. */}
+            {tool.entry.surfaces
+              .filter((s) => s.key !== "forge")
+              .map((s) => (
+                <SurfaceDeliveries key={s.key} surface={s.key} name={s.name} />
+              ))}
+          </div>
+        )}
+        {tab === "settings" && (
+          <div className="int-tab">
+            <SettingsSummary tool={tool} />
             <Button
               size="small"
-              variant="ghost"
-              leadingIcon={<RotateCwGlyph size="sm" />}
-              loading={checking}
-              disabledReason={model.managed ?? (data?.syncing ? "A sync is running." : undefined)}
-              onClick={async () => {
-                if (model.managed) return;
-                setChecking(true);
-                try {
-                  // A REFUSAL IS SAID in the loop's own words; the button's
-                  // own busy state is the rest of the answer.
-                  setRefused(await model.check(tool));
-                } finally {
-                  void access.reload({ quiet: true });
-                  setChecking(false);
-                }
-              }}
+              variant="secondary"
+              disabledReason={tool.blocked}
+              onClick={() => !tool.blocked && setOpen("settings")}
             >
-              Check now
+              Edit settings
             </Button>
-          )
-        }
-      />
-      {refused && (
-        <p className="t-caption" role="status">
-          {refused}
-        </p>
-      )}
-      {tab === "agents" && (
-        <div className="int-tab">
-          {issues.length > 0 && (
-            <div className="int-issues">
-              {issues.map((issue) => (
-                <IssueRow key={issue.key} tool={tool} issue={issue} onFix={setOpen} />
-              ))}
-            </div>
-          )}
-          <QueryState
-            error={access.code}
-            refusal={access.refusal}
-            loading={access.loading && !data}
-          >
-            {data && (
-              <AgentsAccess
-                kind={tool.entry.key}
-                name={tool.entry.name}
-                data={data}
-                reload={() => void access.reload({ quiet: true })}
-                held={held}
-                readOnly={readOnly}
-                avatarOf={model.avatarOf}
-                onAnswer={access.adopt}
-                onReplaceKey={() => setOpen("rotate")}
-                stepFor={seatStepFor(tool, model)}
-              />
-            )}
-          </QueryState>
-          {/* ADVISORIES ARE SAID, never raised, and under the agents: the
-              tool works, and what the loop noticed is worth reading once. */}
-          <Notes notes={tool.notes} />
-        </div>
-      )}
-      {tab === "activity" && (
-        <div className="int-tab">
-          {kinds.length > 0 && (
-            <SetupPasses key={`passes:${tool.entry.key}`} entry={tool.entry} kinds={kinds} />
-          )}
-          {/* `forge` is a relay rather than a source: its events are filed
-              under the product they belong to. */}
-          {tool.entry.surfaces
-            .filter((s) => s.key !== "forge")
-            .map((s) => (
-              <SurfaceDeliveries key={s.key} surface={s.key} name={s.name} />
-            ))}
-        </div>
-      )}
-      {tab === "settings" && (
-        <div className="int-tab">
-          <SettingsSummary tool={tool} />
-          <Button
-            size="small"
-            variant="secondary"
-            disabledReason={tool.blocked}
-            onClick={() => !tool.blocked && setOpen("settings")}
-          >
-            Edit settings
-          </Button>
-          <DocsLink tool={tool} />
-        </div>
-      )}
+            <DocsLink tool={tool} />
+          </div>
+        )}
+      </div>
     </>
   );
 }

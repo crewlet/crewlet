@@ -12,7 +12,6 @@
 import { useMemo, useState } from "react";
 
 import { useQuery } from "~/lib/useQuery.ts";
-import { isDirect } from "~/lib/chatRooms.ts";
 
 import type { ReadCursors } from "./cursor.ts";
 import { ChatDrafts, DraftsContext } from "./drafts.ts";
@@ -28,7 +27,7 @@ import {
 } from "./nav.tsx";
 import { useOutbox } from "./outbox.ts";
 import { Room } from "./Room.tsx";
-import { roomTitle } from "./rooms.ts";
+import { roomTitle, roomWhere } from "./rooms.ts";
 
 /** What a suite reads back of the screen around the room. */
 export interface LoneRoomProbe {
@@ -86,7 +85,7 @@ export function LoneRoom({
       summary,
       channel,
       title,
-      where: channel && !isDirect(channel.kind) ? `#${title}` : title,
+      where: channel ? roomWhere(channel.kind, title) : title,
     };
   }, [channelID, detail, summary, viewer, nameOf]);
   const frame = useMemo<ChatFrame>(

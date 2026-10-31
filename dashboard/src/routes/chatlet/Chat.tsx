@@ -72,7 +72,7 @@ import { usePageLabels } from "~/app/Shell.tsx";
 import { CHAT_NARROW } from "~/app/layout.ts";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { useChatActivity, useChatRead, useCoalesced } from "~/lib/chatLive.ts";
-import { badgesAreMeasured, isDirect, useChatRooms } from "~/lib/chatRooms.ts";
+import { badgesAreMeasured, useChatRooms } from "~/lib/chatRooms.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -104,7 +104,7 @@ import { useChatPeople } from "./people.ts";
 import { Room } from "./Room.tsx";
 import { RoomsDock, RoomsSheet } from "./RoomsPanel.tsx";
 import { RoomScopeProvider } from "./scope.tsx";
-import { roomTitle } from "./rooms.ts";
+import { roomTitle, roomWhere } from "./rooms.ts";
 import { SearchView } from "./Search.tsx";
 import { useChatShortcuts } from "./shortcuts.ts";
 import { ChatTopBar } from "./TopBar.tsx";
@@ -300,7 +300,7 @@ export function ChatFrameRoot({
       summary,
       channel,
       title,
-      where: channel && !isDirect(channel.kind) ? `#${title}` : title,
+      where: channel ? roomWhere(channel.kind, title) : title,
     };
   }, [room, detail, summary, viewer.handle, nameOf]);
 

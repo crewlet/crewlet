@@ -697,7 +697,11 @@ describe("the sidebar's figures", () => {
     const row = screen.getByRole("link", { name: /^My work/ });
     expect(row.textContent).toContain("3 open, assigned to you");
     // THE INBOX'S PILL, not the quiet count: the work waits on the viewer.
-    expect(row.querySelector(".crewlet-nav-item__badge")?.textContent).toContain("3");
+    // In the QUIET tone, because nobody asked: the accent is the Inbox's.
+    // Mutation: drop the tone and the class check goes red.
+    const badge = row.querySelector(".crewlet-nav-item__badge");
+    expect(badge?.textContent).toContain("3");
+    expect(badge?.classList.contains("crewlet-nav-item__badge--quiet")).toBe(true);
   });
 
   test("a count that stopped at the engine's ceiling is drawn as a floor", async () => {

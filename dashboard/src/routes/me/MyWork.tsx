@@ -39,10 +39,10 @@
  * would be told the company was empty.
  *
  * What a sparse day gets instead is a page that says something TRUE before its
- * first count: the banner names whose day this is, their seat and the way to
- * it, and carries the one thing on this screen that asks for an
- * acknowledgement. Each empty section names what would fill it, in that
- * person's voice. And a count is WITHHELD rather than drawn as a zero while its
+ * first count: the page bar's picker names whose day this is, and the one
+ * thing on this screen that asks for an acknowledgement stands above the
+ * sections ([OrderStamp]). Each empty section names what would fill it, in
+ * that person's voice. And a count is WITHHELD rather than drawn as a zero while its
  * read is in flight, because "nothing is on you" is a claim and it is false
  * until an answer arrives.
  *
@@ -91,7 +91,7 @@ import { useMemo } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
 import { ChecklistClaims, Coverage, RowList, type RowChrome } from "~/components/work.tsx";
@@ -104,7 +104,6 @@ import {
   Select,
   type SelectOption,
   Skeleton,
-  Tag,
 } from "@crewlethq/ui";
 import { KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -362,9 +361,9 @@ export function MyWork({ section }: { section: MeSection }) {
 
   return (
     <>
-      {/* THE BAR HOLDS WHAT YOU CAN DO. Whose day this is is what the object
-          IS, so it is the band above the sections rather than a pill up here —
-          see [WhoseDay]. */}
+      {/* THE BAR HOLDS WHAT YOU CAN DO, and whose day this is: its picker
+          names the person, and on somebody else's day every held control
+          says whose it is. */}
       <PageActions>
         {/* IN THE PAGE BAR RATHER THAN IN A SIDEBAR. Whose day this is a
             FILTER on the screen you are on, and the product's grammar puts a
@@ -460,11 +459,7 @@ export function MyWork({ section }: { section: MeSection }) {
         ))}
 
       {whose && (
-        <WhoseDay
-          handle={whose}
-          seat={index.byHandle.get(whose)}
-          ownDay={ownDay}
-          login={ownDay && viewer.unbound}
+        <OrderStamp
           stamp={person.data ?? undefined}
           setByName={setByName}
           onPriorities={tab === "priorities" ? undefined : () => showPriorities()}
@@ -611,48 +606,27 @@ export function dayHolds({
 }
 
 /**
- * Whose day this is, above the sections, and what has been decided about it.
- *
- * # It is what the object IS, so it is not in the page bar
- *
- * A page bar holds what you can DO and an object's own identity goes in the
- * page — which is the rule the turn screen records after portalling five of
- * its marks into the bar and finding the reader's eye travelling to the far
- * corner and back for a fact named forty pixels below.
- *
- * ONE NEUTRAL BAND, WHATEVER IT SAYS. Colour carries state and never identity,
- * and whose day this is is identity — so the two readings are told apart by
- * the WORDS and by the name beside them, not by a hue.
- *
- * # And it carries the stamp, on every section
+ * Who ordered this queue, above the sections, while somebody else's order
+ * stands.
  *
  * A queue somebody else ordered is the one thing on this screen that asks for
  * an acknowledgement, and the acknowledgement is the person's own next change
- * to it — which clears the stamp for good. Drawn inside the Priorities panel
+ * to it, which clears the stamp for good. Drawn inside the Priorities panel
  * it was visible only to a reader who had already opened it. The
  * `Priorities →` control is withheld on the Priorities reading itself, because
  * a link to the page you are on is a lie.
+ *
+ * WHOSE DAY THIS IS IS NOT REPEATED HERE. The page bar's picker names the
+ * person, and on somebody else's day every held control says whose it is; a
+ * row under it repeating the seat's chip, its handle and "yours" said the
+ * same thing a third time.
  */
-function WhoseDay({
-  handle,
-  seat,
-  ownDay,
-  login = false,
+function OrderStamp({
   stamp,
   setByName,
   onPriorities,
   now,
 }: {
-  handle: string;
-  /** The chart's own row, absent for a handle it does not name. */
-  seat?: Seat;
-  ownDay: boolean;
-  /**
-   * The day is kept under a LOGIN rather than a seat — an unbound reader's
-   * own. A login has no seat page, so it is named rather than drawn as a chip
-   * linking to one that would answer "no such seat".
-   */
-  login?: boolean;
   /** This person's own record, where it has answered. */
   stamp?: WorkPersonState;
   /** Who set the order, by name, or "" where nobody else did. */
@@ -661,37 +635,17 @@ function WhoseDay({
   onPriorities?: () => void;
   now: number;
 }) {
+  if (!setByName) return null;
   return (
-    <>
-      <div className="row gap-2 wrap">
-        {/* THE CHIP IS THE WAY TO THE SEAT PAGE, and the product's one way a
-            person appears in a list. A handle the chart does not name still
-            gets one: the name falls back to the handle, which is what the
-            seat page resolves on too. */}
-        {!login && (
-          <SeatChip
-            name={seat?.name ?? handle}
-            handle={handle}
-            kind={seat?.kind}
-            avatar={seat?.avatar}
-            size="md"
-          />
-        )}
-        <span className="mono t-caption">{handle}</span>
-        <Tag>{ownDay ? "yours" : "their day"}</Tag>
-      </div>
-      {setByName && (
-        <Callout variant="info">
-          Order set by {setByName}
-          {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}.{" "}
-          {onPriorities && (
-            <button type="button" className="t-link" onClick={onPriorities}>
-              Priorities →
-            </button>
-          )}
-        </Callout>
+    <Callout variant="info">
+      Order set by {setByName}
+      {stamp?.priorities_set_at ? ` ${relTime(stamp.priorities_set_at, now)}` : ""}.{" "}
+      {onPriorities && (
+        <button type="button" className="t-link" onClick={onPriorities}>
+          Priorities →
+        </button>
       )}
-    </>
+    </Callout>
   );
 }
 

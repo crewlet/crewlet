@@ -10,7 +10,7 @@
 
 import { describe, expect, test } from "vitest";
 
-import { knownKind, roomMark, roomTitle, unreadLabel } from "./rooms.ts";
+import { knownKind, roomMark, roomTitle, roomWhere, unreadLabel } from "./rooms.ts";
 import type { ChatChannel } from "~/protocol/index.ts";
 
 const channel = (over: Partial<ChatChannel> = {}): ChatChannel => ({
@@ -50,6 +50,24 @@ describe("what a room is called", () => {
 
   test("a room whose name has not arrived is addressed by its id rather than by nothing", () => {
     expect(roomTitle(channel({ name: "" }))).toBe("room-1");
+  });
+});
+
+// WHAT A SENTENCE CALLS A ROOM, the one place a `#` is written. A channel's
+// glyph IS its `#`, so the words drawn beside a glyph are the bare title and
+// only words standing alone carry this. Mutation: add the `#` for a team's
+// room, a conversation or an unknown kind, and the matching case goes red.
+describe("what a sentence calls a room", () => {
+  test.each([
+    ["public", "#general"],
+    ["private", "#general"],
+    ["unit", "general"],
+    ["dm", "general"],
+    ["group", "general"],
+    ["", "general"],
+    ["from-a-newer-engine", "general"],
+  ])("a %s room reads as %s", (kind, said) => {
+    expect(roomWhere(kind, "general")).toBe(said);
   });
 });
 

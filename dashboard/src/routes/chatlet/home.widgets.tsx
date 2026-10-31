@@ -39,7 +39,7 @@ import {
   gapsOf,
 } from "~/routes/home/board/kit.tsx";
 import { useChatActivity, useCoalesced } from "~/lib/chatLive.ts";
-import { badgesAreMeasured, isDirect, useChatRooms } from "~/lib/chatRooms.ts";
+import { badgesAreMeasured, useChatRooms } from "~/lib/chatRooms.ts";
 import { bodyExcerpt } from "./Body.tsx";
 import { placeHref } from "./nav.tsx";
 import { roomMark, roomTitle, unreadLabel } from "./rooms.ts";
@@ -177,9 +177,9 @@ function UnreadRoomsRead({ viewer }: { viewer: string }) {
                   }
                 >
                   <span className="home-tasks-stack">
-                    <span className="home-tasks-title">
-                      {isDirect(channel.kind) ? title : `#${title}`}
-                    </span>
+                    {/* THE GLYPH IS THE ROOM'S SIGIL, so the name beside it is bare
+                        (`rooms.ts`' `roomWhere`). */}
+                    <span className="home-tasks-title">{title}</span>
                     <span className="home-tasks-meta">
                       {[said, room.last ? relTime(room.last.at, now) : ""]
                         .filter(Boolean)
@@ -248,7 +248,7 @@ function NewestMentions() {
             >
               <span className="home-tasks-stack">
                 <span className="home-tasks-title">
-                  {mention.channel_name ? `#${mention.channel_name}` : "A direct conversation"}
+                  {mention.channel_name || "A direct conversation"}
                   {mention.thread_root ? " · in a thread" : ""}
                 </span>
                 <span className="home-tasks-meta">

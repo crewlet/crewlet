@@ -787,23 +787,33 @@ export function questionOf(row: InboxRow): string | null {
 /**
  * Needs you and Answered with each question in one of them, never both.
  *
- * A QUESTION ANSWERED ON THIS VISIT (`settled`, by its row's key) stays in
- * Needs you, marked with its answer, and is not listed under Answered as
- * well. ANY OTHER question Answered lists has left Needs you: the two reads
- * are asked apart, and the open one can still list a question the person
- * answered a moment ago in another tab, which they must not see as waiting.
+ * A QUESTION ANSWERED ON THIS VISIT AND SETTLED (`settled`, by its row's key,
+ * `moved`) leaves Needs you for the head of Answered, newest first, as the
+ * row that was answered, and the engine's row for the same question is not
+ * listed beside it. One HELD where it stands (an answer the engine accepted
+ * and has not settled) stays in Needs you, and is not under Answered either.
+ * ANY OTHER question Answered lists has left Needs you: the two reads are
+ * asked apart, and the open one can still list a question the person answered
+ * a moment ago in another tab, which they must not see as waiting.
  */
 export function pairAnswered(
   needs: readonly InboxRow[],
   answered: readonly InboxRow[],
-  settled: Pick<ReadonlySet<string>, "has">,
+  settled: ReadonlyMap<string, { row: InboxRow; moved?: boolean | undefined }>,
 ): { needs: InboxRow[]; answered: InboxRow[] } {
-  const here = new Set(needs.filter((r) => settled.has(r.key)).map(questionOf));
+  const moved = [...settled.values()]
+    .filter((s) => s.moved)
+    .map((s) => s.row)
+    .reverse();
+  const movedKeys = new Set(moved.map((r) => r.key));
+  const here = new Set([...needs.filter((r) => settled.has(r.key)), ...moved].map(questionOf));
   const closed = answered.filter((r) => !here.has(questionOf(r)));
   const gone = new Set(closed.map(questionOf));
   return {
-    needs: needs.filter((r) => settled.has(r.key) || !gone.has(questionOf(r))),
-    answered: closed,
+    needs: needs.filter(
+      (r) => !movedKeys.has(r.key) && (settled.has(r.key) || !gone.has(questionOf(r))),
+    ),
+    answered: [...moved, ...closed],
   };
 }
 

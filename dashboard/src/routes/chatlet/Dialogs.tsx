@@ -71,7 +71,7 @@ import { nameRefusal, normalizeName, startable } from "./name.ts";
 import { useChatFrame, useChatNav, type ChatDialog } from "./nav.tsx";
 import { handlesOf, matchesPerson, useChatPeople, type ChatPerson } from "./people.ts";
 import { useRoomDetail } from "./roomDetail.ts";
-import { roomMark, roomTitle } from "./rooms.ts";
+import { roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { ROOM_TEMPLATES, templateNamed, type RoomTemplate } from "./templates.ts";
@@ -266,14 +266,14 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
         ...(topic.trim() ? { topic: topic.trim() } : {}),
         ...(members.length ? { members: handlesOf(members) } : {}),
       },
-      { done: `Created #${name}`, quiet: true },
+      { done: `Created ${roomWhere(kind, name)}`, quiet: true },
     );
     if (result === null) return;
     const answer = reportFor("channel", result);
     if (answer.go) {
       onClose();
       nav.openRoom(answer.go);
-      toast.show({ variant: "success", message: `#${name} is ready` });
+      toast.show({ variant: "success", message: `${roomWhere(kind, name)} is ready` });
       return;
     }
     setReport(answer);
@@ -314,7 +314,7 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
           required
           helper={
             name !== "" && name !== typed.trim()
-              ? `It will be #${name}. A room can’t be renamed.`
+              ? `It will be ${roomWhere(kind, name)}. A room can’t be renamed.`
               : `Lower-case letters, digits, hyphens and underscores, at most ${MAX_CHANNEL_NAME}. A room can’t be renamed.`
           }
           // THE GRAMMAR FIRST, THEN THE ENGINE: a name somebody else holds is
@@ -454,7 +454,7 @@ export function AddPeopleDialog({ room, onClose }: { room: string; onClose: () =
   const listId = useId();
 
   if (!channel) return null;
-  const name = `#${channel.name ?? ""}`;
+  const name = roomWhere(channel.kind, channel.name ?? "");
   const unit = channel.kind === "unit";
   const inRoom = new Set(members.map((member) => member.handle));
   const outside = people.everyone.filter(

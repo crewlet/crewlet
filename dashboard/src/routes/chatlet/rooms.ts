@@ -121,6 +121,21 @@ export function roomTitle(
 }
 
 /**
+ * What a sentence calls a room: `#name` for a channel, public or private;
+ * its team's name for a team's room, which is never a channel's `#`; and the
+ * title as it stands for a conversation, or for a kind this build cannot
+ * classify.
+ *
+ * WORDS ALONE, NEVER BESIDE THE GLYPH. Where the room's glyph ([roomMark])
+ * is drawn, the glyph is the room's sigil and the words beside it are the
+ * bare [roomTitle]: the two together drew a channel's `#` twice, once as the
+ * glyph and once as text, in the room's intro and on Home's widgets.
+ */
+export function roomWhere(kind: ChatKind, title: string): string {
+  return kind === "public" || kind === "private" ? `#${title}` : title;
+}
+
+/**
  * What an unread badge says.
  *
  * THE CAP IS THE ENGINE'S, NOT A NUMBER CHOSEN HERE. It counts to

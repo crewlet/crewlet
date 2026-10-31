@@ -50,7 +50,7 @@ import { useChatFrame, useChatNav, type ChatPlace } from "./nav.tsx";
 import { matchesPerson, useChatPeople } from "./people.ts";
 import { RoomActions } from "./RoomActions.tsx";
 import { RoomMark } from "./RoomsPanel.tsx";
-import { roomTitle, unreadIn, unreadLabel, waitingIn } from "./rooms.ts";
+import { roomTitle, roomWhere, unreadIn, unreadLabel, waitingIn } from "./rooms.ts";
 
 /** Under this width of the bar, Menu drops its word. */
 export const BAR_NARROW_PX = 760;
@@ -178,8 +178,9 @@ function RoomSwitcher({ tight }: { tight: boolean }) {
         label="Switch room"
         {...sw}
         trigger={{
-          // A TEAM'S ROOM IS ITS TEAM'S NAME, never a channel's `#`.
-          label: here ? (here.channel.kind === "unit" ? title : `#${title}`) : "Rooms",
+          // THE ROOM AS A SENTENCE CALLS IT, since the trigger draws no
+          // glyph: `#name`, or a team's room by its team's name.
+          label: here ? roomWhere(here.channel.kind, title) : "Rooms",
           title: "Switch room",
           ...(elsewhere && !tight ? { tag: <Count tone="attention" value={elsewhere} /> } : {}),
         }}

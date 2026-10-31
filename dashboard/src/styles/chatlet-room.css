@@ -274,13 +274,21 @@
 /* The Add people card's drawing: a team of four seats in a square, three
    faces and one open seat drawn in the card's own colour, a dashed edge and
    a plus in the kind's ink, so it reads as the place the card's action
-   fills. */
+   fills.
+
+   ON THE KIT'S ONE CANVAS. Every drawing on an action card takes the same
+   box, the card's width at the illustrations' 4:3 (`ActionCard`), and the
+   kit's art box stands it on the card's foot; the square is centred in that
+   box rather than given a size and a margin of its own, so the three first
+   steps stand in a row at one height. */
 .chat-people-art {
   display: grid;
   grid-template-columns: repeat(2, 42px);
   grid-auto-rows: 42px;
+  place-content: center;
   gap: var(--spacing-2);
-  margin-bottom: var(--spacing-3);
+  width: 100%;
+  aspect-ratio: 4 / 3;
 }
 
 .chat-people-art-seat {

@@ -80,7 +80,7 @@ import { useChatFrame, useChatNav } from "./nav.tsx";
 import { matchesPerson, useChatPeople } from "./people.ts";
 import { coverageOf } from "./page.ts";
 import { useRoomDetail } from "./roomDetail.ts";
-import { roomMark, roomTitle } from "./rooms.ts";
+import { roomMark, roomTitle, roomWhere } from "./rooms.ts";
 import { RoomScopeProvider, useRoomScope } from "./scope.tsx";
 import { reportFor } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
@@ -132,7 +132,7 @@ export function useRoomWords(): {
     };
     return {
       title,
-      where: (room: RoomRef) => (isDirect(room.kind) ? title(room) : `#${title(room)}`),
+      where: (room: RoomRef) => roomWhere(room.kind, title(room)),
     };
   }, [frame.channels, frame.viewer, frame.nameOf]);
 }

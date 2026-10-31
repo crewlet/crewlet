@@ -14,9 +14,9 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { AppShell, LayerHost, ToastProvider } from "@crewlethq/ui";
+import { Announcer, AppShell, LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { ADVANCE_MS, Inbox } from "./Inbox.tsx";
+import { Inbox } from "./Inbox.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -28,6 +28,7 @@ import { installScreen } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+import { fakeTransition } from "~/test/motion.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -236,6 +237,7 @@ function mount({
   }) as typeof socket.query;
   render(
     <ToastProvider>
+      <Announcer label="Announcements" />
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
           <FrameReadings>
@@ -292,12 +294,6 @@ function decisionsOf(...items: unknown[]) {
 /** The open item's one-sentence byline, as it reads. */
 function byline(): string {
   return document.querySelector(".crewlet-reading-pane__byline")?.textContent ?? "";
-}
-
-async function wait(ms: number) {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
-  });
 }
 
 describe("the list", () => {
@@ -874,7 +870,14 @@ describe("the pane", () => {
     ]);
   });
 
-  test("an answered item stays in its place as done, and the next one opens a moment later", async () => {
+  // AN ANSWER MOVES THE ROW AND THE READER ON, AT ONCE: the row leaves Needs
+  // you for the head of Answered, marked Answered with the choice under the
+  // question, the next thing to deal with opens in the same moment, and one
+  // polite announcement says both. Held in place until the reader left, a
+  // done row stood among the open ones and the next waited on a timer.
+  // Mutation: keep the row in Needs you, or open the next on a timer, and
+  // this goes red.
+  test("an answered item moves to Answered and the next one opens at once, said once", async () => {
     const second = {
       ...askItem(),
       at: new Date(Date.now() - 60 * 60_000).toISOString(),
@@ -885,22 +888,149 @@ describe("the pane", () => {
     await settle();
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
     await settle();
-    // WHAT HAPPENED, FIRST: the open item shows its answer, and its row stays
-    // where it stood, marked Answered with the choice under the question,
-    // and read as answered. Never struck: every word stays legible.
-    expect(location.hash).toContain("row=ask%3Ac-12");
-    const region = screen.getByRole("region", { name: /^Needs you/ });
-    const needs = within(region);
-    const done = needs.getAllByRole("button", { name: /Answered$/ });
-    expect(done).toHaveLength(1);
-    expect(done[0]!.textContent).toContain("You chose Hold release");
-    expect(done[0]!.querySelector(".crewlet-inbox-row__status")?.textContent).toBe("Answered");
-    expect(done[0]!.querySelector(".crewlet-inbox-row__meta")).toBeNull();
-    // THE COUNT IS WHAT IS STILL OPEN.
-    expect(region.getAttribute("aria-labelledby")).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Needs you, 1" })).toBe(region);
-    await wait(ADVANCE_MS + 50);
     expect(location.hash).toContain("row=ask%3Ac-13");
+    // THE COUNT IS WHAT IS STILL OPEN, and nothing in it is done.
+    const region = screen.getByRole("region", { name: "Needs you, 1" });
+    expect(within(region).queryByRole("button", { name: /Answered$/ })).toBeNull();
+    // LANDED IN ANSWERED, which stays closed and counts it.
+    const group = screen.getByRole("button", { name: "Answered, 1" });
+    expect(group.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(group);
+    const done = within(screen.getByRole("region", { name: "Answered, 1" })).getByRole("button", {
+      name: /Answered$/,
+    });
+    expect(done.textContent).toContain("You chose Hold release");
+    expect(done.querySelector(".crewlet-inbox-row__status")?.textContent).toBe("Answered");
+    // SAID ONCE, politely.
+    const said = document.querySelector('[aria-live="polite"]')?.textContent ?? "";
+    expect(said).toMatch(/^Answered\. Next: /);
+  });
+
+  // THE MOVE IS SEEN AND THE READER IS CARRIED ON: Answered's heading takes
+  // the kit's arrival wash only when an answer lands in it (never on a first
+  // draw, where nothing arrived), the row itself washes when the group is
+  // open, and the pane plays the next item in with focus on its title, since
+  // the pressed button left with the answered one. Mutation: pass the token
+  // on a first draw, or drop the pane's content key, and this goes red.
+  test("an answer lands in Answered with a wash, and focus moves to the next title", async () => {
+    const next = askItem({ ...DECISION, question: "Freeze the API for the release?" });
+    const second = {
+      ...next,
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...next.ask, comment: "c-13" },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem(), second) } });
+    await settle();
+    expect(document.querySelector(".crewlet-inbox-list__arrival")).toBeNull();
+    const press = screen.getByRole("button", { name: /Hold release/ });
+    press.focus();
+    fireEvent.click(press);
+    await settle();
+    const group = screen.getByRole("button", { name: "Answered, 1" });
+    expect(group.closest("h2, h3, h4")?.querySelector(".crewlet-inbox-list__arrival")).toBeTruthy();
+    expect(document.activeElement?.textContent).toContain("Freeze the API for the release?");
+    expect(document.activeElement?.classList.contains("crewlet-reading-pane__title")).toBe(true);
+    fireEvent.click(group);
+    expect(
+      within(screen.getByRole("region", { name: "Answered, 1" }))
+        .getByRole("button", { name: /Answered$/ })
+        .closest(".crewlet-inbox-row--arrived"),
+    ).toBeTruthy();
+  });
+
+  // A ROW CHOSEN IN THE LIST KEEPS THE READER IN THE LIST: the pane plays the
+  // row in but takes focus only when the reader's focus was in the pane, so
+  // arrowing or clicking down the list is never pulled away from it.
+  // Mutation: move focus on every new row and this goes red.
+  test("a row opened from the list keeps focus on that row", async () => {
+    const next = askItem({ ...DECISION, question: "Freeze the API for the release?" });
+    const second = {
+      ...next,
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...next.ask, comment: "c-13" },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem(), second) } });
+    await settle();
+    const row = within(screen.getByRole("region", { name: "Needs you, 2" })).getByRole("button", {
+      name: /Freeze the API for the release\?/,
+    });
+    row.focus();
+    fireEvent.click(row);
+    await settle();
+    expect(location.hash).toContain("row=ask%3Ac-13");
+    expect(document.querySelector(".crewlet-reading-pane__title")?.textContent).toBe(
+      "Freeze the API for the release?",
+    );
+    expect(document.activeElement).toBe(row);
+  });
+
+  // THE LAST ROW TAKES ITS GROUP WITH IT, once it has closed: Needs you stays
+  // while the answered row's height closes (the kit's group draws it, inert,
+  // on its way out), and then goes, so no "Needs you, 0" heading is left over
+  // nothing and the inbox's one empty state shows, never under the closing
+  // row. jsdom runs no transitions, so the row's own is faked and finished by
+  // hand. Mutation: draw the group only while it has rows and the first
+  // expectation goes red; show the empty state at once and the second does;
+  // never hear the row close and the last two do.
+  test("the last row leaving Needs you takes the group with it once it has closed", async () => {
+    const motion = fakeTransition(".crewlet-inbox-row", "grid-template-rows");
+    try {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      mount({ answers: { decisions: decisionsOf(askItem()) } });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+      await settle();
+      const group = screen.getByRole("region", { name: /^Needs you/ });
+      expect(group.querySelector(".crewlet-inbox-row--leaving")?.hasAttribute("inert")).toBe(true);
+      expect(document.querySelector(".crewlet-empty-state")).toBeNull();
+      await act(async () => motion.finish());
+      await settle();
+      expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
+      expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
+    } finally {
+      motion.restore();
+    }
+  });
+
+  // AT ONCE WHERE NOTHING MOVES: with no motion to run (reduced motion, or no
+  // Web Animations API, as in jsdom) the row closes in the commit that answers
+  // it, and the group and the empty state change with it. Mutation: never
+  // hear the row close and the group is left over nothing.
+  test("the last row leaving Needs you takes the group at once where nothing moves", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem()) } });
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
+    await settle();
+    expect(screen.queryByRole("region", { name: /^Needs you/ })).toBeNull();
+    expect(document.querySelectorAll(".crewlet-empty-state")).toHaveLength(1);
+  });
+
+  // ONE ANSWER PER ROW: a second word on a row already moved, a press
+  // repeated before the list drew again, answers nothing and moves the reader
+  // on no further. Mutation: drop the guard and the reader skips a row.
+  test("a press repeated on an answered row moves the reader on once", async () => {
+    const second = {
+      ...askItem(),
+      at: new Date(Date.now() - 60 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-13", question: undefined },
+    };
+    const third = {
+      ...askItem(),
+      at: new Date(Date.now() - 120 * 60_000).toISOString(),
+      ask: { ...askItem().ask, comment: "c-14", question: undefined },
+    };
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({ answers: { decisions: decisionsOf(askItem(), second, third) } });
+    await settle();
+    const press = screen.getByRole("button", { name: /Hold release/ });
+    fireEvent.click(press);
+    fireEvent.click(press);
+    await settle();
+    expect(location.hash).toContain("row=ask%3Ac-13");
+    expect(posted.filter((p) => p.tool === "comment_on_work_item")).toHaveLength(1);
   });
 
   test("a run answered in words stays in place with what was written under it", async () => {
@@ -1946,7 +2076,7 @@ describe("what was answered", () => {
     expect(screen.queryByRole("group", { name: "Answers" })).toBeNull();
   });
 
-  test("a row answered here is in Needs you, never in the Answered group as well", async () => {
+  test("a row answered here moves under Answered, never in Needs you as well", async () => {
     const mine = answeredItem({
       ask: { ...askItem().ask, open: false },
       answer: { by: "jane", at: new Date().toISOString(), choice: "hold", body: "Hold release" },
@@ -1965,12 +2095,15 @@ describe("what was answered", () => {
     fireEvent.click(screen.getByRole("button", { name: /Hold release/ }));
     await settle();
     await settle();
-    expect(screen.queryByRole("button", { name: /^Answered, / })).toBeNull();
+    // ONE ROW FOR THE QUESTION, the one answered here, though the engine
+    // now lists it as answered too.
+    fireEvent.click(screen.getByRole("button", { name: "Answered, 1" }));
     expect(
-      within(screen.getByRole("region", { name: /^Needs you/ })).getAllByRole("button", {
+      within(screen.getByRole("region", { name: "Answered, 1" })).getAllByRole("button", {
         name: /Answered$/,
       }),
     ).toHaveLength(1);
+    expect(screen.queryByRole("region", { name: /^Needs you, [1-9]/ })).toBeNull();
   });
 
   // A CODING RUN'S QUESTION, ONCE ANSWERED, IS READ BACK AS AN ASK IS. The
@@ -2187,7 +2320,7 @@ describe("what was answered", () => {
       ).toHaveLength(1);
     });
 
-    test("answered here stays in Needs you with its option marked, never under Answered as well", async () => {
+    test("answered here moves under Answered with its option marked, never in Needs you as well", async () => {
       const parked = {
         kind: "run",
         at: new Date(Date.now() - 5 * 60_000).toISOString(),
@@ -2225,10 +2358,8 @@ describe("what was answered", () => {
       const answers = within(screen.getByRole("group", { name: "Answers" }));
       expect(answers.getByRole("button", { pressed: true }).textContent).toContain("Target main");
       expect(screen.queryByRole("button", { name: "Something else" })).toBeNull();
-      expect(screen.queryByRole("button", { name: /^Answered, / })).toBeNull();
-      expect(
-        within(screen.getByRole("region", { name: /^Needs you/ })).getAllByRole("listitem"),
-      ).toHaveLength(1);
+      expect(screen.getByRole("button", { name: /^Answered, 1/ })).toBeTruthy();
+      expect(screen.queryByRole("region", { name: /^Needs you, [1-9]/ })).toBeNull();
     });
 
     // ASKED ON EVERY COMPANY: a coding run's question is answered here

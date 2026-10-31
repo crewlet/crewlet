@@ -1897,259 +1897,264 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </span>
         </>
       </PageActions>
-      <header className="trace-head">
-        <ObjectHeader
-          kind="Turn"
-          icon="layers"
-          identifier={turnId}
-          title={title}
-          status={turnStatus(view, now)}
-          facts={turnFacts(view, now)}
-        />
-        <Tabs
-          overflow="menu"
-          variant="underline"
-          ariaLabel="The turn's sections"
-          className="trace-tabs"
-          value={tab}
-          onValueChange={(next) => setTab(next as TurnTab)}
-          panelId={panelId}
-          items={TURN_TABS.map((value) => ({
-            value,
-            label: TURN_TAB_LABELS[value],
-            ...(value === "tools" && calls > 0 ? { count: calls } : {}),
-          }))}
-        />
-      </header>
-      {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header drawn
+      {/* THE TAB BAR AND WHAT IS UNDER IT, one step apart (`.tab-detail`). */}
+      <div className="tab-detail">
+        <header className="trace-head">
+          <ObjectHeader
+            kind="Turn"
+            icon="layers"
+            identifier={turnId}
+            title={title}
+            status={turnStatus(view, now)}
+            facts={turnFacts(view, now)}
+          />
+          <Tabs
+            overflow="menu"
+            variant="underline"
+            ariaLabel="The turn's sections"
+            className="trace-tabs"
+            value={tab}
+            onValueChange={(next) => setTab(next as TurnTab)}
+            panelId={panelId}
+            items={TURN_TABS.map((value) => ({
+              value,
+              label: TURN_TAB_LABELS[value],
+              ...(value === "tools" && calls > 0 ? { count: calls } : {}),
+            }))}
+          />
+        </header>
+        {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header drawn
           from the id that needs no answer to exist. */}
-      {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
-      <QueryState
-        error={error}
-        refusal={refusal}
-        loading={loading}
-        // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone: a
-        // turn deep-linked the moment it started answers with nothing while
-        // phase after phase streams in.
-        empty={
-          events.length || phases.length || running
-            ? undefined
-            : {
-                title: "No events for this turn",
-                hint: "Turns older than 30 days aren’t kept.",
-              }
-        }
-      >
-        {/* WHICH NODES DID NOT ANSWER. The turn is assembled from every
+        {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
+        <QueryState
+          error={error}
+          refusal={refusal}
+          loading={loading}
+          // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone: a
+          // turn deep-linked the moment it started answers with nothing while
+          // phase after phase streams in.
+          empty={
+            events.length || phases.length || running
+              ? undefined
+              : {
+                  title: "No events for this turn",
+                  hint: "Turns older than 30 days aren’t kept.",
+                }
+          }
+        >
+          <div className="trace-body">
+            {/* WHICH NODES DID NOT ANSWER. The turn is assembled from every
             node's own store, and a silent node may hold the part of it this
             page is missing. */}
-        <CoverageNote coverage={[view.coverage]} what="this turn" />
-        {cut && (
-          <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-            Too long to show in full; the middle phases are missing.
-            {traceId ? " The trace has the same work." : ""}
-          </Callout>
-        )}
+            <CoverageNote coverage={[view.coverage]} what="this turn" />
+            {cut && (
+              <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+                Too long to show in full; the middle phases are missing.
+                {traceId ? " The trace has the same work." : ""}
+              </Callout>
+            )}
 
-        {/* ABOVE THE TABS, because a turn that fell over is not something a
+            {/* ABOVE THE TABS, because a turn that fell over is not something a
             reader should have to find a tab to discover. Absent entirely on a
             healthy turn. */}
-        {story.wentWrong.length > 0 && (
-          <Card padding="none">
-            <Card.Header
-              icon={<CircleAlertGlyph size="sm" />}
-              count={story.wentWrong.length}
-              subtitle="guard breaches, exhausted chains, refused calls"
-            >
-              <Card.Title>What went wrong</Card.Title>
-            </Card.Header>
-            <EventList events={story.wentWrong} actor={role} />
-          </Card>
-        )}
-
-        <div
-          ref={panelRef}
-          className="tabpanel trace-panel"
-          role="tabpanel"
-          id={panelId}
-          aria-labelledby={tabId(panelId, tab)}
-          tabIndex={0}
-        >
-          {tab === "timeline" && (
-            <Waterfall
-              model={model}
-              phases={phases}
-              marks={marks}
-              agent={role}
-              selected={span}
-              onSelect={setSpan}
-              now={clock || model.to}
-              turnId={turnId}
-            />
-          )}
-
-          {tab === "transcript" && (
-            <div className="col gap-4">
-              {view.parked && running && (
-                <ParkedRun turnId={turnId} run={parkedRun} now={clock || Date.now()} />
-              )}
-              <Card padding="sm">
-                <Card.Header icon={<BrainGlyph size="sm" />} count={own.length}>
-                  <Card.Title>Phases</Card.Title>
+            {story.wentWrong.length > 0 && (
+              <Card padding="none">
+                <Card.Header
+                  icon={<CircleAlertGlyph size="sm" />}
+                  count={story.wentWrong.length}
+                  subtitle="guard breaches, exhausted chains, refused calls"
+                >
+                  <Card.Title>What went wrong</Card.Title>
                 </Card.Header>
-                <div className="col gap-2">
-                  {own.map((p, i) => (
-                    <PhaseCard
-                      key={p.key}
-                      record={p}
-                      nested={nested.get(p.key)}
-                      // THE FIRST PHASE, THE ONE THAT IS RUNNING, AND THE ONE
-                      // A PARKED TURN PARKED IN. A watch link lands here
-                      // (`lib/turns.ts`' `watchLink`) to see what the turn is
-                      // doing now, and with only the first open that was a
-                      // phase that finished minutes ago, the one it is on a
-                      // closed row under it. A phase that goes live while the
-                      // page is open is a new key, so it mounts — and opens —
-                      // then; one that completes keeps its key and its card,
-                      // and the card latches, so finishing never closes it
-                      // under a reader. A parked turn has no live phase: its
-                      // executor's card is opened instead, under the run.
-                      defaultOpen={i === 0 || p.live || p.key === parkedPhase}
-                    />
-                  ))}
-                  {!own.length && <span className="t-caption">No phase completed.</span>}
-                </div>
+                <EventList events={story.wentWrong} actor={role} />
               </Card>
+            )}
 
-              {story.did.length > 0 && (
-                <Card padding="none">
-                  <Card.Header
-                    icon={<ZapGlyph size="sm" />}
-                    count={story.did.length}
-                    // "COLLEAGUES" IS A PROMISE the wire keeps: the A2A records
-                    // carry the publishing turn (internal/a2a/service.go), and
-                    // internal/events/types/turnbands_client_test.go holds it.
-                    subtitle="coding runs, delegations, colleagues, skills"
-                  >
-                    <Card.Title>What else it did</Card.Title>
-                  </Card.Header>
-                  <EventList events={story.did} actor={role} />
-                </Card>
+            <div
+              ref={panelRef}
+              className="tabpanel trace-panel"
+              role="tabpanel"
+              id={panelId}
+              aria-labelledby={tabId(panelId, tab)}
+              tabIndex={0}
+            >
+              {tab === "timeline" && (
+                <Waterfall
+                  model={model}
+                  phases={phases}
+                  marks={marks}
+                  agent={role}
+                  selected={span}
+                  onSelect={setSpan}
+                  now={clock || model.to}
+                  turnId={turnId}
+                />
               )}
 
-              {story.leftBehind.length > 0 && (
-                <Card padding="none">
-                  <Card.Header
-                    icon={<DatabaseGlyph size="sm" />}
-                    count={story.leftBehind.length}
-                    subtitle="the reflection pass, once the phases were done"
-                  >
-                    <Card.Title>What the seat learned</Card.Title>
-                  </Card.Header>
-                  <EventList events={story.leftBehind} actor={role} />
-                </Card>
-              )}
+              {tab === "transcript" && (
+                <div className="col gap-4">
+                  {view.parked && running && (
+                    <ParkedRun turnId={turnId} run={parkedRun} now={clock || Date.now()} />
+                  )}
+                  <Card padding="sm">
+                    <Card.Header icon={<BrainGlyph size="sm" />} count={own.length}>
+                      <Card.Title>Phases</Card.Title>
+                    </Card.Header>
+                    <div className="col gap-2">
+                      {own.map((p, i) => (
+                        <PhaseCard
+                          key={p.key}
+                          record={p}
+                          nested={nested.get(p.key)}
+                          // THE FIRST PHASE, THE ONE THAT IS RUNNING, AND THE ONE
+                          // A PARKED TURN PARKED IN. A watch link lands here
+                          // (`lib/turns.ts`' `watchLink`) to see what the turn is
+                          // doing now, and with only the first open that was a
+                          // phase that finished minutes ago, the one it is on a
+                          // closed row under it. A phase that goes live while the
+                          // page is open is a new key, so it mounts (and opens)
+                          // then; one that completes keeps its key and its card,
+                          // and the card latches, so finishing never closes it
+                          // under a reader. A parked turn has no live phase: its
+                          // executor's card is opened instead, under the run.
+                          defaultOpen={i === 0 || p.live || p.key === parkedPhase}
+                        />
+                      ))}
+                      {!own.length && <span className="t-caption">No phase completed.</span>}
+                    </div>
+                  </Card>
 
-              {story.rest.length > 0 && (
-                <Card padding="none">
-                  <Card.Header
-                    icon={<ChartNoAxesGanttGlyph size="sm" />}
-                    count={story.rest.length}
-                    subtitle="other events"
-                  >
-                    <Card.Title>Also published</Card.Title>
-                  </Card.Header>
-                  <EventList events={story.rest} actor={role} />
-                </Card>
-              )}
+                  {story.did.length > 0 && (
+                    <Card padding="none">
+                      <Card.Header
+                        icon={<ZapGlyph size="sm" />}
+                        count={story.did.length}
+                        // "COLLEAGUES" IS A PROMISE the wire keeps: the A2A records
+                        // carry the publishing turn (internal/a2a/service.go), and
+                        // internal/events/types/turnbands_client_test.go holds it.
+                        subtitle="coding runs, delegations, colleagues, skills"
+                      >
+                        <Card.Title>What else it did</Card.Title>
+                      </Card.Header>
+                      <EventList events={story.did} actor={role} />
+                    </Card>
+                  )}
 
-              <Absorbed groups={absorbed} />
+                  {story.leftBehind.length > 0 && (
+                    <Card padding="none">
+                      <Card.Header
+                        icon={<DatabaseGlyph size="sm" />}
+                        count={story.leftBehind.length}
+                        subtitle="the reflection pass, once the phases were done"
+                      >
+                        <Card.Title>What the seat learned</Card.Title>
+                      </Card.Header>
+                      <EventList events={story.leftBehind} actor={role} />
+                    </Card>
+                  )}
 
-              {(rec.summary || rec.learning) && (
-                <Card padding="sm">
-                  <Card.Header icon={<FileTextGlyph size="sm" />} subtitle="closing events">
-                    <Card.Title>The turn&rsquo;s own record</Card.Title>
-                  </Card.Header>
-                  <div className="col gap-2">
-                    {conversation && (
-                      <PropertiesRail
-                        groups={[
-                          {
-                            properties: [
+                  {story.rest.length > 0 && (
+                    <Card padding="none">
+                      <Card.Header
+                        icon={<ChartNoAxesGanttGlyph size="sm" />}
+                        count={story.rest.length}
+                        subtitle="other events"
+                      >
+                        <Card.Title>Also published</Card.Title>
+                      </Card.Header>
+                      <EventList events={story.rest} actor={role} />
+                    </Card>
+                  )}
+
+                  <Absorbed groups={absorbed} />
+
+                  {(rec.summary || rec.learning) && (
+                    <Card padding="sm">
+                      <Card.Header icon={<FileTextGlyph size="sm" />} subtitle="closing events">
+                        <Card.Title>The turn&rsquo;s own record</Card.Title>
+                      </Card.Header>
+                      <div className="col gap-2">
+                        {conversation && (
+                          <PropertiesRail
+                            groups={[
                               {
-                                // The turn's CONVERSATION IDENTITY,
-                                // "{source}:{local}" — the surface's own
-                                // answer to "which ongoing conversation is
-                                // this", not an address.
-                                label: "Conversation",
-                                value: (
-                                  <span className="row gap-2 baseline">
-                                    <InlineCode>{conversation}</InlineCode>
-                                    <span className="t-caption">
-                                      the external conversation this turn served
-                                    </span>
-                                  </span>
-                                ),
+                                properties: [
+                                  {
+                                    // The turn's CONVERSATION IDENTITY,
+                                    // "{source}:{local}", the surface's own
+                                    // answer to "which ongoing conversation is
+                                    // this", not an address.
+                                    label: "Conversation",
+                                    value: (
+                                      <span className="row gap-2 baseline">
+                                        <InlineCode>{conversation}</InlineCode>
+                                        <span className="t-caption">
+                                          the external conversation this turn served
+                                        </span>
+                                      </span>
+                                    ),
+                                  },
+                                ],
                               },
-                            ],
-                          },
-                        ]}
-                      />
-                    )}
-                    {rec.summary && (
-                      <Disclosure
-                        title="Turn summary event"
-                        actions={<CopyButton text={summaryJSON} title="copy this record" />}
-                      >
-                        <CodeBlock
-                          plain
-                          copyable={false}
-                          selectable
-                          label="agent_turn_completed, as JSON"
-                          code={summaryJSON}
-                        />
-                      </Disclosure>
-                    )}
-                    {rec.learning && (
-                      <Disclosure
-                        title="Learning record"
-                        actions={<CopyButton text={learningJSON} title="copy this record" />}
-                      >
-                        <CodeBlock
-                          plain
-                          copyable={false}
-                          selectable
-                          label="turn_completed, as JSON"
-                          code={learningJSON}
-                        />
-                      </Disclosure>
-                    )}
-                  </div>
-                </Card>
+                            ]}
+                          />
+                        )}
+                        {rec.summary && (
+                          <Disclosure
+                            title="Turn summary event"
+                            actions={<CopyButton text={summaryJSON} title="copy this record" />}
+                          >
+                            <CodeBlock
+                              plain
+                              copyable={false}
+                              selectable
+                              label="agent_turn_completed, as JSON"
+                              code={summaryJSON}
+                            />
+                          </Disclosure>
+                        )}
+                        {rec.learning && (
+                          <Disclosure
+                            title="Learning record"
+                            actions={<CopyButton text={learningJSON} title="copy this record" />}
+                          >
+                            <CodeBlock
+                              plain
+                              copyable={false}
+                              selectable
+                              label="turn_completed, as JSON"
+                              code={learningJSON}
+                            />
+                          </Disclosure>
+                        )}
+                      </div>
+                    </Card>
+                  )}
+                </div>
+              )}
+
+              {tab === "context" && (
+                <div className="col gap-4">
+                  <TurnBrief view={view} omit={title} />
+                  {prefetch.length > 0 || weights.length > 0 ? (
+                    <Given blocks={prefetch} weights={weights} />
+                  ) : (
+                    <p className="t-caption">No prompt breakdown yet.</p>
+                  )}
+                </div>
+              )}
+
+              {tab === "tools" && (
+                <ToolsTab
+                  phases={phases}
+                  model={model}
+                  onOpen={(id) => nav.to(["live", "turns", turnId], id ? { span: id } : {})}
+                />
               )}
             </div>
-          )}
-
-          {tab === "context" && (
-            <div className="col gap-4">
-              <TurnBrief view={view} omit={title} />
-              {prefetch.length > 0 || weights.length > 0 ? (
-                <Given blocks={prefetch} weights={weights} />
-              ) : (
-                <p className="t-caption">No prompt breakdown yet.</p>
-              )}
-            </div>
-          )}
-
-          {tab === "tools" && (
-            <ToolsTab
-              phases={phases}
-              model={model}
-              onOpen={(id) => nav.to(["live", "turns", turnId], id ? { span: id } : {})}
-            />
-          )}
-        </div>
-      </QueryState>
+          </div>
+        </QueryState>
+      </div>
     </>
   );
 }

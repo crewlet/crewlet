@@ -112,6 +112,78 @@ function mount(viewer: Record<string, unknown> = ADA) {
   );
 }
 
+// THE INTRO NAMES THE ROOM WITH ONE `#`: the glyph is a channel's sigil, so
+// the title and the "very beginning" line draw the bare name beside it, while
+// the words that stand alone (the transcript's name, the composer's) say
+// `#general`. Handed the room as a sentence calls it, the intro drew the
+// glyph and "#general" both. Mutation: pass the intro `where` for its title
+// and the first case goes red.
+describe("the room's intro", () => {
+  test("names a channel by its glyph and its bare name, once each", async () => {
+    mount();
+    const title = await screen.findByRole("heading", { level: 2, name: "general" });
+    expect(title.textContent).not.toContain("#");
+    expect(title.querySelectorAll(".chat-intro-mark")).toHaveLength(1);
+    const line = document.querySelector<HTMLElement>(".chat-intro-text")!;
+    expect(line.textContent).toContain("This is the very beginning of the general room.");
+    expect(line.textContent).not.toContain("#");
+    // WORDS ALONE CARRY THE `#`.
+    expect(screen.getByLabelText("Messages in #general")).toBeTruthy();
+  });
+
+  // A TEAM'S ROOM IS ITS TEAM'S NAME, never a channel's `#`, and the chart
+  // that made it is said as the org chart, never as its actor's handle.
+  test("a team's room reads as its team's name, made by the org chart", async () => {
+    const team = {
+      ...channel,
+      kind: "unit",
+      name: "platform",
+      unit: "Platform",
+      created_by: "org-sync",
+      created_by_kind: "system",
+    };
+    answers.chat_channel = {
+      ...served,
+      channel: team,
+      revision: 3,
+      message_seq: 2,
+      member: true,
+      members: [],
+    };
+    mount();
+    await screen.findByRole("heading", { level: 2, name: "platform" });
+    const line = document.querySelector<HTMLElement>(".chat-intro-text")!;
+    expect(line.textContent).toMatch(/^The org chart created this team room for Platform/);
+    expect(line.textContent).not.toContain("org-sync");
+    expect(screen.getByLabelText("Messages in platform")).toBeTruthy();
+  });
+
+  // A CONVERSATION WITH NOBODY ELSE IN IT is one the engine allows, titled
+  // "Just you"; its intro said "just between you and ." and named nobody.
+  test("a conversation with only the reader in it says so", async () => {
+    const solo = { ...channel, kind: "dm", name: "" };
+    answers.chat_channel = {
+      ...served,
+      channel: solo,
+      revision: 3,
+      message_seq: 2,
+      member: true,
+      members: [],
+    };
+    answers.chat_channels = {
+      ...served,
+      read_state: true,
+      channels: [{ channel: solo, revision: 3, unread: 0, participants: ["ada"] }],
+    };
+    mount();
+    await screen.findByRole("heading", { level: 2, name: "Just you" });
+    const line = document.querySelector<HTMLElement>(".chat-intro-text")!;
+    expect(line.textContent).toBe(
+      "Only you are in this conversation. Here you can send yourself messages and keep links.",
+    );
+  });
+});
+
 /** [ADA], holding Admin — who may take down anybody's message. */
 const ADMIN_ADA = { ...ADA, grants: ["admin"] };
 

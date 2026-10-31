@@ -158,6 +158,18 @@ test("a phase card shows the duration off the record itself", async () => {
   );
 });
 
+// THE TABS STAND ONE STEP ABOVE WHAT THEY SWITCH: the header that carries
+// them and the body under it share one `.tab-detail` column, spaced by the
+// shared tab step, while the body keeps the page's own step between its
+// parts. Mutation: put the body back as the page's sibling and this fails.
+test("the turn's tabs and its body stand in one tab column", async () => {
+  mount({ events: [phase("2026-09-13T10:01:30Z", 90_000)] });
+  await screen.findByTitle("how long this phase took");
+  const head = document.querySelector(".trace-head")!;
+  expect(head.parentElement?.classList.contains("tab-detail")).toBe(true);
+  expect(head.parentElement?.querySelector(":scope .trace-body .trace-panel")).toBeTruthy();
+});
+
 // A CUT VIEW NAMES THE GAP, IN THE HEADER AND ABOVE THE PANELS.
 //
 // `EventLog.Turn` orders oldest first and stops at the store's per-turn cap,
