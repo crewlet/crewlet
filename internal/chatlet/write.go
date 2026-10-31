@@ -157,12 +157,12 @@ type Store struct {
 
 // Roster is what the write path asks about the company the rooms belong to.
 //
-// A CONSUMER-DEFINED SEAM of two methods, because two of them is all this
+// A CONSUMER-DEFINED SEAM of three methods, because three of them is all this
 // package needs: the org chart is a large surface and a write path that could
 // reach all of it would be one that could decide things the log has no record
 // of.
 //
-// IT MUST NOT BLOCK. Both methods are called from INSIDE the decide's own read
+// IT MUST NOT BLOCK. Every method is called from INSIDE the decide's own read
 // transaction, where the framework forbids anything that can wait — no broker
 // call, no coordination read, no model. The roster is the epoch's own chart,
 // held in memory; an implementation that went to the network here would hold
@@ -190,6 +190,12 @@ type Roster interface {
 	// that; the implementation answers it by the same rule that decides
 	// who is in the room.
 	Lead(unit, room string) string
+
+	// Seats is every seat handle the company has, people and agents: the
+	// company an auto-join room accounts for when the setting is turned on
+	// ([ChannelPatch.AutoJoinSeats]), so it adds the seats the company takes
+	// on from then and nobody already in it.
+	Seats() []string
 }
 
 // Options configure a store.
@@ -975,6 +981,20 @@ func (s *Store) PatchChannel(ctx context.Context, actor Actor, channelID string,
 					return statelog.Decision{}, err
 				}
 			}
+			// THE COMPANY AS IT STANDS NOW is what a room turning
+			// auto-join on accounts for, decided in this round's
+			// snapshot and never carried over from an earlier one.
+			patch.AutoJoinSeats = nil
+			if patch.AutoJoin != nil {
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := authority.autoJoins(room); err != nil {
+					return statelog.Decision{}, err
+				}
+				if *patch.AutoJoin && !room.AutoJoin {
+					patch.AutoJoinSeats = cleanHandles(s.roster.Seats())
+					slices.Sort(patch.AutoJoinSeats)
+				}
+			}
 			// THE ROOM IS THE ANSWER EITHER WAY, and it is taken
 			// BEFORE the no-op return: a caller told its write
 			// landed reads the room out of this, and an idempotent
@@ -1025,6 +1045,29 @@ type ChannelAuthority struct {
 	// wrong with the request: the caller reads the room again, decides
 	// again on the unit it is in now, and re-sends.
 	ArchiveUnit string
+
+	// AutoJoin reports a caller admitted to turn the room's auto-join on or
+	// off ([Channel.AutoJoin]): an administrator, by the authority table's
+	// `chat.channel.autojoin`. The zero value admits nobody, so a caller
+	// that never asked cannot move it by forgetting to.
+	AutoJoin bool
+}
+
+// autoJoins refuses an auto-join setting this authority does not admit, or
+// on a room that cannot take one: only a public room does. A unit's room is
+// the org chart's, a direct conversation is its people, and a private room's
+// membership is who may read it, which no setting decides for the people the
+// company takes on next.
+func (a ChannelAuthority) autoJoins(room Channel) error {
+	if !a.AutoJoin {
+		return fmt.Errorf("%w: adding everybody who joins the company to %s "+
+			"is an administrator's setting", ErrForbidden, room.called())
+	}
+	if room.Kind != KindPublic {
+		return invalid("auto_join", "%s is a %s room, and only a public room adds "+
+			"everybody who joins the company", room.called(), room.Kind)
+	}
+	return nil
 }
 
 // archives refuses an archive this authority does not admit on room as the
@@ -1285,7 +1328,7 @@ func (s *Store) chartMembership(ctx context.Context, actor Actor, channelID stri
 	}
 	chart := chartWrite{epoch: configplane.ActivationStamp(activatedAt), unit: unit}
 	return s.setMembership(ctx, actor, channelID, s.newOpID(), chart,
-		func(room Channel, _ []Member) ([]Member, error) {
+		plainMembership(func(room Channel, _ []Member) ([]Member, error) {
 			if room.Kind != KindUnit {
 				return nil, fmt.Errorf("%w: %s isn't a unit's own room, and the "+
 					"org chart decides who's in a unit's room only. A change "+
@@ -1293,7 +1336,7 @@ func (s *Store) chartMembership(ctx context.Context, actor Actor, channelID stri
 					room.called())
 			}
 			return members, nil
-		})
+		}))
 }
 
 // chartWrite is what the org chart's own membership write carries beside the
@@ -1352,8 +1395,30 @@ func (w MembershipWrite) Valid() bool {
 func (s *Store) members(ctx context.Context, actor Actor, channelID, opID string,
 	next func(Channel, []Member) ([]Member, error)) (Written, error) {
 
-	written, _, err := s.setMembership(ctx, actor, channelID, opID, chartWrite{}, next)
+	written, _, err := s.setMembership(ctx, actor, channelID, opID, chartWrite{},
+		plainMembership(next))
 	return written, err
+}
+
+// memberDecision is what a membership write decides inside the snapshot: the
+// set the room becomes, and the seats an auto-join room accounts for with it.
+// The transaction is the snapshot's own, for a decision that reads more of the
+// room than its members ([Store.AutoJoin] reads its account).
+type memberDecision func(tx *sql.Tx, room Channel, held []Member) (memberChange, error)
+
+// memberChange is a [memberDecision]'s answer.
+type memberChange struct {
+	set        []Member
+	autoJoined []string
+}
+
+// plainMembership is a decision that reads the room and its members alone and
+// accounts for nobody: every membership write but auto-join's.
+func plainMembership(next func(Channel, []Member) ([]Member, error)) memberDecision {
+	return func(_ *sql.Tx, room Channel, held []Member) (memberChange, error) {
+		set, err := next(room, held)
+		return memberChange{set: set}, err
+	}
 }
 
 // setMembership is the shared shape of every membership write: read the room
@@ -1366,7 +1431,7 @@ func (s *Store) members(ctx context.Context, actor Actor, channelID, opID string
 // staffs the room for — and the zero value for every other one; see
 // [Store.SetUnitMembers] for what each decides.
 func (s *Store) setMembership(ctx context.Context, actor Actor, channelID, opID string,
-	chart chartWrite, next func(Channel, []Member) ([]Member, error)) (Written, MembershipWrite, error) {
+	chart chartWrite, next memberDecision) (Written, MembershipWrite, error) {
 
 	at := s.now()
 	subject := ChannelSubject(channelID)
@@ -1417,10 +1482,11 @@ func (s *Store) setMembership(ctx context.Context, actor Actor, channelID, opID 
 					"would make it a different conversation. Open one with the "+
 					"people you want instead", ErrForbidden)
 			}
-			set, err := next(room, held)
+			change, err := next(tx, room, held)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			set := change.set
 			// THE EMPTY LIST, NEVER NULL: emptying a room is a real
 			// gesture and [MemberSet] says it is spelled by a record
 			// that carries the empty list — a caller handing over
@@ -1444,7 +1510,8 @@ func (s *Store) setMembership(ctx context.Context, actor Actor, channelID, opID 
 				// back by the older node's own apply arriving
 				// second — its owner no more than its members.
 				return statelog.Decision{}, nil
-			case slices.Equal(set, held) && rehome == "" && room.ChartEpoch >= chart.epoch:
+			case slices.Equal(set, held) && rehome == "" && room.ChartEpoch >= chart.epoch &&
+				len(change.autoJoined) == 0:
 				// AN UNCHANGED MEMBERSHIP IS A NO-OP, not a
 				// record: a seat that joins a room it is already
 				// in should be told it is in the room, and a
@@ -1469,7 +1536,7 @@ func (s *Store) setMembership(ctx context.Context, actor Actor, channelID, opID 
 			}
 			return decide(stamp, actor, subject, OpMembers, scope, opID,
 				MemberSet{V: DocumentVersion, Members: set, ChartEpoch: chart.epoch,
-					Unit: rehome}, nil, at)
+					Unit: rehome, AutoJoined: change.autoJoined}, nil, at)
 		},
 	})
 	if err != nil {
@@ -2175,6 +2242,9 @@ func (s *Store) Edit(ctx context.Context, actor Actor, channelID, messageID stri
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			if err := isEvent(held, "edit"); err != nil {
+				return statelog.Decision{}, err
+			}
 			if held.Author != actor.Name() {
 				return statelog.Decision{}, fmt.Errorf("%w: this message was "+
 					"written by %s, and only its author can edit it",
@@ -2303,6 +2373,9 @@ func (s *Store) Delete(ctx context.Context, actor Actor, channelID,
 			}
 			held, err := readMessageTx(ctx, tx, room.ID, messageID)
 			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if err := isEvent(held, "delete"); err != nil {
 				return statelog.Decision{}, err
 			}
 			if held.Author != actor.Name() && !authority.Moderate {
@@ -2436,7 +2509,11 @@ func (s *Store) react(ctx context.Context, actor Actor, channelID, messageID,
 			if err := s.reachableTx(ctx, tx, room, actor); err != nil {
 				return statelog.Decision{}, err
 			}
-			if _, err := readMessageTx(ctx, tx, room.ID, messageID); err != nil {
+			held, err := readMessageTx(ctx, tx, room.ID, messageID)
+			if err != nil {
+				return statelog.Decision{}, err
+			}
+			if err := isEvent(held, "reaction"); err != nil {
 				return statelog.Decision{}, err
 			}
 			// A MESSAGE THIS SNAPSHOT ALREADY HOLDS FULL is refused
@@ -2822,6 +2899,9 @@ func (s *Store) threadOf(ctx context.Context, tx *sql.Tx, channelID, replyTo str
 	if err != nil {
 		return "", "", err
 	}
+	if err := isEvent(parent, "reply"); err != nil {
+		return "", "", err
+	}
 	if parent.ThreadRoot == "" {
 		return parent.ID, parent.Author, nil
 	}
@@ -3202,6 +3282,9 @@ func applyPatch(room *Channel, patch ChannelPatch, at time.Time) {
 	if patch.Purpose != nil {
 		room.Purpose = *patch.Purpose
 	}
+	if patch.AutoJoin != nil {
+		room.AutoJoin = *patch.AutoJoin
+	}
 	if patch.Archived != nil {
 		if *patch.Archived {
 			if room.ArchivedAt == nil {
@@ -3231,7 +3314,8 @@ func applyPatch(room *Channel, patch ChannelPatch, at time.Time) {
 // make an unrelated field's presence decide whether a topic change is a no-op.
 func sameRoom(before, after Channel) bool {
 	return before.Topic == after.Topic && before.Purpose == after.Purpose &&
-		(before.ArchivedAt == nil) == (after.ArchivedAt == nil)
+		(before.ArchivedAt == nil) == (after.ArchivedAt == nil) &&
+		before.AutoJoin == after.AutoJoin
 }
 
 // withMember adds one member if the set does not already name them.

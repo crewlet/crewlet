@@ -89,7 +89,8 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 	e.reconcileSeatServers(ctx)
 	steps = append(steps, "seat_tools")
 
-	// THE TRACKER'S PROJECTS, THE KNOWLEDGE CONTAINERS AND THE UNIT ROOMS,
+	// THE TRACKER'S PROJECTS, THE KNOWLEDGE CONTAINERS AND THE CHAT ROOMS THE
+	// CHART STAFFS (each unit's own, and every auto-join room's newcomers),
 	// before any mail is released: the first thing the seats in a new unit
 	// do is file work into its project and talk in its room.
 	e.applyChart(ctx, c)
@@ -97,7 +98,8 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 	e.applyContainers(ctx, c)
 	steps = append(steps, "knowledge_containers")
 	e.applyUnitRooms(ctx, c)
-	steps = append(steps, "chat_unit_rooms")
+	e.applyAutoJoinRooms(ctx, c)
+	steps = append(steps, "chat_rooms")
 
 	if e.node != nil {
 		// A CONVERGENCE RATHER THAN A WALK, which is what makes it right

@@ -406,13 +406,33 @@ type ChannelPatch struct {
 	// the two, or it would be a line saying the room was set up when
 	// nothing about it changed.
 	Template *string `json:"template,omitempty"`
+
+	// AutoJoin turns the room's auto-join on or off ([Channel.AutoJoin]):
+	// an administrator's to move, never any member's ([ChannelAuthority]).
+	AutoJoin *bool `json:"auto_join,omitempty"`
+
+	// AutoJoinSeats is the company's seats when the setting is turned ON,
+	// carried WHOLE and sorted: the seats the room accounts for from the
+	// start, so the setting adds the people the company takes on from now
+	// and nobody already in it. Decided by the writer from the org chart it
+	// holds, because the applier holds no chart, and refused on any other
+	// patch.
+	AutoJoinSeats []string `json:"auto_join_seats,omitempty"`
 }
 
 // Validate refuses a patch this build will not write.
 func (p ChannelPatch) Validate() error {
-	if p.Topic == nil && p.Purpose == nil && p.Archived == nil {
+	if p.Topic == nil && p.Purpose == nil && p.Archived == nil && p.AutoJoin == nil {
 		return invalid("patch", "a patch sets no field — an empty patch is a "+
 			"record on the log and a live frame for a change nobody made")
+	}
+	if len(p.AutoJoinSeats) > 0 && (p.AutoJoin == nil || !*p.AutoJoin) {
+		return invalid("auto_join_seats", "a patch that does not turn auto-join "+
+			"on accounts for no seats: the seats are the company as it stood "+
+			"when the setting was turned on")
+	}
+	if err := checkHandles("auto_join_seats", p.AutoJoinSeats, MaxMembers); err != nil {
+		return err
 	}
 	if p.Topic != nil {
 		if err := checkTopic(*p.Topic); err != nil {
@@ -497,10 +517,25 @@ type MemberSet struct {
 	// same activation, and an older activation moves it back no more than
 	// it moves the members back.
 	Unit string `json:"unit,omitempty"`
+
+	// AutoJoined is the seats this write puts in an auto-join room as
+	// newcomers to the company ([Store.AutoJoin]), which the room accounts
+	// for from this record on, sorted. Every one of them is in Members.
+	// Empty on every other membership write.
+	AutoJoined []string `json:"auto_joined,omitempty"`
 }
 
 // Validate refuses a membership this build will not write.
 func (m MemberSet) Validate() error {
+	if err := checkHandles("auto_joined", m.AutoJoined, MaxMembers); err != nil {
+		return err
+	}
+	for _, handle := range m.AutoJoined {
+		if !slices.ContainsFunc(m.Members, func(x Member) bool { return x.Handle == handle }) {
+			return invalid("auto_joined", "%q is put in the room by auto-join "+
+				"and is not in the membership this record states", handle)
+		}
+	}
 	if m.ChartEpoch < 0 {
 		return invalid("chart_epoch", "a membership names activation %d — an "+
 			"activation is an instant, and zero is how a write says it is not "+
@@ -1089,6 +1124,24 @@ func checkMembers(ms []Member, max int) error {
 				"record claim a set it did not derive", m.Handle)
 		}
 		seen[m.Handle] = true
+	}
+	return nil
+}
+
+// checkHandles holds a list of seat handles to its cap and to one spelling
+// of each: sorted, distinct and none empty, so a record's bytes say one thing
+// whichever order a writer gathered the set in.
+func checkHandles(field string, handles []string, max int) error {
+	if len(handles) > max {
+		return invalid(field, "%d seats against a %d cap", len(handles), max)
+	}
+	for i, h := range handles {
+		if strings.TrimSpace(h) == "" || h != strings.TrimSpace(h) {
+			return invalid(field, "%q is not a seat handle", h)
+		}
+		if i > 0 && handles[i-1] >= h {
+			return invalid(field, "the seats are not sorted and distinct at %q", h)
+		}
 	}
 	return nil
 }

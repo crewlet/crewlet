@@ -205,6 +205,15 @@ const (
 	// many agents one `@channel` wakes too.
 	MaxMentions = 32
 
+	// MaxThreadRepliers is how many repliers a thread's summary names
+	// ([ThreadSummary.Repliers]), beside how many there are in all.
+	//
+	// THREE, the faces a transcript draws under a root before it says
+	// "+N": a summary is read for every post on a page, and naming every
+	// voice of a long thread there would carry its whole cast for a row
+	// of three avatars.
+	MaxThreadRepliers = 3
+
 	// MaxThreadParticipants bounds the people a thread carries with it.
 	//
 	// SIXTEEN, the tracker's, and derived from what a thread IS rather

@@ -362,6 +362,11 @@ type ChannelsQuery struct {
 	// the person's read state must not ask for it.
 	Unread bool
 
+	// With keeps only the rooms this seat is ALSO a member of: the rooms
+	// the viewer has in common with somebody, which a profile lists. Empty
+	// is every room of the viewer's; the viewer's own handle is the same.
+	With string
+
 	// Limit is the most rooms the listing answers, the most recently
 	// active first, cut from the one list sorted by activity and never
 	// paged; zero is [MaxRailChannels]. A rail is answered whole, each room
@@ -423,6 +428,15 @@ type ChannelSummary struct {
 	// case, stated rather than inferred from the number, so a caller
 	// rendering "100" cannot mean two different things by it.
 	UnreadCapped bool `json:"unread_capped,omitempty"`
+
+	// Mentions is how many of the Unread messages name this viewer or the
+	// whole room (`@channel`): the badge that says somebody is asking for
+	// them. Counted over the same messages as Unread, so it is never more
+	// than Unread and stops where UnreadCapped says that did. A room event
+	// names nobody, and a muted room is counted all the same: the mute
+	// silences the badge on the screen, and the screen is where it is
+	// applied.
+	Mentions int `json:"mentions"`
 
 	// Last is the newest message, or nil in a room where nothing has been
 	// said yet.
@@ -741,7 +755,7 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 	q ChannelsQuery) (ChannelListing, error) {
 
 	var out ChannelListing
-	follow, order, err := railMemberships(ctx, tx, who)
+	follow, order, err := railMemberships(ctx, tx, who, q.With)
 	if err != nil {
 		return ChannelListing{}, err
 	}
@@ -776,8 +790,8 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 		if err != nil {
 			return ChannelListing{}, err
 		}
-		summary.Unread, summary.UnreadCapped, err = unreadCount(ctx, tx, id,
-			who, q.Cursors[id], summary.Last)
+		summary.Unread, summary.UnreadCapped, summary.Mentions, err = unreadCount(
+			ctx, tx, id, who, q.Cursors[id], summary.Last)
 		if err != nil {
 			return ChannelListing{}, err
 		}
@@ -811,15 +825,29 @@ func (r *Reader) rail(ctx context.Context, tx *sql.Tx, who string,
 // from one that was cut: a read limited to exactly [MaxRailChannels] comes
 // back full in both cases, and the listing would then report a complete rail
 // for a person whose rooms it had truncated.
-func railMemberships(ctx context.Context, tx *sql.Tx, who string) (
+//
+// WITH ANOTHER SEAT NAMED, the same rows narrowed to the rooms that seat is in
+// too, in the same statement: a seek on that seat's own member row per room
+// rather than a second listing intersected afterwards.
+func railMemberships(ctx context.Context, tx *sql.Tx, who, with string) (
 	map[string]bool, []string, error) {
 
-	rows, err := tx.QueryContext(ctx, `
+	query, args := `
 		SELECT channel_id, follow_all
 		  FROM chat_members
 		 WHERE handle = ?
 		 ORDER BY channel_id
-		 LIMIT ?`, who, MaxRailChannels+1)
+		 LIMIT ?`, []any{who, MaxRailChannels + 1}
+	if with = strings.TrimSpace(with); with != "" && with != who {
+		query, args = `
+		SELECT a.channel_id, a.follow_all
+		  FROM chat_members a
+		  JOIN chat_members b ON b.channel_id = a.channel_id AND b.handle = ?
+		 WHERE a.handle = ?
+		 ORDER BY a.channel_id
+		 LIMIT ?`, []any{with, who, MaxRailChannels + 1}
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("chatlet: read %s's rooms: %w", who, err)
 	}
@@ -907,6 +935,10 @@ func railRooms(ctx context.Context, tx *sql.Tx, ids []string,
 // ONE INDEX SEEK on `chat_messages_channel_idx`, which is ordered
 // `(channel_id, channel_seq DESC)` precisely so this is the first row the
 // index yields rather than an aggregate over the room.
+//
+// A ROOM EVENT IS NEVER THE PREVIEW. "Ana added Ravi" is not what anybody
+// said in the room, so the rail shows the last thing somebody did say, and
+// steps past the events above it on the same index.
 func lastMessage(ctx context.Context, tx *sql.Tx, channelID string) (
 	*MessagePreview, error) {
 
@@ -924,7 +956,7 @@ func lastMessage(ctx context.Context, tx *sql.Tx, channelID string) (
 		SELECT id, author_handle, author_kind, body, channel_seq, created_at,
 		       deleted_at, log_stream, log_generation, log_seq
 		  FROM chat_messages
-		 WHERE channel_id = ?
+		 WHERE channel_id = ? AND event = ''
 		 ORDER BY channel_seq DESC
 		 LIMIT 1`, channelID).
 		Scan(&preview.MessageID, &preview.Author, &kind, &body,
@@ -969,29 +1001,48 @@ func lastMessage(ctx context.Context, tx *sql.Tx, channelID string) (
 //
 // A MESSAGE YOU WROTE IS NOT ONE YOU HAVE NOT READ, and a tombstone is not a
 // message: both are excluded, because a badge nobody can clear by reading the
-// room is a badge that trains people to ignore the rail.
+// room is a badge that trains people to ignore the rail. Nor is a room event,
+// which is the room's change rather than anything said in it, so the window
+// is the room's newest [UnreadLimit] MESSAGES, stepping past events on the
+// same index.
+//
+// # And the mentions among them, in the same statement
+//
+// The third value is how many of the counted messages name the viewer
+// (a `chat_mentions` row, one primary-key probe per message in the window) or
+// the whole room (the row's own `collective`). A LEFT JOIN rather than a
+// correlated EXISTS, because the pinned driver may rewrite a correlated
+// subquery into a join over its whole child table ([storetest.Decorrelated]),
+// and that child is every mention in the company.
 func unreadCount(ctx context.Context, tx *sql.Tx, channelID, who string,
-	cursor int64, last *MessagePreview) (int, bool, error) {
+	cursor int64, last *MessagePreview) (unread int, capped bool, mentions int, err error) {
 
 	if last == nil || last.Position.Packed() <= cursor {
-		return 0, false, nil
+		return 0, false, 0, nil
 	}
-	var count int
-	err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM (
-			SELECT version, author_handle, deleted_at
-			  FROM chat_messages
-			 WHERE channel_id = ?
-			 ORDER BY channel_seq DESC
-			 LIMIT ?)
-		 WHERE version > ? AND author_handle <> ? AND deleted_at IS NULL`,
-		channelID, UnreadLimit, cursor, who).Scan(&count)
+	err = tx.QueryRowContext(ctx, unreadStatement,
+		channelID, UnreadLimit, who, cursor, who).Scan(&unread, &mentions)
 	if err != nil {
-		return 0, false, fmt.Errorf("chatlet: count what %s has not read in room "+
-			"%s: %w", who, channelID, err)
+		return 0, false, 0, fmt.Errorf("chatlet: count what %s has not read in "+
+			"room %s: %w", who, channelID, err)
 	}
-	return count, count >= UnreadLimit, nil
+	return unread, unread >= UnreadLimit, mentions, nil
 }
+
+// unreadStatement is [unreadCount]'s one statement: the room's newest
+// messages, those above the cursor that somebody else wrote and nobody took
+// back, and of those the ones naming the reader or the room.
+const unreadStatement = `
+	SELECT COUNT(*),
+	       COALESCE(SUM(CASE WHEN t.collective = 1 OR n.handle IS NOT NULL
+	                         THEN 1 ELSE 0 END), 0)
+	  FROM (SELECT id, version, author_handle, deleted_at, collective
+	          FROM chat_messages
+	         WHERE channel_id = ? AND event = ''
+	         ORDER BY channel_seq DESC
+	         LIMIT ?) t
+	  LEFT JOIN chat_mentions n ON n.message_id = t.id AND n.handle = ?
+	 WHERE t.version > ? AND t.author_handle <> ? AND t.deleted_at IS NULL`
 
 // attachParticipants fills in who is in each DIRECT conversation, in one
 // statement for the whole rail.
@@ -1403,6 +1454,34 @@ type MessageView struct {
 	Position statelog.Position `json:"position"`
 
 	Reactions []ReactionCount `json:"reactions,omitempty"`
+
+	// Thread is the replies under a room post, nil on a reply, on a room
+	// event and on a post nobody answered.
+	Thread *ThreadSummary `json:"thread,omitempty"`
+}
+
+// ThreadSummary is a root's replies, as a transcript shows them under it.
+//
+// READ, NEVER KEPT: counted from the thread's own rows when the page is read
+// (`chat_messages_thread_idx`), so a delete, an erase and a prune that change
+// what a thread holds change its summary with no counter for each of them to
+// keep in step.
+type ThreadSummary struct {
+	// Replies is every reply, a tombstone included: it still sits in the
+	// thread, under the words it replaced.
+	Replies int `json:"replies"`
+
+	// LastReplyAt is the newest reply's broker instant, and
+	// LastReplyPosition its record, whose [statelog.Position.Packed] a
+	// screen compares with the reader's cursor to tell a thread that moved
+	// past what they have read.
+	LastReplyAt       time.Time         `json:"last_reply_at"`
+	LastReplyPosition statelog.Position `json:"last_reply_position"`
+
+	// Repliers are the first [MaxThreadRepliers] seats to reply, in the
+	// order of their first reply, and ReplierCount how many replied in all.
+	Repliers     []string `json:"repliers"`
+	ReplierCount int      `json:"replier_count"`
 }
 
 // TranscriptQuery asks for a page of one room.
@@ -1848,7 +1927,131 @@ func readMessagePage(ctx context.Context, tx *sql.Tx, who string,
 	if more && lastSeq > 0 {
 		out.next = strconv.FormatInt(lastSeq, 10)
 	}
-	return out, attachReactions(ctx, tx, who, out.views, ids)
+	if err := attachReactions(ctx, tx, who, out.views, ids); err != nil {
+		return messagePage{}, err
+	}
+	return out, attachThreads(ctx, tx, out.views)
+}
+
+// attachThreads puts each room post's thread summary on it, in two statements
+// per room on the page: every replier of every root with their count and
+// their first and last reply, then the newest reply of each root.
+//
+// PER ROOM, because the thread index leads with the room
+// (`chat_messages_thread_idx`, `(channel_id, thread_root, channel_seq)`), and
+// a page a reader assembled from several rooms (the saved messages) seeks
+// each room's roots in its own range. A transcript page is one room.
+func attachThreads(ctx context.Context, tx *sql.Tx, views []MessageView) error {
+	roots := map[string][]string{}
+	var rooms []string
+	at := map[string]int{}
+	for i, view := range views {
+		m := view.Message
+		if m.ThreadRoot != "" || m.Event != nil {
+			continue
+		}
+		if _, seen := roots[m.ChannelID]; !seen {
+			rooms = append(rooms, m.ChannelID)
+		}
+		roots[m.ChannelID] = append(roots[m.ChannelID], m.ID)
+		at[m.ID] = i
+	}
+	for _, room := range rooms {
+		if err := attachRoomThreads(ctx, tx, room, roots[room], views, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// attachRoomThreads is [attachThreads] for one room's roots.
+func attachRoomThreads(ctx context.Context, tx *sql.Tx, room string, ids []string,
+	views []MessageView, at map[string]int) error {
+
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, room)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT thread_root, author_handle, COUNT(*), MIN(channel_seq), MAX(channel_seq)
+		  FROM chat_messages
+		 WHERE channel_id = ? AND thread_root IN (`+placeholders(len(ids))+`)
+		 GROUP BY thread_root, author_handle
+		 ORDER BY thread_root, MIN(channel_seq)`, args...)
+	if err != nil {
+		return fmt.Errorf("chatlet: read room %s's threads: %w", room, err)
+	}
+	newestOf := map[string]int64{}
+	for rows.Next() {
+		var (
+			root, author string
+			count        int
+			first, last  int64
+		)
+		if err = rows.Scan(&root, &author, &count, &first, &last); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("chatlet: scan a thread's replier: %w", err)
+		}
+		i, ok := at[root]
+		if !ok {
+			continue
+		}
+		summary := views[i].Thread
+		if summary == nil {
+			summary = &ThreadSummary{Repliers: []string{}}
+			views[i].Thread = summary
+		}
+		summary.Replies += count
+		summary.ReplierCount++
+		if len(summary.Repliers) < MaxThreadRepliers {
+			summary.Repliers = append(summary.Repliers, author)
+		}
+		if last > newestOf[root] {
+			newestOf[root] = last
+		}
+	}
+	if err = closeRows(rows, "room "+room+"'s threads"); err != nil {
+		return err
+	}
+	if len(newestOf) == 0 {
+		return nil
+	}
+	// A ROOM'S SEQUENCE IS ITS OWN AND UNIQUE in it, so each newest reply
+	// names its root back.
+	newest := make(map[int64]string, len(newestOf))
+	for root, seq := range newestOf {
+		newest[seq] = root
+	}
+	seqArgs := make([]any, 0, len(newest)+1)
+	seqArgs = append(seqArgs, room)
+	for seq := range newest {
+		seqArgs = append(seqArgs, seq)
+	}
+	last, err := tx.QueryContext(ctx, `
+		SELECT channel_seq, created_at, log_stream, log_generation, log_seq
+		  FROM chat_messages
+		 WHERE channel_id = ? AND channel_seq IN (`+placeholders(len(newest))+`)`,
+		seqArgs...)
+	if err != nil {
+		return fmt.Errorf("chatlet: read room %s's newest replies: %w", room, err)
+	}
+	for last.Next() {
+		var (
+			seq, created, generation, position int64
+			stream                             string
+		)
+		if err = last.Scan(&seq, &created, &stream, &generation, &position); err != nil {
+			_ = last.Close()
+			return fmt.Errorf("chatlet: scan a thread's newest reply: %w", err)
+		}
+		summary := views[at[newest[seq]]].Thread
+		summary.LastReplyAt = store.DecodeTime(created)
+		summary.LastReplyPosition = statelog.Position{
+			Stream: stream, Generation: uint32(generation), Seq: uint64(position),
+		}
+	}
+	return closeRows(last, "room "+room+"'s newest replies")
 }
 
 // attachReactions puts each message's reactions on it, in ONE statement for

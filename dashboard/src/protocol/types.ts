@@ -3890,6 +3890,11 @@ export interface ChatChannel {
   /** Present on an archived room, which is readable for ever and writable by
    *  nobody. */
   archived_at?: string;
+  /** Every seat that joins the company from now on, agent or person, is put
+   *  in this room by the engine, with a `joined` event authored by `system`.
+   *  Set by an administrator alone (`update_channel`'s `auto_join`); turning
+   *  it on adds nobody already in the company. Absent is off. */
+  auto_join?: boolean;
 }
 
 /** One message, whole. */

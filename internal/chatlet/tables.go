@@ -12,8 +12,9 @@ import "github.com/crewlet/crewlet/internal/statelog"
 //
 // THE NAMES ARE THE MIGRATION'S, EXACTLY. Nothing in Go connects a string here
 // to `internal/store/schema/replicated/0055_the_chat_domain_lands.sql` (and
-// `0068_a_chat_message_is_decided_where_it_is_applied.sql`, the verdicts, and
-// `0070_the_chat_verdicts_say_how_far_back_they_were_pruned.sql`), and a
+// `0068_a_chat_message_is_decided_where_it_is_applied.sql`, the verdicts,
+// `0070_the_chat_verdicts_say_how_far_back_they_were_pruned.sql`, and
+// `0071_a_room_says_what_changed_in_it.sql`, the auto-join account), and a
 // misspelling is silent in the direction that matters: a table left out of the
 // map is scrubbed from no snapshot, compared by no claim and swept by nobody,
 // which looks exactly like a table that behaves. What catches it is the
@@ -37,6 +38,13 @@ var ReproducibleTables = []string{
 	// is an ADDRESS, and a node whose claims were not rebuilt would let a
 	// second room take a name the first already holds.
 	"chat_channels", "chat_channel_names", "chat_members",
+
+	// The seats an auto-join room has accounted for ([Channel.AutoJoin]):
+	// written by the patch that turns the setting on and by every
+	// membership record that puts a newcomer in. A node whose replay left
+	// it out would put every seat of the company in the room at its next
+	// reconcile, the people who left it included.
+	"chat_autojoin",
 
 	// The transcript, and the four child tables DERIVED from it. Each
 	// exists because a FILTER reads it — a collection inside a document

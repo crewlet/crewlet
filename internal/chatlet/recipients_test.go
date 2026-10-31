@@ -35,6 +35,10 @@ type testRoster struct {
 	// about a unit alone could not say a room its unit stopped declaring
 	// is nobody's.
 	lead map[[2]string]string
+
+	// seats is the company's whole seat list, which an auto-join room
+	// accounts for when the setting is turned on.
+	seats []string
 }
 
 func (r testRoster) Seat(handle string) (exists, human bool) {
@@ -45,6 +49,9 @@ func (r testRoster) Seat(handle string) (exists, human bool) {
 // once, for the room's own unit and the room, and puts the answer on the
 // record.
 func (r testRoster) Lead(unit, room string) string { return r.lead[[2]string{unit, room}] }
+
+// Seats is the company's whole seat list.
+func (r testRoster) Seats() []string { return r.seats }
 
 // agents is a company of nothing but agent seats, which is the shape most of
 // these cases need.

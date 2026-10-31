@@ -183,7 +183,20 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	rows += members
 
-	a.live.note(at.live(room.ID))
+	// A NAMED ROOM OPENS WITH WHO IS IN IT: its founding members joined,
+	// authored by whoever made it (the engine, for a unit's room). A direct
+	// conversation opens with no line, since its people are what it is.
+	frame := at.live(room.ID)
+	if p.Kind.Named() {
+		written, err := a.writeEvents(ctx, tx, at, room.ID,
+			membershipEvents(at.record.Actor, AuthorSystem, nil, p.Members))
+		if err != nil {
+			return 0, err
+		}
+		rows += written.rows
+		noteEvents(&frame, written)
+	}
+	a.live.note(frame)
 	return rows, nil
 }
 
@@ -255,6 +268,7 @@ func (a *Applier) applyChannelPatch(ctx context.Context, tx *sql.Tx,
 			"incorrectly rather than one that has not arrived",
 			at.position, at.subject().ID)
 	}
+	before := room
 	if p.Topic != nil {
 		room.Topic = *p.Topic
 	}
@@ -268,6 +282,9 @@ func (a *Applier) applyChannelPatch(ctx context.Context, tx *sql.Tx,
 			room.ArchivedAt = &archived
 		}
 	}
+	if p.AutoJoin != nil {
+		room.AutoJoin = *p.AutoJoin
+	}
 	rows, err := a.writeChannel(ctx, tx, at, room)
 	if err != nil || rows == 0 {
 		// THE VERSION GUARD SKIPPED IT, which is a redelivery or a
@@ -275,7 +292,58 @@ func (a *Applier) applyChannelPatch(ctx context.Context, tx *sql.Tx,
 		// frame for it would announce a change that did not happen.
 		return 0, err
 	}
-	a.live.note(at.live(room.ID))
+	if p.AutoJoin != nil && *p.AutoJoin != before.AutoJoin {
+		accounted, err := resetAutoJoin(ctx, tx, at, room.ID, *p.AutoJoin, p.AutoJoinSeats)
+		if err != nil {
+			return 0, err
+		}
+		rows += accounted
+	}
+	frame := at.live(room.ID)
+	written, err := a.writeEvents(ctx, tx, at, room.ID, patchEvents(before, room, p))
+	if err != nil {
+		return 0, err
+	}
+	rows += written.rows
+	noteEvents(&frame, written)
+	a.live.note(frame)
+	return rows, nil
+}
+
+// resetAutoJoin starts or ends a room's auto-join account ([Channel.AutoJoin]):
+// turned on, the seats the company had then, which the setting will not add;
+// turned off, nothing, so turning it on again later starts from the company
+// as it is then rather than from a list a year old.
+func resetAutoJoin(ctx context.Context, tx *sql.Tx, at applyContext, roomID string,
+	on bool, seats []string) (int, error) {
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat_autojoin WHERE channel_id = ?`, roomID); err != nil {
+		return 0, fmt.Errorf("chatlet: clear room %s's auto-join account at %s: %w",
+			roomID, at.position, err)
+	}
+	if !on {
+		return 0, nil
+	}
+	return accountAutoJoin(ctx, tx, at, roomID, seats)
+}
+
+// accountAutoJoin records seats as accounted for by a room's auto-join, so the
+// reconcile never puts them in again.
+func accountAutoJoin(ctx context.Context, tx *sql.Tx, at applyContext, roomID string,
+	seats []string) (int, error) {
+
+	rows, err := store.InsertRows(ctx, tx, at.maxVariables,
+		`INSERT INTO chat_autojoin (channel_id, handle, at, version) VALUES`,
+		`(?, ?, ?, ?)`,
+		`ON CONFLICT (channel_id, handle) DO NOTHING`,
+		len(seats), func(i int) []any {
+			return []any{roomID, seats[i], store.EncodeTime(at.brokerAt), at.packed}
+		})
+	if err != nil {
+		return 0, fmt.Errorf("chatlet: account room %s's auto-join seats at %s: %w",
+			roomID, at.position, err)
+	}
 	return rows, nil
 }
 
@@ -391,6 +459,20 @@ func (a *Applier) applyMembers(ctx context.Context, tx *sql.Tx, at applyContext,
 			return 0, err
 		}
 		frame.Removed = removedFrom(held, p.Members)
+		written, err := a.writeEvents(ctx, tx, at, room.ID,
+			membershipEvents(at.record.Actor, at.record.ActorKind, held, p.Members))
+		if err != nil {
+			return 0, err
+		}
+		members += written.rows
+		noteEvents(&frame, written)
+	}
+	if len(p.AutoJoined) > 0 {
+		accounted, err := accountAutoJoin(ctx, tx, at, room.ID, p.AutoJoined)
+		if err != nil {
+			return 0, err
+		}
+		members += accounted
 	}
 	a.live.note(frame)
 	return rows + members, nil
@@ -415,7 +497,7 @@ func removedFrom(held, members []Member) []string {
 
 // writeChannel writes a room's changed state, guarded by its own version.
 //
-// FIVE COLUMNS AND THE DOCUMENT, and the ones NOT here are the point: a
+// SIX COLUMNS AND THE DOCUMENT, and the ones NOT here are the point: a
 // room's id, its name, its kind and who made it are IMMUTABLE — the name is
 // the address the create arbitrated, and the rest is what the room is — so
 // an update that could move them would be a rename with no claim behind it.
@@ -437,10 +519,11 @@ func (a *Applier) writeChannel(ctx context.Context, tx *sql.Tx, at applyContext,
 	res, err := tx.ExecContext(ctx, `
 		UPDATE chat_channels
 		SET topic = ?, purpose = ?, unit = ?, retention_days = ?, archived_at = ?,
-		    version = ?, document = ?
+		    auto_join = ?, version = ?, document = ?
 		WHERE id = ? AND version < ?`,
 		room.Topic, room.Purpose, room.Unit, retentionValue(room.RetentionDays),
-		nullInstant(room.ArchivedAt), at.packed, document, room.ID, at.packed)
+		nullInstant(room.ArchivedAt), boolValue(room.AutoJoin), at.packed, document,
+		room.ID, at.packed)
 	if err != nil {
 		return 0, fmt.Errorf("chatlet: apply room %s at %s: %w",
 			room.ID, at.position, err)

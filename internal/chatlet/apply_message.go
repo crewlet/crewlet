@@ -180,14 +180,16 @@ func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 		INSERT INTO chat_messages
 			(id, channel_id, thread_root, author_handle, author_kind, body,
 			 links, channel_seq, created_at, edited_at, deleted_at,
-			 log_stream, log_generation, log_seq, version, shard, document)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
+			 log_stream, log_generation, log_seq, version, shard, document,
+			 event, collective)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, '', ?)
 		ON CONFLICT (id) DO NOTHING`,
 		message.ID, message.ChannelID, message.ThreadRoot, message.Author,
 		string(message.AuthorKind), message.Body, links, seq,
 		store.EncodeTime(at.brokerAt),
 		at.position.Stream, at.position.Generation, int64(at.position.Seq),
-		at.packed, search.ChatShardOf(message.ID), document)
+		at.packed, search.ChatShardOf(message.ID), document,
+		boolValue(message.Collective))
 	if err != nil {
 		return 0, "", fmt.Errorf("chatlet: write message %s at %s: %w",
 			message.ID, at.position, err)
@@ -507,15 +509,18 @@ func (a *Applier) applyReact(ctx context.Context, tx *sql.Tx, at applyContext,
 	}
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO chat_reactions
-			(message_id, emoji, handle, at, channel_id, message_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+			(message_id, emoji, handle, at, channel_id, message_at, message_author)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (message_id, emoji, handle) DO NOTHING`,
 		r.MessageID, r.Emoji, r.By, store.EncodeTime(at.brokerAt),
 		// THE ROOM AND THE MESSAGE'S OWN INSTANT ARE COPIED ONTO THE
 		// ROW, which looks redundant beside `message_id` and is what
 		// makes the retention prune a range delete on an index rather
-		// than a join the planner has to walk.
-		message.ChannelID, store.EncodeTime(message.CreatedAt))
+		// than a join the planner has to walk. The message's AUTHOR is
+		// copied for the same reason: the reactions to one person's
+		// messages are a seek on it rather than a join over every
+		// reaction in the company.
+		message.ChannelID, store.EncodeTime(message.CreatedAt), message.Author)
 	if err != nil {
 		return 0, "", fmt.Errorf("chatlet: add %s's %q to message %s at %s: %w",
 			r.By, r.Emoji, r.MessageID, at.position, err)
