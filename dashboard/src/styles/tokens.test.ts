@@ -153,8 +153,13 @@ export function undeclared(
   declaresOnly: { name: string; text: string }[] = [],
 ): string[] {
   const declared = new Set<string>(scripted);
+  // A DECLARATION OPENS A LINE, A BLOCK OR FOLLOWS ANOTHER ONE: the kit's
+  // built sheet writes a rule's custom properties on one line (its
+  // `.crewlet-kind--doc { --crewlet-kind-ink: ...; --crewlet-kind-fill: ... }`
+  // family), and a reader of line starts alone read those as declared by
+  // nothing.
   for (const { text } of [...all, ...declaresOnly]) {
-    for (const m of text.matchAll(/^\s*(--[a-zA-Z0-9_-]+)\s*:/gm)) declared.add(m[1]!);
+    for (const m of text.matchAll(/(?:^|[{;])\s*(--[a-zA-Z0-9_-]+)\s*:/gm)) declared.add(m[1]!);
   }
   const missing: string[] = [];
   for (const { name, text } of all) {
@@ -222,6 +227,17 @@ describe("the token namespace", () => {
       ["--by-script"],
     );
     expect(missing).toEqual(["fake.css:1 reads --by-nobody, which nothing declares"]);
+  });
+
+  test("it can tell: a property a one-line rule declares is declared", () => {
+    // THE KIT'S BUILT SHEET declares a kind's properties on the rule's own
+    // line, and a sheet of ours reads them under a card that wears the class.
+    const missing = undeclared(
+      [{ name: "fake.css", text: ".a {\n  color: var(--kind-ink);\n  fill: var(--kind-nope);\n}" }],
+      [],
+      [{ name: "kit.css", text: ".kind--doc { --kind-hue: blue; --kind-ink: navy; }" }],
+    );
+    expect(missing).toEqual(["fake.css:3 reads --kind-nope, which nothing declares"]);
   });
 
   test("it can tell — a property nobody declares is caught, a fallback is not", () => {
