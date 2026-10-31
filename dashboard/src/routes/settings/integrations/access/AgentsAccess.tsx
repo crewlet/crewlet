@@ -550,23 +550,26 @@ export function AgentsAccess({
           />
         )}
         renderAccessoryRow={(row) => {
-          const message = row.drafted ? null : (
-            <LaneMessage
-              lane={row.lane}
-              seat={row.seat}
-              saved={row.saved}
-              syncing={data.syncing}
-              now={now}
-              held={held}
-              readOnly={readOnly !== undefined}
-              step={stepFor?.(row.seat.handle)}
-              pending={pending[row.key]}
-              link={links[row.key]}
-              onAct={(a) => void act(row.seat, row.lane, a)}
-              onInstall={() => void install(row.seat, row.lane)}
-              onRemove={() => setRemoving({ seat: row.seat, lane: row.lane })}
-            />
-          );
+          // NOTHING TO SAY IS NO ROW: the message is read here, not handed to
+          // a component that might draw nothing, because an element is never
+          // null and every row grew an empty accessory row under it.
+          const message = row.drafted
+            ? null
+            : laneMessage({
+                lane: row.lane,
+                seat: row.seat,
+                saved: row.saved,
+                syncing: data.syncing,
+                now,
+                held,
+                readOnly: readOnly !== undefined,
+                step: stepFor?.(row.seat.handle),
+                pending: pending[row.key],
+                link: links[row.key],
+                onAct: (a) => void act(row.seat, row.lane, a),
+                onInstall: () => void install(row.seat, row.lane),
+                onRemove: () => setRemoving({ seat: row.seat, lane: row.lane }),
+              });
           const hint = emptyScopeHint(row.lane, row.want) ?? productOnlyNote(row.lane, row.want);
           return message || hint ? (
             <div className="agent-access-under">
@@ -664,9 +667,10 @@ type Pending = AccessSeatAction | "install" | undefined;
 /**
  * What a lane is waiting on, under its row: a seat that left, a refusal, an
  * account turned off at the vendor by hand, a change made there, or a step
- * only a person can take.
+ * only a person can take. Null where it waits on nothing, so the row under it
+ * is not drawn at all. A plain function of the lane, holding no state.
  */
-function LaneMessage({
+function laneMessage({
   lane,
   seat,
   saved,
@@ -696,7 +700,7 @@ function LaneMessage({
   onAct: (action: "retry" | "keep" | "restore" | "done") => void;
   onInstall: () => void;
   onRemove: () => void;
-}) {
+}): ReactNode {
   if (syncing && saved.plan.length > 0) return null;
   const busy = held !== undefined;
   const keep = !busy && !readOnly;

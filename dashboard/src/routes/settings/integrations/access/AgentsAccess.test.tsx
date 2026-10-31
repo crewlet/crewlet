@@ -226,6 +226,32 @@ test("where the engine's plan asks for a step-up, the review names who gets admi
   ).toBeTruthy();
 });
 
+// A ROW WITH NOTHING TO SAY HAS NOTHING UNDER IT. The message was handed to
+// the table as an element, which is never null, so every row drew an empty
+// accessory row (11px and a rule) beneath it. Mutation: hand the table the
+// element again and the first count goes to three.
+test("only a row with something waiting draws a row under it", () => {
+  draw(datadogAnswer());
+  expect(document.querySelectorAll(".crewlet-data-table__accessory-row")).toHaveLength(0);
+  cleanup();
+  draw(
+    datadogAnswer({
+      sync: {
+        at: new Date().toISOString(),
+        outcome: "failed",
+        steps: [],
+        error: {
+          said: "Datadog refused the role change.",
+          remedy: "Give that user User Access Manage at Datadog, then retry.",
+          actor: "you",
+          step: "rerole",
+        },
+      },
+    }),
+  );
+  expect(document.querySelectorAll(".crewlet-data-table__accessory-row")).toHaveLength(1);
+});
+
 test("a vendor's refusal is said under the row with a retry", () => {
   draw(
     datadogAnswer({
