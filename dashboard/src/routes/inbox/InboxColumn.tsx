@@ -270,6 +270,15 @@ function LaterRows({
   );
 }
 
+/**
+ * A row as a sentence says it, from the words it is drawn with: who, then
+ * what ("Rui Santos: Ship the release on Friday?"), for an announcement that
+ * names the row opening.
+ */
+export function rowSpoken(row: InboxRow, index: OrgIndex): string {
+  return `${rowName(row, rowWho(row, index))}: ${rowWords(row, index).text}`;
+}
+
 /** What a row says under the name, and the quieter words after it. */
 function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: string } {
   switch (row.kind) {

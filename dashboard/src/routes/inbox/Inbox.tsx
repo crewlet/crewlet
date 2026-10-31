@@ -34,13 +34,18 @@
  * whatever runs the tracker). So does Answered, for the runs' questions the
  * person answered (`answered_decisions`, which lists those on every company).
  *
- * # What is done is shown, then the next item opens
+ * # What is answered moves to Answered, and the next item opens
  *
- * An answered question or run stays in its place in Needs you until the
- * reader leaves the screen, marked Answered in its head with the answer under
- * the question, and its pane shows what was answered; a read or snoozed
- * update shows its new state. A moment later (`ADVANCE_MS`) the next item
- * opens, unless the reader has already moved on.
+ * An answered question or run leaves Needs you at once for the Answered
+ * group, at its head, marked Answered with the answer under the question, and
+ * the next thing to deal with opens in the pane in the same moment; one polite
+ * announcement says both ("Answered. Next: …"). Held in place until the reader
+ * left, a done row stood among the open ones, and the next item waited on a
+ * timer. An answer the engine has accepted and not yet settled is the one
+ * kept where it stands ([PaneProps.onSettled]'s `hold`), shown as sent. A
+ * read or snoozed update shows its new state, and a moment later
+ * (`ADVANCE_MS`) the next item opens, unless the reader has already moved
+ * on.
  *
  * # What was answered before stays to be looked back at
  *
@@ -65,7 +70,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Callout, InlineCode, useMediaMatch, useScreenBelow } from "@crewlethq/ui";
+import { Callout, InlineCode, announce, useMediaMatch, useScreenBelow } from "@crewlethq/ui";
 import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -89,7 +94,13 @@ import { useAttention } from "~/lib/useAttention.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { useStableList } from "~/lib/useStableList.ts";
-import { InboxColumn, taskTitleOf, titleOf, type Settled as Given } from "./InboxColumn.tsx";
+import {
+  InboxColumn,
+  rowSpoken,
+  taskTitleOf,
+  titleOf,
+  type Settled as Given,
+} from "./InboxColumn.tsx";
 import type { AskAnswer } from "~/components/writes.tsx";
 import { InboxPane } from "./InboxPane.tsx";
 import { usePagedInbox } from "./pages.tsx";
@@ -127,6 +138,11 @@ export const ADVANCE_MS = 700;
 interface Settled extends Given {
   row: InboxRow;
   at: number;
+  /**
+   * Settled for good, so moved into the Answered group: false for an answer
+   * held where it stands until the engine settles it.
+   */
+  moved?: boolean;
 }
 
 /**
@@ -144,8 +160,10 @@ function keepSettled(
 ): InboxRow[] {
   const out = [...needs];
   const present = new Set(out.map((r) => r.key));
+  // ONLY WHAT IS HELD stays where it stood: a settled answer has moved to
+  // Answered ([pairAnswered]).
   const held = [...settled.values()]
-    .filter((s) => !present.has(s.row.key))
+    .filter((s) => !s.moved && !present.has(s.row.key))
     .sort((a, b) => a.at - b.at);
   for (const s of held) out.splice(Math.min(s.at, out.length), 0, s.row);
   return out;
@@ -270,9 +288,18 @@ export function Inbox() {
   ];
   // AN ANSWERED ROW THE ADDRESS NAMES OPENS ITS GROUP, so the open row is
   // never one the list is hiding: a link to an answer, or a return to one.
+  // NOT ONE ANSWERED HERE: the next item opens with it, and the row it left
+  // lands in the closed group's count rather than opening the group.
   useEffect(() => {
-    if (open && !answeredOpen && answered.some((r) => r.key === open)) setAnsweredOpen(true);
-  }, [open, answeredOpen, answered]);
+    if (
+      open &&
+      !answeredOpen &&
+      !settled.get(open)?.moved &&
+      answered.some((r) => r.key === open)
+    ) {
+      setAnsweredOpen(true);
+    }
+  }, [open, answeredOpen, answered, settled]);
 
   // THE OPEN ROW: the one the URL names, or, beside the list (never in one
   // pane, where the pane replaces it), the first one not yet dealt with, so the pane
@@ -302,8 +329,8 @@ export function Inbox() {
 
   // THE NEXT ROW, once the open one is settled. Read from refs when the timer
   // fires rather than from this render: by then the list has been re-read.
-  const live = useRef({ open, order, settled });
-  live.current = { open, order, settled };
+  const live = useRef({ open, order, settled, index });
+  live.current = { open, order, settled, index };
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const settle = useCallback(
@@ -328,12 +355,36 @@ export function Inbox() {
       }
       const before = live.current.order.map((r) => r.key);
       if (label) {
+        // ONCE: a second word on a row already moved (a press repeated before
+        // the list drew again) answers nothing and moves nobody on twice.
+        if (live.current.settled.get(row.key)?.moved) return;
         const at = live.current.order
           .filter((r) => r.kind !== "notice" && r.kind !== "answered")
           .findIndex((r) => r.key === row.key);
-        const given: Settled = { label, row, at: Math.max(0, at) };
+        const given: Settled = { label, row, at: Math.max(0, at), moved: true };
         if (answer) given.answer = answer;
         setSettled((was) => new Map(was).set(row.key, given));
+        // THE NEXT THING TO DEAL WITH OPENS NOW, never one answered before
+        // (the Answered group's rows), and the move is said once.
+        const order = live.current.order;
+        const next = nextAfter(
+          row.key,
+          before,
+          before,
+          new Set([
+            ...live.current.settled.keys(),
+            ...order.filter((r) => r.kind === "answered").map((r) => r.key),
+          ]),
+        );
+        const coming = next ? order.find((r) => r.key === next) : undefined;
+        announce(
+          coming
+            ? `Answered. Next: ${rowSpoken(coming, live.current.index)}`
+            : "Answered. Nothing else is waiting on you.",
+        );
+        window.clearTimeout(timer.current);
+        if (next) nav.filter({ row: next });
+        return;
       }
       // NAMED FIRST, so the row stays open while it leaves the list.
       if (live.current.open !== row.key) nav.filter({ row: row.key });

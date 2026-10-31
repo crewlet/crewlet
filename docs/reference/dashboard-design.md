@@ -3067,16 +3067,19 @@ seat's names the window that is spent and offers the two ways out: raise the
 ceiling, or hand the item on. A condition's says what it costs to leave and
 where the answer is.
 
-**What was done is shown, then the next item opens.** An answered question
-or run stays in its place in Needs you until the reader leaves the screen,
-marked **Answered** in its head (a soft success tag where the time was) with
-the answer under the question ("You chose **Hold release**", or what was
+**What is answered moves to Answered, and the next item opens.** An answered
+question or run leaves Needs you at once for the head of the **Answered**
+group, marked **Answered** in its head (a soft success tag where the time was)
+with the answer under the question ("You chose **Hold release**", or what was
 written, with a speech mark), in full ink and never struck through: a strike
 reads as "cancelled" and cuts through the words a reader comes back to check.
-The group's count is what is still open. Its pane shows the answer where the
-controls were; a read or snoozed update shows its new state. 700 ms later
-(`ADVANCE_MS`) the next item after it in the list opens, unless the reader has
-moved on first.
+The next item after it opens in the pane in the same moment, the group stays
+closed and counts it, and one polite announcement says both ("Answered. Next:
+…"). A second press on a row already answered moves the reader on no further.
+An answer the engine has accepted and not yet settled stays where it stood,
+shown as sent, until it settles. Needs you's count is what is still open. A
+read or snoozed update shows its new state, and 700 ms later (`ADVANCE_MS`)
+the next item after it opens, unless the reader has moved on first.
 
 **What was answered before waits in a closed group.** The asks put to the
 reader and closed in the last week, and the coding runs' questions the reader

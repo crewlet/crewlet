@@ -597,18 +597,28 @@ describe("what was answered", () => {
       notices: [],
     });
     const answeredRow = answeredRows({ handle: "jane", items: [ranAsk()] });
+    const none = new Map();
     // ANSWERED ELSEWHERE: the open row the slower read still lists leaves.
-    expect(pairAnswered([parked("q1")], answeredRow, new Set())).toEqual({
+    expect(pairAnswered([parked("q1")], answeredRow, none)).toEqual({
       needs: [],
       answered: answeredRow,
     });
-    // ANSWERED HERE: the row stays in Needs you, and Answered does not list it.
-    expect(pairAnswered([parked("q1")], answeredRow, new Set(["run:turn-7"]))).toEqual({
+    // ANSWERED HERE AND SETTLED: the row moves to the head of Answered as the
+    // row that was answered, and the engine's row for it is not listed too.
+    const moved = new Map([["run:turn-7", { row: parked("q1"), moved: true }]]);
+    expect(pairAnswered([parked("q1")], answeredRow, moved)).toEqual({
+      needs: [],
+      answered: [parked("q1")],
+    });
+    // HELD HERE (accepted, not settled): it stays in Needs you, and Answered
+    // does not list it.
+    const held = new Map([["run:turn-7", { row: parked("q1") }]]);
+    expect(pairAnswered([parked("q1")], answeredRow, held)).toEqual({
       needs: [parked("q1")],
       answered: [],
     });
     // THE RUN ASKED AGAIN: its new question still waits.
-    expect(pairAnswered([parked("q2")], answeredRow, new Set())).toEqual({
+    expect(pairAnswered([parked("q2")], answeredRow, none)).toEqual({
       needs: [parked("q2")],
       answered: answeredRow,
     });
