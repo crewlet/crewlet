@@ -121,10 +121,11 @@ export function roomTitle(
 }
 
 /**
- * What a sentence calls a room: `#name` for a channel, public or private;
- * its team's name for a team's room, which is never a channel's `#`; and the
- * title as it stands for a conversation, or for a kind this build cannot
- * classify.
+ * What a sentence calls a room: its team's name for a team's room, which is
+ * never a channel's `#`; the title as it stands for a conversation; and
+ * `#name` for every other kind. A kind this build cannot classify is a
+ * channel to every other sentence, which tells a conversation apart by
+ * [isDirect] alone, so a newer peer's channel reads as one here too.
  *
  * WORDS ALONE, NEVER BESIDE THE GLYPH. Where the room's glyph ([roomMark])
  * is drawn, the glyph is the room's sigil and the words beside it are the
@@ -132,7 +133,7 @@ export function roomTitle(
  * glyph and once as text, in the room's intro and on Home's widgets.
  */
 export function roomWhere(kind: ChatKind, title: string): string {
-  return kind === "public" || kind === "private" ? `#${title}` : title;
+  return isDirect(kind) || kind === "unit" ? title : `#${title}`;
 }
 
 /**
