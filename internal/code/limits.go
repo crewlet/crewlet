@@ -468,6 +468,20 @@ const (
 	// listing row.
 	MaxDescriptionBytes = config.CodeMaxDescriptionBytes
 
+	// MaxRemoteURLBytes is config.CodeMaxRemoteURLBytes: the longest URL a
+	// repository's mirror or its import names, which every record of its
+	// settings carries as it carries the description.
+	MaxRemoteURLBytes = config.CodeMaxRemoteURLBytes
+
+	// MaxCredentialRefBytes is config.CodeMaxCredentialRefBytes: the longest
+	// ${NAME} reference a mirror or an import names its credential by — all
+	// a record carries of one.
+	MaxCredentialRefBytes = config.CodeMaxCredentialRefBytes
+
+	// MaxMirrorRefs is config.CodeMaxMirrorRefs: the most ref patterns a push
+	// mirror names, as many as a repository carries protection rules.
+	MaxMirrorRefs = config.CodeMaxMirrorRefs
+
 	// MaxChangeBodyBytes is the longest body — a change's description — a
 	// change carries: as long as a task's body in the engine's own tracker,
 	// the text a change most often carries over from the work it is for.

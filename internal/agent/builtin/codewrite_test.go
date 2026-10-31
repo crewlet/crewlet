@@ -978,6 +978,9 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 		code.RefusalRepoDeleted: tools.RefusalNotFound, code.RefusalBusy: tools.RefusalUnavailable,
 		code.RefusalUnavailable: tools.RefusalUnavailable, code.RefusalNotApplied: tools.RefusalUnavailable,
 		code.RefusalStoreFull: tools.RefusalStoreFull, code.RefusalNotPermitted: tools.RefusalForbidden,
+		// A PULL MIRROR is the repository's rule, as an archive is; an
+		// IMPORT clears with waiting, as a busy repository does.
+		code.RefusalRepoMirrored: tools.RefusalForbidden, code.RefusalRepoImporting: tools.RefusalUnavailable,
 	}
 	for _, refusal := range code.Refusals() {
 		writer := &codeWrites{write: func(w code.EngineWrite) (code.EngineWriteResult, error) {

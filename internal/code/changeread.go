@@ -510,7 +510,7 @@ func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Princ
 			return nil, fmt.Errorf("code: read the repositories %s names: %w", what, scanErr)
 		}
 		ref.Status, ref.Owner.Kind, ref.Visibility = RepoStatus(status), OwnerKind(owners), Visibility(visibility)
-		if ref.Status != RepoStatusActive && ref.Status != RepoStatusArchived {
+		if !ref.Status.live() {
 			continue
 		}
 		g, refused := JudgeRead(asker, ceilingSeat, ref, chart)

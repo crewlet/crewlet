@@ -1251,7 +1251,7 @@ by hand it says so and exits 2.
 
 ### `crewlet code status`
 
-With no `-repo`, every active and archived repository, read at the node's
+With no `-repo`, every importing, active and archived repository, read at the node's
 default level (`stale`), as many a page as the node serves (500), every page
 after the first at or past the first one's position, and on stderr the
 position the listing was read at, so two runs can be compared:
@@ -1344,7 +1344,7 @@ one or two of them. A verify is one of the deployment's own controls and takes
 **`admin`**, so the token in `CREWLET_API_TOKEN` must carry it: any other is
 refused naming it, before the node checks anything.
 
-With no `-repo`, every active and archived repository, listed at
+With no `-repo`, every importing, active and archived repository, listed at
 `linearizable` so one declared a moment ago is not missed; `-repo NAME`, as
 often as you like, verifies those — a name nobody declared is refused in the
 node's words, naming `code.repos`. Each is verified in turn, **at the position

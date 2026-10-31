@@ -132,6 +132,7 @@ type KnownRepoStatus = (typeof REPO_STATUSES)[number];
  * error here until it has its words.
  */
 const REPO_STATUS_WORDS: Readonly<Record<KnownRepoStatus, string>> = {
+  importing: "Importing",
   active: "Active",
   archived: "Archived",
   deleted: "Deleted",
@@ -158,7 +159,7 @@ export function repoStatusWord(status: CodeRepoStatus): string {
  * — and then every state on its own, in the engine's order.
  */
 export const REPO_STATUS_FILTERS: readonly { value: string; label: string }[] = [
-  { value: "", label: "Active and archived" },
+  { value: "", label: "Active, archived and importing" },
   ...REPO_STATUSES.map((status) => ({ value: status, label: REPO_STATUS_WORDS[status] })),
 ];
 

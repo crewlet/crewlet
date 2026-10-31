@@ -36,7 +36,10 @@ import (
 // Every write first meets its repository: absent, deleted or being purged is
 // repo_deleted, in the sentence of the state it is in ([RepoGone]); archived
 // is repo_archived, since an archived repository is read-only and its changes
-// are read and written nothing.
+// are read and written nothing; being imported is repo_importing, since it
+// takes no write until its import is done; and a pull mirror is
+// repo_mirrored for every write but a close and a landing, since it moves only
+// by its syncs and neither of those moves a ref.
 //
 // AN OPEN then meets:
 //
@@ -667,6 +670,15 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	case repo.status == RepoStatusArchived:
 		return d.refuse(ChangeRefusalRepoArchived, fmt.Sprintf("repository %s is archived and read-only "+
 			"(code.repos archived: true): its changes are read, and written nothing", repo.name))
+	case repo.status == RepoStatusImporting:
+		return d.refuse(ChangeRefusalRepoImporting, ImportingDetail(repo.name))
+	case repo.mirrored && p.Close == nil && p.Landed == nil:
+		// A PULL MIRROR TAKES NO CHANGE OF ITS OWN: it moves only by its
+		// syncs, so nothing it holds merges through one. A CLOSE and a
+		// LANDING still land — neither moves a ref — so a repository that
+		// became a mirror with changes live can shed them, and one its source
+		// merged is recorded merged once a sync brings the merge in.
+		return d.refuse(ChangeRefusalRepoMirrored, MirroredDetail(repo.name, repo.managedBy))
 	}
 	if p.JudgesChart() && seats.Roster == nil {
 		// THE CALLER'S BUG: the committer hands a seat's write on to the

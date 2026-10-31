@@ -133,7 +133,7 @@ export function Repositories() {
             : status
               ? {
                   title: emptyTitle(status),
-                  hint: "Choose Active and archived to see the repositories in use.",
+                  hint: "Choose Active, archived and importing to see the repositories in use.",
                 }
               : {
                   title: "No repositories yet",
@@ -273,6 +273,8 @@ export function Repositories() {
 /** What an empty listing of one state says. */
 function emptyTitle(status: string): string {
   switch (status) {
+    case "importing":
+      return "No repository is being imported";
     case "active":
       return "No active repositories";
     case "archived":

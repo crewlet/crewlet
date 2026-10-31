@@ -637,6 +637,54 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 			doc:  codeChart + "code:\n  merge_by_floor: persons\n",
 			path: "code.merge_by_floor", kind: "conflict", says: []string{"code.native"},
 		},
+		// A REPOSITORY'S MIRRORS AND ITS IMPORT: each URL read by the rule its
+		// dial reads it by, each credential one whole ${VAR}, a push mirror's
+		// seat one that reads what it publishes and its refs off the seats'
+		// own branches, and no combination that would do nothing.
+		"a pull mirror over plain http": {
+			doc:  codeRepos(web + "      mirror_from: {url: 'http://forge.example.com/acme/web.git'}\n"),
+			path: "code.repos[0].mirror_from.url", kind: "shape", says: []string{"https"},
+		},
+		"a credential written as the token": {
+			doc: codeRepos(web + "      mirror_from: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: ghp_0123456789abcdef}\n"),
+			path: "code.repos[0].mirror_from.credential", kind: "shape",
+			says: []string{"one whole ${VAR} reference", "crewlet secrets set"},
+		},
+		"a credential with text around its reference": {
+			doc: codeRepos(web + "      import: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: 'Bearer ${FORGE_TOKEN}'}\n"),
+			path: "code.repos[0].import.credential", kind: "shape", says: []string{"one whole ${VAR} reference"},
+		},
+		"a push mirror with no credential": {
+			doc:  codeRepos(web + "      mirror_to: {url: 'https://forge.example.com/acme/web.git', as: swe}\n"),
+			path: "code.repos[0].mirror_to.credential", kind: "missing", says: []string{"a push authenticates"},
+		},
+		"a push mirror as no seat": {
+			doc: codeRepos(web + "      mirror_to: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: '${FORGE_TOKEN}', as: nobody}\n"),
+			path: "code.repos[0].mirror_to.as", kind: "unknown_value", says: []string{`"nobody"`, "swe"},
+		},
+		"a push mirror as a seat that does not read it": {
+			doc: codeRepos(web + "      visibility: unit\n      mirror_to: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: '${FORGE_TOKEN}', as: sre}\n"),
+			path: "code.repos[0].mirror_to.as", kind: "conflict", says: []string{"seat sre does not read web"},
+		},
+		"a push mirror of the seats' own branches": {
+			doc: codeRepos(web + "      mirror_to: {url: 'https://forge.example.com/acme/web.git', " +
+				"credential: '${FORGE_TOKEN}', as: swe, refs: ['refs/heads/**']}\n"),
+			path: "code.repos[0].mirror_to.refs[0]", kind: "conflict", says: []string{"refs/heads/seats/"},
+		},
+		"an import beside a pull mirror": {
+			doc: codeRepos(web + "      mirror_from: {url: 'https://forge.example.com/acme/web.git'}\n" +
+				"      import: {url: 'https://forge.example.com/acme/web.git'}\n"),
+			path: "code.repos[0].import", kind: "conflict", says: []string{"second source"},
+		},
+		"an archived pull mirror": {
+			doc: codeRepos(web + "      archived: true\n" +
+				"      mirror_from: {url: 'https://forge.example.com/acme/web.git'}\n"),
+			path: "code.repos[0].mirror_from", kind: "conflict", says: []string{"takes no sync"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -995,6 +1043,56 @@ func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
 		if strings.HasPrefix(w.Path, "code.") {
 			t.Errorf("a declaration protecting every default branch warned: %s: %s", w.Path, w.Message)
 		}
+	}
+}
+
+// A REPOSITORY'S MIRRORS AND ITS IMPORT ARE ACCEPTED as declared, each
+// credential kept as the ${VAR} reference it was written as — Tier B is never
+// resolved at its parse, and the code log records the reference — and a push
+// mirror's seat accepted where the chart lets it read the repository. A pull
+// mirror's protect list is warned, at it, since a mirror takes no push for a
+// rule to hold.
+//
+// Mutation: drop the pull mirror's arm from codeWarnings — nothing is
+// warned, red.
+func TestARepositorysMirrorsAreAccepted(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte(codeRepos(`    - name: web
+      owner: {unit: Engineering}
+      protect: [{branch: main}]
+      mirror_to:
+        url: https://forge.example.com/acme/web.git
+        credential: ${FORGE_TOKEN}
+        as: swe
+        refs: [refs/heads/main, 'refs/tags/v*']
+    - name: api
+      owner: {unit: Engineering}
+      protect: [{branch: main}]
+      import: {url: 'https://forge.example.com/acme/api.git', credential: '${FORGE_TOKEN}'}
+    - name: upstream
+      owner: {unit: Engineering}
+      protect: [{branch: main}]
+      mirror_from: {url: 'https://forge.example.com/upstream/lib.git'}
+`)))
+	if err != nil {
+		t.Fatalf("refused: %v", err)
+	}
+	repos := c.Code.Repos
+	if got := repos[0].MirrorTo.Credential; got != "${FORGE_TOKEN}" {
+		t.Errorf("mirror_to.credential reads %q, want the reference as written", got)
+	}
+	if got := repos[1].Import.Credential; got != "${FORGE_TOKEN}" {
+		t.Errorf("import.credential reads %q, want the reference as written", got)
+	}
+	var warned []config.Warning
+	for _, w := range c.Warnings() {
+		if strings.HasPrefix(w.Path, "code.") {
+			warned = append(warned, w)
+		}
+	}
+	if len(warned) != 1 || warned[0].Path != "code.repos[2].protect" ||
+		!strings.Contains(warned[0].Message, "pull mirror") {
+		t.Errorf("warned %+v, want the one at code.repos[2].protect naming the pull mirror", warned)
 	}
 }
 

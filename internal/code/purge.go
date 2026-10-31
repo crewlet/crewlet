@@ -104,7 +104,7 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 			case row.Name != name:
 				return statelog.Decision{}, fmt.Errorf("code: repository %s is named %q "+
 					"and this purge was scoped to %q", repoID, row.Name, name)
-			case row.Status == RepoStatusActive || row.Status == RepoStatusArchived:
+			case row.Status.live():
 				return statelog.Decision{}, fmt.Errorf("%w: %s is %s", ErrNotDeleted, row.Name, row.Status)
 			case row.Status == RepoStatusDeleted && row.DeletedAt.Valid &&
 				store.DecodeTime(row.DeletedAt.Int64).Add(retention).After(s.now()):

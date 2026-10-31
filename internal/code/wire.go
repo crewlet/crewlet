@@ -47,9 +47,23 @@ type RepoRef struct {
 	// reads of the repository ([GrantOf]).
 	Visibility Visibility `json:"visibility"`
 	// Search is how code search reads it ([SearchMode]).
-	Search        SearchMode `json:"search"`
-	DefaultBranch string     `json:"default_branch"`
-	Description   string     `json:"description,omitempty"`
+	Search SearchMode `json:"search"`
+	// Mirrored is a PULL MIRROR ([RepoSettings.MirrorFrom]): it moves only
+	// by its syncs, so a push and a change's every write are refused
+	// repo_mirrored — what the code host's admission and an engine write's
+	// landing read of it before the committer is asked. Never the mirror's
+	// URL or credential, which no row a read serves carries.
+	//
+	// AN ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields row:
+	// it is read from the row a record wrote. AS A STATED CONDITION, as the
+	// mirror's own fields are (mirror.go): no build that carries the code
+	// domain has run without it — none of the domain is on main — so every
+	// node a code host asks answers it; were one without it ever to run
+	// first, a host reading its answer would take a pull mirror's push to the
+	// committer, which refuses it there, recorded, from the rows.
+	Mirrored      bool   `json:"mirrored,omitempty"`
+	DefaultBranch string `json:"default_branch"`
+	Description   string `json:"description,omitempty"`
 	// Protections are its rules AS A PUSH IS JUDGED BY THEM ([PushRule]),
 	// sorted by pattern — never a rule's merge gate. This row is what the
 	// admission of every git request reads, every page of a git node's sync
@@ -1506,8 +1520,8 @@ type ExpungeResult struct {
 	// added, never from the decision.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 	// Refusal is why it was refused with no record — stale, repo_deleted,
-	// upload_expired, pack_too_large, busy, not_applied or unavailable —
-	// and Detail its one sentence.
+	// repo_importing, upload_expired, pack_too_large, busy, not_applied or
+	// unavailable — and Detail its one sentence.
 	Refusal Refusal `json:"refusal,omitempty"`
 	Detail  string  `json:"detail,omitempty"`
 	// Position is where its record landed — for one asked again under its

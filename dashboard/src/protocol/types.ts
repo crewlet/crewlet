@@ -6640,6 +6640,12 @@ export interface CodeRepoSummary {
    * search naming it.
    */
   search: "indexed" | "grep" | (string & {});
+  /**
+   * A pull mirror (`code.RepoRef.Mirrored`): it moves only by the code host's syncs
+   * from a repository at another host, and takes no push and no change of its own.
+   * Absent for one that is not.
+   */
+  mirrored?: boolean;
   default_branch: string;
   description?: string;
   protections?: CodeProtection[];

@@ -199,6 +199,30 @@ const (
 	// paragraph, which rides every settings record and every listing row.
 	CodeMaxDescriptionBytes = 1_024
 
+	// CodeMaxRemoteURLBytes is the longest URL a repository's mirror or its
+	// import names: ONE KIBIBYTE, the bound a description is held to
+	// ([CodeMaxDescriptionBytes]), because every create, settings change and
+	// restore carries a repository's mirrors whole as it carries its
+	// description — and far past any forge's repository URL, a host and an
+	// owner/name path a few dozen bytes long.
+	CodeMaxRemoteURLBytes = 1_024
+
+	// CodeMaxCredentialRefBytes is the longest credential a mirror or an
+	// import names — the whole ${NAME} reference, which is all a record ever
+	// carries of one: 128 bytes, twice the longest seat handle
+	// (iam.MaxLogin, 64) a provisioner's variable is named after beside its
+	// vendor's prefix. A JUDGMENT, which bounds what a settings record carries
+	// rather than any name a person writes.
+	CodeMaxCredentialRefBytes = 128
+
+	// CodeMaxMirrorRefs is the most ref patterns a push mirror names: as many
+	// as its repository carries protection rules ([CodeMaxProtections]), so
+	// a mirror may name every protected pattern of its repository — the
+	// "protected branches only" a forge's own mirror offers — and, like a
+	// rule, every pattern is asked about every ref a round of the mirror
+	// compares.
+	CodeMaxMirrorRefs = 64
+
 	// CodeMaxRepos is the most repositories one document may declare: a
 	// typo guard on code.repos, two orders of magnitude past the reference
 	// company's sixty or so — a list longer than it is a generated document
@@ -694,6 +718,45 @@ type CodeRepo struct {
 	// touching them asks for a review. They GRANT NOTHING — who may read and
 	// push is the chart's and the tier's, whatever a path owner names.
 	PathOwners []CodePathOwner `yaml:"path_owners,omitempty" json:"path_owners,omitempty" desc:"Who owns which of the repository's paths, at most 64 owners and 256 KiB as the code log records them: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before."`
+	// MirrorFrom makes the repository a PULL MIRROR of a repository at
+	// another host, MirrorTo a PUSH MIRROR to one, and Import fills it from
+	// one when it is created. Only a person or this document sets any of the
+	// three (U49): a pull mirror and an import dial another host, and a push
+	// mirror sends the company's code to one. Each credential is a ${VAR}
+	// reference and nothing else, recorded as the reference and resolved
+	// only when the remote is dialed.
+	MirrorFrom *CodeMirrorSource `yaml:"mirror_from,omitempty" json:"mirror_from,omitempty" desc:"Makes it a pull mirror of a repository at another host: it is imported from there when it is created, then moves only by the code host's syncs from it, and takes no push and no change of its own."`
+	MirrorTo   *CodeMirrorTarget `yaml:"mirror_to,omitempty" json:"mirror_to,omitempty" desc:"Makes it a push mirror: the code host pushes the refs it names to a repository at another host, as the seat named by as."`
+	Import     *CodeImportSource `yaml:"import,omitempty" json:"import,omitempty" desc:"Fills it, when it is created, from a repository at another host: it takes no push until its import is done. Read only by its create: a repository that exists already ignores it."`
+}
+
+// IdentityKey is the repository's name, which code.repos holds unique: what a
+// redaction's restore matches a repository's credentials by, since a mirror's
+// or an import's credential is masked wherever a read surface finds one that
+// is not a reference — and restored by position, a reordered code.repos would
+// hand one repository's credential to another.
+func (r CodeRepo) IdentityKey() string { return r.Name }
+
+// CodeMirrorSource is the repository a pull mirror follows ([CodeRepo.MirrorFrom]).
+type CodeMirrorSource struct {
+	URL        string `yaml:"url" json:"url" js:"required" desc:"The repository it follows: an https URL with no user, query or fragment, at most 1024 bytes."`
+	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
+}
+
+// CodeMirrorTarget is the repository a push mirror pushes to
+// ([CodeRepo.MirrorTo]).
+type CodeMirrorTarget struct {
+	URL        string   `yaml:"url" json:"url" js:"required" desc:"The repository it pushes to: an https URL with no user, query or fragment, at most 1024 bytes."`
+	Credential string   `secret:"true" yaml:"credential" json:"credential" js:"required" desc:"What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host, resolved from the secret store and then the environment when it dials, never a literal."`
+	As         string   `yaml:"as" json:"as" js:"required" desc:"The seat whose identity the push carries at that host, by its handle: a seat that reads this repository — a person's seat reads every one, an agent's what its grant does — never a bot."`
+	Refs       []string `yaml:"refs,omitempty" json:"refs,omitempty" desc:"The refs it pushes, at most 64 patterns of refs/heads/<glob> and refs/tags/<glob>, each once; unset is the default branch and refs/tags/*. No pattern may reach a seat's own branches under refs/heads/seats/."`
+}
+
+// CodeImportSource is the repository a repository is filled from when it is
+// created ([CodeRepo.Import]).
+type CodeImportSource struct {
+	URL        string `yaml:"url" json:"url" js:"required" desc:"The repository it is filled from: an https URL with no user, query or fragment, at most 1024 bytes."`
+	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
 }
 
 // CodePathOwner is one owner of a repository's paths: exactly one of a unit or
@@ -1422,7 +1485,193 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 		first[pattern] = k
 	}
 	validatePathOwners(&p, at(path, "path_owners"), r.PathOwners, owners)
+	r.validateRemotes(&p, path, owners)
 	return p.err()
+}
+
+// validateRemotes holds the repository's mirrors and its import at path into
+// p: each URL a remote's, read by the one rule its dial reads it by
+// ([gitref.ParseRemoteURL]) and at most [CodeMaxRemoteURLBytes], and each
+// credential one whole ${VAR} reference ([validateCodeRemote]) — a push
+// mirror's required; a push mirror's seat one of the chart's that reads the
+// repository ([CodeRepo.validateMirrorSeat]) and its refs ([validateMirrorRefs]);
+// and none of the combinations that would do nothing: an import beside a pull
+// mirror, which is imported from its own source when it is created, and either
+// beside archived, which takes neither a sync nor an import.
+//
+// RUNNABLE, as an owner's rules are: the code domain refuses settings carrying
+// a URL no dial reads or a credential that is not a reference, so the
+// reconcile could not record one, and a push mirror whose seat the chart
+// lacks, or that does not read what it would publish, has nobody to push as.
+func (r CodeRepo) validateRemotes(p *problems, path Path, owners *codeOwners) {
+	if m := r.MirrorFrom; m != nil {
+		from := at(path, "mirror_from")
+		validateCodeRemote(p, from, m.URL, m.Credential, false)
+		switch {
+		case r.Import != nil:
+			p.add(at(path, "import"), ErrConflict,
+				"a pull mirror is imported from mirror_from when it is created, so import beside it is a "+
+					"second source: remove import")
+		case r.Archived:
+			p.add(from, ErrConflict,
+				"an archived repository takes no sync, so a pull mirror of it would never move: remove "+
+					"mirror_from to keep it as it stands, or archived to follow its source")
+		}
+	}
+	if i := r.Import; i != nil {
+		validateCodeRemote(p, at(path, "import"), i.URL, i.Credential, false)
+		if r.Archived && r.MirrorFrom == nil {
+			p.add(at(path, "import"), ErrConflict,
+				"an import fills an active repository, and an archived one takes nothing: leave archived "+
+					"unset until the import is done — import is read only when the repository is created, "+
+					"so remove it then, and archive the repository")
+		}
+	}
+	if m := r.MirrorTo; m != nil {
+		to := at(path, "mirror_to")
+		validateCodeRemote(p, to, m.URL, m.Credential, true)
+		r.validateMirrorSeat(p, at(to, "as"), m.As, owners)
+		validateMirrorRefs(p, at(to, "refs"), m.Refs)
+	}
+}
+
+// validateCodeRemote holds one remote at path into p: its URL present, at most
+// [CodeMaxRemoteURLBytes] and one the dial reads ([gitref.ParseRemoteURL]), and
+// its credential — required where needed — ONE WHOLE ${VAR} REFERENCE of at
+// most [CodeMaxCredentialRefBytes] and nothing else.
+//
+// A REFERENCE, NEVER A TOKEN: the code domain records the credential as it is
+// written, on every record of the repository's settings, which every data node
+// keeps and every backup carries — so a token written here would be a secret
+// at rest in the code log, and the reference is resolved only when the remote
+// is dialed, from the secret store and then the environment. The refusal never
+// quotes the value: a literal is a token.
+func validateCodeRemote(p *problems, path Path, url, credential string, needCredential bool) {
+	switch {
+	case strings.TrimSpace(url) == "":
+		p.add(at(path, "url"), ErrMissing, "the repository at the other host: an https URL")
+	case len(url) > CodeMaxRemoteURLBytes:
+		p.add(at(path, "url"), ErrOutOfRange, "%d bytes, past the %d a remote's URL may hold", len(url),
+			CodeMaxRemoteURLBytes)
+	default:
+		if _, err := gitref.ParseRemoteURL(url); err != nil {
+			p.add(at(path, "url"), ErrShape, "%v", err)
+		}
+	}
+	switch {
+	case credential == "" && needCredential:
+		p.add(at(path, "credential"), ErrMissing,
+			"a push authenticates: name the ${VAR} that holds the token, which the secret store or the "+
+				"environment answers when the code host dials")
+	case credential == "":
+	case len(credential) > CodeMaxCredentialRefBytes:
+		p.add(at(path, "credential"), ErrOutOfRange, "%d bytes, past the %d a credential's reference may hold",
+			len(credential), CodeMaxCredentialRefBytes)
+	case !wholeReference(credential):
+		p.add(at(path, "credential"), ErrShape,
+			"a credential is one whole ${VAR} reference and nothing else — never the token itself, which "+
+				"every record of the repository's settings would carry: put the token in the secret store "+
+				"(crewlet secrets set NAME) and write ${NAME}")
+	}
+}
+
+// validateMirrorSeat holds a push mirror's seat at path into p: a seat of the
+// chart, by its handle, that reads the repository ([CodeRepo.mirrorSeatReads]).
+func (r CodeRepo) validateMirrorSeat(p *problems, path Path, as string, owners *codeOwners) {
+	handle := strings.TrimSpace(as)
+	seat := owners.index.SeatByHandle(handle)
+	switch {
+	case handle == "":
+		p.add(path, ErrMissing,
+			"a push mirror pushes as a seat's own identity at the other host, never a bot: name the seat "+
+				"by its handle")
+	case seat == nil:
+		p.add(path, ErrUnknownValue, "%q is no seat's handle in this company; the seats are: %s", as,
+			owners.seats())
+	case !r.mirrorSeatReads(owners.index, seat):
+		p.add(path, ErrConflict,
+			"seat %s does not read %s, which only its owner's own seats and leads read (visibility: unit): "+
+				"a push mirror publishes only what the seat it pushes as reads — name a seat the chart "+
+				"relates to the owner, or a person's seat", handle, r.Name)
+	}
+}
+
+// mirrorSeatReads reports whether seat reads the repository r, as the code
+// domain grants a read (internal/code's GrantOf, ADR-0058): a PERSON'S seat
+// reads every repository, and an agent's every one visible to the company —
+// every tier this document can spell reads, so no tier narrows it — and one
+// visible to its owner's unit alone where the chart relates the seat to the
+// owner: a seat in the owning unit or a unit below it, a lead over it (the
+// effective lead of it or of a unit above it), or — owned by a seat — that
+// seat, or a lead over the unit holding it.
+//
+// THE DOMAIN'S RULE IN THE DOCUMENT'S TERMS, because config cannot import the
+// domain that imports it: the engine's
+// TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt holds the two to one
+// verdict over every relation a chart can give.
+func (r CodeRepo) mirrorSeatReads(x *org.Index, seat *org.Role) bool {
+	if seat.IsHuman() || r.Visibility.Resolved() == CodeVisibilityCompany {
+		return true
+	}
+	var over *org.Unit
+	switch unit, owner := strings.TrimSpace(r.Owner.Unit), strings.TrimSpace(r.Owner.Seat); {
+	case unit != "":
+		if over = x.UnitByRef(unit); over == nil {
+			return false
+		}
+		if slices.Contains(x.UnitChainFor(seat), over) {
+			return true
+		}
+	case owner != "":
+		if owner == seat.Handle() {
+			return true
+		}
+		holder := x.SeatByHandle(owner)
+		if holder == nil {
+			return false
+		}
+		over = x.UnitFor(holder)
+	}
+	for u := over; u != nil; u = x.Parent(u) {
+		if lead := x.EffectiveLead(u); lead != nil && lead.Handle() == seat.Handle() {
+			return true
+		}
+	}
+	return false
+}
+
+// validateMirrorRefs holds a push mirror's refs at path into p: at most
+// [CodeMaxMirrorRefs], each a protection pattern of gitref's grammar — under
+// refs/heads/ or refs/tags/ — that reaches no seat's own namespace
+// ([gitref.PatternReachesSeats]), and each once.
+//
+// NO SEAT'S BRANCHES LEAVE: refs/heads/seats/<handle>/ is where a seat's work
+// waits for a person, its experiments among it, and a mirror publishes what
+// the company merged, never what a seat has not yet offered — so a pattern
+// that could match one ref there is refused, refs/heads/** among them, while
+// refs/heads/*, which matches only top-level branches, is not.
+func validateMirrorRefs(p *problems, path Path, refs []string) {
+	if len(refs) > CodeMaxMirrorRefs {
+		p.add(path, ErrOutOfRange, "%d patterns, past the %d one push mirror may name", len(refs),
+			CodeMaxMirrorRefs)
+	}
+	first := make(map[string]int, len(refs))
+	for k, pattern := range refs {
+		entry := idx(path, k)
+		switch was, dup := first[pattern]; {
+		case !gitref.ValidPattern(pattern):
+			p.add(entry, ErrShape, "%q is not refs/heads/<glob> or refs/tags/<glob>", pattern)
+		case gitref.PatternReachesSeats(pattern):
+			p.add(entry, ErrConflict,
+				"%s reaches %s<handle>/, where each seat's own branches wait for a person, and a mirror "+
+					"publishes what the company merged: name the branches it pushes — refs/heads/*, or a "+
+					"family such as refs/heads/release/*", pattern, gitref.SeatsRoot)
+		case dup:
+			p.add(entry, ErrConflict, "%s is named twice (first at refs[%d])", pattern, was)
+		default:
+			first[pattern] = k
+		}
+	}
 }
 
 // validatePathOwners holds a repository's path owners at path into p: at most
@@ -1844,6 +2093,12 @@ func validateGateClasses(p *problems, path Path, name string, list []CodeChangeC
 // warning back with the revision that does it. Its visibility still warns:
 // an archived repository is still read.
 //
+// NOR A PULL MIRROR'S, for the same reason: it takes no push and no change of
+// its own (mirror_from), so its default branch moves only by the code host's
+// syncs. Its protect list is warned instead, located at it — every rule there
+// holds nothing, and a person reading it would believe it gates what it
+// cannot. Its visibility still warns: a mirror is read.
+//
 // THE CHART IS BUILT HERE, and only for a company that hosts code: no other
 // advisory reads one, and a company with no repositories would otherwise pay
 // a normalised chart at every validate and every apply for nothing.
@@ -1858,6 +2113,16 @@ func (c *Company) codeWarnings() []Warning {
 	for i, r := range c.Code.Repos {
 		if w, ok := unitWithNoLead(units, i, r); ok {
 			out = append(out, w)
+		}
+		if r.MirrorFrom != nil {
+			if len(r.Protect) > 0 {
+				out = append(out, advisory(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
+					"%s is a pull mirror (mirror_from): every ref moves by the code host's syncs from its "+
+						"source, and it takes no push and no change of its own, so no rule of its protect "+
+						"list holds anything (remove protect, or remove mirror_from to push to it here)",
+					r.Name)))
+			}
+			continue
 		}
 		out = append(out, idleGateFields(i, r)...)
 		if r.Archived {

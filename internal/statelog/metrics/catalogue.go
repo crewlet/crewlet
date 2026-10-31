@@ -749,7 +749,8 @@ func Catalogue() []Instrument {
 				"refusal's own code — `not_permitted`, `stale`, `change_exists`, " +
 				"`no_source`, `no_target`, `same_ref`, `no_difference`, " +
 				"`change_closed`, `change_merged`, `change_not_found`, " +
-				"`repo_archived`, `repo_deleted`, `busy`, `not_applied`, " +
+				"`repo_archived`, `repo_importing`, `repo_mirrored`, " +
+				"`repo_deleted`, `busy`, `not_applied`, " +
 				"`unavailable` — which decided nothing; `handed_on`, one this " +
 				"node decided nothing of for a reason about itself (stopping, " +
 				"no chart to judge a seat by, behind the company's " +

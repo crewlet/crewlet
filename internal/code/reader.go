@@ -283,8 +283,9 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 		active                                            int64
 	)
 	err := tx.QueryRowContext(ctx, repoViewSQL, id).Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &kind,
-		&owners, &v.ref.Owner.Ref, &visibility, &search, &v.ref.DefaultBranch, &v.ref.Description, &deleted,
-		&active, &v.ref.Refs, &v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes,
+		&owners, &v.ref.Owner.Ref, &visibility, &search, &v.ref.Mirrored, &v.ref.DefaultBranch,
+		&v.ref.Description, &deleted, &active, &v.ref.Refs, &v.branches, &v.tags, &v.tombstones,
+		&v.ref.LivePacks, &v.ref.LiveBytes,
 		&v.ref.LiveObjects, &v.ref.DropEpoch, &v.tombstonesThrough, &v.retiredThrough, &v.layersPosition, &v.pushes,
 		&v.lastPushAt, &v.createdAt)
 	switch {
@@ -2256,7 +2257,10 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	out *ReadAnswer) error {
 	statuses := q.Status
 	if len(statuses) == 0 {
-		statuses = []RepoStatus{RepoStatusActive, RepoStatusArchived}
+		// THE REPOSITORIES IN USE: one being imported is listed beside the
+		// active and the archived — it is fetched, and fills as its import
+		// lands — and only the deleted and the purging wait to be asked for.
+		statuses = []RepoStatus{RepoStatusImporting, RepoStatusActive, RepoStatusArchived}
 	}
 	names := make([]string, len(statuses))
 	for i, s := range statuses {
@@ -2285,7 +2289,8 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 			head                                              sql.NullString
 		)
 		if err := rows.Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &kind, &owners, &v.ref.Owner.Ref,
-			&visibility, &search, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &active, &v.ref.Refs,
+			&visibility, &search, &v.ref.Mirrored, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &active,
+			&v.ref.Refs,
 			&v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects, &v.ref.DropEpoch, &v.pushes, &v.lastPushAt,
 			&head); err != nil {
 			_ = rows.Close()
@@ -3409,9 +3414,9 @@ type RepoLife struct {
 const lifePage = 1_000
 
 // WalkLives hands visit every repository a reconcile of code.repos acts on —
-// active, archived or deleted; a purge's is the code-retention duty's — in
-// name order, a page of [lifePage] at a time, each page one STALE read of
-// this node's rows. A visit's error ends the walk with it.
+// importing, active, archived or deleted; a purge's is the code-retention
+// duty's — in name order, a page of [lifePage] at a time, each page one STALE
+// read of this node's rows. A visit's error ends the walk with it.
 //
 // THE RECONCILE'S OWN READ, because the listing a surface reads is the wrong
 // shape for it: [Reader.Read]'s repositories carry the head (a join of
@@ -3597,7 +3602,8 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 // driver's planner is held to the index each is written for.
 const (
 	repoViewSQL = `SELECT id, name, status, managed_by, kind, owner_kind, owner, visibility, search,
-		default_branch, description, deleted_at, last_activity_at, refs, branches, tags, tombstones, live_packs,
+		mirror_from != '', default_branch, description, deleted_at, last_activity_at, refs, branches, tags,
+		tombstones, live_packs,
 		live_bytes, live_objects, drop_epoch, tombstones_through, retired_through, layers_position, pushes,
 		last_push_at, created_at FROM code_repos WHERE id = ?`
 	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position, content_position`
@@ -3653,7 +3659,8 @@ const (
 		AND position <= ? AND (position < ? OR push_id < ?)
 		ORDER BY position DESC, push_id DESC LIMIT ?`
 	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.kind, r.owner_kind, r.owner, r.visibility,
-		r.search, r.default_branch, r.description, r.deleted_at, r.last_activity_at, r.refs, r.live_packs,
+		r.search, r.mirror_from != '', r.default_branch, r.description, r.deleted_at, r.last_activity_at, r.refs,
+		r.live_packs,
 		r.live_bytes, r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target
 		FROM code_repos r LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
 			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''
@@ -3717,7 +3724,7 @@ const (
 	// beside the OR is what keeps the index's range seek, which a bare OR of
 	// the two terms would give up.
 	livesSQL = `SELECT id, name, status, managed_by FROM code_repos
-		WHERE name > ? AND status IN ('active', 'archived', 'deleted')
+		WHERE name > ? AND status IN ('importing', 'active', 'archived', 'deleted')
 		ORDER BY name LIMIT ?`
 	duePurgingSQL = `SELECT id, name, deleted_at FROM code_repos
 		WHERE status = 'purging' AND deleted_at >= ? AND (deleted_at > ? OR id > ?)

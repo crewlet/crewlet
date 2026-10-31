@@ -1177,9 +1177,10 @@ func (t *codeListRepos) Parameters() map[string]any {
 		"properties": map[string]any{
 			"status": map[string]any{
 				"type": "string",
-				"enum": []string{string(code.RepoStatusActive), string(code.RepoStatusArchived)},
-				"description": "Only the active repositories, or only the archived ones (read-only); " +
-					"both when left out.",
+				"enum": []string{string(code.RepoStatusImporting), string(code.RepoStatusActive),
+					string(code.RepoStatusArchived)},
+				"description": "Only those being imported, the active, or the archived (read-only); all three " +
+					"when left out.",
 			},
 			"cursor": codeCursorArg(),
 			"limit": map[string]any{
@@ -1246,11 +1247,11 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Fresh: seatRead}
 	switch status := code.RepoStatus(strings.TrimSpace(argString(args, "status"))); status {
 	case "":
-	case code.RepoStatusActive, code.RepoStatusArchived:
+	case code.RepoStatusImporting, code.RepoStatusActive, code.RepoStatusArchived:
 		q.Status = []code.RepoStatus{status}
 	default:
-		return failed(fmt.Sprintf("%s: `status` is %s or %s, not %q.", t.Name(), code.RepoStatusActive,
-			code.RepoStatusArchived, clip(string(status)))), nil
+		return failed(fmt.Sprintf("%s: `status` is %s, %s or %s, not %q.", t.Name(), code.RepoStatusImporting,
+			code.RepoStatusActive, code.RepoStatusArchived, clip(string(status)))), nil
 	}
 	q.Limit = argInt(args, "limit", defaultCodeRepoList)
 	if q.Limit < 1 || q.Limit > maxCodeRepoList {

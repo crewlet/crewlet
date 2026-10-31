@@ -351,13 +351,13 @@ func registeredStatements() map[string]statement {
 		"marker":              {markerSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"purged":              {purgedSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"repo version":        {repoVersionSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"clear protections":   {clearProtectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"path owners":         {pathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"path owners of":      {pathOwnersOfSQL, []any{`["repo-1","repo-2"]`}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"clear path owners":   {clearPathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"delete repo":         {deleteRepoSQL, []any{1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"refs named":          {refsNamedSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
 		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, false, 1, false, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
@@ -384,6 +384,7 @@ func registeredStatements() map[string]statement {
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		"repo row":            {repoRowSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"repo remotes":        {remotesSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"protections":         {protectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"push rules":          {pushRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"gates":               {gatesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
@@ -1354,6 +1355,22 @@ func claimedReads() map[string]statement {
 			WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`,
 			[]any{string(SearchIndexed), "", MaxSnapshotItems},
 			[]string{"code_repos_search_idx (search=? AND name>?)"}},
+		// THE MIRRORS' AND THE IMPORTS' INDEXES THEIR LATER READERS SEEK
+		// (replicated 0082): the home's listings of the repositories being
+		// imported, the pull mirrors least recently synced first and the push
+		// mirrors — each a keyset page at a time, its partial predicate
+		// repeated verbatim. Nothing in this build reads a repository by its
+		// mirror or its import's progress.
+		"code_repos_importing_idx": {`SELECT id, import_source, import_seq FROM code_repos
+			INDEXED BY code_repos_importing_idx WHERE status = 'importing' AND id > ? ORDER BY id LIMIT ?`,
+			[]any{"", MaxSnapshotItems}, []string{"code_repos_importing_idx (id>?)"}},
+		"code_repos_mirrored_idx": {`SELECT id, name, mirror_from FROM code_repos
+			INDEXED BY code_repos_mirrored_idx WHERE mirror_from != '' AND status = 'active'
+			AND mirror_synced_at <= ? ORDER BY mirror_synced_at, id LIMIT ?`,
+			[]any{2, MaxSnapshotItems}, []string{"code_repos_mirrored_idx (mirror_synced_at<=?)"}},
+		"code_repos_mirror_to_idx": {`SELECT id, name, mirror_to FROM code_repos
+			INDEXED BY code_repos_mirror_to_idx WHERE mirror_to != '' AND id > ? ORDER BY id LIMIT ?`,
+			[]any{"", MaxSnapshotItems}, []string{"code_repos_mirror_to_idx (id>?)"}},
 		// A PERSON'S CODE INBOX (replicated 0081), newest first: the
 		// composed inbox's code half reads it.
 		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications

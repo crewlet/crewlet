@@ -174,6 +174,47 @@ code:
   resolved as `owner` is, owning 1 to 32 globs of the repository's paths, each
   glob once and each owner in one entry, and at most 256 KiB in all as the code
   log records them ([Path owners](#path-owners)).
+- **`mirror_from`** `{url, credential}` — makes it a **pull mirror** of a
+  repository at another host: it is imported from there when it is created,
+  and then moves only by the code host's syncs from it, so it takes no push
+  and no change of its own — each refused `repo_mirrored` ([What git
+  prints](#what-git-prints-and-what-it-means)). Its `protect` list is warned
+  about, since no push reaches a rule, and an archived one is refused: an
+  archived repository takes no sync.
+- **`mirror_to`** `{url, credential, as, refs}` — makes it a **push mirror**:
+  the code host pushes the refs it names to a repository at another host, as
+  the seat `as` names — that seat's own identity there, never a bot — and so
+  `credential` is required, and the seat must read this repository: a person's
+  seat reads every one, an agent's what its grant reads ([Who may read and
+  push](#who-may-read-and-push)). `refs` are at most 64 patterns of
+  `refs/heads/<glob>` and `refs/tags/<glob>`, each once; unset is the default
+  branch and `refs/tags/*`. No pattern may reach a seat's own branches under
+  `refs/heads/seats/` — `refs/heads/**` among them — since a mirror publishes
+  what the company merged, never what a seat has yet to offer.
+- **`import`** `{url, credential}` — fills it, when it is created, from a
+  repository at another host: it is `importing` until the import is done, and
+  takes no write meanwhile — no push, no change, no archive and no purge —
+  each refused `repo_importing`. It is read by the create alone: one declared
+  for a repository that exists already fetches nothing, which the reconcile
+  says once a run (`code_import_ignored`), and beside `mirror_from` it is
+  refused, since a pull mirror imports from its own source.
+
+Each `url` is `https` with no user, query or fragment, at most 1 024 bytes, in
+the one form the code host dials it by. Each `credential` is **one whole
+`${VAR}` reference and nothing else**, at most 128 bytes — never the token,
+which every record of the repository's settings would carry to every data node
+and every backup. The code log records the reference as written, and the code
+host resolves it — from the [secret store](secret-store.md), then the
+environment — only when it dials ([`${VAR}`
+references](configuration.md#var-references)); unset fetches anonymously.
+Only a person or this document sets a mirror or an import: a seat asking to
+create a repository with one, or to set or remove either mirror of one, is
+refused `not_permitted` whatever its grant, since a pull mirror and an import
+reach another host for the company and a push mirror sends its code to one.
+A scratch repository takes none of the three. This release records each and
+refuses the writes it names; **nothing fetches from or pushes to another host
+yet**, so a repository created with `mirror_from` or `import` stays
+`importing` until a release that runs the import.
 
 At most 10 000 repositories one document — a typo guard two orders of
 magnitude past a large company's, not a limit anybody is expected to meet. It
@@ -1145,6 +1186,8 @@ A write that is refused appends nothing, and says why in one sentence:
 | Refusal | Means |
 |---|---|
 | `repo_deleted`, `repo_archived` | The repository is deleted, being purged or gone — in the sentence of the state it is in — or archived and read-only |
+| `repo_importing` | The repository is being imported from another host, and takes no write until its import is done |
+| `repo_mirrored` | The repository is a pull mirror, which moves only by its syncs from its source: every write but a close — and the landing its home records once a sync brings a merge in — is refused, so a repository that became a mirror with changes live can shed them |
 | `change_not_found` | The repository holds no such change |
 | `not_permitted` | The asker may not make the write: an open by one who may not push the source branch, saying what the asker holds and what would admit it; any other write by one who neither owns the change nor maintains the repository, nor is a person |
 | `stale` | The change is at another version than the write was formed against |
@@ -6472,6 +6515,8 @@ words, since git does not read the header.
 | The repository is deleted | `fatal: remote error: repository <name> is deleted; declaring it again in code.repos restores it …`, or for a repository a tool made, `…; a restore through the code tools brings it back …` | Declare it again — or, for one a tool made, restore it through the tools — before its purge, to restore it as it was. |
 | The repository is being purged | `fatal: remote error: repository <name> is being purged, which cannot be undone; once the purge completes, declaring its name in code.repos creates a new, empty repository`, or `(repo_deleted: repository <name> was purged and holds nothing; …)` on a push the purge overtook | Nothing brings it back. Once its purge completes, declaring the name again creates a new, empty repository. |
 | The repository is archived (a push) | `fatal: remote error: …archived…`, or `(repo_archived: …)` per ref | Fetch only; unarchive it in `code.repos` to push. |
+| The repository is being imported from another host (a push) — `code.repos` `import`, a pull mirror's first fetch from its `mirror_from`, or a person's import | `fatal: remote error: repository <name> is being imported from another host, and takes no write until its import is done: …`, or `(repo_importing: …)` per ref | Fetch it meanwhile; push once its import is done. |
+| The repository is a pull mirror (a push) — it names a `mirror_from` | `fatal: remote error: repository <name> is a pull mirror (code.repos mirror_from): it moves only by the code host's syncs from its source, …`, or `(repo_mirrored: …)` per ref | Push to its source, whose commits its next sync brings in; or remove its `mirror_from` — a person's to remove, never a seat's — to push here. |
 | A token bound to nobody (a push) | `fatal: remote error: this token is not bound to a person: …`, or `(not_permitted: this token is not bound to a person: …)` on every ref of a push sent without its advertisement | Push with a token that acts as your human seat — your own machine token (`crewlet iam token -login`). |
 | A command the pusher's grant does not cover ([who may read and push](#who-may-read-and-push)) | `(not_permitted: …)`, saying what the pusher holds, what the command needs and what would admit it | Ask for what the sentence names, or push where it says. |
 | More than 1 000 refs in one push | `(this push names more than 1000 refs; push them in parts …)` | Push the refs in groups. |

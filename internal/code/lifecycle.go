@@ -160,6 +160,14 @@ type LifecycleRequest struct {
 	// Create is a create's whole initial settings: ManagedTools, no
 	// configuration activation, and the kind its name says ([KindOf]).
 	Create *RepoSettings `json:"create,omitempty"`
+	// Import is a create's, and only a create's: the repository at another
+	// host it is filled from ([CreateRepo.Import]) — a person's alone (U49
+	// a), and nil for none. A request is no record, so it takes no
+	// versionedFields row: the create it leads to carries it, and
+	// CreateRepo.Import names the row that takes (mirror.go). It crosses the
+	// estate's wire to whichever data node decides it under the code
+	// domain's stated condition, as RepoChange.PathOwners does.
+	Import *ImportSource `json:"import,omitempty"`
 	// Change is a settings request's fields, each nil left as it stands.
 	Change *RepoChange `json:"change,omitempty"`
 	// Protect is a protect request: one rule for one pattern, Rule nil
@@ -237,12 +245,74 @@ type RepoChange struct {
 	// without it, none of the domain being on main — so every node asked it
 	// reads it.
 	PathOwners *PathOwnersChange `json:"path_owners,omitempty"`
+	// MirrorFrom and MirrorTo set a PROJECT repository's pull mirror and push
+	// mirror ([RepoSettings.MirrorFrom], [RepoSettings.MirrorTo]): nil leaves
+	// one as it stands, a value with no URL removes it, and any other sets it
+	// whole. A person's alone (U49 a): an agent asking either is refused
+	// not_permitted whatever its grant ([lifecycleRefusal]). A request is no
+	// record, so neither takes a versionedFields row: the record the change
+	// leads to carries the settings whole, and RepoSettings' fields name the
+	// rows those take (mirror.go). Each crosses the estate's wire under the
+	// code domain's stated condition, as PathOwners does.
+	MirrorFrom *MirrorSource `json:"mirror_from,omitempty"`
+	MirrorTo   *MirrorTarget `json:"mirror_to,omitempty"`
 }
 
 // empty reports a change that changes nothing.
 func (c RepoChange) empty() bool {
 	return c.Description == nil && c.DefaultBranch == nil && c.Visibility == nil && c.Search == nil &&
-		c.Owner == nil && c.PathOwners == nil
+		c.Owner == nil && c.PathOwners == nil && c.MirrorFrom == nil && c.MirrorTo == nil
+}
+
+// mirrors reports a change that asks about either of the repository's mirrors.
+func (c RepoChange) mirrors() bool { return c.MirrorFrom != nil || c.MirrorTo != nil }
+
+// mirrorsInvalid is why the change's mirrors are none a record could carry, or
+// "": a mirror set is held to a record's rules ([MirrorSource], [MirrorTarget]),
+// and one removed — no URL — names nothing else, which a caller would have
+// meant as a mirror.
+func (c RepoChange) mirrorsInvalid() string {
+	if m := c.MirrorFrom; m != nil {
+		switch {
+		case m.URL == "" && m.Credential != "":
+			return "mirror_from: one with no url removes the pull mirror, and names no credential"
+		case m.URL != "":
+			if why := m.invalid(); why != "" {
+				return "mirror_from." + why
+			}
+		}
+	}
+	if m := c.MirrorTo; m != nil {
+		switch {
+		case m.URL == "" && (m.Credential != "" || m.As != "" || len(m.Refs) > 0):
+			return "mirror_to: one with no url removes the push mirror, and names no credential, seat or refs"
+		case m.URL != "":
+			if why := m.invalid(); why != "" {
+				return "mirror_to." + why
+			}
+		}
+	}
+	return ""
+}
+
+// applyMirrors is next with the change's mirrors put in it: each the change
+// names set whole, or removed where it names no URL.
+func (c RepoChange) applyMirrors(next *RepoSettings) {
+	if m := c.MirrorFrom; m != nil {
+		next.MirrorFrom = nil
+		if m.URL != "" {
+			set := *m
+			next.MirrorFrom = &set
+		}
+	}
+	if m := c.MirrorTo; m != nil {
+		next.MirrorTo = nil
+		if m.URL != "" {
+			set := *m
+			set.Refs = slices.Clone(m.Refs)
+			next.MirrorTo = &set
+		}
+	}
 }
 
 // PathOwnersChange is a settings request's change to who owns which of a
@@ -500,6 +570,10 @@ func (r LifecycleRequest) invalid() string {
 			return why
 		}
 	}
+	if r.Import != nil && r.Kind != LifecycleCreate {
+		return fmt.Sprintf("import: a %s request carries none — an import fills a repository as it is created",
+			r.Kind)
+	}
 	// EXACTLY THE KIND'S FIELDS: a field another kind reads, sent with this
 	// one, is a caller that meant another request.
 	has := map[string]bool{
@@ -545,6 +619,9 @@ func (r LifecycleRequest) invalid() string {
 			if why := r.Change.PathOwners.invalid(); why != "" {
 				return "change." + why
 			}
+		}
+		if why := r.Change.mirrorsInvalid(); why != "" {
+			return "change." + why
 		}
 	case LifecycleProtect:
 		switch {
@@ -640,7 +717,7 @@ func (r LifecycleRequest) createInvalid() string {
 	if err := s.Validate(); err != nil {
 		return "create." + strings.TrimPrefix(strings.TrimPrefix(err.Error(), ErrInvalid.Error()), ": ")
 	}
-	return ""
+	return CreateRepo{Name: r.Name, Settings: s, Import: r.Import}.importInvalid()
 }
 
 // LifecyclePolicy is what a create is held to, and how long a scratch
@@ -681,17 +758,18 @@ func lifecycleActor(p Principal) Actor {
 }
 
 // settingsOf is a repository's settings as a record carries them, from its
-// row as a read serves it, its rules whole and its path owners, neither of
-// which a [RepoRef] carries — each read beside it in the same decide
-// ([protectionsIn], [pathOwnersIn]), since a record carries the settings
-// WHOLE, and one formed from the row's rules alone would remove every merge
-// gate the repository has, and one formed without its path owners every path
-// owner.
-func settingsOf(r RepoRef, rules []Protection, owners []PathOwner) RepoSettings {
+// row as a read serves it, its rules whole, its path owners and its mirrors,
+// none of which a [RepoRef] carries — each read beside it in the same decide
+// ([protectionsIn], [pathOwnersIn], [remotesIn]), since a record carries the
+// settings WHOLE, and one formed from the row's rules alone would remove every
+// merge gate the repository has, one formed without its path owners every path
+// owner, and one formed without its mirrors both mirrors.
+func settingsOf(r RepoRef, rules []Protection, owners []PathOwner, remotes repoRemotes) RepoSettings {
 	return RepoSettings{
 		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, DefaultBranch: r.DefaultBranch,
 		Description: r.Description, Archived: r.Status == RepoStatusArchived, Visibility: r.Visibility,
 		Search: r.Search, Protections: slices.Clone(rules), PathOwners: slices.Clone(owners),
+		MirrorFrom: remotes.mirrorFrom(), MirrorTo: remotes.mirrorTo(),
 	}
 }
 
@@ -706,6 +784,22 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 		return req.Create.PathOwners
 	}
 	return nil
+}
+
+// mirrorsAsked is what of a repository's mirrors or its import req asks for,
+// as a refusal names it — "" for none: a create carrying a pull mirror, a push
+// mirror or an import, or a settings change naming either mirror, whether it
+// sets one or removes it.
+func mirrorsAsked(req LifecycleRequest) string {
+	switch {
+	case req.Kind == LifecycleCreate && req.Import != nil:
+		return "to create " + req.Name + " filled by an import"
+	case req.Kind == LifecycleCreate && (req.Create.MirrorFrom != nil || req.Create.MirrorTo != nil):
+		return "to create " + req.Name + " with a mirror"
+	case req.Kind == LifecycleSettings && req.Change.mirrors():
+		return "to change a repository's mirror"
+	}
+	return ""
 }
 
 // lifecycleRefusal is whether actor may ask req of a repository — repo as it
@@ -736,6 +830,10 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 //     seat's own repositories are its scratch repositories, capped and
 //     expiring, and a seat-owned project is neither: only a person makes one
 //     ([seatProjectRefusal]);
+//   - and A MIRROR OR AN IMPORT IS A PERSON'S (U49 a): a seat asking to create
+//     a repository with either, or to change either mirror of one, is
+//     refused whatever its grant ([mirrorsAsked]) — each dials another host
+//     for the company, or sends its code to one;
 //   - and A PROTECTION BINDS EVERY SEAT, its unit's lead included: whatever
 //     its grant, a seat adds a protection rule or tightens one and never
 //     removes or loosens one ([loosenings]), judged against the rule this
@@ -866,6 +964,17 @@ func askerLifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protectio
 				next.Owner.Ref, next.Owner.Kind)
 		}
 		return false, ""
+	}
+	// A MIRROR AND AN IMPORT ARE A PERSON'S (U49 a), whatever the seat's
+	// grant on the repository — its unit's lead included: a pull mirror and an
+	// import dial another host for the company, and a push mirror sends the
+	// company's code to one, so a seat steered by what it read could publish
+	// the code or reach outside with it. Asked first, so the seat hears this
+	// rather than whichever grant rule its request would otherwise meet.
+	if what := mirrorsAsked(req); what != "" {
+		return true, fmt.Sprintf("only a person sets a repository's mirror or import, and seat %s asked %s: "+
+			"a pull mirror and an import dial another host for the company, and a push mirror sends its "+
+			"code to one", actor.Seat, what)
 	}
 	switch req.Kind {
 	case LifecycleHold:
@@ -1110,6 +1219,7 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 	scope := []string{NamePath(token), RepoPath(id)}
 	settings := *req.Create
 	settings.ConfigEpoch = 0
+	create := CreateRepo{RepoID: id, Name: req.Name, Settings: settings, Import: req.Import}
 	at := s.now()
 	var d lifecycleDecision
 	result, err := s.publisher.Publish(ctx, statelog.Request{
@@ -1124,10 +1234,11 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 			// THE NEW REPOSITORY, as its record will make it: what the
 			// grant is judged on, and the answer's row while it is
 			// pending. A refusal answers no row: nothing was made.
-			made := RepoRef{ID: id, Name: req.Name, Status: settings.status(), ManagedBy: ManagedTools,
+			made := RepoRef{ID: id, Name: req.Name, Status: create.status(), ManagedBy: ManagedTools,
 				Kind: settings.Kind, Owner: settings.Owner, Visibility: settings.Visibility,
 				Search: settings.Search, DefaultBranch: settings.DefaultBranch,
-				Description: settings.Description, Protections: pushRules(settings.Protections), Position: cp.At}
+				Description: settings.Description, Protections: pushRules(settings.Protections),
+				Mirrored: settings.MirrorFrom != nil, Position: cp.At}
 			holder, redirect, found, err := claimRowIn(ctx, tx, token)
 			switch {
 			case err != nil:
@@ -1157,6 +1268,12 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 			if refused, why := lifecycleRefusal(req, RepoRef{}, nil, made, nil, nil, roster); refused {
 				d.refuse(LifecycleNotPermitted, "%s", why)
 				return statelog.Decision{}, nil
+			}
+			if m := settings.MirrorTo; m != nil {
+				if why := MirrorSeatRefusal(m.As, made, roster); why != "" {
+					d.refuse(LifecycleNotPermitted, "%s", why)
+					return statelog.Decision{}, nil
+				}
 			}
 			if settings.Kind == RepoScratch {
 				if policy.ScratchMaxPerSeat == 0 {
@@ -1192,8 +1309,7 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 				}
 			}
 			d.wrote, d.row = true, made
-			return recordFor(stamp, subject, OpCreate, scope, req.OpID, lifecycleActor(req.Actor),
-				CreateRepo{RepoID: id, Name: req.Name, Settings: settings}, at)
+			return recordFor(stamp, subject, OpCreate, scope, req.OpID, lifecycleActor(req.Actor), create, at)
 		},
 	})
 	return s.lifecycleAnswer(ctx, req, id, result, err, d, func(back RepoRef) (LifecycleRefusal, string) {
@@ -1336,19 +1452,23 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 				return statelog.Decision{}, s.goneOrMissing(ctx, tx, req.RepoID, &d)
 			}
 			d.row = v.ref
-			// ITS RULES WHOLE AND ITS PATH OWNERS, which no RepoRef carries —
-			// its rules' merge gates and who owns which paths — beside its
-			// row: every kind but a hold writes the settings whole, or
-			// decides from them.
+			// ITS RULES WHOLE, ITS PATH OWNERS AND ITS MIRRORS, which no
+			// RepoRef carries — its rules' merge gates, who owns which paths,
+			// what it follows and publishes to — beside its row: every kind but
+			// a hold writes the settings whole, or decides from them.
 			var (
-				rules  []Protection
-				owners []PathOwner
+				rules   []Protection
+				owners  []PathOwner
+				remotes repoRemotes
 			)
 			if req.Kind != LifecycleHold {
 				if rules, err = protectionsIn(ctx, tx, req.RepoID); err != nil {
 					return statelog.Decision{}, err
 				}
 				if owners, err = pathOwnersIn(ctx, tx, req.RepoID); err != nil {
+					return statelog.Decision{}, err
+				}
+				if remotes, err = remotesIn(ctx, tx, req.RepoID); err != nil {
 					return statelog.Decision{}, err
 				}
 			}
@@ -1359,7 +1479,7 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 			if req.Kind == LifecycleHold {
 				payload, op, err = decideHold(ctx, tx, req, v.ref, roster, &d)
 			} else {
-				payload, op, err = s.decideOnRepo(req, v.ref, rules, owners, roster, &d)
+				payload, op, err = s.decideOnRepo(req, v.ref, rules, owners, remotes, roster, &d)
 			}
 			if err != nil || payload == nil {
 				return statelog.Decision{}, err
@@ -1379,12 +1499,11 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 }
 
 // decideOnRepo is the decide of a kind on the repository's own subject but a
-// hold's ([decideHold]), from its row v, its rules whole and its path owners:
-// the record's payload and op,
-// or nil where the request is refused (d says why) or writes nothing. An error
-// is the request's own fault.
+// hold's ([decideHold]), from its row v, its rules whole, its path owners and
+// its mirrors: the record's payload and op, or nil where the request is
+// refused (d says why) or writes nothing. An error is the request's own fault.
 func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection, owners []PathOwner,
-	roster Roster, d *lifecycleDecision) (any, OpKind, error) {
+	remotes repoRemotes, roster Roster, d *lifecycleDecision) (any, OpKind, error) {
 
 	// A DELETED REPOSITORY IS A DELETE'S AND A RESTORE'S TO ANSWER: the one
 	// answers it from the row, the other brings it back. Every other kind is
@@ -1397,11 +1516,33 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 		toolRepoRefusal(v, d)
 		return nil, "", nil
 	}
-	next := settingsOf(v, rules, owners)
+	if refused, why := archiveRefusal(req, v, remotes); refused {
+		d.refuse(LifecycleNotPermitted, "%s", why)
+		return nil, "", nil
+	}
+	next := settingsOf(v, rules, owners, remotes)
 	nextRef := v
 	switch req.Kind {
 	case LifecycleSettings:
 		c := req.Change
+		if c.mirrors() {
+			// A SCRATCH REPOSITORY TAKES NO MIRROR, whoever asks — a person
+			// included: it is its seat's own experiment. And an ARCHIVED
+			// one becomes no pull mirror: it takes no sync. Each refused here,
+			// naming why, before the settings' own validation would refuse
+			// the record as invalid.
+			switch {
+			case v.Kind == RepoScratch:
+				d.refuse(LifecycleNotPermitted, "%s is a scratch repository, which takes no mirror: it is its "+
+					"seat's own", v.Name)
+				return nil, "", nil
+			case v.Status == RepoStatusArchived && c.MirrorFrom != nil && c.MirrorFrom.URL != "":
+				d.refuse(LifecycleNotPermitted, "%s is archived and takes no sync, so it is no pull mirror: "+
+					"unarchive it first", v.Name)
+				return nil, "", nil
+			}
+			c.applyMirrors(&next)
+		}
 		if c.Description != nil {
 			next.Description = *c.Description
 		}
@@ -1477,6 +1618,18 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 		d.refuse(LifecycleNotPermitted, "%s", why)
 		return nil, "", nil
 	}
+	// A PUSH MIRROR'S SEAT READS WHAT IT PUBLISHES, judged where a change
+	// moves the judgement — the mirror itself, or the owner or the visibility
+	// its seat's read is judged by — on the repository as the change leaves it
+	// ([MirrorSeatRefusal]), so no change records a mirror pushing what its
+	// seat may not read.
+	if c := req.Change; req.Kind == LifecycleSettings && next.MirrorTo != nil &&
+		(c.MirrorTo != nil || c.Owner != nil || c.Visibility != nil) {
+		if why := MirrorSeatRefusal(next.MirrorTo.As, nextRef, roster); why != "" {
+			d.refuse(LifecycleNotPermitted, "%s", why)
+			return nil, "", nil
+		}
+	}
 	switch req.Kind {
 	case LifecycleDelete:
 		if v.Status == RepoStatusDeleted {
@@ -1490,17 +1643,38 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 			// answer.
 			return nil, "", nil
 		}
-		restored := settingsOf(v, rules, owners)
+		restored := settingsOf(v, rules, owners, remotes)
 		return LifecycleRecord{RepoID: v.ID, Settings: &restored}, OpRestore, nil
 	}
 	if err := next.Validate(); err != nil {
 		return nil, "", err
 	}
-	if next.equal(settingsOf(v, rules, owners)) {
+	if next.equal(settingsOf(v, rules, owners, remotes)) {
 		// AN IDEMPOTENT NO-OP: the row already says it.
 		return nil, "", nil
 	}
 	return SettingsRecord{RepoID: v.ID, Settings: next}, OpSettings, nil
+}
+
+// archiveRefusal is whether an archive or an unarchive of the repository v,
+// whose mirrors and import remotes are, is refused, and the sentence why: one
+// being IMPORTED is archived once its import is done — an archived one takes
+// nothing an import lands, and the status that says it is importing is the
+// one an archive would take — and a PULL MIRROR is never archived, since an
+// archived repository takes no sync, so its source would never move it.
+func archiveRefusal(req LifecycleRequest, v RepoRef, remotes repoRemotes) (bool, string) {
+	if req.Kind != LifecycleArchive && req.Kind != LifecycleUnarchive {
+		return false, ""
+	}
+	switch {
+	case v.Status == RepoStatusImporting:
+		return true, fmt.Sprintf("repository %s is being imported from another host, and is archived or "+
+			"unarchived once its import is done: an archived repository takes nothing an import lands", v.Name)
+	case req.Kind == LifecycleArchive && remotes.from != nil:
+		return true, fmt.Sprintf("repository %s is a pull mirror, and an archived repository takes no sync, so "+
+			"its source would never move it: remove its mirror_from first to keep it as it stands", v.Name)
+	}
+	return false, ""
 }
 
 // decideHold is a hold's decide, in tx: repo_deleted for a repository deleted,

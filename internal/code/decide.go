@@ -478,9 +478,11 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			return nil, nil, 0, 0, err
 		}
 		refused = RefusalRepoDeleted
-	case repo.status == RepoStatusArchived:
-		refused = RefusalRepoArchived
-		detail = ArchivedDetail(repo.name, repo.managedBy)
+	default:
+		// ARCHIVED, BEING IMPORTED, OR A PULL MIRROR: each takes no push,
+		// whoever pushes — a person's included — in the sentence of what it
+		// is ([pushRepo.writeRefusal]).
+		refused, detail = repo.writeRefusal()
 	}
 	if refused != "" {
 		for _, i := range open {
@@ -811,12 +813,33 @@ type pushRepo struct {
 	// defaultBranch is its default branch, by name ("main"): what a push's
 	// change proposes into where its options name no target ([pushOpen]).
 	defaultBranch string
+	// mirrored is a pull mirror ([RepoRef.Mirrored]), which takes no push
+	// and no change of its own.
+	mirrored bool
 }
 
 // grantRef is the repository id names as a grant reads it: its name, which a
 // refusal names, its owner and its visibility.
 func (r pushRepo) grantRef(id string) RepoRef {
 	return RepoRef{ID: id, Name: r.name, Owner: r.owner, Visibility: r.visibility}
+}
+
+// writeRefusal is the refusal its STATUS gives every write that would move a
+// ref of the live repository r — a push's every command, a change's every
+// write — with its sentence, or "" where it takes them: an archived repository
+// is read-only, one being imported takes nothing until its import is done, and
+// a pull mirror moves only by its syncs. One judgement for the push decide and
+// the change decide, in this order, so both refuse one repository alike.
+func (r pushRepo) writeRefusal() (Refusal, string) {
+	switch {
+	case r.status == RepoStatusArchived:
+		return RefusalRepoArchived, ArchivedDetail(r.name, r.managedBy)
+	case r.status == RepoStatusImporting:
+		return RefusalRepoImporting, ImportingDetail(r.name)
+	case r.mirrored:
+		return RefusalRepoMirrored, MirroredDetail(r.name, r.managedBy)
+	}
+	return "", ""
 }
 
 // pushRepoIn reads a repository's row for a decide.
@@ -826,7 +849,7 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
 		&r.liveBytes, &r.livePacks, &r.version, &deleted, &r.dropEpoch, &r.expungeID, &ownerKind,
-		&r.owner.Ref, &visibility, &managed, &r.defaultBranch)
+		&r.owner.Ref, &visibility, &managed, &r.defaultBranch, &r.mirrored)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
@@ -1766,7 +1789,8 @@ func UnheldDetail(old string) string {
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
 	decideRepoSQL = `SELECT name, status, refs, live_bytes, live_packs, version, deleted_at,
-		drop_epoch, expunge_id, owner_kind, owner, visibility, managed_by, default_branch FROM code_repos
+		drop_epoch, expunge_id, owner_kind, owner, visibility, managed_by, default_branch, mirror_from != ''
+		FROM code_repos
 		WHERE id = ?`
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
 	// seatDaysSQL is each named seat's pushes counted on one company day: ONE

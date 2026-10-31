@@ -251,6 +251,37 @@
         "null"
       ]
     },
+    "CodeImportSource": {
+      "additionalProperties": false,
+      "properties": {
+        "credential": {
+          "description": "What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "url": {
+          "description": "The repository it is filled from: an https URL with no user, query or fragment, at most 1024 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "CodeLanding": {
       "additionalProperties": false,
       "properties": {
@@ -327,6 +358,94 @@
           ]
         }
       },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeMirrorSource": {
+      "additionalProperties": false,
+      "properties": {
+        "credential": {
+          "description": "What the code host fetches with: one whole ${VAR} reference to a token, resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "url": {
+          "description": "The repository it follows: an https URL with no user, query or fragment, at most 1024 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeMirrorTarget": {
+      "additionalProperties": false,
+      "properties": {
+        "as": {
+          "description": "The seat whose identity the push carries at that host, by its handle: a seat that reads this repository — a person's seat reads every one, an agent's what its grant does — never a bot.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "credential": {
+          "description": "What the code host pushes with: one whole ${VAR} reference to the as seat's own token at that host, resolved from the secret store and then the environment when it dials, never a literal.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "refs": {
+          "description": "The refs it pushes, at most 64 patterns of refs/heads/\u003cglob\u003e and refs/tags/\u003cglob\u003e, each once; unset is the default branch and refs/tags/*. No pattern may reach a seat's own branches under refs/heads/seats/.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "url": {
+          "description": "The repository it pushes to: an https URL with no user, query or fragment, at most 1024 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "url",
+        "credential",
+        "as"
+      ],
       "type": [
         "object",
         "null"
@@ -591,6 +710,18 @@
             "boolean",
             "null"
           ]
+        },
+        "import": {
+          "$ref": "#/$defs/CodeImportSource",
+          "description": "Fills it, when it is created, from a repository at another host: it takes no push until its import is done. Read only by its create: a repository that exists already ignores it."
+        },
+        "mirror_from": {
+          "$ref": "#/$defs/CodeMirrorSource",
+          "description": "Makes it a pull mirror of a repository at another host: it is imported from there when it is created, then moves only by the code host's syncs from it, and takes no push and no change of its own."
+        },
+        "mirror_to": {
+          "$ref": "#/$defs/CodeMirrorTarget",
+          "description": "Makes it a push mirror: the code host pushes the refs it names to a repository at another host, as the seat named by as."
         },
         "name": {
           "anyOf": [

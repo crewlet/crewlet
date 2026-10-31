@@ -51,8 +51,10 @@ import (
 // Against the rows of one snapshot, in this order; the first rule that fails
 // is the answer, and none of them writes anything. Every record's first rule
 // is the repository: absent, deleted or being purged is repo_deleted, in the
-// sentence of the state it is in ([RepoGone]); archived is decided, since an
-// archived repository still holds what was pushed to it.
+// sentence of the state it is in ([RepoGone]); being imported is
+// repo_importing, since what of an import no ref reaches yet a later chunk's
+// refs will ([ImportingDetail]); archived is decided, since an archived
+// repository still holds what was pushed to it.
 //
 // A REQUEST then meets no rule of its own: it forms its record whatever the
 // repository holds open, and its apply WIDENS a request already open to its
@@ -502,6 +504,15 @@ func decideExpunge(ctx context.Context, tx *sql.Tx, p ExpungeProposal, retention
 			return expungeDecision{}, err
 		}
 		d.refusal = RefusalRepoDeleted
+		return d, nil
+	}
+	if repo.status == RepoStatusImporting {
+		// AN IMPORTING REPOSITORY IS NOT EXPUNGED: its import's packs land
+		// as it goes, and what of them no ref reaches yet is what a later
+		// chunk's refs will — so neither a request, a begin nor a commit is
+		// decided until the import is done, and the weekly pass's listing
+		// passes it by.
+		d.refusal, d.detail = RefusalRepoImporting, ImportingDetail(repo.name)
 		return d, nil
 	}
 	switch {

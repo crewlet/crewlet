@@ -1429,6 +1429,8 @@ Every node holds a **Tier A keyring** — `crewlet validate` refuses a `crewlet.
 
 A credential in the company document is normally a `${ENV_VAR}` reference, stored verbatim and resolved where a provider, transport or integration is constructed (`internal/engine`). It resolves from the encrypted [secret store](secret-store.md) first and the process environment behind it — which is what lets a provisioner hand a minted credential straight to the engine instead of writing a file someone has to source. A reference the store does not answer resolves from the environment, so a deployment that keeps its credentials in its platform's own secret mechanism needs nothing else.
 
+A repository's mirror and import credentials in `code.repos` (`mirror_from.credential`, `mirror_to.credential`, `import.credential`) are held to more: each must be **one whole `${VAR}`** and nothing else, and `crewlet validate` refuses a literal or a reference with text around it. The code log records each repository's settings on every data node and in every backup, so the code domain records the reference itself, never what it resolves to, and the code host resolves it — store first, then the environment — only when it dials the other host ([Declaring repositories](code-host.md#declaring-repositories)). Rotating the token is then a `crewlet secrets set` and no new revision.
+
 ### Encrypted at rest, and authenticated
 
 Crewlet encrypts the **entire** `company_config` payload as one opaque blob (AES-256-GCM) under the keyring before it reaches the DB:

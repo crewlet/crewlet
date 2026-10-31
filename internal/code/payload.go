@@ -285,6 +285,21 @@ func (r CommandResult) Valid() bool { return slices.Contains(CommandResults(), r
 type RepoStatus string
 
 const (
+	// RepoStatusImporting is being filled from another host — an import, or
+	// a pull mirror's first fetch from its source ([CreateRepo.status]) — and
+	// takes no write until its import is done: no push, no change, no
+	// archive and no expunge ([RefusalRepoImporting]). It is fetched, listed
+	// and renamed, its settings change and it is deleted as an active one is;
+	// the compactor, the publisher and the expunge pass it by.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this status — none of the domain is on main —
+	// and while that is so, every build that meets a record making one reads
+	// it. Once a build without it has run, a create that imports takes the
+	// rows CreateRepo.Import names (mirror.go), since only such a create
+	// makes a repository importing — a build without the status would apply
+	// it as an active repository, and take its pushes.
+	RepoStatusImporting RepoStatus = "importing"
 	// RepoStatusActive takes pushes.
 	RepoStatusActive RepoStatus = "active"
 	// RepoStatusArchived is read-only.
@@ -297,9 +312,18 @@ const (
 	RepoStatusPurging RepoStatus = "purging"
 )
 
-// RepoStatuses is the closed set.
+// RepoStatuses is the closed set, in the order a repository's life reaches
+// them.
 func RepoStatuses() []RepoStatus {
-	return []RepoStatus{RepoStatusActive, RepoStatusArchived, RepoStatusDeleted, RepoStatusPurging}
+	return []RepoStatus{RepoStatusImporting, RepoStatusActive, RepoStatusArchived, RepoStatusDeleted,
+		RepoStatusPurging}
+}
+
+// live reports a status a repository is in use in: importing, active or
+// archived — listed, fetched and kept, where a deleted one waits for its
+// purge and a purging one is going.
+func (s RepoStatus) live() bool {
+	return s == RepoStatusImporting || s == RepoStatusActive || s == RepoStatusArchived
 }
 
 // Valid reports a value this build knows.
@@ -622,6 +646,12 @@ type RepoSettings struct {
 	// such a build would apply settings without their path owners, and a
 	// node running it would hold none of the rows every other node holds.
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
+	// MirrorFrom makes it a PULL MIRROR of a repository at another host, and
+	// MirrorTo a PUSH MIRROR to one; nil for none, and neither on a scratch
+	// repository. Only a person or the configuration sets either (mirror.go,
+	// whose head states the record format's condition for both).
+	MirrorFrom *MirrorSource `json:"mirror_from,omitempty"`
+	MirrorTo   *MirrorTarget `json:"mirror_to,omitempty"`
 	// ConfigEpoch is the activation these settings came from
 	// (configplane.ActivationStamp), which the activation fence and the
 	// reconcile's lifecycle rules compare.
@@ -690,6 +720,27 @@ func (s RepoSettings) Validate() error {
 	if why := pathOwnersInvalid(s.PathOwners); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
 	}
+	// A SCRATCH REPOSITORY TAKES NO MIRROR: it is its seat's own experiment,
+	// and a mirror dials another host for it, or publishes it there. And an
+	// ARCHIVED one is no pull mirror: it takes no sync, so its source would
+	// never move it.
+	switch {
+	case s.Kind == RepoScratch && (s.MirrorFrom != nil || s.MirrorTo != nil):
+		return fmt.Errorf("%w: mirror: a scratch repository takes no mirror — it is its seat's own", ErrInvalid)
+	case s.MirrorFrom != nil && s.Archived:
+		return fmt.Errorf("%w: mirror_from: an archived repository takes no sync, so a pull mirror is "+
+			"never archived — remove mirror_from to keep it as it stands", ErrInvalid)
+	}
+	if s.MirrorFrom != nil {
+		if why := s.MirrorFrom.invalid(); why != "" {
+			return fmt.Errorf("%w: mirror_from.%s", ErrInvalid, why)
+		}
+	}
+	if s.MirrorTo != nil {
+		if why := s.MirrorTo.invalid(); why != "" {
+			return fmt.Errorf("%w: mirror_to.%s", ErrInvalid, why)
+		}
+	}
 	return nil
 }
 
@@ -703,7 +754,18 @@ func (s RepoSettings) equal(o RepoSettings) bool {
 		s.DefaultBranch == o.DefaultBranch && s.Description == o.Description &&
 		s.Archived == o.Archived && s.Visibility == o.Visibility && s.Search == o.Search &&
 		slices.EqualFunc(s.Protections, o.Protections, Protection.Equal) &&
-		slices.EqualFunc(s.PathOwners, o.PathOwners, PathOwner.equal)
+		slices.EqualFunc(s.PathOwners, o.PathOwners, PathOwner.equal) &&
+		equalPointed(s.MirrorFrom, o.MirrorFrom, func(a, b MirrorSource) bool { return a == b }) &&
+		equalPointed(s.MirrorTo, o.MirrorTo, MirrorTarget.equal)
+}
+
+// equalPointed compares two optional values: both absent, or both present and
+// equal by eq.
+func equalPointed[T any](a, b *T, eq func(T, T) bool) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return eq(*a, *b)
 }
 
 // status is the status settings put an active repository in.
@@ -726,6 +788,62 @@ type CreateRepo struct {
 	RepoID   string       `json:"repo_id"`
 	Name     string       `json:"name"`
 	Settings RepoSettings `json:"settings"`
+	// Import fills the repository from another host as it is created
+	// ([ImportSource]) — read by its create alone, so a declaration naming one
+	// for a repository that exists is not read again — and nil for none: a
+	// pull mirror ([RepoSettings.MirrorFrom]) is imported from its own
+	// source, and takes none beside it. Only a person or the configuration
+	// names one (mirror.go, whose head states the record format's condition).
+	Import *ImportSource `json:"import,omitempty"`
+}
+
+// importInvalid is why the create's import — its own, or its pull mirror's
+// first fetch — is none a record carries, or "": none on a scratch repository,
+// none beside a pull mirror, which is imported from its source, and none into
+// an archived repository, which takes nothing an import lands.
+func (p CreateRepo) importInvalid() string {
+	switch i := p.Import; {
+	case i == nil:
+		return ""
+	case p.Settings.Kind == RepoScratch:
+		return "import: a scratch repository takes no import — it is its seat's own"
+	case p.Settings.MirrorFrom != nil:
+		return "import: a pull mirror is imported from its mirror_from when it is created, so an import " +
+			"beside it is a second source"
+	case p.Settings.Archived:
+		return "import: an import fills an active repository, and an archived one takes nothing — archive " +
+			"it once its import is done"
+	default:
+		if why := i.invalid(); why != "" {
+			return "import." + why
+		}
+	}
+	return ""
+}
+
+// status is the status the create makes its repository: IMPORTING where it
+// imports — its own import, or a pull mirror's first fetch from its source —
+// and otherwise what its settings say.
+func (p CreateRepo) status() RepoStatus {
+	if p.Import != nil || p.Settings.MirrorFrom != nil {
+		return RepoStatusImporting
+	}
+	return p.Settings.status()
+}
+
+// importSource is what the create's import fetches, as code_repos.import_source
+// records it: its own import, or its pull mirror's source — FIXED AT THE
+// CREATE, so a mirror_from a settings change moves while the import runs is the
+// next sync's to follow — and nil where it imports nothing.
+func (p CreateRepo) importSource() *ImportSource {
+	switch {
+	case p.Import != nil:
+		i := *p.Import
+		return &i
+	case p.Settings.MirrorFrom != nil:
+		return &ImportSource{URL: p.Settings.MirrorFrom.URL, Credential: p.Settings.MirrorFrom.Credential}
+	}
+	return nil
 }
 
 // SettingsRecord replaces a repository's settings whole.

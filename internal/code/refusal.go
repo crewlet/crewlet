@@ -15,7 +15,7 @@ import (
 // build does not know is a value rather than a panic.
 type Refusal string
 
-// The codes. The first seventeen may be RECORDED on a command ([Refusal.Recorded]);
+// The codes. The first nineteen may be RECORDED on a command ([Refusal.Recorded]);
 // the last eleven are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
@@ -46,6 +46,20 @@ const (
 	// purged, purged or not there at all — four states with four remedies,
 	// so its sentence is formed from the state ([RepoGone.Detail]).
 	RefusalRepoDeleted Refusal = "repo_deleted"
+	// RefusalRepoImporting is a write to a repository being imported from
+	// another host ([RepoStatusImporting]) — a push, a change's every write,
+	// an expunge — which takes none until its import is done
+	// ([ImportingDetail]).
+	//
+	// RECORDABLE AS repo_archived IS, though the push decide refuses the
+	// whole push for it, so no record carries it today: a value of
+	// Command.Reason under the code domain's stated condition (mirror.go),
+	// which no build that carries the domain has run without.
+	RefusalRepoImporting Refusal = "repo_importing"
+	// RefusalRepoMirrored is a write to a PULL MIRROR ([RepoRef.Mirrored]) —
+	// a push, a change's every write — which moves only by its syncs from
+	// its source ([MirroredDetail]). Recordable as repo_importing is.
+	RefusalRepoMirrored Refusal = "repo_mirrored"
 	// RefusalRepoSize is a push past code.limits.repo_max_bytes.
 	RefusalRepoSize Refusal = "repo_size"
 	// RefusalRepoRefs is a create past MaxRefsPerRepo live refs.
@@ -199,7 +213,8 @@ func Refusals() []Refusal {
 	return []Refusal{
 		RefusalStale, RefusalProtectedForce, RefusalProtectedDelete,
 		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalBadRef,
-		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
+		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoImporting, RefusalRepoMirrored, RefusalRepoSize,
+		RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
 		RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalTooManyChanges,
 		RefusalUnavailable, RefusalStoreFull, RefusalForgedCommitter, RefusalNotApplied, RefusalUnknown,
@@ -238,8 +253,12 @@ var sentences = map[Refusal]string{
 	RefusalBadRef:       "not a ref: git's check-ref-format rules, at most 255 bytes of UTF-8 under refs/<namespace>/",
 	RefusalRepoArchived: "the repository is archived and read-only",
 	RefusalRepoDeleted:  "the repository is deleted, being purged or gone, and takes no push",
-	RefusalRepoSize:     "the repository would hold more than code.limits.repo_max_bytes",
-	RefusalRepoRefs:     "the repository holds as many live refs as one repository may",
+	RefusalRepoImporting: "the repository is being imported from another host, and takes no push until its " +
+		"import is done",
+	RefusalRepoMirrored: "the repository is a pull mirror, which moves only by its syncs from its source; push " +
+		"to its source",
+	RefusalRepoSize: "the repository would hold more than code.limits.repo_max_bytes",
+	RefusalRepoRefs: "the repository holds as many live refs as one repository may",
 	RefusalRefConflict: "a ref and a directory of refs never share a name (feature beside feature/x): " +
 		"every clone holding one could not fetch the other",
 	RefusalUploadExpired: "the pack was uploaded too long ago to be committed; run git push again",

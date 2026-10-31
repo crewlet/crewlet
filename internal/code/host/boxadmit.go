@@ -260,7 +260,7 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 	// session's answer would refuse, while the run's re-syncs last.
 	repo, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name, Fresh: adm.fresh})
 	if !adm.linearizable && spent == nil && (errors.Is(err, code.ErrRepoNotFound) ||
-		(err == nil && (refuses(repo.Status, op) || repo.ID != g.RepoID))) {
+		(err == nil && (refuses(repo, op) || repo.ID != g.RepoID))) {
 		if spent = s.boxResync(adm); spent == nil {
 			adm.linearizable = true
 			repo, err = s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,

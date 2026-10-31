@@ -135,6 +135,14 @@ const (
 	// ChangeRefusalRepoArchived is a write to an archived repository, which
 	// is read-only: a change on it is read and written nothing.
 	ChangeRefusalRepoArchived ChangeRefusal = "repo_archived"
+	// ChangeRefusalRepoImporting is a write to a repository being imported
+	// from another host, which takes none until its import is done
+	// ([ImportingDetail]).
+	ChangeRefusalRepoImporting ChangeRefusal = "repo_importing"
+	// ChangeRefusalRepoMirrored is a write to a PULL MIRROR, which moves only
+	// by its syncs from its source ([MirroredDetail]) — every write but a
+	// close and a landing, neither of which moves a ref.
+	ChangeRefusalRepoMirrored ChangeRefusal = "repo_mirrored"
 	// ChangeRefusalChangeNotFound is a write naming a change the repository
 	// does not hold.
 	ChangeRefusalChangeNotFound ChangeRefusal = "change_not_found"
@@ -199,7 +207,8 @@ const (
 // ChangeRefusals is every code, in this order.
 func ChangeRefusals() []ChangeRefusal {
 	return []ChangeRefusal{
-		ChangeRefusalRepoDeleted, ChangeRefusalRepoArchived, ChangeRefusalChangeNotFound,
+		ChangeRefusalRepoDeleted, ChangeRefusalRepoArchived, ChangeRefusalRepoImporting,
+		ChangeRefusalRepoMirrored, ChangeRefusalChangeNotFound,
 		ChangeRefusalNotPermitted, ChangeRefusalStale, ChangeRefusalSameRef, ChangeRefusalNoSource,
 		ChangeRefusalNoTarget, ChangeRefusalNoDifference, ChangeRefusalChangeExists, ChangeRefusalChangeClosed,
 		ChangeRefusalChangeMerged, ChangeRefusalAmbiguousSource, ChangeRefusalBadOption, ChangeRefusalBusy,

@@ -478,6 +478,9 @@ func reconcileCodeRepos(ctx context.Context, logger *slog.Logger, store codeLife
 		leave(fmt.Errorf("engine: walk the code log's repositories, without which no "+
 			"removal from code.repos is deleted: %w", listErr))
 	}
+	if listErr == nil {
+		importsIgnored(ctx, logger, decided, was)
+	}
 	var wrote codeReposWritten
 	defer wrote.log(ctx, logger)
 	results, err := store.EnsureRepos(ctx, a, decided)
@@ -548,6 +551,34 @@ func (w *codeReposWritten) ensured(name string, was map[string]code.RepoStatus, 
 	default:
 		w.changed = append(w.changed, name)
 	}
+}
+
+// importsIgnored says, in ONE line a run, which declarations name an import
+// for a repository that existed before the run — live or deleted, as the walk
+// of the rows found it (was) — and is not being imported: an import is read
+// by its repository's create alone ([code.Declared.Import]), so each of these
+// is passed by, and the line is what tells the person who added one to a
+// repository that already holds history that nothing will be fetched — and
+// the one who left one in place after its import that it can go. One still
+// being imported is its create's import running, and is not named. Its count,
+// and its first [codeReposLoggedNames] names; nothing where there are none.
+func importsIgnored(ctx context.Context, logger *slog.Logger, decided []code.Declared,
+	was map[string]code.RepoStatus) {
+
+	var names []string
+	for _, d := range decided {
+		if status, existed := was[d.Name]; existed && status != code.RepoStatusImporting && d.Import != nil {
+			names = append(names, d.Name)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	logger.InfoContext(ctx, "code_import_ignored", "count", len(names),
+		"names", names[:min(len(names), codeReposLoggedNames)],
+		"detail", "import is read only when its repository is created, and these existed already, so "+
+			"nothing is fetched for them: remove import from each declaration — a pull mirror's "+
+			"mirror_from is what follows another host")
 }
 
 // codeReposLoggedNames is the most names the reconcile's line lists of each
@@ -677,7 +708,8 @@ func codeRepoNotApplied(ctx context.Context, logger *slog.Logger, name string, e
 // [code.Store.DeleteRepo] checks the manager again inside its own snapshot,
 // so this is the reconcile not asking rather than the only guard.
 func retiredByOmission(l code.RepoLife) bool {
-	live := l.Status == code.RepoStatusActive || l.Status == code.RepoStatusArchived
+	live := l.Status == code.RepoStatusImporting || l.Status == code.RepoStatusActive ||
+		l.Status == code.RepoStatusArchived
 	return live && l.ManagedBy == code.ManagedConfig
 }
 
@@ -691,7 +723,11 @@ func retiredByOmission(l code.RepoLife) bool {
 // carries one canonical order, so every node deciding one declaration forms
 // byte-identical records, and [code.RepoSettings.Validate] refuses any other —
 // and the default branch, the visibility and the search mode defaulted, the
-// last to indexed: a repository the company declares is searched across.
+// last to indexed: a repository the company declares is searched across. Its
+// mirrors and its import are recorded as written — each credential the ${VAR}
+// reference itself, never what it resolves to, which is read only when the
+// remote is dialed — a push mirror's seat by its handle, trimmed as an owner's
+// is, and its refs in the document's order, unset for the default.
 //
 // AN ERROR only for a revision validation refuses — an owner the chart does
 // not resolve: a runnable revision never reaches it, and one that does is
@@ -728,12 +764,23 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 		}
 		owners = append(owners, code.PathOwner{Owner: who, Paths: po.Paths})
 	}
-	return code.Declared{Name: r.Name, Settings: code.RepoSettings{
+	d := code.Declared{Name: r.Name, Settings: code.RepoSettings{
 		ManagedBy: code.ManagedConfig, Owner: owner, Visibility: code.Visibility(r.Visibility.Resolved()),
 		Search: code.SearchMode(r.Search.Resolved()), DefaultBranch: r.ResolvedDefaultBranch(),
 		Description: r.Description, Archived: r.Archived, Protections: protections,
 		PathOwners: code.CanonicalPathOwners(owners),
-	}}, nil
+	}}
+	if m := r.MirrorFrom; m != nil {
+		d.Settings.MirrorFrom = &code.MirrorSource{URL: m.URL, Credential: m.Credential}
+	}
+	if m := r.MirrorTo; m != nil {
+		d.Settings.MirrorTo = &code.MirrorTarget{URL: m.URL, Credential: m.Credential,
+			As: strings.TrimSpace(m.As), Refs: slices.Clone(m.Refs)}
+	}
+	if i := r.Import; i != nil {
+		d.Import = &code.ImportSource{URL: i.URL, Credential: i.Credential}
+	}
+	return d, nil
 }
 
 // declaredGate is a rule's resolved merge gate ([config.CodeProtection.Gate])

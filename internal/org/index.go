@@ -277,6 +277,12 @@ func (x *Index) Reports(r *Role) []*Role {
 // Index was not built over.
 func (x *Index) UnitFor(r *Role) *Unit { return x.homes[r] }
 
+// Parent is the unit holding u against the indexed chart — the first in walk
+// order where a unit is reached twice — or nil for a top-level unit or one the
+// Index was not built over: a unit's chain upward, a map lookup a step, where
+// [Organization.UnitChainTo] walks the chart to find it.
+func (x *Index) Parent(u *Unit) *Unit { return x.parents[u] }
+
 // UnitChainFor is [Organization.UnitChainFor] against the indexed chart: the
 // units from the outermost down to the first in walk order holding r as a
 // direct member, or nothing for a root seat or one the Index was not built

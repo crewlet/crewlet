@@ -340,11 +340,12 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 
 // runAccess is what a run may do with a repository — the request's access,
 // held to g, the grant its box will be judged by on the run's branch — or the
-// refusal: `write` asked on an archived repository, or on a branch g's ref
-// rule refuses (the seat's, or the colleague's its turn works for), is refused
-// with the code host's sentence; none asked is write exactly where write
-// would pass, so a read-only seat naming a repository to look at is not
-// refused, and a run that forgot the field can deliver where its box may.
+// refusal: `write` asked on a repository that takes no push — archived, being
+// imported, or a pull mirror — or on a branch g's ref rule refuses (the
+// seat's, or the colleague's its turn works for), is refused with the code
+// host's sentence; none asked is write exactly where write would pass, so a
+// read-only seat naming a repository to look at is not refused, and a run that
+// forgot the field can deliver where its box may.
 //
 // A PRECHECK, from this node's chart: a box's every push is decided again at
 // the code host's admission and at its decide, so this decides only whether a
@@ -360,9 +361,14 @@ func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.
 		return sandbox.RepoRead, nil
 	}
 	why := ""
-	if repo.Status == code.RepoStatusArchived {
+	switch {
+	case repo.Status == code.RepoStatusArchived:
 		why = code.ArchivedDetail(repo.Name, repo.ManagedBy) + "; a run may read it, not push"
-	} else {
+	case repo.Status == code.RepoStatusImporting:
+		why = code.ImportingDetail(repo.Name) + "; a run may read it, not push"
+	case repo.Mirrored:
+		why = code.MirroredDetail(repo.Name, repo.ManagedBy) + "; a run may read it, not push"
+	default:
 		old := head.OID
 		if head.Missing != "" {
 			old = code.ZeroOID

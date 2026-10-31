@@ -14,7 +14,7 @@
  * state reads as its raw word, and one this keeps that the engine dropped is a
  * choice every listing refuses.
  */
-export const REPO_STATUSES = ["active", "archived", "deleted", "purging"] as const;
+export const REPO_STATUSES = ["importing", "active", "archived", "deleted", "purging"] as const;
 
 /**
  * What became of one command of a push, in the engine's order

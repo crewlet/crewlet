@@ -808,14 +808,20 @@ func undecided(cmds []code.Command) bool {
 // statusRefusal is the refusal a repository's row gives every push, with its
 // sentence, or "" for a repository that takes pushes: deleted or purging
 // (repo_deleted, the domain's own sentence for the state — which names the
-// purge by the CURRENT epoch's retention, so a method), or archived
-// (repo_archived).
+// purge by the CURRENT epoch's retention, so a method), archived
+// (repo_archived), being imported (repo_importing) or a pull mirror
+// (repo_mirrored) — each in the domain's one sentence for it, the one its
+// push decide refuses with from the rows.
 func (s *Server) statusRefusal(repo code.RepoRef) (code.Refusal, string) {
 	switch {
 	case gone(repo.Status):
 		return code.RefusalRepoDeleted, s.goneSentence(repo)
 	case repo.Status == code.RepoStatusArchived:
 		return code.RefusalRepoArchived, code.ArchivedDetail(repo.Name, repo.ManagedBy)
+	case repo.Status == code.RepoStatusImporting:
+		return code.RefusalRepoImporting, code.ImportingDetail(repo.Name)
+	case repo.Mirrored:
+		return code.RefusalRepoMirrored, code.MirroredDetail(repo.Name, repo.ManagedBy)
 	}
 	return "", ""
 }

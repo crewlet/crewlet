@@ -55,7 +55,7 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return 0, fmt.Errorf("code: read repository %s for the rename at %s: %w", p.RepoID, at.position, err)
 	}
 	if name != p.From || ManagedBy(managed) != ManagedTools ||
-		(RepoStatus(status) != RepoStatusActive && RepoStatus(status) != RepoStatusArchived) {
+		!RepoStatus(status).live() {
 		return 0, nil
 	}
 	holder, redirect, taken, err := claimRowIn(ctx, tx, at.record.Subject.ID)

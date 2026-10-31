@@ -136,7 +136,7 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	ref, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 	if errors.Is(err, code.ErrRepoNotFound) ||
-		(err == nil && (refuses(ref.Status, op) || (ref.Redirect != "" && op == auth.GitPush))) {
+		(err == nil && (refuses(ref, op) || (ref.Redirect != "" && op == auth.GitPush))) {
 		adm.linearizable = true
 		ref, err = s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
@@ -427,15 +427,18 @@ func grantRefusal(p code.Principal) AuditRefusal {
 	return AuditRefusal(code.RefusalNotPermitted)
 }
 
-// refuses reports whether a repository in status refuses op.
-func refuses(status code.RepoStatus, op auth.GitOp) bool {
-	switch status {
+// refuses reports whether repo, as a read found it, refuses op: a deleted or
+// purging one every op, and an archived one, one being imported and a pull
+// mirror a push — each the refusal a stale read is confirmed by a
+// linearizable one before it is answered.
+func refuses(repo code.RepoRef, op auth.GitOp) bool {
+	switch repo.Status {
 	case code.RepoStatusDeleted, code.RepoStatusPurging:
 		return true
-	case code.RepoStatusArchived:
+	case code.RepoStatusArchived, code.RepoStatusImporting:
 		return op == auth.GitPush
 	}
-	return false
+	return repo.Mirrored && op == auth.GitPush
 }
 
 // gone reports a deleted or purging repository: one that answers nothing.

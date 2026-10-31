@@ -187,6 +187,12 @@ type Declared struct {
 	// ManagedConfig; ConfigEpoch is ignored — EnsureRepo sets the
 	// activation's.
 	Settings RepoSettings
+	// Import is the declaration's import ([CreateRepo.Import]): what a create
+	// fills the repository from, and NOTHING to a repository that exists —
+	// an import is read by the create alone, so EnsureRepo settles an
+	// existing repository's settings and passes its import by, which the
+	// engine's reconcile says once a run (code_import_ignored).
+	Import *ImportSource
 }
 
 // Ensured is what [Store.EnsureRepo] did.
@@ -232,12 +238,13 @@ func (s *Store) EnsureRepo(ctx context.Context, a Activation, d Declared) (Ensur
 	}
 	settings := d.settingsAt(a)
 
-	created, found, err := s.claim(ctx, a, d.Name, settings)
+	created, found, err := s.claim(ctx, a, d.Name, settings, d.Import)
 	if err != nil {
 		return Ensured{}, err
 	}
 	if created != "" {
-		return Ensured{RepoID: created, Changed: true, Status: settings.status()}, nil
+		create := CreateRepo{Settings: settings, Import: d.Import}
+		return Ensured{RepoID: created, Changed: true, Status: create.status()}, nil
 	}
 	return s.settle(ctx, a, found, settings)
 }
@@ -259,7 +266,14 @@ func (d Declared) Validate() error {
 		return fmt.Errorf("%w: settings.kind: a declared repository is a %s, not %q", ErrInvalid,
 			RepoProject, d.Settings.Kind)
 	}
-	return d.settingsAt(Activation{}).Validate()
+	settings := d.settingsAt(Activation{})
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	if why := (CreateRepo{Name: d.Name, Settings: settings, Import: d.Import}).importInvalid(); why != "" {
+		return fmt.Errorf("%w: %s", ErrInvalid, why)
+	}
+	return nil
 }
 
 // settingsAt is what the declaration says, stamped with the activation a — THE
@@ -725,7 +739,7 @@ func unchangedIn(ctx context.Context, tx *sql.Tx, a Activation, declared []Decla
 			continue
 		}
 		switch row.Status {
-		case RepoStatusActive, RepoStatusArchived:
+		case RepoStatusImporting, RepoStatusActive, RepoStatusArchived:
 			if !row.settings().equal(d.settingsAt(a)) {
 				continue
 			}
@@ -782,15 +796,20 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 	for rows.Next() {
 		var id string
 		var row repoRow
-		var status, managed, kind, owners, visibility, search string
+		var status, managed, kind, owners, visibility, search, from, to string
+		var pending bool
 		if err = rows.Scan(&id, &row.Name, &status, &managed, &kind, &owners, &row.Owner.Ref, &visibility,
 			&search, &row.DefaultBranch, &row.Description, &row.ConfigEpoch, &row.PurgeParts,
-			&row.DeletedAt); err != nil {
+			&row.DeletedAt, &from, &to, &pending); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("code: read the declared repositories: %w", err)
 		}
 		row.Status, row.ManagedBy, row.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
 		row.Kind, row.Visibility, row.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
+		if err = row.remotesOf(from, to, pending); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
 		out[id] = row
 	}
 	if err = rows.Err(); err != nil {
@@ -866,8 +885,8 @@ func pathOwnersOf(ctx context.Context, tx *sql.Tx, list string, keep func(id str
 // nobody holds the name, and the holder's id when somebody does. newID is
 // minted ONCE per call, so every round of one call creates the same
 // repository.
-func (s *Store) claim(ctx context.Context, a Activation, name string,
-	settings RepoSettings) (created, found string, err error) {
+func (s *Store) claim(ctx context.Context, a Activation, name string, settings RepoSettings,
+	imports *ImportSource) (created, found string, err error) {
 
 	token := NameToken(name)
 	subject := NameSubject(name)
@@ -896,7 +915,7 @@ func (s *Store) claim(ctx context.Context, a Activation, name string,
 			wrote = true
 			return recordFor(stamp, subject, OpCreate, scope, opID,
 				Actor{ID: s.nodeID, Kind: ActorConfig},
-				CreateRepo{RepoID: newID, Name: name, Settings: settings}, at)
+				CreateRepo{RepoID: newID, Name: name, Settings: settings, Import: imports}, at)
 		},
 	})
 	switch {
@@ -973,12 +992,27 @@ func (s *Store) settle(ctx context.Context, a Activation, id string,
 				return statelog.Decision{}, nil
 			}
 			out.Status = row.Status
+			// AN IMPORT STILL TO BE DONE IS NEVER ARCHIVED: the status that
+			// says the repository is importing is the one an archive would
+			// take, and an archived repository takes nothing an import
+			// lands — so a declaration archiving it is refused as written
+			// until the import is done, at the first activation after.
+			pending := row.Status == RepoStatusImporting ||
+				(row.Status == RepoStatusDeleted && row.Remotes.importPending)
+			if pending && settings.Archived && !row.settings().equal(settings) {
+				return statelog.Decision{}, fmt.Errorf("%w: %s is being imported from another host, and "+
+					"is archived once its import is done: an archived repository takes nothing an import "+
+					"lands", ErrInvalid, row.Name)
+			}
 			switch row.Status {
-			case RepoStatusActive, RepoStatusArchived:
+			case RepoStatusImporting, RepoStatusActive, RepoStatusArchived:
 				if row.settings().equal(settings) {
 					return statelog.Decision{}, nil
 				}
-				out.Changed, out.Status = true, settings.status()
+				out.Changed = true
+				if row.Status != RepoStatusImporting {
+					out.Status = settings.status()
+				}
 				return recordFor(stamp, subject, OpSettings, scope, opID,
 					Actor{ID: s.nodeID, Kind: ActorConfig},
 					SettingsRecord{RepoID: id, Settings: settings}, at)
@@ -986,7 +1020,7 @@ func (s *Store) settle(ctx context.Context, a Activation, id string,
 				if a.epoch <= row.ConfigEpoch {
 					return statelog.Decision{}, nil
 				}
-				out.Changed, out.Status = true, settings.status()
+				out.Changed, out.Status = true, row.Remotes.restoredStatus(settings)
 				restored := settings
 				return recordFor(stamp, subject, OpRestore, scope, opID,
 					Actor{ID: s.nodeID, Kind: ActorConfig},
@@ -1046,8 +1080,7 @@ func (s *Store) DeleteRepo(ctx context.Context, a Activation, repoID string) (bo
 			if err != nil || !found {
 				return statelog.Decision{}, err
 			}
-			if (row.Status != RepoStatusActive && row.Status != RepoStatusArchived) ||
-				row.ManagedBy != ManagedConfig || row.ConfigEpoch > a.epoch {
+			if !row.Status.live() || row.ManagedBy != ManagedConfig || row.ConfigEpoch > a.epoch {
 				return statelog.Decision{}, nil
 			}
 			wrote = true
@@ -1139,6 +1172,8 @@ type repoRow struct {
 	DeletedAt     sql.NullInt64
 	Protections   []Protection
 	PathOwners    []PathOwner
+	// Remotes are its mirrors and whether its import is still to be done.
+	Remotes repoRemotes
 	// LastActivityAt is the repository's idle clock, as the store encodes an
 	// instant, and Version the composed position of the last record on its
 	// subject: what a scratch expiry's decide holds to its pass
@@ -1152,8 +1187,23 @@ func (r repoRow) settings() RepoSettings {
 	return RepoSettings{
 		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, Visibility: r.Visibility, Search: r.Search,
 		DefaultBranch: r.DefaultBranch, Description: r.Description, Archived: r.Status == RepoStatusArchived,
-		Protections: r.Protections, PathOwners: r.PathOwners, ConfigEpoch: r.ConfigEpoch,
+		Protections: r.Protections, PathOwners: r.PathOwners, MirrorFrom: r.Remotes.mirrorFrom(),
+		MirrorTo: r.Remotes.mirrorTo(), ConfigEpoch: r.ConfigEpoch,
 	}
+}
+
+// remotesOf reads a row's two mirror columns and its pending import, as
+// repoRowSQL and reposRowsSQL select them, into r.
+func (r *repoRow) remotesOf(from, to string, pending bool) error {
+	var err error
+	if r.Remotes.from, err = remoteOf[MirrorSource](from); err != nil {
+		return fmt.Errorf("code: read %s's mirror_from: %w", r.Name, err)
+	}
+	if r.Remotes.to, err = remoteOf[MirrorTarget](to); err != nil {
+		return fmt.Errorf("code: read %s's mirror_to: %w", r.Name, err)
+	}
+	r.Remotes.importPending = pending
+	return nil
 }
 
 // repoIn reads a repository's row, its rules and its path owners in tx.
@@ -1161,10 +1211,12 @@ func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 	var (
 		row                                               repoRow
 		status, managed, kind, owners, visibility, search string
+		from, to                                          string
+		pending                                           bool
 	)
 	err := tx.QueryRowContext(ctx, repoRowSQL, id).Scan(&row.Name, &status, &managed, &kind, &owners,
 		&row.Owner.Ref, &visibility, &search, &row.DefaultBranch, &row.Description, &row.ConfigEpoch,
-		&row.PurgeParts, &row.DeletedAt, &row.LastActivityAt, &row.Version)
+		&row.PurgeParts, &row.DeletedAt, &row.LastActivityAt, &row.Version, &from, &to, &pending)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return repoRow{}, false, nil
@@ -1173,6 +1225,9 @@ func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 	}
 	row.Status, row.ManagedBy, row.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
 	row.Kind, row.Visibility, row.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
+	if err = row.remotesOf(from, to, pending); err != nil {
+		return repoRow{}, false, err
+	}
 	if row.Protections, err = protectionsIn(ctx, tx, id); err != nil {
 		return repoRow{}, false, err
 	}
@@ -1348,10 +1403,12 @@ const (
 	claimsSQL = `SELECT token, repo_id FROM code_names
 		WHERE token IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 	reposRowsSQL = `SELECT id, name, status, managed_by, kind, owner_kind, owner, visibility, search,
-		default_branch, description, config_epoch, purge_parts, deleted_at FROM code_repos
+		default_branch, description, config_epoch, purge_parts, deleted_at, mirror_from, mirror_to,
+		import_source != '' AND imported_at = 0 FROM code_repos
 		WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 	repoRowSQL = `SELECT name, status, managed_by, kind, owner_kind, owner, visibility, search, default_branch,
-		description, config_epoch, purge_parts, deleted_at, last_activity_at, version FROM code_repos
+		description, config_epoch, purge_parts, deleted_at, last_activity_at, version, mirror_from, mirror_to,
+		import_source != '' AND imported_at = 0 FROM code_repos
 		WHERE id = ?`
 	protectionsSQL = `SELECT pattern, allow_force, allow_delete, direct_push, gate FROM code_protections
 		WHERE repo_id = ? ORDER BY pattern`

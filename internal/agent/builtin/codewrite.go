@@ -1165,16 +1165,18 @@ func writeRefusalError(refusal, detail string) error {
 // own sentence for `invalid` and `forbidden` alone:
 //
 //   - a rule of the repository refusing the caller — the grant, a protection,
-//     the seat's daily quota, a read-only repository, its bounds — is
-//     FORBIDDEN, the sentence naming the rule and, for the quota, when the
-//     day turns; never budget_exhausted, which is the company's token budget;
+//     the seat's daily quota, a read-only repository or a pull mirror, its
+//     bounds — is FORBIDDEN, the sentence naming the rule and, for the quota,
+//     when the day turns; never budget_exhausted, which is the company's
+//     token budget;
 //   - a branch the engine's names refuse, or a pack past what one push may
 //     store, is INVALID: the fix is another call;
 //   - a head that moved is STALE_VERSION, a repository gone NOT_FOUND, a store
 //     with no room STORE_FULL;
-//   - what waiting clears — a busy or compacting repository, an expunge that
-//     began, a log or a store that refused, a push applied nowhere — is
-//     UNAVAILABLE, the same call again being the same write;
+//   - what waiting clears — a busy or compacting repository, one being
+//     imported, an expunge that began, a log or a store that refused, a push
+//     applied nowhere — is UNAVAILABLE, the same call again being the same
+//     write;
 //   - and what no engine write can be answered — an --atomic push, a tag moved,
 //     a push of more changes than a record holds, a commit claiming the
 //     engine's committer (forged_committer, which only a coding box's pack is
@@ -1183,8 +1185,8 @@ func writeRefusalError(refusal, detail string) error {
 func pushClass(r code.Refusal) (tools.Refusal, bool) {
 	switch r {
 	case code.RefusalNotPermitted, code.RefusalProtectedForce, code.RefusalProtectedDelete,
-		code.RefusalProtectedDirect, code.RefusalPushQuota, code.RefusalRepoArchived, code.RefusalRepoSize,
-		code.RefusalRepoRefs, code.RefusalBlobTooLarge, code.RefusalRefConflict:
+		code.RefusalProtectedDirect, code.RefusalPushQuota, code.RefusalRepoArchived, code.RefusalRepoMirrored,
+		code.RefusalRepoSize, code.RefusalRepoRefs, code.RefusalBlobTooLarge, code.RefusalRefConflict:
 		return tools.RefusalForbidden, true
 	case code.RefusalReservedRef, code.RefusalBadRef, code.RefusalPackTooLarge:
 		return tools.RefusalInvalid, true
@@ -1195,7 +1197,7 @@ func pushClass(r code.Refusal) (tools.Refusal, bool) {
 	case code.RefusalStoreFull:
 		return tools.RefusalStoreFull, true
 	case code.RefusalBusy, code.RefusalCompactionBehind, code.RefusalUploadExpired, code.RefusalExpunging,
-		code.RefusalUnavailable, code.RefusalNotApplied:
+		code.RefusalRepoImporting, code.RefusalUnavailable, code.RefusalNotApplied:
 		return tools.RefusalUnavailable, true
 	}
 	return "", false
