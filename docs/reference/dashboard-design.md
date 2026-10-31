@@ -9810,7 +9810,7 @@ brings that carries a design-system rule.
   touch** (`TOUCH_MEDIA` in `app/layout.ts`, no hover and a coarse pointer,
   read through `lib/media.ts`'s `useKeyHints`): the drawer's search drew
   "Ctrl + K" on a phone, a key nobody there has, and the keycap cut the
-  trigger's own label to "Ask or jump t…"; the palette's key legend and its
+  trigger's own label short; the palette's key legend and its
   rows' chords go the same way. It asks "is this touch?" rather than "is there
   a keyboard?", because no media feature can see a keyboard, and a browser
   that answers neither keeps its hints. The keys still work for a reader who

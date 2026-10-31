@@ -136,6 +136,13 @@ import { goSignIn } from "~/lib/session.ts";
 import { useKeyHints } from "~/app/layout.ts";
 import { toggleRailShape } from "./railShape.ts";
 
+/**
+ * What the search control is called in either shape: the full sidebar's field
+ * and the compact rail's Search tile open the same palette, so they name it
+ * with the same words.
+ */
+const SEARCH_LABEL = "Search everything";
+
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
   // THE FRAME'S READINGS, not the sidebar's own: see `FrameReadings`.
@@ -345,13 +352,12 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
       search={
         <SearchTrigger
           variant="rail"
-          label="Ask or jump to…"
-          title="Search everything"
+          label={SEARCH_LABEL}
           onClick={onSearch}
           keyshortcuts="Meta+K Control+K"
           // A KEYCAP ONLY FOR A READER WITH KEYS (`useKeyHints`): in the
           // phone's drawer "Ctrl + K" named a key nobody there has, and cut
-          // the trigger's own label to "Ask or jump t…".
+          // the trigger's own label short.
           shortcut={keyHints ? <Kbd keys={capsOf(palette)} subtle /> : undefined}
         />
       }
@@ -398,7 +404,7 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           <CompactNavItem
             label="Search"
             icon={<SearchGlyph size="sm" />}
-            title={keyHints ? `Ask or jump to… (${pressText(palette)})` : "Ask or jump to…"}
+            title={keyHints ? `${SEARCH_LABEL} (${pressText(palette)})` : SEARCH_LABEL}
             keyshortcuts={ariaKeysOf(palette)}
             onClick={onSearch}
           />

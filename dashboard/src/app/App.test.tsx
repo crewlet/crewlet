@@ -221,7 +221,7 @@ describe("the overlays the frame opens", () => {
 
   test("the palette opened from the sidebar's search is portalled to the body too", async () => {
     mountAs(Promise.resolve(person));
-    fireEvent.click(await screen.findByRole("button", { name: /Ask or jump to/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Search everything" }));
     const palette = await screen.findByRole("dialog", { name: "Search" });
     expect(palette.closest(".crewlet-layer-host")).toBeNull();
     expect(palette.closest(".crewlet-modal-overlay")?.parentElement).toBe(document.body);
@@ -230,7 +230,7 @@ describe("the overlays the frame opens", () => {
 
 // A KEYCAP IS A HINT FOR A KEYBOARD. On a phone the drawer's search drew
 // "Ctrl + K", a key nobody there has, and the keycap cut the trigger's own
-// label to "Ask or jump t…". Where the reader's primary input is touch
+// label short. Where the reader's primary input is touch
 // (`TOUCH_MEDIA`) the frame draws none; everywhere else it does. Mutation:
 // draw the keycap whatever the input and the touch case goes red.
 describe("the drawer's search", () => {
@@ -263,7 +263,7 @@ describe("the drawer's search", () => {
     try {
       mount();
       const search = document.querySelector(".crewlet-app-shell__rail-search")!;
-      expect(search.textContent).toContain("Ask or jump to…");
+      expect(search.textContent).toContain("Search everything");
       expect(search.querySelectorAll(".crewlet-kbd-combo")).toHaveLength(caps);
     } finally {
       restore();
