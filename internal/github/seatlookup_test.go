@@ -139,7 +139,7 @@ func TestALookupWithNoInstalledAppRefusesRatherThanAnsweringEmpty(t *testing.T) 
 	if err == nil {
 		t.Fatalf("a company with no installed app answered %v", people)
 	}
-	if !strings.Contains(err.Error(), "no agent's app could read this thread") {
+	if !strings.Contains(err.Error(), "no agent's app could read this repository") {
 		t.Errorf("error = %v, and it does not say why nobody was looked up", err)
 	}
 }

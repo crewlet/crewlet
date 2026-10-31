@@ -154,7 +154,6 @@ func TestANodeHoldingNoDataReadsTheThreadThroughTheRouter(t *testing.T) {
 	}
 }
 
-
 // noReaderViews is a chat reader double's reader views when its suite reads
 // none of them: each is refused, so a case that reaches one by mistake fails
 // rather than reading an empty answer as a real one.

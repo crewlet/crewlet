@@ -434,6 +434,10 @@ type Sources struct {
 	// under somebody else's address would vouch for a link that does not
 	// go there.
 	DashboardBase func() string
+	// PullRequests reads a pull request for a chat link's preview, through
+	// the company's GitHub wiring (`chat_unfurls`). Nil previews none: a
+	// pull request's link is then drawn by the link rules alone.
+	PullRequests PullRequestReader
 	// Retention is this node's answer about the state log's own history:
 	// how far each domain's log may be trimmed, what is stopping it, and
 	// what this node costs to replace.

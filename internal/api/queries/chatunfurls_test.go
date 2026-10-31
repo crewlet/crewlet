@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/github"
 )
 
 // unfurlSources is chat's sources on a deployment reached at
@@ -84,5 +86,69 @@ func TestALinkIsPreviewedAsTheRecordItOpens(t *testing.T) {
 	}
 	if _, err := r.Answer(asAna(t), "chat_unfurls", map[string]any{"urls": nine}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("nine links answered %v, want bad params", err)
+	}
+}
+
+// pulls is a pull request reader that answers what it holds and says what it
+// was asked.
+type pulls struct {
+	held  map[github.PullRef]github.PullRequest
+	asked []github.PullRef
+}
+
+func (p *pulls) PullRequestPreview(_ context.Context, ref github.PullRef) (github.PullRequest, error) {
+	p.asked = append(p.asked, ref)
+	pr, ok := p.held[ref]
+	if !ok {
+		return github.PullRequest{}, errors.New("not found")
+	}
+	return pr, nil
+}
+
+// A PULL REQUEST IS PREVIEWED ONLY ON GITHUB.COM AND ONLY UNDER AN OWNER THE
+// COMPANY'S GITHUB CONFIGURATION NAMES, with its repository, number, title,
+// state and size and nothing else; any other address, and a pull request that
+// cannot be read, is drawn as a plain link. Nothing is fetched for a link the
+// rules leave out.
+//
+// Mutation: drop the owner check and the stranger's pull request is read.
+func TestAPullRequestIsPreviewedOnlyUnderTheCompanysOwners(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	cfg.Integrations.GitHub = &config.GitHub{Enabled: true, WebhookSecret: "hook",
+		Provisioning: &config.GitHubProvisioning{Org: "acme"}}
+	reader := &pulls{held: map[github.PullRef]github.PullRequest{
+		{Owner: "acme", Repo: "web", Number: 41}: {Number: 41, Title: "Add a per-IP ceiling",
+			State: "open", Draft: true, Additions: 120, Deletions: 14},
+	}}
+	s := chatSources(t, newStubChat(), &stubChatSearch{}, nil)
+	s.Company, s.PullRequests = companySource(t, cfg), reader
+	got, err := askChat(t, s, "chat_unfurls", map[string]any{"urls": []any{
+		"https://github.com/acme/web/pull/41/files",
+		"https://github.com/stranger/web/pull/7",
+		"https://github.com/acme/web/pull/42",
+		"https://github.example.com/acme/web/pull/41",
+	}})
+	body := chatJSON(t, got, err)
+	unfurls, _ := body["unfurls"].([]any)
+	if len(unfurls) != 1 {
+		t.Fatalf("previewed %v, want the one readable pull request under acme", unfurls)
+	}
+	pr, _ := unfurls[0].(map[string]any)
+	want := map[string]any{"kind": "pull_request", "code": "acme/web#41",
+		"title": "Add a per-IP ceiling", "status": "Draft", "tone": "neutral",
+		"meta": "+120 -14", "href": "https://github.com/acme/web/pull/41"}
+	for k, v := range want {
+		if pr[k] != v {
+			t.Errorf("the preview's %s is %v, want %v", k, pr[k], v)
+		}
+	}
+	if _, has := pr["owner"]; has {
+		t.Errorf("the preview names its author: %v", pr)
+	}
+	for _, ref := range reader.asked {
+		if ref.Owner != "acme" {
+			t.Errorf("a pull request under %s was read", ref.Owner)
+		}
 	}
 }

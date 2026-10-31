@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
@@ -36,6 +38,16 @@ import (
 // Everything else is drawn by the dashboard's link rules alone, so it is
 // simply absent from the answer.
 
+// PullRequestReader reads one pull request for a preview, through the
+// company's own GitHub wiring, cached briefly by its implementation.
+type PullRequestReader interface {
+	PullRequestPreview(ctx context.Context, ref github.PullRef) (github.PullRequest, error)
+}
+
+// githubWeb is the one host a pull request's address is read on: github.com.
+// An Enterprise Server's addresses are drawn by the link rules alone.
+const githubWeb = "https://github.com"
+
 // chatUnfurlKind is what a link points at.
 type chatUnfurlKind string
 
@@ -43,6 +55,7 @@ const (
 	unfurlTask     chatUnfurlKind = "task"
 	unfurlPage     chatUnfurlKind = "page"
 	unfurlArtifact chatUnfurlKind = "artifact"
+	unfurlPull     chatUnfurlKind = "pull_request"
 )
 
 // chatUnfurl is one link resolved for its preview.
@@ -128,6 +141,9 @@ func unfurlURLs(p Params) ([]string, error) {
 func (s Sources) unfurl(ctx context.Context, r *Registry, base, raw string) (
 	chatUnfurl, bool, error) {
 
+	if pull, ok := s.pullUnfurl(ctx, raw); ok {
+		return pull, true, nil
+	}
 	screen, params, ok := ownAddress(base, raw)
 	if !ok {
 		return chatUnfurl{}, false, nil
@@ -262,4 +278,56 @@ func taskTone(group string) string {
 		return "info"
 	}
 	return "neutral"
+}
+
+// pullUnfurl previews a link to a pull request on github.com, under an owner
+// the company's GitHub configuration names, read through its own wiring. False
+// for any other link, and for a pull request that could not be read: a
+// preview is never a reason to refuse the rest, and the link is drawn plain.
+//
+// ONLY WHAT THE LINK ALREADY POINTS AT, in the words anybody who opens it
+// reads first: its repository and number, title, state, whether it is a
+// draft, and its size. Never its body, its comments or its author's details,
+// since the preview is read with the company's credential rather than the
+// reader's and shown to everybody who can read the room.
+func (s Sources) pullUnfurl(ctx context.Context, raw string) (chatUnfurl, bool) {
+	if s.PullRequests == nil {
+		return chatUnfurl{}, false
+	}
+	ref, ok := github.ParsePullURL(githubWeb, raw)
+	if !ok {
+		return chatUnfurl{}, false
+	}
+	web, owners, ok := s.companyGitHub()
+	if !ok || browserBase(web) != githubWeb ||
+		!slices.Contains(owners, strings.ToLower(ref.Owner)) {
+		return chatUnfurl{}, false
+	}
+	pr, err := s.PullRequests.PullRequestPreview(ctx, ref)
+	if err != nil {
+		log.DebugContext(ctx, "chat_pull_preview_unread", "owner", ref.Owner,
+			"repo", ref.Repo, "number", ref.Number, "error", err)
+		return chatUnfurl{}, false
+	}
+	status, tone := pullState(pr)
+	return chatUnfurl{
+		URL: raw, Kind: unfurlPull, Href: ref.Canonical(githubWeb),
+		Code:  fmt.Sprintf("%s/%s#%d", ref.Owner, ref.Repo, ref.Number),
+		Title: pr.Title, Status: status, Tone: tone,
+		Meta: fmt.Sprintf("+%d -%d", pr.Additions, pr.Deletions),
+	}, true
+}
+
+// pullState is a pull request's state in the words its own page shows it in,
+// and the tone of the dot beside it.
+func pullState(pr github.PullRequest) (string, string) {
+	switch {
+	case pr.Merged:
+		return "Merged", "info"
+	case pr.State == "closed":
+		return "Closed", "neutral"
+	case pr.Draft:
+		return "Draft", "neutral"
+	}
+	return "Open", "success"
 }

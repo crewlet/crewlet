@@ -592,6 +592,11 @@ each over the rooms they may read and nothing else:
   every room they may still read.
 - **Shared in a room**: every link the room's messages carried, newest first,
   with who shared it and when.
+- **Link previews**: a link to one of this dashboard's own tasks, pages or
+  artifacts is drawn as that record, read as the reader so that one they may
+  not open is a plain link, and a link to a pull request in the company's own
+  code on GitHub is drawn with its title and state
+  ([what that discloses](../integrations/github.md#pull-request-previews-in-chat)).
 - **One message in place**: a message by its id, with its thread's root and
   the replies just before it, which is how Activity and Saved open one where
   it was said.
