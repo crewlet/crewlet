@@ -975,7 +975,7 @@ export interface AssistantBriefPoint {
 
 /** The message a point came from, as the engine read it for the person: a reply
  *  names its thread, which a screen opens in place of the room. */
-export interface AssistantBriefSource {
+interface AssistantBriefSource {
   channel_id: string;
   message_id: string;
   thread_root?: string;

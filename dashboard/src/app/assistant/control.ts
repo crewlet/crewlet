@@ -94,3 +94,34 @@ export function useQueuedQuestion(): string | null {
     () => null,
   );
 }
+
+/**
+ * A conversation started outside the panel, waiting for the panel to show it:
+ * a room's catch up (`roomBrief.ts`) asked in its own pane and continued in
+ * Ask Crewlet. Queued here for the reason a question is, and taken the same
+ * way; a newer one replaces one never taken.
+ */
+let queuedConversation: string | null = null;
+
+/** Queue a conversation for the panel to open. */
+export function queueConversation(id: string): void {
+  queuedConversation = id;
+  for (const listener of waiting) listener();
+}
+
+/** Take the queued conversation, if any; it is the taker's from here. */
+export function takeQueuedConversation(): string | null {
+  const id = queuedConversation;
+  queuedConversation = null;
+  if (id !== null) for (const listener of waiting) listener();
+  return id;
+}
+
+/** The queued conversation, as a value the panel re-renders on. */
+export function useQueuedConversation(): string | null {
+  return useSyncExternalStore(
+    subscribe,
+    () => queuedConversation,
+    () => null,
+  );
+}

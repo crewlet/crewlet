@@ -87,7 +87,9 @@ import { usePageSnapshot } from "../context.ts";
 import { briefQuestion } from "../brief.ts";
 import {
   ASSISTANT_COMPOSER_ID,
+  takeQueuedConversation,
   takeQueuedQuestion,
+  useQueuedConversation,
   useQueuedQuestion,
   type AssistantFocus,
 } from "../control.ts";
@@ -314,6 +316,19 @@ export function Drawer({
     if (event.clipboardData.getData("text/plain") === "") event.preventDefault();
     attachments.add(files);
   };
+
+  // A CONVERSATION STARTED ELSEWHERE (a room's catch up, continued here) is
+  // opened as the panel's own, read again from the engine under this session.
+  const queuedConversation = useQueuedConversation();
+  useEffect(() => {
+    if (queuedConversation === null) return;
+    const id = takeQueuedConversation();
+    if (id === null) return;
+    void openConversation(id).catch(() => {
+      // A conversation that is gone (cleared in another tab, purged) is not
+      // opened: the panel stays where it was.
+    });
+  }, [queuedConversation]);
 
   // A QUESTION TYPED ELSEWHERE (the palette's row) is asked at once where
   // this panel could ask it now, and otherwise waits in the box for the
