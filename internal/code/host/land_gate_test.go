@@ -338,10 +338,11 @@ func exprString(e ast.Expr) string {
 }
 
 // THE WALK, ON A TREE WHOSE VERDICT IS KNOWN. A fixture host whose landing
-// takes each step once — through a helper, a closure, the store's one
-// function — passes; and each way a second path to a step can be written must
-// be reported: the adoption taken again in the relay, a proposal through a
-// second field of the estate's type, a method value taken outside the
+// takes each step once — a push's proposal and a merge's among them, through a
+// helper, a closure, the store's one function — passes; and each way a second
+// path to a step can be written must be reported: the adoption taken again in
+// the relay, a proposal through a second field of the estate's type, a merge
+// proposed outside the landing, a method value taken outside the
 // landing, an upload through an interface of its own or a Put on the store
 // itself beside the store's function, that function called again or held as
 // a value outside the landing, or reached through an import of another name,
@@ -360,7 +361,10 @@ import (
 	"example.com/m/internal/code/cache"
 )
 
-type Estate interface{ Propose(ctx context.Context, n int) (int, error) }
+type Estate interface {
+	Propose(ctx context.Context, n int) (int, error)
+	Merge(ctx context.Context, n int) (int, error)
+}
 
 type Options struct {
 	Estate  Estate
@@ -373,6 +377,7 @@ type Server struct{ o Options }
 
 func (s *Server) land(ctx context.Context) {
 	_, _ = s.o.Estate.Propose(ctx, 1)
+	_, _ = s.o.Estate.Merge(ctx, 1)
 	s.store(ctx)
 	adopt := func() { _ = s.o.Cache.Adopt(ctx) }
 	adopt()
@@ -397,6 +402,13 @@ func (s *Server) serveSession(ctx context.Context) { s.land(ctx) }
 			return strings.Replace(s, "func (s *Server) serveSession(ctx context.Context) { s.land(ctx) }",
 				"func (s *Server) serveSession(ctx context.Context) { s.land(ctx); _, _ = s.o.Spare.Propose(ctx, 2) }", 1)
 		}, want: []string{"Estate.Propose is selected 2 times", "selected in Server.serveSession"}},
+		{name: "a merge proposed outside the landing", edit: func(s string) string {
+			return strings.Replace(s, "func (s *Server) serveSession(ctx context.Context) { s.land(ctx) }",
+				"func (s *Server) serveSession(ctx context.Context) { s.land(ctx); _, _ = s.o.Estate.Merge(ctx, 2) }", 1)
+		}, want: []string{"Estate.Merge is selected 2 times", "selected in Server.serveSession"}},
+		{name: "no merge anywhere", edit: func(s string) string {
+			return strings.Replace(s, "	_, _ = s.o.Estate.Merge(ctx, 1)\n", "", 1)
+		}, want: []string{"selects Estate.Merge nowhere"}},
 		{name: "a method value outside the landing", extra: `
 func newServer(o Options) func(context.Context, int) (int, error) { return o.Estate.Propose }
 `, want: []string{"Estate.Propose is selected 2 times", "selected in newServer"}},
