@@ -324,10 +324,7 @@ func playFake(script fakeScript, prompt []byte, stdout io.Writer, cs *sdk.Client
 		fmt.Fprint(os.Stderr, script.Stderr)
 	}
 	if script.Hang || script.HangUnsignalled {
-		if script.HangUnsignalled {
-			signal.Ignore(syscall.SIGTERM, syscall.SIGINT)
-		}
-		select {}
+		park(script.HangUnsignalled)
 	}
 	if !script.NoResult {
 		usage := total
@@ -369,7 +366,7 @@ func runFakeServer(script fakeScript) {
 	fmt.Println("INFO loading configuration")
 	fmt.Printf("server listening on http://fake-%d\n", os.Getpid())
 	if srv.NeverUp {
-		select {}
+		park(false)
 	}
 	_ = os.WriteFile(fakeServerFile, []byte(fmt.Sprintf("http://fake-%d %s", os.Getpid(), password)), 0o600)
 	fmt.Printf("server password %s\n", password)
@@ -395,7 +392,27 @@ func runFakeServer(script fakeScript) {
 	code := playFake(script, prompt, f, cs)
 	_ = f.Close()
 	_ = os.WriteFile(fakeDoneFile, []byte(strconv.Itoa(code)), 0o600)
-	select {}
+	park(false)
+}
+
+// park holds a fake until it is signalled, as the process it stands in for
+// waits to be stopped, and lets the signal end it under its default action;
+// ignoring holds it through SIGTERM and SIGINT until it is killed. A bare
+// select{} is no such wait: once the fake has no connection open and no timer
+// pending, the runtime ends it with "all goroutines are asleep - deadlock!" and
+// exit status 2, at a moment its own timers decide, so a fake meant to be
+// stopped sometimes exits by itself. A process watching for a signal is never
+// deadlocked.
+func park(ignoring bool) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	for got := range sig {
+		if ignoring {
+			continue
+		}
+		signal.Reset(got)
+		_ = syscall.Kill(os.Getpid(), got.(syscall.Signal))
+	}
 }
 
 // fakeServerOrExit checks a client was handed the server's address and its

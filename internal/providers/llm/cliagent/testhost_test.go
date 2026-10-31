@@ -32,6 +32,7 @@ type testHost struct {
 	handlers map[string]func(ctx context.Context, args map[string]any) (string, bool)
 	calls    []hostCall
 	turns    []llm.Turn
+	observed chan struct{} // closed and replaced by each Observe
 	spent    []llm.Usage
 	busy     []bool
 	inflight int
@@ -68,6 +69,7 @@ func newTestHost(t *testing.T, names ...string) *testHost {
 	h := &testHost{
 		sessions: sessions,
 		handlers: map[string]func(context.Context, map[string]any) (string, bool){},
+		observed: make(chan struct{}),
 		done:     make(chan struct{}),
 	}
 	for _, name := range names {
@@ -115,6 +117,8 @@ func (h *testHost) Observe(t llm.Turn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.turns = append(h.turns, t)
+	close(h.observed)
+	h.observed = make(chan struct{})
 }
 
 func (h *testHost) Spent(u llm.Usage) {
@@ -198,21 +202,34 @@ func (h *testHost) snapshot() (turns []llm.Turn, calls []hostCall, spent llm.Usa
 }
 
 // awaitRecorded waits, as the tool loop's host does before it runs a call,
-// for the record to show a request asking for a call to name — the call and
+// for the record to show a request asking for a call to name (the call and
 // the record reach the engine by two ways, a socket and the CLI's output, and
-// race — reporting whether it did within the host's two seconds.
-func (h *testHost) awaitRecorded(name string) bool {
-	deadline := time.Now().Add(2 * time.Second)
+// race), reporting whether it did within the host's two seconds.
+func (h *testHost) awaitRecorded(ctx context.Context, name string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.waitRecorded(ctx, name)
+}
+
+// waitRecorded waits for the record to show a request asking for a call to
+// name, woken by each turn the host is told of rather than by a clock, and
+// reports false only when ctx ends first.
+func (h *testHost) waitRecorded(ctx context.Context, name string) bool {
 	for {
-		for _, turn := range h.latestTurns() {
-			if slices.ContainsFunc(turn.Calls, func(c llm.TurnCall) bool { return c.Name == name }) {
-				return true
-			}
+		h.mu.Lock()
+		found := slices.ContainsFunc(h.latestTurnsLocked(), func(turn llm.Turn) bool {
+			return slices.ContainsFunc(turn.Calls, func(c llm.TurnCall) bool { return c.Name == name })
+		})
+		observed := h.observed
+		h.mu.Unlock()
+		if found {
+			return true
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-observed:
+		case <-ctx.Done():
 			return false
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -220,6 +237,10 @@ func (h *testHost) awaitRecorded(name string) bool {
 func (h *testHost) latestTurns() []llm.Turn {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.latestTurnsLocked()
+}
+
+func (h *testHost) latestTurnsLocked() []llm.Turn {
 	var order []string
 	last := map[string]llm.Turn{}
 	for _, t := range h.turns {

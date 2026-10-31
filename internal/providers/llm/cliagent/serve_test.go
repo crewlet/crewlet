@@ -153,7 +153,17 @@ func TestAServedRunsServerGoesWithARunCutShort(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			host := newTestHost(t, "submit")
-			host.handle("submit", func(context.Context, map[string]any) (string, bool) {
+			host.handle("submit", func(callCtx context.Context, _ map[string]any) (string, bool) {
+				// The run is cut short only once the record has shown the
+				// request, as the tool loop's host waits for it before it
+				// runs a call. In a served run the record reaches the engine
+				// through the client's relay, which polls a beat behind the
+				// call, and a run cut ahead of it leaves the request to the
+				// client's last relay inside the grace: a race this test is
+				// not about, and one a loaded runner loses.
+				if !host.waitRecorded(callCtx, "submit") {
+					t.Error("the record never showed the request that asked for the call")
+				}
 				if byHost {
 					host.end()
 				} else {
