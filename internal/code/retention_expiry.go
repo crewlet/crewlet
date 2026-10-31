@@ -23,7 +23,10 @@ import (
 // write of its own, so a deletion is decided against every push and hold on
 // the repository's one subject and lands in its push history like any other:
 // the row keeps each branch's last commit (its command's Old), from which
-// code_create_branch restores it for as long as the history keeps the row.
+// code_create_branch restores it while the repository still holds that
+// commit. The row is kept for the push history's 181 days, but the commit is
+// held only for the deletion's [PruneGrace] at least: the row names where
+// the branch was, never a promise that its commit is still there.
 //
 // Last, after the scratch expiry, on the pass's pacer and within its budget:
 // a purge and a release free names, an expiry only room, which

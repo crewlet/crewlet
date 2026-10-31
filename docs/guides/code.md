@@ -728,7 +728,12 @@ the commit the branch was at, and nothing about the branch is sent.
 was at, by the seat or by you through your assistant. The deletion's row in
 the push history — `GET /code/repos/{name}/pushes` and `crewlet code status
 -repo` — names every branch it deleted beside that commit (`via` `expiry`,
-`actor_kind` `system`), for the 181 days the history keeps it. A repository
+`actor_kind` `system`) for the 181 days the history keeps it. The row says
+where the branch was; restoring it needs the commit itself, which the
+repository is held to keep only for the deletion's **14-day** prune grace
+([ref drops](../concepts/code-host.md#retention-and-history)). Restore a
+branch you need within two weeks of its deletion: after that, it comes back
+only while the repository still holds the commit. A repository
 setting refs faster than they go idle raises `code_refs_near_limit` before it
 reaches the 100 000 live refs it may hold ([alarms](../reference/alarms.md)).
 
