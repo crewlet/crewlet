@@ -5517,9 +5517,10 @@ generation once the node has written the repository's commit-graph, which it
 does first for every copy it reads whole, so they cost a few milliseconds
 whatever the commit's date; git's own connectivity check in receive-pack
 still walks by date, reading the graph. Measured over a gigabyte of source
-history (455 680 commits) on the node pin, git 2.56.0, such a push is 0.30 s
-of the node's time with the graph against about 0.09 s for any other push,
-and 6.7 s in the seconds after a node has read the repository whole and
+history (455 680 commits) on the node pin, git 2.56.0, on two E-cores of a
+Core Ultra 7 265U, each push's bundle put to the in-memory store, such a push
+is 0.30 s of the node's time with the graph against about 0.09 s for any other
+push, and 6.7 s in the seconds after a node has read the repository whole and
 before its graph is written. No walk
 is refused for what it takes — each is given 11 µs for every object the
 repository holds besides what the push itself is given. The person's own git

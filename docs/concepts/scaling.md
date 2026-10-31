@@ -139,12 +139,14 @@ flowchart LR
     C -- "6 · upload-pack" --> fetcher
 ```
 
-The figures below were measured on one machine at a time — four vCPUs of a
-2.1 GHz Xeon unless a paragraph names another — and each paragraph names the
-git and the object store it was measured with;
-the measured sections of the `internal/code`, `internal/code/host`,
-`internal/code/cache` and `internal/code/codecluster` package docs carry every
-arm.
+The figures below were measured on one machine at a time, and not all on the
+same one — four vCPUs of a 2.1 GHz Xeon, or two or four E-cores of an Intel
+Core Ultra 7 265U — so read a figure beside those its own paragraph gives,
+never across paragraphs. Where a paragraph does not name the machine, the git
+or the object store behind a figure, the measured section it comes from does:
+those of the `internal/code`, `internal/code/host`, `internal/code/cache`,
+`internal/code/compact` and `internal/code/codecluster` package docs carry
+every arm and say what each ran on.
 
 **What a committer and the code log commit.** Measured on three data nodes of
 one cluster sharing that machine's cores and its one disk — so a record's three
@@ -300,7 +302,7 @@ holds a fraction of a root's and is charged 350 bytes an object rather than
 its budget room for the rest of its work while they build.
 Measured on the node pin over a source repository's history of a gigabyte,
 three million objects, from the in-memory store (one run of each, on two
-cores): a git node writing the whole bitmap of its own took 13.5 seconds and
+E-cores of a Core Ultra 7 265U): a git node writing the whole bitmap of its own took 13.5 seconds and
 812 MiB; the maintainer's root publication of it held the same 812 MiB for
 its layer and bitmap (13.8 seconds) and 262 MiB for its commit-graph layer
 (13.5 seconds), once for the fleet; and a git node installing what it
@@ -346,20 +348,23 @@ begins with a whole download.
 
 **And by the bytes and CPU it serves, not by its requests.** Measured on the
 node pin, git 2.56.0, on two E-cores of a Core Ultra 7 265U, over a tree of
-10 000 files in two hundred pushes, a 31.5 MB pack: from a node holding the
-repository's own bitmap, a full clone costs 0.64 s of the node's git CPU, and a
-shallow clone of one commit, blobless, of the directories a sparse checkout's
-cone names 0.27–0.29 s; from the repository's published layers, written over
-the maintainer's repack of the same pushes, the full clone costs 0.07 s and
-is sent a fifth fewer bytes, and the narrow one 0.06 s. On a node that has not
-yet indexed the repository a full clone walks and delta-searches the whole
+10 000 files in two hundred pushes, a 31.5 MB pack. Warm, over the in-memory
+store: from a node holding the repository's own bitmap, a full clone costs
+0.64 s of the node's git CPU, and a shallow clone of one commit, blobless, of
+the directories a sparse checkout's cone names 0.27–0.29 s; from the
+repository's published layers, written over the maintainer's repack of the
+same pushes, the full clone costs 0.07 s and is sent a fifth fewer bytes, and
+the narrow one 0.06 s. Cold, against the S3-shaped fake answering every
+request 100 ms after it arrives at 80 MB/s a connection: on a node that has
+not yet indexed the repository a full clone walks and delta-searches the whole
 history, 2.8 s of CPU, against 0.29–0.30 s for the narrow clone, which moves
 3.4 MB rather than the whole pack. Measured again at ten times the tree —
 100 000 files in two thousand pushes, a 334 MB pack — on a node that has not
-indexed it, the two cold clones cost about ten times as much: 27 s of CPU for
-the full one and 2.6 s for the narrow one.
+indexed it, against the same fake, the two cold clones cost about ten times as
+much: 27 s of CPU for the full one and 2.6 s for the narrow one.
 Identical clones share nothing: thirty-two at once cost the node thirty-two
-clones of CPU. A warm fetch of one new commit is 6–8 ms of it. So size a git
+clones of CPU. A warm fetch of one new commit, over the in-memory store, is
+6–8 ms of it. So size a git
 node's cores by the clones and fetches it serves, and point CI at a blobless
 clone with a cone wherever a tree is large — shallow too, where the job reads
 no history:
@@ -395,8 +400,8 @@ each time it doubles, until its packs are full. So over a repository's life a
 git node downloads, and writes to its disk, at most about (1 + log₂(0.9 GB ÷
 the mean push's pack)) times the bytes pushed to the repositories it holds:
 about 16 times at pushes of 20 KB, and fewer the more pushes a merge takes at
-once. Measured (`BenchmarkCompact`, git 2.56.0 over the in-memory store,
-requests and bytes counted), a quiet repository — 1 200 pushes of 24 KB, one
+once. Measured (`BenchmarkCompact`, git 2.56.0 over the in-memory store, on
+two E-cores of a Core Ultra 7 265U, requests and bytes counted), a quiet repository — 1 200 pushes of 24 KB, one
 a minute, merged sixteen at a time — had the other git node download 4.7
 times what was pushed, the git node that built the merges having uploaded
 3.7 times it, and twenty minutes of a busy one — 6 000 pushes at three
