@@ -82,7 +82,11 @@ var sentinels = []sentinel{
 
 	// THE INBOX RULES', which a person's gesture on a domain's inbox is
 	// decided by on the data node that writes it: a list at its ceiling is
-	// answered as itself, since its remedy is another gesture.
+	// answered as itself, since its remedy is another gesture. And a composed
+	// cursor this build did not issue, refused where the inbox is composed:
+	// registered with the rest, so the day a composition is asked across a
+	// hop its refusal arrives as itself rather than as a bare message.
+	{"inbox.ErrBadCursor", inbox.ErrBadCursor},
 	{"inbox.ErrFull", inbox.ErrFull},
 	{"inbox.ErrInvalid", inbox.ErrInvalid},
 

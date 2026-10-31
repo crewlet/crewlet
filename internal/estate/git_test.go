@@ -1761,6 +1761,11 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		{opCodeConversation.spec, code.ConversationWrite{Revise: &code.Revise{}}, true},
 		{opCodeConversation.spec, code.ConversationWrite{Mergeability: &code.Mergeability{}}, true},
 		{opCodeConversation.spec, code.ConversationWrite{Mergeability: &code.Mergeability{Refresh: true}}, true},
+		// A PERSON'S MARK OF THEIR OWN CODE INBOX, held to the handle by the
+		// principal alone: no chart, whoever asks — a seat's is refused by
+		// the writer, never judged.
+		{opCodeMark.spec, code.MarkWrite{Asker: person, Handle: "founder"}, false},
+		{opCodeMark.spec, code.MarkWrite{Asker: seat, Handle: "dev"}, false},
 	} {
 		if tc.spec.judges == nil {
 			t.Errorf("%s declares no grant", tc.spec.name)

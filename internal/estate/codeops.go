@@ -236,7 +236,12 @@ var opCodeConversation = define("code.conversation", opIdempotentWrite, codeDoma
 // minted once and the domain's operation ledger collapses, so an unanswered
 // one is asked of the next data node with the same id. No actor: the person
 // travels inside the write, checked by its writer, which refuses a mark of
-// anybody's record but the asker's own. It judges no chart.
+// anybody's record but the asker's own. It judges no chart, and DECLARES so
+// ([op.judgesGrant], a predicate false of every write): the writer holds the
+// asker to the handle by the principal alone (a person whose seat is the
+// handle), so a node behind the company's configuration decides a mark as a
+// current one would, and refusing it there would only send a person's
+// gesture round the walk for nothing.
 var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, w code.MarkWrite) (code.MarkResult, error) {
 		if b.Code == nil {
@@ -244,7 +249,7 @@ var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
 		}
 		res, err := b.Code.Mark(ctx, w)
 		return res, ranNothing(err)
-	})
+	}).judgesGrant(func(code.MarkWrite) bool { return false })
 
 // opCodeChecks is a write of a repository's CHECKS — an attempt queued by the
 // repository's home, a claim of one by the git node that runs it, its holder's
