@@ -276,6 +276,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
               emoji={emoji}
               name={emojiName(emoji)}
               onPick={() => react(emoji)}
+              disabledReason={reactHold || undefined}
             />
           ))}
         {!quoted && (
@@ -288,7 +289,7 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
               <MessageAction
                 label="Add a reaction"
                 icon={<FaceSlightlySmilingPlusGlyph size="md" />}
-                disabled={!!reactHold}
+                disabledReason={reactHold || undefined}
                 onClick={toggle}
               />
             )}
@@ -305,6 +306,9 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           label={saved ? "Remove from Saved" : "Save for later"}
           pressed={saved}
           icon={<BookmarkGlyph size="md" />}
+          // SAVED IS FULL: held with why, rather than a press the engine
+          // would refuse. Taking one out of Saved is never held.
+          disabledReason={(!saved && marks.saveHold) || undefined}
           onClick={save}
         />
         <ActionDivider />
@@ -344,7 +348,15 @@ function SpokenRow({ view, continuation, where, working, flash }: Required<Messa
           }))}
           onToggle={react}
           disabledReason={reactHold || undefined}
-          add={quoted || reactHold ? undefined : <AddReaction onPick={react} onOpenChange={hold} />}
+          add={
+            quoted ? undefined : (
+              <AddReaction
+                onPick={react}
+                onOpenChange={hold}
+                disabledReason={reactHold || undefined}
+              />
+            )
+          }
         />
       )}
       {thread && thread.replies > 0 && (

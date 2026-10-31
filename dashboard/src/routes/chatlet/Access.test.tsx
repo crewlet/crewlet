@@ -208,6 +208,24 @@ test.each(SEATED)("a thread's reply is drawn for $who, held with why", async (re
   expect(presses).toHaveLength(0);
 });
 
+test("a reader who cannot react gets the tray's reactions held, the reason in each hint", async () => {
+  // THE TRAY'S REACTIONS ARE HELD AS THE CHIPS ARE: drawn, refusing the
+  // press, and saying why in the hint, never left pressable for a reaction
+  // the engine would refuse.
+  const row = await mountRoom({ ...ADA, acts: ADA.acts.filter((t) => t !== "react_to_message") });
+  const quick = within(row).getAllByRole("button", { name: /^React with/ });
+  expect(quick.length).toBeGreaterThan(0);
+  // THE TRAY'S AND THE REACTION BAR'S Add a reaction, both drawn and held.
+  const add = within(row).getAllByRole("button", { name: "Add a reaction" });
+  expect(add).toHaveLength(2);
+  for (const control of [...quick, ...add]) {
+    await saysHeld(control, WRITE_REASONS.not_served);
+  }
+  fireEvent.click(quick[0]!);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(presses).toHaveLength(0);
+});
+
 /** A message's three changes, and how each control is found on its row. */
 const MESSAGE_CHANGES: { tool: string; control: (row: HTMLElement) => HTMLElement }[] = [
   { tool: "edit_message", control: (row) => moreItem(row, /^edit message/i) },
