@@ -169,6 +169,8 @@ export interface Issue {
   external?: { label: string; href: string };
   /** What it is about, as the engine names each: an agent's handle, an address, a project. */
   subjects: string[];
+  /** The agents among [subjects] the chart has, each by its name. */
+  agents: IssueAgent[];
   surface: string;
   /**
    * An agent's own wait or refusal, which its row on the Agents tab draws
@@ -176,6 +178,24 @@ export interface Issue {
    * home lists it as something waiting on you.
    */
   seat?: boolean;
+}
+
+/** An agent an issue is about, as the chart names it. */
+export interface IssueAgent {
+  handle: string;
+  name: string;
+  kind: "agent" | "human";
+}
+
+/** A seat on the chart, by its handle: its name and kind, or nothing for a handle it does not have. */
+export type SeatOf = (handle: string) => Omit<IssueAgent, "handle"> | undefined;
+
+/** The agents the chart has among what an issue is about. */
+function agentsOf(subjects: readonly string[], seatOf: SeatOf): IssueAgent[] {
+  return subjects.flatMap((handle) => {
+    const seat = seatOf(handle);
+    return seat ? [{ handle, ...seat }] : [];
+  });
 }
 
 export interface Tool {
@@ -321,7 +341,7 @@ function issuesOf(
   entry: Entry,
   present: ReturnType<typeof presentSurfaces>,
   state: EntryState,
-  isSeat: (handle: string) => boolean,
+  seatOf: SeatOf,
 ): Issue[] {
   const out: Issue[] = [];
   for (const p of present) {
@@ -329,6 +349,7 @@ function issuesOf(
     for (const f of p.row.reconcile?.findings ?? []) {
       if (advisory(f)) continue;
       const owner = ownerOf(f.actor ?? p.row.reconcile?.actor);
+      const subjects = f.subjects ?? (f.subject && seatOf(f.subject) ? [f.subject] : []);
       let fix: Issue["fix"];
       if (ROTATE_FINDINGS.has(f.kind)) fix = { label: "Replace key", intent: "rotate" };
       else if (f.kind === "credential_missing" && !f.subject)
@@ -350,8 +371,11 @@ function issuesOf(
             : undefined),
         owner,
         fix,
-        external: f.action_url ? { label: `Open ${entry.name}`, href: f.action_url } : undefined,
-        subjects: f.subjects ?? (f.subject && isSeat(f.subject) ? [f.subject] : []),
+        // THE BUTTON SAYS THE FIX: the address is where the person the
+        // finding names goes to make it, so it is the fix, at the vendor.
+        external: f.action_url ? { label: `Fix on ${entry.name}`, href: f.action_url } : undefined,
+        subjects,
+        agents: agentsOf(subjects, seatOf),
         surface: p.surface.name,
         ...(f.seat ? { seat: true } : {}),
       });
@@ -366,6 +390,7 @@ function issuesOf(
       owner: "you",
       fix: { label: "Finish setup", intent: "continue" },
       subjects: [],
+      agents: [],
       surface: entry.name,
     });
   }
@@ -384,8 +409,14 @@ function surfaceIssues(entry: Entry, p: ReturnType<typeof presentSurfaces>[numbe
   const kinds = new Set((row.reconcile?.findings ?? []).map((f) => f.kind));
   const ingress = [...kinds].some((k) => k.startsWith("ingress_"));
   const out: Issue[] = [];
-  const add = (kind: string, issue: Omit<Issue, "key" | "subjects" | "surface">) =>
-    out.push({ key: `${surface.key}:${kind}`, subjects: [], surface: surface.name, ...issue });
+  const add = (kind: string, issue: Omit<Issue, "key" | "subjects" | "agents" | "surface">) =>
+    out.push({
+      key: `${surface.key}:${kind}`,
+      subjects: [],
+      agents: [],
+      surface: surface.name,
+      ...issue,
+    });
   if (row.secret_usable === false && !kinds.has("credential_missing")) {
     add("secret", {
       tone: "danger",
@@ -551,8 +582,8 @@ export interface ToolInputs {
   /** The setup listing was refused. */
   guarded: boolean;
   trafficKnown: boolean;
-  /** Whether a handle is a seat on the chart. */
-  isSeat: (handle: string) => boolean;
+  /** A handle's seat on the chart, or nothing for one it does not have. */
+  seatOf: SeatOf;
   avatarOf: (handle: string) => AgentAvatar | null;
 }
 
@@ -565,7 +596,7 @@ export function deriveTool(entry: Entry, what: ToolInputs): Tool {
   const state = entryState(entry, what.rows, what.rollups);
   const credentials = credentialFindings(present);
   const action = actionFor(state, setupTools, configured, credentials, what.guarded);
-  const issues = configured ? issuesOf(entry, present, state, what.isSeat) : [];
+  const issues = configured ? issuesOf(entry, present, state, what.seatOf) : [];
   const roster = rosterOf(setupTools);
   const findings = seatFindingsOf(present.flatMap((p) => p.row.reconcile?.findings ?? []));
   const asks = sections
@@ -599,6 +630,13 @@ export function useIntegrations(): Model {
     (handle: string) => index.byHandle.get(handle)?.avatar ?? null,
     [index],
   );
+  const seatOf = useCallback<SeatOf>(
+    (handle) => {
+      const seat = index.byHandle.get(handle);
+      return seat ? { name: seat.name, kind: seat.kind } : undefined;
+    },
+    [index],
+  );
   const [settling, setSettling] = useState(false);
   const { data, loading, error, refusal, refetch } = useQuery("integrations", undefined, {
     pollMs: settling ? 4_000 : 60_000,
@@ -628,11 +666,11 @@ export function useIntegrations(): Model {
           setup: setup.byKey,
           guarded: setup.guarded,
           trafficKnown,
-          isSeat: (h) => index.byHandle.has(h),
+          seatOf,
           avatarOf,
         }),
       ),
-    [rows, data, setup.byKey, setup.guarded, trafficKnown, avatarOf, index],
+    [rows, data, setup.byKey, setup.guarded, trafficKnown, avatarOf, seatOf],
   );
   const byKey = useMemo(() => new Map(tools.map((t) => [t.entry.key, t])), [tools]);
 

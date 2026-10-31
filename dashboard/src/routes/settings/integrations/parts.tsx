@@ -12,6 +12,8 @@ import {
   Copyable,
   DescriptionList,
   EmptyValue,
+  EntityChip,
+  IconTile,
   List,
   StatusDot,
   Tag,
@@ -24,6 +26,7 @@ import { CheckGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
 import type { ReconcileFinding } from "~/contract/integrations.ts";
 import { asSentence, relTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
+import { href } from "~/app/router.tsx";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
 // THE SCREEN'S OWN SHEET, with every module of the integrations screen (its
 // directory, panes, setup form and disconnect dialog), which all reach it here.
@@ -104,7 +107,6 @@ export function ServiceDot({ service }: { service: BuiltInService }) {
   return status ? <StatusDot tone={status.tone}>{status.label}</StatusDot> : null;
 }
 
-/** One issue, with who owes the next move and the control that makes it. */
 /**
  * The notes on a working integration: what the loop noticed that is worth
  * reading once (an address the vendor cannot reach, what its events cover),
@@ -148,6 +150,51 @@ export function Notes({ notes }: { notes: ReconcileFinding[] }) {
   );
 }
 
+/**
+ * The things an issue is about: each agent the chart has as its own chip, its
+ * name linking to its page, and anything else the engine names (an address,
+ * a project) as the plain subject it is.
+ */
+function IssueSubjects({ issue }: { issue: Issue }) {
+  const agents = new Set(issue.agents.map((a) => a.handle));
+  return (
+    <>
+      {issue.agents.length > 0 && (
+        <span
+          className="int-issue-agents"
+          role="group"
+          aria-label={`agents, ${issue.agents.length}`}
+        >
+          {issue.agents.map((agent) => (
+            <EntityChip
+              key={agent.handle}
+              name={agent.name}
+              kind={agent.kind}
+              size="xs"
+              href={href(["company", "org", "seats", agent.handle])}
+            />
+          ))}
+        </span>
+      )}
+      <FindingSubjects subjects={issue.subjects.filter((s) => !agents.has(s))} />
+    </>
+  );
+}
+
+/**
+ * One issue, as a tile: what is wrong, who owes the next move, the agents it
+ * is about, and the one control that makes it.
+ *
+ * THE APP IS NAMED ONCE, by its mark and on the line under the sentence,
+ * never in the sentence: the engine's sentence is the finding alone, and a
+ * row that led it with the app's name read "GitHub: GitHub: ..." where the
+ * finding named its lane as well.
+ *
+ * THE BUTTON SAYS THE FIX. A control here that answers it is the fix (Replace
+ * key), and in a list across apps it opens on the app's page with that
+ * control; a fix only the vendor takes goes there ("Fix on GitHub"); anything
+ * else in a list across apps sends the reader to the app's page.
+ */
 export function IssueRow({
   tool,
   issue,
@@ -161,53 +208,68 @@ export function IssueRow({
   onFix?: (intent: Intent) => void;
   /** Name the app the issue is about, for a list across apps. */
   showTool?: boolean;
-  /** Send the reader to the app's page instead of fixing it here. */
+  /** The app's page, for a list across apps: where its fix opens. */
   go?: string;
 }) {
+  const variant = issue.owner === "you" ? "primary" : "secondary";
+  const action =
+    issue.fix && onFix ? (
+      <Button
+        size="small"
+        variant={variant}
+        disabledReason={tool.blocked}
+        onClick={() => {
+          if (!tool.blocked && issue.fix) onFix(issue.fix.intent);
+        }}
+      >
+        {issue.fix.label}
+      </Button>
+    ) : issue.fix && go ? (
+      <ButtonLink
+        size="small"
+        variant={variant}
+        href={go}
+        aria-label={actionName(issue.fix.label, tool.entry.name)}
+      >
+        {issue.fix.label}
+      </ButtonLink>
+    ) : issue.external ? (
+      <ButtonLink size="small" variant={variant} external href={issue.external.href}>
+        {issue.external.label}
+      </ButtonLink>
+    ) : go ? (
+      <ButtonLink size="small" variant="secondary" href={go}>
+        Open {tool.entry.name}
+      </ButtonLink>
+    ) : null;
   return (
-    <div className="int-issue">
+    <div className="int-issue" data-tone={issue.tone}>
       {showTool && (
-        <span className="int-issue-mark" aria-hidden>
+        <IconTile size="md" tone="neutral" className="int-issue-mark">
           <VendorMark vendor={tool.entry.vendor} size="md" />
-        </span>
+        </IconTile>
       )}
       <div className="int-issue-text">
-        <span className="int-issue-problem">
-          {showTool && <strong>{tool.entry.name}: </strong>}
-          {issue.problem}
-        </span>
-        <FindingSubjects subjects={issue.subjects} />
+        <span className="int-issue-problem">{issue.problem}</span>
         {issue.remedy && <span className="t-caption">{issue.remedy}</span>}
-        <span className="int-issue-owner">
+        <span className="int-issue-meta">
           <StatusDot
             tone={issue.tone === "danger" ? "danger" : issue.owner === "you" ? "warning" : "info"}
           >
             {issue.owner === "you" ? "Waiting on you" : `${OWNER_WORDS[issue.owner]} is on it`}
           </StatusDot>
+          {showTool && (
+            <>
+              <span className="int-issue-sep" aria-hidden>
+                ·
+              </span>
+              <span>{tool.entry.name}</span>
+            </>
+          )}
         </span>
+        <IssueSubjects issue={issue} />
       </div>
-      <span className="int-issue-act">
-        {go ? (
-          <ButtonLink size="small" variant="secondary" href={go}>
-            Open {tool.entry.name}
-          </ButtonLink>
-        ) : issue.fix && onFix ? (
-          <Button
-            size="small"
-            variant={issue.owner === "you" ? "primary" : "secondary"}
-            disabledReason={tool.blocked}
-            onClick={() => {
-              if (!tool.blocked && issue.fix) onFix?.(issue.fix.intent);
-            }}
-          >
-            {issue.fix.label}
-          </Button>
-        ) : issue.external ? (
-          <ButtonLink size="small" variant="secondary" external href={issue.external.href}>
-            {issue.external.label}
-          </ButtonLink>
-        ) : null}
-      </span>
+      {action && <span className="int-issue-act">{action}</span>}
     </div>
   );
 }

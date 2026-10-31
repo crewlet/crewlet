@@ -58,7 +58,7 @@ function inputs(over: Partial<ToolInputs>): ToolInputs {
     setup: new Map(),
     guarded: false,
     trafficKnown: true,
-    isSeat: () => false,
+    seatOf: () => undefined,
     avatarOf: () => null,
     ...over,
   };
@@ -204,7 +204,7 @@ test("a finding with an address at the app links there by the app's name", () =>
     }),
   );
   expect(tool.issues.map((i) => i.external)).toEqual([
-    { label: "Open Atlassian", href: "https://acme.atlassian.net/admin" },
+    { label: "Fix on Atlassian", href: "https://acme.atlassian.net/admin" },
     undefined,
   ]);
 });
@@ -220,7 +220,7 @@ test("an advisory is a note, and a finding this build does not know un-readies i
       inputs({
         rows: rowsOf({ key: "github", configured: true, reconcile: { phase: "ready", findings } }),
         setup: new Map([["github", listing("github", { seats: [seat] })]]),
-        isSeat: (h) => h === "cto",
+        seatOf: (h) => (h === "cto" ? { name: "CTO", kind: "agent" } : undefined),
       }),
     );
 
@@ -372,7 +372,7 @@ test("an agent's own wait is marked as its row's, with no control of its own", (
             {
               kind: "approval_required",
               subject: "sre",
-              detail: "GitHub: Add Pull requests to SRE's app permissions",
+              detail: "Add Pull requests to SRE's app permissions",
               action_url:
                 "https://github.com/organizations/acme/settings/apps/acme-sre/permissions",
               phase: "awaiting_admin",
@@ -399,11 +399,67 @@ test("an issue listed across apps names its app and links to its page", () => {
       <IssueRow tool={tool} issue={tool.issues[0]!} showTool go="#/company/integrations/github" />
     </Router>,
   );
-  expect(screen.getByText("GitHub:")).toBeTruthy();
+  // THE APP ONCE, under the sentence and never in it: a lead of "GitHub: "
+  // ahead of a finding that named its lane read "GitHub: GitHub: ...".
+  expect(document.querySelector(".int-issue-meta")?.textContent?.trim()).toBe(
+    "Waiting on you·GitHub",
+  );
+  expect(document.querySelector(".int-issue-problem")?.textContent).toBe(
+    "4 agents have no GitHub App of their own.",
+  );
+  expect(document.querySelector(".int-issue-mark")).not.toBeNull();
   expect(screen.getByRole("link", { name: "Open GitHub" }).getAttribute("href")).toBe(
     "#/company/integrations/github",
   );
   expect(screen.queryByRole("button")).toBeNull();
+});
+
+// THE AGENTS BY THE CHART'S NAMES, each linking to its page, and what the
+// chart does not have as the subject the engine named.
+test("an issue names its agents as the chart does, and keeps the rest as said", () => {
+  const tool = deriveTool(
+    entry("github"),
+    inputs({
+      rows: rowsOf({
+        key: "github",
+        configured: true,
+        reconcile: {
+          phase: "awaiting_admin",
+          actor: "admin",
+          findings: [
+            {
+              kind: "approval_required",
+              subjects: ["sre", "acme/infra"],
+              detail: "Add Pull requests to SRE's app permissions",
+              action_url:
+                "https://github.com/organizations/acme/settings/apps/acme-sre/permissions",
+              phase: "awaiting_admin",
+            },
+          ],
+        },
+      }),
+      seatOf: (h) =>
+        h === "sre" ? { name: "Site Reliability Engineer", kind: "agent" } : undefined,
+    }),
+  );
+  const issue = tool.issues[0]!;
+  expect(issue.agents).toEqual([
+    { handle: "sre", name: "Site Reliability Engineer", kind: "agent" },
+  ]);
+  render(
+    <Router>
+      <IssueRow tool={tool} issue={issue} showTool go="#/company/integrations/github" />
+    </Router>,
+  );
+  const agents = screen.getByRole("group", { name: "agents, 1" });
+  expect(within(agents).getByRole("link").getAttribute("href")).toBe("#/company/org/seats/sre");
+  expect(agents.textContent).toContain("Site Reliability Engineer");
+  const rest = screen.getByRole("list", { name: "what this is about, 1" });
+  expect(rest.textContent).toBe("acme/infra");
+  // THE BUTTON SAYS THE FIX, at the vendor where only the vendor takes it.
+  expect(screen.getByRole("link", { name: /Fix on GitHub/ }).getAttribute("href")).toBe(
+    "https://github.com/organizations/acme/settings/apps/acme-sre/permissions",
+  );
 });
 
 // A LONG LIST EXPANDS IN PLACE: the rest are folded for width rather than
