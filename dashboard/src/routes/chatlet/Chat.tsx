@@ -199,7 +199,7 @@ const ChatAreaContext = createContext<(el: HTMLDivElement | null) => void>(() =>
  * the outbox, the read cursor writer, the reader's marks and counts), the
  * drafts, and the open room's detail, read once.
  *
- * EXPORTED FOR THE SUITES (`testkit.tsx`'s `mountInFrame`), so a pane, a view
+ * EXPORTED FOR THE SUITES (`frameKit.tsx`'s `mountInFrame`), so a pane, a view
  * or a dialog is tested inside the frame the screen builds rather than a
  * second one written for the test.
  */

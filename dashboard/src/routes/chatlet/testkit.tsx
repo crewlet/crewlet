@@ -62,9 +62,11 @@ export function LoneRoom({
   const outbox = useOutbox();
   const [drafts] = useState(() => new ChatDrafts());
   const [landed, setLanded] = useState(false);
+  // A WIDE COLUMN, as a suite's jsdom measures no width at all.
   const nav = useChatNavigation(
     { kind: "room", id: channelID, message: landed ? undefined : message },
     null,
+    false,
   );
   const shown: ChatNav = useMemo(() => ({ ...nav, landed: () => setLanded(true) }), [nav]);
   if (probe) probe.nav = shown;
@@ -97,6 +99,11 @@ export function LoneRoom({
       outbox,
       cursors,
       markRead: (room, through) => probe?.marked.push({ room, through }),
+      // THE READER'S MARKS AND COUNTS are the top bar's and the Rooms panel's,
+      // which a room alone does not draw.
+      starred: new Set<string>(),
+      star: () => undefined,
+      counts: null,
     }),
     [viewer, nameOf, rail, channels, outbox, cursors, probe],
   );
