@@ -1002,8 +1002,9 @@ func (b *building) commit(ctx context.Context, tree, parent string, parentDate t
 // acted — the operation's own, to the second — and its COMMITTER date that
 // instant or its parent's committer date, whichever is later. A parent dated
 // after the operation — a person's clock ahead — would otherwise give a child
-// dated before it, which every walk by date pays for (M2's O18 measured 6.9 s
-// a push over a gigabyte of history with no commit-graph), while git's
+// dated before it, which every walk by date pays for (6.7 s a push over a
+// gigabyte of history with no commit-graph, on the node pin: this package's
+// measured section), while git's
 // date-ordered walks, merge-base and the commit-graph's corrected dates read
 // the committer date alone — as git's own rebase and cherry-pick keep the
 // author date and set the committer date of their own. Both are pure
