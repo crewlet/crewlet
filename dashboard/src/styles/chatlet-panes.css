@@ -553,12 +553,6 @@
   white-space: nowrap;
 }
 
-/* The title takes focus when the card that had it is removed, to keep the
-   reader's place; it is not a control, so it draws no ring. */
-.chat-view-head__title:focus {
-  outline: none;
-}
-
 .chat-view-head__tools {
   display: flex;
   flex: none;
@@ -732,10 +726,13 @@
     border-color var(--motion-duration-fast) var(--motion-easing-default);
 }
 
+/* THE HOVER OVERLAY OVER THE CARD'S OWN GROUND: an overlay lifts whatever it
+   lands on, where a rung would be right only against the ground it was
+   picked for. */
 .chat-draft:hover,
 .chat-hit:hover {
   border-color: var(--color-border-hover);
-  background: var(--color-surface-elevated);
+  background-image: linear-gradient(var(--color-surface-hover), var(--color-surface-hover));
 }
 
 .chat-draft:focus-visible,
