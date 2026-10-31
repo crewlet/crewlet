@@ -543,10 +543,12 @@ var cacheWriters = []writerRow{
 	{"internal/code/host/build.go", kindGit + " mktree",
 		"an engine write's touched directories, written into its scratch a level at a time; freshening as above", nil},
 	{"internal/code/host/build.go", kindGit + " commit-tree",
-		"an engine write's commit, written into its scratch", nil},
+		"an engine write's commit — a merge_change's merge commit or squash among them — written into its " +
+			"scratch", nil},
 	{"internal/code/host/build.go", kindGit + " merge-tree",
-		"a revert's or a cherry-pick's merged tree (`--write-tree`), and its conflicted files, written into its " +
-			"scratch; freshening as above", nil},
+		"a revert's or a cherry-pick's merged tree (`--write-tree`), and a merge_change's of its change into its " +
+			"target (`--allow-unrelated-histories`, as the home's mergeability merges them), and its conflicted " +
+			"files, written into its scratch; freshening as above", nil},
 	{"internal/code/host/build.go", kindGit + " pack-objects",
 		"an engine write's one pack (`--stdout`), of its scratch's loose objects into a file staged in its " +
 			"scratch — pack-objects writes a repository only with a base name, so the row is argued for what " +

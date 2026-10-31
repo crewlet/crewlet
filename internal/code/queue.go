@@ -279,6 +279,12 @@ const (
 	// moved from since: what it built merges a branch that is no longer
 	// there, and its builder builds it again onto the tip the target holds.
 	MergeRefusalTargetMoved MergeRefusal = "target_moved"
+	// MergeRefusalTargetMoving is a merge its BUILDER answered once its
+	// target moved under the first build and under every one of
+	// [MergeRecomputes] rebuilds after it: the branch moves faster than a
+	// merge is built onto it, and its queue, or a quieter moment, lands it.
+	// Never a decide's: the git node that built the merge answers it.
+	MergeRefusalTargetMoving MergeRefusal = "target_moving"
 	// MergeRefusalNotPerson is a merge past its target's gate asked by
 	// anybody but a person: only a person overrides a merge gate.
 	MergeRefusalNotPerson MergeRefusal = "not_person"
@@ -339,7 +345,7 @@ const (
 func MergeRefusals() []MergeRefusal {
 	return []MergeRefusal{MergeRefusalRepoDeleted, MergeRefusalRepoArchived, MergeRefusalChangeNotFound,
 		MergeRefusalChangeNotOpen, MergeRefusalChangeDraft, MergeRefusalStale, MergeRefusalHeadMoved,
-		MergeRefusalTargetMoved, MergeRefusalNotPerson, MergeRefusalQueueTarget, MergeRefusalNoQueue,
+		MergeRefusalTargetMoved, MergeRefusalTargetMoving, MergeRefusalNotPerson, MergeRefusalQueueTarget, MergeRefusalNoQueue,
 		MergeRefusalNoAutoRevert, MergeRefusalAlreadyQueued, MergeRefusalQueueFull, MergeRefusalGateUnmet,
 		MergeRefusalSourceRefused, MergeRefusalUploadExpired, MergeRefusalRepoSize,
 		MergeRefusalCompactionBehind, MergeRefusalNotQueued, MergeRefusalNotPermitted, MergeRefusalBusy,

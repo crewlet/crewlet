@@ -63,6 +63,14 @@ type Signer interface {
 	// hold (forged_committer). An error is a node that holds no epoch, which
 	// judges no box's push.
 	Committer() (string, error)
+	// Author is the name and address a commit names the seat handle by as
+	// its AUTHOR where the engine did not act as that seat (U43 a): a
+	// squash's, authored by its change's owner, and the `Co-authored-by:`
+	// trailer of each of its other authors — the chart's role name and
+	// address as Sign names them, or, for a seat the chart no longer holds,
+	// the handle at `<handle>@<code.identity_domain>`: a seat that left
+	// still wrote what it wrote. An error is a node that holds no epoch.
+	Author(handle string) (name, email string, err error)
 }
 
 // Signature is an engine-built commit's names and addresses, each one git
@@ -335,6 +343,12 @@ func (wr *writing) run(ctx context.Context) (code.EngineWriteResult, error) {
 		return code.EngineWriteResult{}, &code.ErrGitUnready{Reason: code.UnreadyNotHeld, Detail: fmt.Sprintf(
 			"%s holds no copy of repository %s and the write is not its walk's home's, which is the one node "+
 				"that fills a copy; a git node holding one builds it meanwhile", s.o.NodeID, w.RepoID)}
+	}
+	if w.Kind == code.WriteMergeChange {
+		// A MERGE IS ITS OWN PIPELINE from here (merge.go): judged by its
+		// change and its gate rather than the push rules of one command, and
+		// landed as a merge record.
+		return wr.runMerge(ctx)
 	}
 	syncStart := s.now()
 	j, res, done, err := wr.judge(ctx)
@@ -690,19 +704,25 @@ func (wr *writing) buildShared(ctx context.Context, sc *cache.Scratch, j judgeme
 	defer release()
 	// THE BUILD'S OWN GIT BEGINS: from here every process is given what is
 	// left of one budget of run time, and charged what it ran.
-	wr.metered, wr.left = true, s.buildBudget
+	wr.metered, wr.left = true, s.buildBudget(w.Kind)
 	b, res, done, err := wr.build(ctx, sc, j)
 	wr.metered = false
 	if errors.Is(err, errBuildSpent) {
-		return built{}, wr.changeRefused(code.WriteTooLarge, fmt.Sprintf("building this change ran the whole %s "+
-			"of git one write is given on %s; make it in a coding box (run_sandbox)", s.buildBudget,
-			s.o.NodeID)), true, nil
+		return built{}, wr.spent(), true, nil
 	}
 	return b, res, done, err
 }
 
-// errBuildSpent is a build whose git ran the whole of its budget
-// (code.WriteBuildDeadline): answered too_large.
+// spent is the answer to a build whose git ran the whole of its kind's budget:
+// too_large, a change no node builds faster.
+func (wr *writing) spent() code.EngineWriteResult {
+	return wr.changeRefused(code.WriteTooLarge, fmt.Sprintf("building this change ran the whole %s of git one "+
+		"%s is given on %s; make it in a coding box (run_sandbox)", wr.s.buildBudget(wr.w.Kind), wr.w.Kind,
+		wr.s.o.NodeID))
+}
+
+// errBuildSpent is a build whose git ran the whole of its budget (its kind's,
+// code.EngineWriteKind.BuildDeadline): answered too_large.
 var errBuildSpent = errors.New("host: the write's build ran its whole budget of git")
 
 // changeRefused is the write's answer to a refusal of its change: nothing
@@ -790,7 +810,11 @@ func (wr *writing) record(ctx context.Context, res code.EngineWriteResult, err e
 		}
 	}
 	refusal := string(res.Refusal)
-	if refusal == "" {
+	switch {
+	case refusal != "":
+	case res.Merge != nil && res.Merge.Refusal != "":
+		refusal = string(res.Merge.Refusal)
+	default:
 		refusal = string(res.Command.Reason)
 	}
 	// WHO WROTE, as code_push names a pusher: the seat the write is the

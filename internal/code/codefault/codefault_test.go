@@ -118,6 +118,17 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := codefault.WritePath(); !slices.Equal(got, writePoints) {
 		t.Fatalf("WritePath() = %v\nwant the order an engine write reaches them: %v", got, writePoints)
 	}
+	// A merge's landing is the one landing, after its own build's point.
+	mergePoints := []codefault.Point{
+		codefault.MergeAfterBuild,  // the merge's commit and pack made in its scratch, nothing stored
+		codefault.HostUpload,       // inside the bundle's upload
+		codefault.HostAfterUpload,  // the bundle stored, no row naming it
+		codefault.HostAfterPropose, // the committer answered the merge record
+		codefault.HostBeforeAdopt,  // the record applied, the pack not yet adopted
+	}
+	if got := codefault.MergePath(); !slices.Equal(got, mergePoints) {
+		t.Fatalf("MergePath() = %v\nwant the order a merge reaches them: %v", got, mergePoints)
+	}
 	// An expunge's crash matrix walks ExpungePath(), its order a claim as
 	// the others are.
 	expungePoints := []codefault.Point{
@@ -134,10 +145,10 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 		t.Fatalf("CheckPath() = %v\nwant the claim applied, before any box", got)
 	}
 	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints, compactPoints, publishPoints,
-		[]codefault.Point{codefault.WriteAfterBuild}, expungePoints,
+		[]codefault.Point{codefault.WriteAfterBuild, codefault.MergeAfterBuild}, expungePoints,
 		[]codefault.Point{codefault.CheckAfterClaim}); !slices.Equal(got, wantAll) {
 		t.Fatalf("Points() = %v\nwant the push path, then the sync's, the compaction's and the publication's, "+
-			"then the write's own, then the expunge's, then a check's run's: %v",
+			"then the write's own and the merge's, then the expunge's, then a check's run's: %v",
 			got, wantAll)
 	}
 

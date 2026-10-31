@@ -3,6 +3,7 @@ package estate
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 )
@@ -492,7 +493,11 @@ var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
 // warm, so a write is built where its objects already are. Each attempt is
 // stamped with whether the node asked is the walk's effective home
 // (code.EngineWrite.Home), the one node a walk lets fill a copy, as a read's
-// is; on a lane of its own ([laneGitWrites]); held to [GitWriteAttempt].
+// is; on a lane of its own ([laneGitWrites]); held to [GitWriteAttempt] — or,
+// for a kind whose build is given longer, its kind's attempt
+// ([Timing.GitWriteAttemptFor]: a merge_change's, which lands as ONE MERGE
+// RECORD rather than a push, the merge's own build budget in place of a
+// push's).
 //
 // IDEMPOTENT BY ITS PUSH ID (code.WritePushID of the write's operation): a
 // home that went silent may have landed it, and the runner-up asked the same
@@ -526,4 +531,6 @@ var opCodeGitWrite = define("code.git_write", opIdempotentWrite, GitCopy, false,
 	func(w code.EngineWrite, home bool) code.EngineWrite {
 		w.Home = home
 		return w
-	}).answeredOn(laneGitWrites)
+	}).attemptBy(func(w code.EngineWrite, t Timing) time.Duration {
+	return t.GitWriteAttemptFor(w.Kind)
+}).answeredOn(laneGitWrites)

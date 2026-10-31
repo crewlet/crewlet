@@ -210,6 +210,19 @@ func Production() Timing {
 		GitReadAttempt: GitReadAttempt, GitWriteAttempt: GitWriteAttempt}
 }
 
+// GitWriteAttemptFor is an engine write's attempt on one git node by its kind:
+// [Timing.GitWriteAttempt] with its build term — code.WriteBuildDeadline, the
+// build of a write landing as one push — replaced by the kind's own
+// (code.EngineWriteKind.BuildDeadline). So a merge_change, whose build is a
+// mergeability's (code.MergeBuildDeadline, 30 s), is given 102 s in
+// production, and every other kind the 82 s it was: the git node fits every
+// stage of the write into its attempt (internal/code/host's deadline rule),
+// and a kind given a longer build must be given the time to run it before its
+// upload and proposal, or every such build near its bound is answered busy.
+func (t Timing) GitWriteAttemptFor(kind code.EngineWriteKind) time.Duration {
+	return t.GitWriteAttempt - code.WriteBuildDeadline + kind.BuildDeadline()
+}
+
 // minReadAttempt is what every read attempt must be longer than: the reply's
 // margin, code.ReplyMargin — the answer's trip back, which a serving node
 // leaves between the end of every wait it makes and its asker's deadline
@@ -570,6 +583,11 @@ type exchange struct {
 	// that may fill a copy — while this exchange's own are stamped not: nil
 	// for every operation but a git one.
 	home *exchange
+
+	// attempt is this exchange's own attempt on one node, read off its
+	// arguments ([op.attemptBy]) — an engine write's, by its kind — and nil
+	// for every exchange whose attempt is its class's ([Router.wholeAttempt]).
+	attempt func(Timing) time.Duration
 }
 
 // call runs one operation on a data node whose copy serves.
@@ -600,13 +618,30 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 				"its arguments name no key", spec.name)
 		}
 	}
+	x, err := exchangesOf(spec, o, actor, args, written, key)
+	if err != nil {
+		return zero, err
+	}
+	answer, err := r.route(ctx, spec, actor, x)
+	if out, ok := answer.(R); ok {
+		return out, err
+	}
+	return zero, err
+}
+
+// exchangesOf is what one call of o over args asks: its exchange — and, for a
+// git operation, the same stamped as asked of the walk's effective home — each
+// with the attempt its arguments declare ([op.attemptBy]).
+func exchangesOf[A, R any](spec *opSpec, o op[A, R], actor *Actor, args A, written tracker.WriteLog,
+	key string) (exchange, error) {
+
 	var (
 		x   exchange
 		err error
 	)
 	if o.home == nil {
 		if x, err = exchangeOf(spec, o, actor, args, written, key); err != nil {
-			return zero, err
+			return exchange{}, err
 		}
 	} else {
 		// A GIT OPERATION IS STAMPED ON EVERY ATTEMPT: home for the walk's
@@ -614,18 +649,20 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 		// caller set, since only the walk knows which node it asks first.
 		home, homeErr := exchangeOf(spec, o, actor, o.home(args, true), written, key)
 		if homeErr != nil {
-			return zero, homeErr
+			return exchange{}, homeErr
 		}
 		if x, err = exchangeOf(spec, o, actor, o.home(args, false), written, key); err != nil {
-			return zero, err
+			return exchange{}, err
 		}
 		x.home = &home
 	}
-	answer, err := r.route(ctx, spec, actor, x)
-	if out, ok := answer.(R); ok {
-		return out, err
+	if o.attempt != nil {
+		x.attempt = func(t Timing) time.Duration { return o.attempt(args, t) }
+		if x.home != nil {
+			x.home.attempt = x.attempt
+		}
 	}
-	return zero, err
+	return x, nil
 }
 
 // exchangeOf is one operation's two halves over args, in its caller's types:
@@ -835,7 +872,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 			return value, ranErr
 		}
 	}
-	budget := r.budgetFor(ctx, spec)
+	budget := r.budgetFor(ctx, spec, x)
 	nodes, err := r.placement.Holders()
 	if err != nil {
 		// A PLACEMENT THAT CANNOT SAY WHO HOLDS THE ESTATE names no peer
@@ -1044,7 +1081,7 @@ func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x excha
 	if !spent.IsZero() {
 		req.Spent = &spent
 	}
-	rep, got, err := r.ask(ctx, node, spec.lane.subject(node), req, budget, r.wholeAttempt(spec))
+	rep, got, err := r.ask(ctx, node, spec.lane.subject(node), req, budget, r.wholeAttempt(spec, x))
 	if err != nil {
 		return reply{}, got, fmt.Errorf("estate: %s: %w", spec.name, err)
 	}
@@ -1204,21 +1241,25 @@ func (x exchange) record(rep reply) {
 // node builds the same push. Given a turn's deadline minutes away, a wedged
 // home was waited on until the turn's tool call gave up, and its runner-up
 // never asked.
-func (r *Router) budgetFor(ctx context.Context, spec *opSpec) time.Duration {
+func (r *Router) budgetFor(ctx context.Context, spec *opSpec, x exchange) time.Duration {
 	if _, bounded := ctx.Deadline(); bounded && spec.class != opRead && !spec.git {
 		return 0
 	}
-	return r.wholeAttempt(spec)
+	return r.wholeAttempt(spec, x)
 }
 
 // wholeAttempt is the router's own attempt on one node for spec's class:
 // [Timing.ReadAttempt] for a read, [Timing.GitReadAttempt] for a git read on a
-// git node, [Timing.GitWriteAttempt] for an engine write on one and
-// [Timing.WriteAttempt] for a write on a data node — what a request waits
-// where nothing shorter bounds it, and what a node's silence must last to be
-// evidence it is gone rather than slow ([Router.ask]).
-func (r *Router) wholeAttempt(spec *opSpec) time.Duration {
+// git node, [Timing.GitWriteAttempt] for an engine write on one — or the
+// attempt its arguments declare ([op.attemptBy]): an engine write's by its
+// kind, [Timing.GitWriteAttemptFor] — and [Timing.WriteAttempt] for a write on
+// a data node — what a request waits where nothing shorter bounds it, and what
+// a node's silence must last to be evidence it is gone rather than slow
+// ([Router.ask]).
+func (r *Router) wholeAttempt(spec *opSpec, x exchange) time.Duration {
 	switch {
+	case x.attempt != nil:
+		return x.attempt(r.timing)
 	case spec.class == opRead && spec.git:
 		return r.timing.GitReadAttempt
 	case spec.class == opRead:

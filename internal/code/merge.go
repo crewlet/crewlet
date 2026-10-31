@@ -197,6 +197,25 @@ func (p MergeProposal) Validate() error {
 	return err
 }
 
+// ValidateUnstored is [MergeProposal.Validate] of a merge whose pack is not
+// stored yet — its builder's check while the bundle uploads, as
+// [Proposal.ValidateUnstored] is a push's: the pack named by the widest
+// object key and hash a stored one could take, so a merge that passes here
+// passes Validate once its bundle is stored. A pack already stored is the
+// caller's mistake: Validate checks one.
+func (p MergeProposal) ValidateUnstored() error {
+	if p.Merge.Pack != nil {
+		if !p.Merge.Pack.Object.IsZero() || p.Merge.Pack.Hash != "" {
+			return fmt.Errorf("%w: merge.pack: already stored as %s — Validate checks a stored pack",
+				ErrInvalidProposal, p.Merge.Pack.Object)
+		}
+		pack := *p.Merge.Pack
+		pack.Object, pack.Hash = largestEntry().Pack.Object, largestEntry().Pack.Hash
+		p.Merge.Pack = &pack
+	}
+	return p.Validate()
+}
+
 // measure validates p and answers its queued byte charge: its record's payload
 // as the committer stamps it — its source at the longest a ref's encoding may
 // be, every byte past its prefix one JSON writes as six, since the decide

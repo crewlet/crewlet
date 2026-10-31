@@ -343,7 +343,7 @@ func passesFill(rep reply) bool {
 func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exchange) (any, error) {
 	w := &walk{}
 	own, ownHalf := r.ownGit(w)
-	budget := r.budgetFor(ctx, spec)
+	budget := r.budgetFor(ctx, spec, x)
 	nodes, err := r.gitPlacement.Holders()
 	if err != nil {
 		// A PLACEMENT THAT CANNOT SAY WHO SERVES GIT names no peer to ask

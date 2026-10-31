@@ -496,17 +496,14 @@ type building struct {
 func (wr *writing) build(ctx context.Context, sc *cache.Scratch, j judgement) (built, code.EngineWriteResult,
 	bool, error) {
 
-	stage := filepath.Join(sc.Dir, writeStage)
-	if err := os.Mkdir(stage, hostbox.DirMode); err != nil {
-		return built{}, code.EngineWriteResult{}, true, fmt.Errorf("host: the write's staging in %s: %w", sc.Dir,
-			err)
+	b, err := wr.newBuilding(sc)
+	if err != nil {
+		return built{}, code.EngineWriteResult{}, true, err
 	}
-	b := &building{wr: wr, sc: sc, stage: stage}
 	var (
 		commit string
 		res    code.EngineWriteResult
 		done   bool
-		err    error
 	)
 	switch wr.w.Kind {
 	case code.WriteCommitFiles:
@@ -523,6 +520,34 @@ func (wr *writing) build(ctx context.Context, sc *cache.Scratch, j judgement) (b
 		return built{}, res, true, err
 	}
 	return built{commit: commit}, code.EngineWriteResult{}, false, nil
+}
+
+// newBuilding is a build in sc, its staging directory made under it.
+func (wr *writing) newBuilding(sc *cache.Scratch) (*building, error) {
+	stage := filepath.Join(sc.Dir, writeStage)
+	if err := os.Mkdir(stage, hostbox.DirMode); err != nil {
+		return nil, fmt.Errorf("host: the write's staging in %s: %w", sc.Dir, err)
+	}
+	return &building{wr: wr, sc: sc, stage: stage}, nil
+}
+
+// ancestor reports whether commit a is an ancestor of commit b, or b itself:
+// ONE `merge-base --is-ancestor` in the scratch, through its alternate —
+// exit 0 is yes, 1 no — within what is left of the build's budget, since a
+// repository with no commit-graph yet walks its history by date to answer it.
+func (b *building) ancestor(ctx context.Context, a, of string) (bool, error) {
+	left, err := b.wr.budget()
+	if err != nil {
+		return false, err
+	}
+	res, err := b.wr.s.runGit(ctx, gitproc.Cmd{
+		Dir: b.sc.Dir, Alternate: b.sc.Alternate, Args: []string{"merge-base", "--is-ancestor", a, of},
+		Class: gitproc.ClassRead, Answers: []int{1}, Deadline: left,
+	})
+	if err := b.wr.failed(ctx, "ancestry of the merge", res, err); err != nil {
+		return false, err
+	}
+	return res.Exit == 0, nil
 }
 
 // create makes the build's next staged file, of kind.
@@ -971,21 +996,48 @@ func (b *building) commit(ctx context.Context, tree, parent string, parentDate t
 		CommitterName: wr.sig.CommitterName, CommitterEmail: wr.sig.CommitterEmail,
 		AuthorWhen: author, CommitterWhen: committer,
 	}
+	var parents []string
+	if parent != "" {
+		parents = []string{parent}
+	}
+	return b.commitOf(ctx, tree, parents, id, message)
+}
+
+// commitOf is ONE `commit-tree` of tree onto parents, in their order — none
+// for a root commit, two for a merge — as id, its message on its standard
+// input as it is given.
+func (b *building) commitOf(ctx context.Context, tree string, parents []string, id *gitproc.Identity,
+	message string) (string, error) {
+
+	wr := b.wr
 	left, err := wr.budget()
 	if err != nil {
 		return "", err
 	}
+	// EACH ARGUMENT LIST SPELLED IN THE Cmd THAT RUNS IT — this file's
+	// literals and whole object ids — so the cache's writers gate reads
+	// every one (internal/code/cache's TestNothingButSyncWritesACache).
 	var res gitproc.Result
-	if parent == "" {
+	switch len(parents) {
+	case 0:
 		res, err = wr.s.runGit(ctx, gitproc.Cmd{
 			Dir: b.sc.Dir, Alternate: b.sc.Alternate, Args: []string{"commit-tree", tree}, Identity: id,
 			Stdin: strings.NewReader(message), Class: gitproc.ClassRead, Deadline: left,
 		})
-	} else {
+	case 1:
 		res, err = wr.s.runGit(ctx, gitproc.Cmd{
-			Dir: b.sc.Dir, Alternate: b.sc.Alternate, Args: []string{"commit-tree", tree, "-p", parent}, Identity: id,
-			Stdin: strings.NewReader(message), Class: gitproc.ClassRead, Deadline: left,
+			Dir: b.sc.Dir, Alternate: b.sc.Alternate, Args: []string{"commit-tree", tree, "-p", parents[0]},
+			Identity: id, Stdin: strings.NewReader(message), Class: gitproc.ClassRead, Deadline: left,
 		})
+	case 2:
+		res, err = wr.s.runGit(ctx, gitproc.Cmd{
+			Dir: b.sc.Dir, Alternate: b.sc.Alternate,
+			Args:     []string{"commit-tree", tree, "-p", parents[0], "-p", parents[1]},
+			Identity: id, Stdin: strings.NewReader(message), Class: gitproc.ClassRead, Deadline: left,
+		})
+	default:
+		return "", fmt.Errorf("host: a commit of %d parents, and an engine write makes one of two at most",
+			len(parents))
 	}
 	if err := wr.failed(ctx, "commit of the change", res, err); err != nil {
 		return "", err
@@ -1017,6 +1069,16 @@ func commitDates(instant, parentDate time.Time) (author, committer time.Time) {
 		committer = parentDate.UTC().Truncate(time.Second)
 	}
 	return author, committer
+}
+
+// later is the later of a and b: a merge commit's committer date is held at or
+// past BOTH its parents' (commitDates), since a child dated before either
+// parent costs every walk by date as one dated before its only parent does.
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // pick is a revert's or a cherry-pick's build: its two commits read, the
@@ -1061,7 +1123,9 @@ func (b *building) pick(ctx context.Context) (string, code.EngineWriteResult, bo
 		return "", code.EngineWriteResult{}, true, err
 	}
 	if !m.clean {
-		res, err := b.conflicted(ctx, m)
+		res, err := b.conflicted(ctx, m, fmt.Sprintf("%s does not apply cleanly on %s: %d paths conflict; resolve "+
+			"them in a coding box (run_sandbox), or write the result yourself", shortID(w.Commit),
+			shortID(w.ExpectedHead), len(m.conflicts)+m.omitted))
 		return "", res, true, err
 	}
 	if m.tree == head.tree {
@@ -1343,7 +1407,12 @@ func (m *mergeOutput) record(rec []byte) error {
 // merge is ONE `merge-tree --write-tree -z --merge-base=<base> <ours>
 // <theirs>` in the scratch, which writes the merged tree — and, for a merge
 // that conflicts, its files with their conflict markers — there and nowhere
-// else: exit 0 is a clean merge, 1 one that conflicts.
+// else: exit 0 is a clean merge, 1 one that conflicts. A base of "" is a
+// change's merge into its target, whose base git finds as `git merge` does —
+// and, for two histories sharing no commit, the empty tree
+// (`--allow-unrelated-histories`), as a change's mergeability measures it
+// (internal/code/home), so a merge and the readiness that let it merge say
+// one thing.
 func (b *building) merge(ctx context.Context, base, ours, theirs string) (*mergeOutput, error) {
 	m := &mergeOutput{at: map[string]int{}, firstType: map[string]string{}}
 	recs := newRecords(m.record)
@@ -1351,11 +1420,21 @@ func (b *building) merge(ctx context.Context, base, ours, theirs string) (*merge
 	if err != nil {
 		return nil, err
 	}
-	res, err := b.wr.s.runGit(ctx, gitproc.Cmd{
-		Dir: b.sc.Dir, Alternate: b.sc.Alternate,
-		Args:   []string{"merge-tree", "--write-tree", "-z", "--merge-base=" + base, ours, theirs},
-		Stdout: recs, Class: gitproc.ClassRead, Deadline: left, Answers: []int{1},
-	})
+	// EACH ARGUMENT LIST SPELLED IN THE Cmd THAT RUNS IT, as commitOf's.
+	var res gitproc.Result
+	if base == "" {
+		res, err = b.wr.s.runGit(ctx, gitproc.Cmd{
+			Dir: b.sc.Dir, Alternate: b.sc.Alternate,
+			Args:   []string{"merge-tree", "--write-tree", "-z", "--allow-unrelated-histories", ours, theirs},
+			Stdout: recs, Class: gitproc.ClassRead, Deadline: left, Answers: []int{1},
+		})
+	} else {
+		res, err = b.wr.s.runGit(ctx, gitproc.Cmd{
+			Dir: b.sc.Dir, Alternate: b.sc.Alternate,
+			Args:   []string{"merge-tree", "--write-tree", "-z", "--merge-base=" + base, ours, theirs},
+			Stdout: recs, Class: gitproc.ClassRead, Deadline: left, Answers: []int{1},
+		})
+	}
 	if err == nil {
 		err = recs.close()
 	}
@@ -1386,12 +1465,13 @@ func cmpOr(a, b string) string {
 // conflicted is a merge's conflicts as the write answers them: as many as fit
 // code.MaxGitAnswerBytes encoded, each with the start of its file as
 // merge-tree wrote it — read in ONE `cat-file --batch -Z` of the scratch,
-// which alone holds that tree — and the rest counted. Nothing is stored.
-func (b *building) conflicted(ctx context.Context, m *mergeOutput) (code.EngineWriteResult, error) {
+// which alone holds that tree — and the rest counted, detail the refusal's
+// sentence. Nothing is stored.
+func (b *building) conflicted(ctx context.Context, m *mergeOutput, detail string) (code.EngineWriteResult,
+	error) {
+
 	wr := b.wr
-	res := code.EngineWriteResult{Refusal: code.WriteConflict, PushID: wr.pushID, Detail: fmt.Sprintf("%s does not "+
-		"apply cleanly on %s: %d paths conflict; resolve them in a coding box (run_sandbox), or write the "+
-		"result yourself", shortID(wr.w.Commit), shortID(wr.w.ExpectedHead), len(m.conflicts)+m.omitted)}
+	res := code.EngineWriteResult{Refusal: code.WriteConflict, PushID: wr.pushID, Detail: detail}
 	held := m.conflicts[:fitConflicts(res, m.conflicts, m.omitted)]
 	marked := make([]prefixWriter, len(held))
 	var (

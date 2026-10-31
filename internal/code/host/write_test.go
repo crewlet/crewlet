@@ -662,8 +662,16 @@ func TestAWriteBuildIsOneReadsDeadline(t *testing.T) {
 			code.WriteBuildDeadline, gitproc.ReadDeadline)
 	}
 	c := newWriteCase(t, codetest.SoloOptions{}, map[string]string{"README.md": "one\n"})
-	if got := host.BuildBudget(c.server()); got != code.WriteBuildDeadline {
-		t.Errorf("a host gives a build %v, want code.WriteBuildDeadline", got)
+	for _, kind := range code.EngineWriteKinds() {
+		want := code.WriteBuildDeadline
+		if kind == code.WriteMergeChange {
+			// A MERGE'S IS THE MERGEABILITY'S: three reads' git.
+			want = 3 * gitproc.ReadDeadline
+		}
+		if got := host.BuildBudget(c.server(), kind); got != want || kind.BuildDeadline() != want {
+			t.Errorf("a host gives a %s's build %v (its kind says %v), want %v", kind, got, kind.BuildDeadline(),
+				want)
+		}
 	}
 	host.SetBuildBudget(c.server(), time.Nanosecond)
 	res, err := c.write(files(c.repo, alice(), "refs/heads/seats/alice/slow", "", c.head, text("s.md", "s\n")))

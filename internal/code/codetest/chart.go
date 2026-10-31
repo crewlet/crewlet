@@ -129,6 +129,13 @@ func (FixtureSigner) Sign(p code.Principal) (host.Signature, error) {
 		CommitterName: FixtureCommitterName, CommitterEmail: FixtureCommitterEmail}, nil
 }
 
+// Author names any seat handle as a commit's author the way Sign names an
+// acting one — a handle the fixture chart does not hold too, as the engine's
+// signer names a seat that left.
+func (FixtureSigner) Author(handle string) (string, string, error) {
+	return handle, FixtureAuthorEmail(handle), nil
+}
+
 // Committer is the address the fixture signer commits as — the one a coding
 // box's pack may hold no new commit of.
 func (FixtureSigner) Committer() (string, error) { return FixtureCommitterEmail, nil }

@@ -944,6 +944,26 @@ func (e *soloEstate) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswe
 	return e.data.Served().Read(ctx, q)
 }
 
+// Merge asks the committer to decide a merge record, a refusal about the node
+// itself answered as Propose answers one.
+func (e *soloEstate) Merge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error) {
+	res, err := e.data.Served().ProposeMerge(ctx, p)
+	if errors.Is(err, code.ErrNotServing) {
+		return res, &soloUnserved{err: err}
+	}
+	return res, err
+}
+
+// Queue asks the committer to decide an enqueue or a dequeue, a refusal about
+// the node itself answered as Propose answers one.
+func (e *soloEstate) Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error) {
+	res, err := e.data.Served().ProposeQueue(ctx, p)
+	if errors.Is(err, code.ErrNotServing) {
+		return res, &soloUnserved{err: err}
+	}
+	return res, err
+}
+
 // soloUnserved is the router's ErrUnserved for the one data node a solo
 // fleet has: a walk that ran nothing, in which nobody went silent.
 type soloUnserved struct{ err error }

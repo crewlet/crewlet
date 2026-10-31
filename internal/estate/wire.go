@@ -544,6 +544,24 @@ type op[A, R any] struct {
 	// home stamps a GIT operation's arguments with whether the node asked
 	// is its walk's effective home ([op.keyedOnGit]), nil for every other.
 	home func(A, bool) A
+
+	// attempt is a git write's attempt on one git node FOR ITS ARGUMENTS
+	// ([op.attemptBy]) — an engine write's, which follows its kind's build
+	// (Timing.GitWriteAttemptFor) — and nil for every operation whose
+	// attempt is its class's alone ([Router.wholeAttempt]).
+	attempt func(A, Timing) time.Duration
+}
+
+// attemptBy declares a git write whose attempt on one git node follows its
+// arguments: of becomes the walk's attempt in place of the class's
+// [Timing.GitWriteAttempt] — what it waits on each node, and how long a node's
+// silence must last to be evidence it is gone. Only a git write takes one.
+func (o op[A, R]) attemptBy(of func(A, Timing) time.Duration) op[A, R] {
+	if !o.spec.git || o.spec.class == opRead {
+		panic(fmt.Sprintf("estate: %s declares an attempt of its own, which only a git write takes", o.spec.name))
+	}
+	o.attempt = of
+	return o
 }
 
 // registry is every operation this build serves, keyed by name.

@@ -36,7 +36,13 @@ import (
 // of files, merges in seconds, and a node at its maintenance lane's share
 // still decides it. PROVISIONAL, as M4's spec marks it: what moves it is a
 // production merge whose p99 nears it.
-const MergeabilityDeadline = 3 * gitproc.ReadDeadline
+//
+// ONE NUMBER WITH AN ENGINE-BUILT MERGE'S (code.MergeBuildDeadline, three of
+// code.WriteBuildDeadline, which internal/code/host holds to
+// gitproc.ReadDeadline): a change's merge into its target is built by the
+// same merge-tree its mergeability is recorded by, so the two are given one
+// budget rather than two that drift apart.
+const MergeabilityDeadline = code.MergeBuildDeadline
 
 // MergeabilityRefresh is how long a change's merge stands before a moved
 // target — or an undecided merge — has its home merge it again: TEN MINUTES.

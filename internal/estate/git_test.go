@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -1794,10 +1796,10 @@ func TestProductionsGitReadAttemptHoldsAGitReadsWaits(t *testing.T) {
 			"budgets with the reply's margin (17s)", got, waits)
 	}
 	r := newFleet(t).client
-	if got := r.wholeAttempt(opCodeGitRead.spec); got != Production().GitReadAttempt {
+	if got := r.wholeAttempt(opCodeGitRead.spec, exchange{}); got != Production().GitReadAttempt {
 		t.Errorf("a router gives a git read %v, want its git read attempt %v", got, Production().GitReadAttempt)
 	}
-	if got := r.wholeAttempt(opCodeRead.spec); got != Production().ReadAttempt {
+	if got := r.wholeAttempt(opCodeRead.spec, exchange{}); got != Production().ReadAttempt {
 		t.Errorf("a router gives a read of the rows %v, want its read attempt %v", got, Production().ReadAttempt)
 	}
 }
@@ -2053,11 +2055,11 @@ func TestProductionsGitWriteAttemptHoldsAWritesWaits(t *testing.T) {
 			"budgets with the reply's margin (82s)", got, waits)
 	}
 	r := newFleet(t).client
-	if got := r.wholeAttempt(opCodeGitWrite.spec); got != Production().GitWriteAttempt {
+	if got := r.wholeAttempt(opCodeGitWrite.spec, exchange{}); got != Production().GitWriteAttempt {
 		t.Errorf("a router gives an engine write %v, want its git write attempt %v", got,
 			Production().GitWriteAttempt)
 	}
-	if got := r.wholeAttempt(opCodeChange.spec); got != Production().WriteAttempt {
+	if got := r.wholeAttempt(opCodeChange.spec, exchange{}); got != Production().WriteAttempt {
 		t.Errorf("a router gives a write on a data node %v, want its write attempt %v", got,
 			Production().WriteAttempt)
 	}
@@ -2079,6 +2081,40 @@ func TestProductionsGitWriteAttemptHoldsAWritesWaits(t *testing.T) {
 		if err := build(attempt); err != nil {
 			t.Errorf("a router whose git write attempt is %v, over the %v a write's proposal needs, answered %v",
 				attempt, bound, err)
+		}
+	}
+}
+
+// AN ENGINE WRITE'S ATTEMPT FOLLOWS ITS KIND'S BUILD (M5-D11): the git write
+// attempt's build term — a push-landing write's ten seconds — is replaced by
+// the kind's own, so a merge_change, built under a mergeability's thirty
+// seconds, is given 102 s and every other kind its 82 s; and the walk reads it
+// off the write it carries, every attempt of it, the home's included.
+//
+// Mutation: give every write the class's attempt → the merge's 82 s, red.
+func TestAnEngineWritesAttemptFollowsItsKind(t *testing.T) {
+	t.Parallel()
+	prod := Production()
+	r := newFleet(t).client
+	for _, kind := range code.EngineWriteKinds() {
+		want := 82 * time.Second
+		if kind == code.WriteMergeChange {
+			want = 102 * time.Second
+		}
+		if got := prod.GitWriteAttemptFor(kind); got != want {
+			t.Errorf("production gives a %s %v, want %v: the git write attempt with its build term the kind's",
+				kind, got, want)
+		}
+		w := code.EngineWrite{Kind: kind, RepoID: uuid.Must(uuid.NewV7()).String()}
+		x, err := exchangesOf(opCodeGitWrite.spec, opCodeGitWrite, nil, w, nil, w.RepoID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := r.wholeAttempt(opCodeGitWrite.spec, x); got != want {
+			t.Errorf("a router gives a %s %v on one git node, want %v", kind, got, want)
+		}
+		if got := r.wholeAttempt(opCodeGitWrite.spec, *x.home); got != want {
+			t.Errorf("a router gives a %s %v on its walk's home, want %v", kind, got, want)
 		}
 	}
 }

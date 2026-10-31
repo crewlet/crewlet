@@ -27,7 +27,8 @@ import (
 // for its row and the adoption — in ONE function, land. It has two callers:
 // the relay, which reads git's commands off the hook and hands them over, and
 // an engine write (write.go), a push the engine builds itself rather than one
-// git received (ADR-0062). A second copy of these steps for the engine's
+// git received (ADR-0062) — a merge_change among them (merge.go), whose
+// proposal is its merge record (landing.Merge). A second copy of these steps for the engine's
 // pushes would be a second implementation of what a push is (ADR-0008), and
 // the first rule it got wrong would be one only it broke: Command.Forced,
 // which protected_force turns on, is formed here and nowhere else.
@@ -121,6 +122,18 @@ type landing struct {
 	// Progress is told each long step as it starts — the relay's keepalive
 	// names it — and nil is nobody listening.
 	Progress func(step string)
+	// Merge is a merge_change's record as its builder formed it (merge.go),
+	// its Pack left for the landing to fill with the bundle it stores, and
+	// nil for every push (M5-D11): a MERGE IS NO PUSH, so its one command —
+	// the target from the base the merge was built onto to its commit — is
+	// judged by the change's merge gate in the record's decide rather than
+	// by the force, stale and protection checks (step 2) or --atomic (step
+	// 4), and its proposal is the merge record's (step 10), answered from
+	// the change's row (step 11). Its status (1), its blobs (3), its size and
+	// its pack bound (5–7), its bundle's store (9, with no listing: a merge
+	// record names the commit it introduces itself) and its adoption (12)
+	// are the landing every push takes.
+	Merge *code.MergeProposal
 }
 
 // objects is what every walk of the landing's history is bounded by
@@ -142,6 +155,11 @@ type landed struct {
 	// Change is what the push's options asked of a change and what became
 	// of it, for the line its pusher reads (changeLine).
 	Change changeAsk
+	// Merge is what the repository's committer answered a merge's record
+	// (landing.Merge), or what its landing could not learn of it — nil for a
+	// push, and for a merge refused before its proposal, whose Commands say
+	// why.
+	Merge *code.MergeResult
 }
 
 // landingError is a landing that ended with no outcome its pusher can be told
@@ -233,39 +251,14 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 
 	// 2 FORCE AND STALE: one merge-base a branch update, with bounded
 	// parallelism; then the stateless rules, and the protections of what
-	// Forced can change (protectAfterForce).
-	var todo []int
-	for i, c := range cmds {
-		if c.Result == "" && c.Old != code.ZeroOID && c.New != code.ZeroOID &&
-			strings.HasPrefix(c.Ref, "refs/heads/") && code.StatelessRefusal(c) == "" {
-			todo = append(todo, i)
+	// Forced can change (protectAfterForce). NOT A MERGE'S: its one command
+	// is a merge of its base, never forced, and what may move its target is
+	// its gate's to say, in the record's decide (landing.Merge).
+	if l.Merge == nil {
+		if err := s.forceAndStale(ctx, &l, cmds, rules, refuse); err != nil {
+			return landed{}, unchecked(err)
 		}
 	}
-	forced, stale, err := s.forceChecks(ctx, l.Scratch, l.objects(), cmds, todo)
-	if err != nil {
-		return landed{}, unchecked(err)
-	}
-	for i := range cmds {
-		c := &cmds[i]
-		if c.Result != "" {
-			continue
-		}
-		if stale[i] {
-			refuse(i, code.RefusalStale, code.UnheldDetail(c.Old))
-			continue
-		}
-		c.Forced = forced[i]
-		if r := code.StatelessRefusal(*c); r != "" {
-			refuse(i, r, "")
-			continue
-		}
-		if c.Forced && l.ForcedGrant != nil {
-			if r, words := l.ForcedGrant(*c); r != "" {
-				refuse(i, r, words)
-			}
-		}
-	}
-	protectAfterForce(cmds, rules, l.Principal.Kind, l.Judged)
 
 	// 3 BLOBS, over the push's own pack — of a push with anything left to
 	// decide. One refused whole by now (a force-push of a protected branch,
@@ -386,7 +379,10 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	// the ref it named (withRefs).
 	var news []string
 	for _, c := range cmds {
-		if c.Result == "" && c.New != code.ZeroOID {
+		// A MERGE LISTS NOTHING: its record names the one commit it
+		// introduces itself — none for a fast-forward, whose head the
+		// change's own pushes brought.
+		if l.Merge == nil && c.Result == "" && c.New != code.ZeroOID {
 			news = append(news, c.New)
 		}
 	}
@@ -404,6 +400,9 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref,
 		func(introduced []string, count int, unstored *code.PackRef) error {
+			if l.Merge != nil {
+				return mergeCarrying(*l.Merge, unstored).ValidateUnstored()
+			}
 			return s.checkProposal(proposal(introduced, count, unstored))
 		})
 	var (
@@ -453,15 +452,31 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 
 	// 10 THE PROPOSAL, to the repository's committer, under the caller's
 	// context: cancellation and no deadline of its own — each data node gets
-	// the router's write attempt.
+	// the router's write attempt. A MERGE'S is its record's, to the same
+	// committer (landing.Merge).
 	l.Progress("committing the push")
-	res, perr := s.o.Estate.Propose(ctx, proposal(introduced, count, ref))
+	var (
+		res    code.ProposeResult
+		merged code.MergeResult
+		perr   error
+	)
+	if l.Merge != nil {
+		merged, perr = s.o.Estate.Merge(ctx, mergeCarrying(*l.Merge, ref))
+	} else {
+		res, perr = s.o.Estate.Propose(ctx, proposal(introduced, count, ref))
+	}
 	if err := s.fault(ctx, codefault.HostAfterPropose, 0); err != nil {
 		return landed{}, unchecked(err)
 	}
 
-	// 11 THE OUTCOME, from the push's own row.
-	v := s.decided(ctx, &l, proposed, change != nil, res, perr)
+	// 11 THE OUTCOME, from the push's own row — a merge's from its change's,
+	// as its committer answered it.
+	var v verdict
+	if l.Merge != nil {
+		v, merged = s.mergeDecided(ctx, &l, proposed, merged, perr)
+	} else {
+		v = s.decided(ctx, &l, proposed, change != nil, res, perr)
+	}
 	result.outcome, result.refusal, result.position = v.outcome, v.refusal, v.position
 	for _, c := range v.commands {
 		if c.Result == code.ResultOK {
@@ -472,6 +487,9 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		ask.answer = v.change
 	}
 	out := done(landed{Commands: withRefs(v.commands, named), Result: result})
+	if l.Merge != nil {
+		out.Merge = &merged
+	}
 
 	// 12 THE ADOPTION, once the row has applied: a pack linked in before
 	// it would be an object no row names (cache.Cache.Adopt).
@@ -487,6 +505,49 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		}
 	}
 	return out, nil
+}
+
+// forceAndStale is land's step 2 for a push: one merge-base a branch update,
+// with bounded parallelism (forceChecks); then, command by command, a stale
+// update refused, Forced set, the stateless rules and the builder's grant on a
+// command found forced (ForcedGrant); then the protections of what Forced can
+// change (protectAfterForce) — each refusal made in place through refuse.
+func (s *Server) forceAndStale(ctx context.Context, l *landing, cmds []code.Command, rules code.Protections,
+	refuse func(int, code.Refusal, string)) error {
+
+	var todo []int
+	for i, c := range cmds {
+		if c.Result == "" && c.Old != code.ZeroOID && c.New != code.ZeroOID &&
+			strings.HasPrefix(c.Ref, "refs/heads/") && code.StatelessRefusal(c) == "" {
+			todo = append(todo, i)
+		}
+	}
+	forced, stale, err := s.forceChecks(ctx, l.Scratch, l.objects(), cmds, todo)
+	if err != nil {
+		return err
+	}
+	for i := range cmds {
+		c := &cmds[i]
+		if c.Result != "" {
+			continue
+		}
+		if stale[i] {
+			refuse(i, code.RefusalStale, code.UnheldDetail(c.Old))
+			continue
+		}
+		c.Forced = forced[i]
+		if r := code.StatelessRefusal(*c); r != "" {
+			refuse(i, r, "")
+			continue
+		}
+		if c.Forced && l.ForcedGrant != nil {
+			if r, words := l.ForcedGrant(*c); r != "" {
+				refuse(i, r, words)
+			}
+		}
+	}
+	protectAfterForce(cmds, rules, l.Principal.Kind, l.Judged)
+	return nil
 }
 
 // judgedKey is one command as a push's builder judged its protection — the

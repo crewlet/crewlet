@@ -270,13 +270,15 @@ func WritesInFlight(s *Server) int {
 	return len(s.writes)
 }
 
-// BuildBudget is the git run time s gives an engine write's build
-// (code.WriteBuildDeadline in production).
-func BuildBudget(s *Server) time.Duration { return s.buildBudget }
+// BuildBudget is the git run time s gives the build of an engine write of kind
+// (its code.EngineWriteKind.BuildDeadline in production).
+func BuildBudget(s *Server, kind code.EngineWriteKind) time.Duration { return s.buildBudget(kind) }
 
-// SetBuildBudget scales the git run time s gives an engine write's build.
-// Set before s's first write.
-func SetBuildBudget(s *Server, d time.Duration) { s.buildBudget = d }
+// SetBuildBudget scales the git run time s gives every engine write's build,
+// whatever its kind. Set before s's first write.
+func SetBuildBudget(s *Server, d time.Duration) {
+	s.buildBudget = func(code.EngineWriteKind) time.Duration { return d }
+}
 
 // CommitDates is commitDates: an engine-built commit's author and committer
 // dates for an operation minted at instant over a parent committed at parent.

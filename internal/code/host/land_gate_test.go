@@ -15,16 +15,17 @@ import (
 )
 
 // TestEveryPushTakesTheOneLanding fails the build when the host reaches the
-// three steps that make a push — its proposal, its bundle's upload and its
-// pack's adoption — anywhere but through the one landing (land.go).
+// steps that make a push — its proposal, its bundle's upload and its pack's
+// adoption — or a MERGE'S PROPOSAL (Estate.Merge: a merge_change lands through
+// the same landing, M5-D11) anywhere but through the one landing (land.go).
 //
 // A push's facts are formed by its landing: Command.Forced only by its force
 // check, which protected_force turns on; the blob scan, --atomic, the size,
-// the seal, the wait for an applied row. A second path to Estate.Propose, to
-// the bundle's store (code.StoreBundle) or to Cache.Adopt is a second
-// implementation of what a push is (ADR-0008) — the first engine-built write
-// that proposed by itself would skip whichever check its author forgot, and
-// pass every test written for it. So each of the three is SELECTED EXACTLY
+// the seal, the wait for an applied row. A second path to Estate.Propose or
+// Estate.Merge, to the bundle's store (code.StoreBundle) or to Cache.Adopt is
+// a second implementation of what a push is (ADR-0008) — the first
+// engine-built write that proposed by itself would skip whichever check its
+// author forgot, and pass every test written for it. So each door is SELECTED EXACTLY
 // ONCE in the package's non-test files, and that selection is written in land
 // or in a function only land reaches: a function every reference to which — a
 // call, a method value, a closure handed on — is written in land or in
@@ -44,7 +45,7 @@ import (
 // code.StoreBundle, the step's one implementation, which makes the Put and
 // seals what it stores — a reference to it, a call or a function value, is a
 // selection of the store as much as a Put the host made itself, which would be
-// the same step with no seal. A selector of one of the three method names the
+// the same step with no seal. A selector of one of the four method names the
 // walk cannot type is reported rather than passed, and so is a reference it
 // cannot place to a method this package declares: a gate asserting where
 // something is NOT that skipped what it could not read would certify nothing
@@ -98,11 +99,16 @@ func (d landingDoor) String() string {
 	return d.owner.Name + "." + d.method
 }
 
-// doorsOf are the three doors under module.
+// doorsOf are the four doors under module.
 func doorsOf(module string) []landingDoor {
 	host, domain, cache := module+"/"+hostDir, module+"/internal/code", module+"/internal/code/cache"
 	return []landingDoor{
 		{owner: decltype.TypeName{Package: host, Name: "Estate"}, method: "Propose"},
+		// A MERGE'S PROPOSAL (M5-D11): a merge_change lands through the
+		// same landing — its blobs scanned, its size and pack bound held,
+		// its bundle stored and its pack adopted as a push's — so its record
+		// is a door only land takes, as a push's proposal is.
+		{owner: decltype.TypeName{Package: host, Name: "Estate"}, method: "Merge"},
 		{owner: decltype.TypeName{Package: domain, Name: "Putter"}, method: "Put", fn: "StoreBundle"},
 		{owner: decltype.TypeName{Package: cache, Name: "Cache"}, method: "Adopt"},
 	}

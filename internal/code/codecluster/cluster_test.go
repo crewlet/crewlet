@@ -475,6 +475,14 @@ func (e memberEstate) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnsw
 	return e.m.read(ctx, q)
 }
 
+func (e memberEstate) Merge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error) {
+	return e.m.router.Load().Code().Merge(ctx, p)
+}
+
+func (e memberEstate) Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error) {
+	return e.m.router.Load().Code().Queue(ctx, p)
+}
+
 // memberCopy is the member's own copy of the estate as its router and its
 // serving half ask it: the code half its data node serves (code.Served, the
 // adapter the engine hands the router), its applier's wait, whether the copy

@@ -90,6 +90,16 @@
 // so a retry, on this node or another, is the same push and the same commit,
 // and a second ask of one push id on this node joins the first.
 //
+// A CHANGE'S MERGE is the same pipeline's (merge.go, M5-D11): its change read
+// at the caller's floor, judged and built onto the target's tip under its
+// kind's budget (code.MergeBuildDeadline), its merge commit authored by who
+// merged and its squash by the change's owner with each other author a
+// `Co-authored-by:` trailer (U43 a) — but LANDED AS A MERGE RECORD, the one
+// landing proposing it (landing.Merge) where a push's proposal goes, and
+// built again onto a target that moved under it at most code.MergeRecomputes
+// times. A target whose merges land through its queue takes an enqueue
+// instead, built by nothing here.
+//
 // # A push's walks go by generation, and are bounded by the history
 //
 // A push walks its repository's history up to four times: the force check's

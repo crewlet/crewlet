@@ -68,16 +68,46 @@ func (s codeSigner) Sign(p code.Principal) (host.Signature, error) {
 		return host.Signature{}, fmt.Errorf("%w: the chart this node serves holds no seat %q to sign the "+
 			"commit as", code.ErrNotServing, p.Seat)
 	}
-	name := role.Name
-	if gitproc.IdentityRefusal(name) != "" {
-		name = p.Seat
-	}
-	email := role.Email
-	if !identityEmail(email) {
-		email = p.Seat + "@" + domain
-	}
+	name, email := authorOf(p.Seat, role.Name, role.Email, domain)
 	return host.Signature{AuthorName: name, AuthorEmail: email, CommitterName: codeCommitterName,
 		CommitterEmail: engineCommitter(domain)}, nil
+}
+
+// Author is how a commit names seat handle as its author where the engine did
+// not act as it — a squash's owner, its other authors' trailers (U43 a): as
+// Sign names an acting seat, from the CURRENT epoch's chart, and for a seat
+// that chart no longer holds, by its handle at the identity domain — a seat
+// that left still wrote what it wrote, and refusing its name would leave a
+// change it opened unmergeable by squash. A node with no epoch names nobody:
+// code.ErrNotServing.
+func (s codeSigner) Author(handle string) (string, string, error) {
+	c := s.e.Company()
+	if c == nil || c.Org == nil || c.Config == nil {
+		return "", "", fmt.Errorf("%w: this node holds no configuration to name a commit's author by",
+			code.ErrNotServing)
+	}
+	domain := codeInForceAt(c).IdentityDomainResolved()
+	if role := c.Org.SeatByHandle(handle); role != nil {
+		name, email := authorOf(handle, role.Name, role.Email, domain)
+		return name, email, nil
+	}
+	name, email := authorOf(handle, "", "", domain)
+	return name, email, nil
+}
+
+// authorOf is the name and address a commit names seat handle by: its role's
+// name where git writes it as given, else the handle; its role's address
+// where it is one, else `<handle>@<domain>`.
+func authorOf(handle, roleName, roleEmail, domain string) (string, string) {
+	name := roleName
+	if name == "" || gitproc.IdentityRefusal(name) != "" {
+		name = handle
+	}
+	email := roleEmail
+	if !identityEmail(email) {
+		email = handle + "@" + domain
+	}
+	return name, email
 }
 
 // Committer is the address Sign names every commit's committer by, off the

@@ -47,8 +47,7 @@ import (
 const Source = "code"
 
 // EngineWriteKind is what an engine write builds: a closed set
-// ([EngineWriteKinds]). M5's rebase and merge are further kinds of the same
-// write.
+// ([EngineWriteKinds]).
 type EngineWriteKind string
 
 const (
@@ -70,12 +69,22 @@ const (
 	// finding is shown by ([Reanchor]), and the file's lines put in their
 	// place — all of them or none.
 	WriteApplySuggestions EngineWriteKind = "apply_suggestions"
+	// WriteMergeChange merges a change ([EngineWrite.Change]) into its
+	// target ([EngineWrite.Ref]) by its method ([EngineWrite.Method]), at the
+	// head its caller read ([EngineWrite.ExpectedHead]): built on the
+	// repository's git node onto the target's tip and landed as ONE MERGE
+	// RECORD its gate decides ([MergeProposal], ADR-0066) — or, on a target
+	// whose merges land through its queue, enqueued there ([QueueProposal]).
+	// Never a push: a merge moves its target, merges its change and may
+	// delete its source in one record, and an engine-built push carries one
+	// command (M5-D10).
+	WriteMergeChange EngineWriteKind = "merge_change"
 )
 
 // EngineWriteKinds is the closed set, in the order a reader is told them.
 func EngineWriteKinds() []EngineWriteKind {
 	return []EngineWriteKind{WriteCommitFiles, WriteRevert, WriteCherryPick, WriteCreateBranch, WriteDeleteBranch,
-		WriteApplySuggestions}
+		WriteApplySuggestions, WriteMergeChange}
 }
 
 // Valid reports a kind this build knows.
@@ -83,9 +92,25 @@ func (k EngineWriteKind) Valid() bool { return slices.Contains(EngineWriteKinds(
 
 // Commits reports whether the kind makes a commit — and so a pack, a
 // signature and a build — rather than only move a ref to a commit the
-// repository holds.
+// repository holds — and lands it as ONE PUSH. A merge_change is a pipeline
+// of its own, whose commit is its method's and whose signature U43's
+// (internal/code/host's merge.go).
 func (k EngineWriteKind) Commits() bool {
 	return k == WriteCommitFiles || k == WriteRevert || k == WriteCherryPick || k == WriteApplySuggestions
+}
+
+// BuildDeadline is the git run time a write of the kind is given for its
+// whole build, every process of it together: [MergeBuildDeadline] for a
+// merge_change, whose one merge-tree is the one a change's mergeability is
+// measured by, and [WriteBuildDeadline] for every kind that lands as one
+// push. The estate's attempt on a git node follows it
+// (internal/estate's Timing.GitWriteAttemptFor), so a kind given a longer
+// build is given the time to run it and nothing more.
+func (k EngineWriteKind) BuildDeadline() time.Duration {
+	if k == WriteMergeChange {
+		return MergeBuildDeadline
+	}
+	return WriteBuildDeadline
 }
 
 // FileOpKind is what one operation of a commit_files does to one path: a
@@ -182,6 +207,29 @@ type EngineWrite struct {
 	// the domain has run without it, none of the domain being on main — so
 	// every git node asked it reads it.
 	Ceiling *WriteCeiling `json:"ceiling,omitempty"`
+	// Change is a merge_change's change, by its number on the repository —
+	// web!42's 42, the name every change tool and the `change` read give it —
+	// whose row the git node reads at the caller's floor for its source, its
+	// title and its authors. Its Ref is the change's target and its
+	// ExpectedHead the change's head, each as its caller read them.
+	Change int64 `json:"change,omitempty"`
+	// Method is a merge_change's [MergeMethod]: a merge commit, one squashed
+	// commit, or a fast-forward.
+	Method MergeMethod `json:"method,omitempty"`
+	// DeleteSource is whether a merge_change deletes the change's source
+	// branch as it merges, as its caller resolved it (Q4: a seat's branch, by
+	// its rule's delete_source).
+	DeleteSource bool `json:"delete_source,omitempty"`
+	// Override is a PERSON'S reason for merging past the target's merge gate,
+	// at most [MaxOverrideReasonBytes] — merged directly, on a queue target
+	// too — and "" for a merge its gate holds.
+	Override string `json:"override,omitempty"`
+	// CloseTask and AutoRevert are what a merge_change onto a QUEUE TARGET
+	// records on its entry ([Enqueue]): whether its landing closes its work
+	// item, and the enqueuer's consent to a revert of a landing of it that
+	// breaks the target.
+	CloseTask  bool `json:"close_task,omitempty"`
+	AutoRevert bool `json:"auto_revert,omitempty"`
 	// Home is whether this attempt was asked of the walk's EFFECTIVE HOME —
 	// stamped by the router's keyed git walk on every attempt
 	// ([GitQuery.Home]'s rule), never by a caller — the one node that may
@@ -259,6 +307,37 @@ type EngineWriteResult struct {
 	// Nothing is stored for a write that conflicts.
 	Conflicts        []Conflict `json:"conflicts,omitempty"`
 	ConflictsOmitted int        `json:"conflicts_omitted,omitempty"`
+	// Merge is a merge_change's own answer beside the write's fields — nil
+	// for every other kind. Outcome, Commit (the commit the target moved to),
+	// PushID (the merge's) and Position are the merge record's, or the
+	// enqueue's where its target's queue took the change; a refusal of the
+	// change's build (a conflict, not_fast_forward, too_large) is Refusal's,
+	// as any write's is.
+	Merge *MergeAnswer `json:"merge,omitempty"`
+}
+
+// MergeAnswer is what a merge_change came to beside an engine write's own
+// answer.
+type MergeAnswer struct {
+	// Queued is a change its target's queue took rather than merged — a
+	// target whose merge gate requires a check (M5-D9) — with EntryID its
+	// entry and Place its place in the queue, from 1, once the enqueue
+	// applied.
+	Queued  bool   `json:"queued,omitempty"`
+	EntryID string `json:"entry_id,omitempty"`
+	Place   int    `json:"place,omitempty"`
+	// Refusal is why nothing merged or was enqueued — the committer's
+	// decide's, or the git node's own before it built anything, judged at
+	// the log's head — with Detail its sentence and Unmet every precondition
+	// of the change's merge gate a gate_unmet did not meet, each naming whom
+	// it waits on.
+	Refusal MergeRefusal   `json:"refusal,omitempty"`
+	Detail  string         `json:"detail,omitempty"`
+	Unmet   []Precondition `json:"unmet,omitempty"`
+	// Recomputes is how many times the merge was built again onto a target
+	// that moved under it before its record was decided, at most
+	// [MergeRecomputes].
+	Recomputes int `json:"recomputes,omitempty"`
 }
 
 // Conflict is one path a three-way merge could not resolve.
@@ -329,13 +408,17 @@ const (
 	// lines, placed in the head's file, overlap — every finding in an
 	// overlap named, beside one it overlaps: nothing is applied.
 	WriteSuggestionOverlap WriteRefusal = "suggestion_overlap"
+	// WriteNotFastForward is a fast_forward merge_change of a change whose
+	// head does not hold its target's tip: the target cannot move to it
+	// without dropping what it holds — merged or squashed, it can.
+	WriteNotFastForward WriteRefusal = "not_fast_forward"
 )
 
 // WriteRefusals is the closed set.
 func WriteRefusals() []WriteRefusal {
 	return []WriteRefusal{WriteConflict, WriteNothingChanged, WriteEditNotFound, WriteEditAmbiguous,
 		WriteEditBinary, WriteEditLineEndings, WritePathConflict, WriteNotFound, WriteNotAFile, WriteMergeCommit,
-		WriteTooLarge, WriteRejectedObject, WriteSuggestionOutdated, WriteSuggestionOverlap}
+		WriteTooLarge, WriteRejectedObject, WriteSuggestionOutdated, WriteSuggestionOverlap, WriteNotFastForward}
 }
 
 // Valid reports a refusal this build knows.
@@ -400,6 +483,27 @@ const (
 	// imports no git process wrapper, so internal/code/host's
 	// TestAWriteBuildIsOneReadsDeadline holds the equality.
 	WriteBuildDeadline = 10 * time.Second
+
+	// MergeBuildDeadline is a merge_change's whole build — its ancestry, its
+	// one `merge-tree --write-tree`, its commit and its pack: THIRTY
+	// SECONDS, three of a write's own (code/home's MergeabilityDeadline is
+	// this constant), since the one merge-tree a merge runs is the one a
+	// change's mergeability is recorded by, merging the same two commits —
+	// the merge base found, both sides diffed against it, their changes
+	// merged — and BenchmarkMergeability measures it (code/home's doc: 125 ms
+	// for 1 000 files changed both ways, some 240 times inside). PROVISIONAL
+	// as that deadline is: what moves it is a production merge whose p99
+	// nears it. A merge past it is too_large, a change to merge in a coding
+	// box.
+	MergeBuildDeadline = 3 * WriteBuildDeadline
+
+	// MergeRecomputes is how many times a merge_change is built again onto a
+	// target that moved between its build and its decide (target_moved)
+	// before it is answered target_moving: FOUR, the design's (M5-D10). A
+	// branch moving under five consecutive builds is a branch moving faster
+	// than its merges are built — a queue's work (M5-D9), or a person's —
+	// and a fifth rebuild would only spend the attempt the write is given.
+	MergeRecomputes = 4
 
 	// MaxTreePathBytes is the longest path a write names: Linux's PATH_MAX,
 	// since a path no checkout can create is a tree no client can use.
@@ -693,6 +797,15 @@ func (w EngineWrite) validKind() error {
 	message := field{"message", w.Message != ""}
 	files := field{"files", len(w.Files) > 0}
 	suggestions := field{"suggestions", len(w.Suggestions) > 0}
+	merging := []field{{"change", w.Change != 0}, {"method", w.Method != ""},
+		{"delete_source", w.DeleteSource}, {"override", w.Override != ""}, {"close_task", w.CloseTask},
+		{"auto_revert", w.AutoRevert}}
+	if w.Kind == WriteMergeChange {
+		return w.validMerge(want(head), none(commit, files, base, message, suggestions))
+	}
+	if err := none(merging...); err != nil {
+		return err
+	}
 	switch w.Kind {
 	case WriteCommitFiles:
 		switch {
@@ -730,6 +843,36 @@ func (w EngineWrite) validKind() error {
 		return err
 	}
 	return none(commit, files, base, message, suggestions)
+}
+
+// validMerge holds a merge_change to its own fields, once the rules every kind
+// shares have passed (fields, the kind's wants and nones): its change by a
+// number from 1, a method this build knows, and a person's override reason
+// within [MaxOverrideReasonBytes] of valid text. A merge's message is the
+// engine's own — its change's reference and title — so it carries none, nor
+// files, a base or a commit; its Ref is its change's target and its
+// ExpectedHead its change's head. AutoRevert and CloseTask ride an enqueue,
+// and an override merges directly, so a consent beside an override is a
+// write asking two things.
+func (w EngineWrite) validMerge(fields ...error) error {
+	for _, err := range fields {
+		if err != nil {
+			return err
+		}
+	}
+	switch {
+	case w.Change < 1:
+		return fmt.Errorf("%w: change: %d is not a change's number, which counts from 1", ErrInvalid, w.Change)
+	case !w.Method.Valid():
+		return fmt.Errorf("%w: method: %q is not one of %v", ErrInvalid, w.Method, MergeMethods())
+	case w.Override != "" && w.AutoRevert:
+		return fmt.Errorf("%w: auto_revert: an override merges the change directly, and a consent to a revert "+
+			"rides its entry in its target's queue", ErrInvalid)
+	}
+	if why := textProblem(w.Override, MaxOverrideReasonBytes, "merge's override reason"); why != "" {
+		return fmt.Errorf("%w: override: %s", ErrInvalid, why)
+	}
+	return nil
 }
 
 // validFiles holds a commit_files' operations to their kinds and paths, and

@@ -5780,6 +5780,69 @@ retry the ledger collapsed. `crewlet.code.merge.outcomes` counts every merge a
 node's committer was asked to decide, by what became of it: `target_moved`
 climbing is a branch moving faster than its merges are built onto it.
 
+### How a merge is built
+
+A merge is an [engine write](#engine-built-commits) of kind `merge_change`,
+asked of the repository's [home git node](#the-home-git-node) like any: the
+change by its number, the head its caller read, the method, and — for a
+person — an override's reason, at most 1 KiB.
+
+1. **Judged before anything is built.** The node's copy is synced to the
+   caller's floor and the change read there, as its caller: a change that is
+   gone, closed or merged, a draft, into another branch or at another head is
+   refused with the record's own codes (`change_not_found`,
+   `change_not_open`, `change_draft`, `stale`, `head_moved`), and a seat's
+   override `not_person`. For a merge its gate holds, the change's
+   readiness — judged with its asker as the merger — must be met but for the
+   merge its build proves, or it is refused `gate_unmet`, naming every
+   precondition and whom it waits on. Every refusal is judged again at the
+   log's head before it is answered, and a change found merged is first
+   looked up as this merge's own: asked again, a merge that landed is
+   answered from its row, nothing built. So an unready merge costs a read,
+   never a build and an upload.
+2. **A queue target enqueues.** A target whose [merge gate](#the-merge-gate)
+   requires a check lands its merges through its [queue](#the-merge-queue):
+   the merge builds nothing, and the change is enqueued at the head its
+   caller read — the enqueue's decide its gate — answered with its entry and
+   its place. A person's override merges directly instead.
+3. **Built onto the tip the copy holds**, in a scratch beside the copy, under
+   one unit of the node's seat git-work share and **thirty seconds of git** —
+   the budget a change's [mergeability](#mergeability) is merged in, since it
+   is the same merge. A `fast_forward` builds nothing: the tip must be an
+   ancestor of the head, or it is refused `not_fast_forward`. A `merge` or a
+   `squash` runs one `git merge-tree --write-tree` of the tip and the head —
+   histories sharing no commit merge from the empty tree, as the
+   mergeability measures them — answering a `conflict` with its paths, or
+   `nothing_to_change` where the target holds the head already.
+4. **Its commit's author** (U43, answered (a)): a **merge commit** — the tip
+   and the head its two parents — is authored by **who merged**, the person
+   or the seat; a **squash** — one commit on the tip, titled with the
+   change's title and reference (`Retry the upload (web!42)`) and carrying
+   its description — by **the change's owner**, with a `Co-authored-by:`
+   trailer for each of its other authors in the order they first wrote it,
+   a seat that has since left the chart named by its handle at the identity
+   domain. The engine commits it, `Crewlet <engine@<code.identity_domain>>`,
+   its author date the instant the merge was asked and its committer date
+   that or its later parent's, so a merge asked again builds the same commit.
+5. **Landed as a merge record** through the one landing every push takes: its
+   blobs held to `code.limits.max_blob_bytes`, its pack to 4 MiB and the
+   repository's bounds, its bundle stored, the record proposed to the
+   repository's committer — whose decide is the authority on every
+   precondition above — and its pack taken into the node's cache once the
+   record applied.
+6. **Built again onto a target that moved.** A target that moved between the
+   build and the decide is refused `target_moved`, and the merge is built
+   again onto the tip a sync at the log's head finds — at most **four
+   times**; moved under the fifth build too, it is answered `target_moving`:
+   the branch moves faster than a merge is built onto it, and its queue, or a
+   quieter moment, lands it.
+
+A router gives a merge **102 seconds** on one git node — an engine write's 82
+with its ten seconds of build replaced by the merge's thirty — and every other
+write its 82. `crewlet.code.host.writes` counts it under `merge_change`, and
+`crewlet.code.host.write.duration`'s `build` stage times its builds, every
+rebuild included.
+
 **A protected branch so moves only by a merge record whose preconditions one
 snapshot proved**, or by a person's own push under `direct_push: persons` —
 that person's recorded override, their push row naming them. No seat's push
@@ -5810,6 +5873,7 @@ code](../guides/tools-and-mcp.md#the-companys-code)).
 | `create_branch` | A branch at a commit the repository holds. |
 | `delete_branch` | A branch, at the head its caller read. |
 | `apply_suggestions` | Up to 64 findings' [suggestions](#findings) put in place of the lines they are anchored to, on a change's source branch at the head its caller read, as one commit — all of them or none ([A review's suggestions applied](#a-reviews-suggestions-applied)). |
+| `merge_change` | A change merged into its target — a merge commit, one squashed commit or a fast-forward — at the head its caller read, landed as one **merge record** rather than a push; or, on a target whose merges land through its queue, enqueued ([How a merge is built](#how-a-merge-is-built)). |
 
 Every write that moves a branch names the head its caller read, so a write
 onto a branch that moved since is refused `stale` rather than land on a
@@ -5992,7 +6056,7 @@ repository's committer reaches is recorded as any push's is. A refusal of the
 
 | Refusal | Means |
 |---|---|
-| `conflict` | A revert or a cherry-pick does not apply cleanly. The answer names each conflicted path, git's word for the conflict (`CONFLICT (contents)`, `CONFLICT (modify/delete)`, …), the ids of its base, ours and theirs — each in the repository, readable whole by its id — and the first 2 KiB of the file with its markers; as many as fit the answer, the rest counted. |
+| `conflict` | A revert or a cherry-pick does not apply cleanly, or a merge does not merge cleanly. The answer names each conflicted path, git's word for the conflict (`CONFLICT (contents)`, `CONFLICT (modify/delete)`, …), the ids of its base, ours and theirs — each in the repository, readable whole by its id — and the first 2 KiB of the file with its markers; as many as fit the answer, the rest counted. |
 | `nothing_to_change` | The change leaves the tree as it is; no commit is made. |
 | `edit_not_found`, `edit_ambiguous` | An edit's text occurs nowhere in its file, or more than once (the sentence names the first two lines). |
 | `edit_binary` | An edit of a file git reads as binary: a NUL in its first 8 000 bytes. |
@@ -6001,7 +6065,8 @@ repository's committer reaches is recorded as any push's is. A refusal of the
 | `path_not_found` | An edit, a delete, a move or a mode of a path the tree does not hold. |
 | `not_a_file` | An edit or a mode of a directory, a link or a submodule. |
 | `merge_commit` | A revert or a cherry-pick of a merge, which needs a mainline: make it in a coding box. |
-| `too_large` | The write's pack is past 4 MiB, or its build ran its ten seconds of git. |
+| `not_fast_forward` | A `fast_forward` merge of a change whose head does not hold its target's tip: merge or squash it, or rebase it onto its target first. |
+| `too_large` | The write's pack is past 4 MiB, or its build ran its ten seconds of git — a merge's thirty. |
 | `rejected_object` | An object the build made fails `index-pack --strict`; the sentence is git's own first error, naming the object and the check. |
 | `suggestion_outdated` | A suggestion whose finding's lines changed since they were read — a hunk between the blob they were read in and the head's touched them — or whose file is gone or no regular file at the head, or holds fewer lines than it names; every such finding is named, and nothing is applied. |
 | `suggestion_overlap` | Suggestions whose lines, placed in the head's file, overlap; every finding in an overlap is named beside one it overlaps, and nothing is applied. |

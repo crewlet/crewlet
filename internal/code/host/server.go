@@ -31,8 +31,16 @@ type Estate interface {
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
 	// Read is a read of the code host's rows by its kind: a check's box's
 	// admission reads the attempt its token names (code.ReadCheckBox,
-	// checkadmit.go).
+	// checkadmit.go) — and a merge_change reads the change it merges and its
+	// target's merge gates (merge.go).
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	// Merge asks the repository's committer to decide a merge_change's
+	// record (code.Committer.ProposeMerge): a door only the one landing
+	// takes, as Propose is (TestEveryPushTakesTheOneLanding).
+	Merge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error)
+	// Queue asks it to decide an enqueue: a merge_change onto a target whose
+	// merges land through its queue builds nothing, and is enqueued instead.
+	Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
 }
 
 // Boxes is what admits a box (boxadmit.go): a coding run's tokens and the run
@@ -349,10 +357,11 @@ type Server struct {
 	writesMu sync.Mutex
 	writes   map[string]*inflightWrite
 	// syncWait bounds an engine write's wait on its sync and on its push's
-	// outcome (statelog.ReadBudget), and buildBudget is the git run time its
-	// build is given (code.WriteBuildDeadline) — fields so the suite can
-	// scale them (export_test.go).
-	syncWait, buildBudget time.Duration
+	// outcome (statelog.ReadBudget), and buildBudget the git run time a
+	// write of each kind is given for its build (code.EngineWriteKind's
+	// BuildDeadline) — fields so the suite can scale them (export_test.go).
+	syncWait    time.Duration
+	buildBudget func(code.EngineWriteKind) time.Duration
 
 	// runRequests is every coding run's requests in flight here, by its
 	// launch, under runsMu (boxlimit.go).
@@ -397,7 +406,7 @@ func New(o Options) (*Server, error) {
 	}
 	s := &Server{o: o, log: o.Logger, now: o.Now, requestMemory: RequestMemoryBytes,
 		checkProposal: code.Proposal.ValidateUnstored, runGit: o.Git.Run, syncWait: statelog.ReadBudget,
-		buildBudget: code.WriteBuildDeadline}
+		buildBudget: code.EngineWriteKind.BuildDeadline}
 	if s.log == nil {
 		s.log = logging.Get("code.host")
 	}
