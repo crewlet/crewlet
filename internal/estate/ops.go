@@ -230,6 +230,9 @@ type ChatReader interface {
 	Directory(ctx context.Context, viewer string,
 		fresh statelog.Freshness) (chatlet.Directory, error)
 
+	// The reader's own views ([ChatReaderViews], chatreader.go).
+	ChatReaderViews
+
 	// Readable is every room the viewer may READ, which is wider than the
 	// rooms it is in. It is no operation of its own: it is the
 	// authorization half of a search ([opChatSearch]), resolved on the node

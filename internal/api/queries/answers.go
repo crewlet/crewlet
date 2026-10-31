@@ -908,6 +908,16 @@ func Register(r *Registry, s Sources) {
 		// conversation is read forwards.
 		r.Register("chat_thread", Requires(iam.GrantChatlet), s.chatThread)
 		r.Register("chat_mentions", Requires(iam.GrantChatlet), s.chatMentions)
+		// THE READER'S OWN VIEWS, each across the rooms they may read and
+		// each read with their own record (chatreader.go): what waits for
+		// them, the threads they follow, what they saved and sent, a
+		// room's shared links, and one message read in place.
+		r.Register("chat_activity", Requires(iam.GrantChatlet), s.chatActivity)
+		r.Register("chat_threads", Requires(iam.GrantChatlet), s.chatThreads)
+		r.Register("chat_saved", Requires(iam.GrantChatlet), s.chatSaved)
+		r.Register("chat_sent", Requires(iam.GrantChatlet), s.chatSent)
+		r.Register("chat_links", Requires(iam.GrantChatlet), s.chatLinks)
+		r.Register("chat_message", Requires(iam.GrantChatlet), s.chatMessage)
 		// THE NAMES OF THE ROOMS A SEAT MAY READ, joined or not: how a
 		// reader tells a room written in prose from a colour or an
 		// issue's number spelled the same way.

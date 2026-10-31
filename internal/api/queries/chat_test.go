@@ -48,15 +48,18 @@ import (
 // different posture from its siblings.
 var chatQuestions = []string{
 	"chat_channels", "chat_channel", "chat_messages", "chat_thread",
-	"chat_mentions", "chat_search", "chat_room_names", "chat_rooms",
+	"chat_mentions", "chat_activity", "chat_threads", "chat_saved", "chat_sent",
+	"chat_links", "chat_message", "chat_search", "chat_room_names", "chat_rooms",
 }
 
-// chatAsked is a parameter set per question, so one table can ask all seven
+// chatAsked is a parameter set per question, so one table can ask them all
 // without a question being skipped for want of a room id.
 func chatAsked(what string) map[string]any {
 	switch what {
-	case "chat_channel", "chat_messages":
+	case "chat_channel", "chat_messages", "chat_links":
 		return map[string]any{"channel_id": cEng}
+	case "chat_message":
+		return map[string]any{"channel_id": cEng, "message_id": "m-1"}
 	case "chat_thread":
 		return map[string]any{"channel_id": cEng, "root_id": "m-1"}
 	case "chat_search":
@@ -116,6 +119,8 @@ type stubChat struct {
 	page     chatlet.TranscriptQuery
 	thread   chatlet.ThreadQuery
 	feed     chatlet.MentionQuery
+	activity chatlet.ActivityQuery
+	saved    chatlet.SavedQuery
 
 	// reads counts every call that reached this reader, so a case about a
 	// refusal can prove nothing was read rather than that nothing was

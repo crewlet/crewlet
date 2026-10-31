@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -124,7 +125,7 @@ func TestEachChatReadRouteAsksItsOwnQuestionWithItsPath(t *testing.T) {
 
 // quietChat is a chat reader that answers every read empty, for a case about
 // which questions exist rather than what they answer.
-type quietChat struct{}
+type quietChat struct{ noReaderViews }
 
 func (quietChat) Channels(context.Context, string, chatlet.ChannelsQuery,
 	statelog.Freshness) (chatlet.ChannelListing, error) {
@@ -216,4 +217,42 @@ func TestTheAppTellsTheChatHubItServesSocketsOnceBuilt(t *testing.T) {
 	if !built.ServesSockets() {
 		t.Error("the app mounted its socket over the hub and never said so")
 	}
+}
+
+
+// noReaderViews is a chat reader double's reader views when its suite reads
+// none of them: each is refused, so a case that reaches one by mistake fails
+// rather than reading an empty answer as a real one.
+type noReaderViews struct{}
+
+var errNoReaderViews = errors.New("this double answers no reader view")
+
+func (noReaderViews) Activity(context.Context, string, chatlet.ActivityQuery,
+	statelog.Freshness) (chatlet.Activity, error) {
+	return chatlet.Activity{}, errNoReaderViews
+}
+
+func (noReaderViews) Threads(context.Context, string, chatlet.ThreadsQuery,
+	statelog.Freshness) (chatlet.FollowedThreads, error) {
+	return chatlet.FollowedThreads{}, errNoReaderViews
+}
+
+func (noReaderViews) Saved(context.Context, string, chatlet.SavedQuery,
+	statelog.Freshness) (chatlet.SavedMessages, error) {
+	return chatlet.SavedMessages{}, errNoReaderViews
+}
+
+func (noReaderViews) Sent(context.Context, string, chatlet.SentQuery,
+	statelog.Freshness) (chatlet.SentMessages, error) {
+	return chatlet.SentMessages{}, errNoReaderViews
+}
+
+func (noReaderViews) Links(context.Context, string, chatlet.LinksQuery,
+	statelog.Freshness) (chatlet.SharedLinks, error) {
+	return chatlet.SharedLinks{}, errNoReaderViews
+}
+
+func (noReaderViews) Message(context.Context, string, chatlet.MessageQuery,
+	statelog.Freshness) (chatlet.OneMessage, error) {
+	return chatlet.OneMessage{}, errNoReaderViews
 }

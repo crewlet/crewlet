@@ -539,6 +539,63 @@ a do-not-disturb its person is in, so their own assistant sees what the
 dashboard's badges show; a read state that cannot be read is said rather than
 counted from zero, which would call every room unread.
 
+## What a reader keeps
+
+Beside how far they have read, a person keeps a few marks of their own in
+chat, and each is kept exactly where their read state is: in
+[coordination](coordination.md), under the seat they hold, so it passes to
+whoever holds the seat next and reaches every tab of theirs through the same
+push a read cursor does. None of it is on the chat log and none of it changes
+anything for anybody else.
+
+- **How a room reaches them.** Every message, mentions only (the default) or
+  muted. A person is never woken, so the level decides what their own screens
+  raise for the room and nothing else; it is not the membership's
+  `follow_all`, which is the wake policy for a seat and is the org chart's in a
+  unit's room.
+- **Starred rooms**, which their screens list first.
+- **Saved messages**, kept for later. A save names its room and its message,
+  and the message is shown only in that room and only while they may read it:
+  one taken back, erased, pruned by the room's horizon or in a room they have
+  left is listed as gone, and the save stays until they let it go.
+- **Threads followed or unfollowed by hand.** A thread they started, replied in
+  or were named in is followed without a mark. A mark decides either way: an
+  unfollow keeps a thread they spoke in quiet, and a follow takes in one they
+  never spoke in. Replying again does not undo an unfollow by itself; the
+  dashboard follows the thread again when they reply in it.
+- **A place per thread.** Reading a room does not open its threads, so a reply
+  is new to them while it is above both the room's place and the thread's own.
+- **Mark unread.** A place only moves forward, so two tabs flushing at once can
+  never move it back; setting a room's place back before a message is the one
+  deliberate exception, made exactly where it is asked.
+
+Each mark is named on its own, never as the whole list, so two tabs marking
+two things at once both land. A person may star 256 rooms, set 256 rooms to
+every message and save 256 messages; one more is refused rather than dropping
+an older one silently. Thread marks are bounded at 256 too, and past that the
+mark made longest ago goes, because every unfollow leaves one and a cap that
+refused would keep somebody in a thread they asked to leave. Every mark is
+written through `mark_chat_read`, as a read cursor is.
+
+From those marks and the conversation, each reader has views of their own,
+each over the rooms they may read and nothing else:
+
+- **Activity**: the moments they were named (or the whole of a room they are
+  in was), the replies in the threads they follow, and the reactions to their
+  messages, newest first. A mention or a reply is unread above their places
+  for it, the same measure the room's own badge counts, and each row carries
+  the position that marks it read. A reaction asks nothing of anybody and is
+  never unread.
+- **Threads**: the threads they follow, the one with the newest reply first,
+  each with its root and its newest replies.
+- **Saved** and **Sent**: what they kept for later, and what they said in
+  every room they may still read.
+- **Shared in a room**: every link the room's messages carried, newest first,
+  with who shared it and when.
+- **One message in place**: a message by its id, with its thread's root and
+  the replies just before it, which is how Activity and Saved open one where
+  it was said.
+
 ## Search
 
 Chatlet has its own keyword index, separate from Doclet's, and **no
@@ -644,7 +701,7 @@ is not in.
 | Archive a room, or open it again | the room's creator, the lead of the unit whose room it is or of a unit above it, or `admin` — as a person, never an agent |
 | Edit a message | its author, as a person — nobody else, an administrator included |
 | Take a message down | its author, as a person, or `admin` as a moderator — in any room, without reading it |
-| Mark what you read, mute a room, do-not-disturb | your own record only, as a person — kept under your seat |
+| Mark what you read, mute a room, set how it reaches you, star it, save a message, follow or unfollow a thread, do-not-disturb | your own record only, as a person, kept under your seat |
 | Set a room's horizon, erase messages, prune a room | `admin`, with a recent proof, and never a seat — a person, or an administrator's own credential acting as itself |
 
 ## What is not here

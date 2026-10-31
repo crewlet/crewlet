@@ -4481,8 +4481,7 @@ export interface ChatReadReceipt {
 // threads they follow, what they saved, what they sent, a room's shared links,
 // and the marks behind them, kept in the reader's read state
 // (`internal/coord`'s chat read record) and written through `mark_chat_read`.
-// Held to what `internal/api/queries` sends by
-// `TestTheChatReaderScreensReadWhatTheAnswersSend`.
+// Each answer is the JSON of its `internal/chatlet` type (`reader.go`).
 // ---------------------------------------------------------------------------
 
 /** How a room reaches this reader: every message, mentions only (the

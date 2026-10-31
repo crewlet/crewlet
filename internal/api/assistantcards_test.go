@@ -374,7 +374,10 @@ func (w filledWork) Search(context.Context, worklet.SearchQuery) (worklet.Search
 
 // filledChat is the company's own chat answering every read filled, and its
 // index as one still building while building is set.
-type filledChat struct{ building *atomic.Bool }
+type filledChat struct {
+	noReaderViews
+	building *atomic.Bool
+}
 
 func (filledChat) Channels(context.Context, string, chatlet.ChannelsQuery, statelog.Freshness) (
 	chatlet.ChannelListing, error) {

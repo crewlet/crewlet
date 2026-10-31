@@ -85,6 +85,9 @@ type ChatReader interface {
 		fresh statelog.Freshness) (chatlet.RoomNames, error)
 	Directory(ctx context.Context, viewer string,
 		fresh statelog.Freshness) (chatlet.Directory, error)
+
+	// The reader's own views (chatreader.go).
+	ChatReaderViews
 }
 
 // ChatSearcher is the keyword search over the company's chat, as this surface

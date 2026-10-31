@@ -126,6 +126,49 @@ func (d *chatDesk) Mentions(_ context.Context, viewer string, q chatlet.MentionQ
 	return chatlet.MentionFeed{Served: served, Handle: viewer, NextCursor: q.Cursor}, nil
 }
 
+func (d *chatDesk) Activity(_ context.Context, viewer string, q chatlet.ActivityQuery,
+	fresh statelog.Freshness) (chatlet.Activity, error) {
+	served := d.read("activity", viewer, fresh)
+	return chatlet.Activity{Served: served, NextCursor: q.Cursor,
+		ReadState: q.Marks.Known}, nil
+}
+
+func (d *chatDesk) Threads(_ context.Context, viewer string, q chatlet.ThreadsQuery,
+	fresh statelog.Freshness) (chatlet.FollowedThreads, error) {
+	served := d.read("threads", viewer, fresh)
+	return chatlet.FollowedThreads{Served: served, NextCursor: q.Cursor,
+		ReadState: len(q.Marks.Following) == 1}, nil
+}
+
+func (d *chatDesk) Saved(_ context.Context, viewer string, q chatlet.SavedQuery,
+	fresh statelog.Freshness) (chatlet.SavedMessages, error) {
+	served := d.read("saved", viewer, fresh)
+	out := chatlet.SavedMessages{Served: served, ReadState: true}
+	for _, m := range q.Saved {
+		out.Saved = append(out.Saved, chatlet.SavedEntry{Mark: m, Gone: true})
+	}
+	return out, nil
+}
+
+func (d *chatDesk) Sent(_ context.Context, viewer string, q chatlet.SentQuery,
+	fresh statelog.Freshness) (chatlet.SentMessages, error) {
+	served := d.read("sent", viewer, fresh)
+	return chatlet.SentMessages{Served: served, NextCursor: q.Cursor}, nil
+}
+
+func (d *chatDesk) Links(_ context.Context, viewer string, q chatlet.LinksQuery,
+	fresh statelog.Freshness) (chatlet.SharedLinks, error) {
+	served := d.read("links", viewer, fresh)
+	return chatlet.SharedLinks{Served: served, ChannelID: q.ChannelID}, nil
+}
+
+func (d *chatDesk) Message(_ context.Context, viewer string, q chatlet.MessageQuery,
+	fresh statelog.Freshness) (chatlet.OneMessage, error) {
+	served := d.read("message", viewer, fresh)
+	return chatlet.OneMessage{Served: served, View: chatlet.MessageView{
+		Message: chatlet.Message{ID: q.MessageID, ChannelID: q.ChannelID}}}, nil
+}
+
 func (d *chatDesk) RoomNames(_ context.Context, viewer string,
 	fresh statelog.Freshness) (chatlet.RoomNames, error) {
 	served := d.read("room_names", viewer, fresh)
@@ -356,6 +399,35 @@ func TestEveryChatReadIsAnsweredForItsViewerAtItsLevel(t *testing.T) {
 			out, err := c.RoomNames(ctx, "jane", linear)
 			return out.Served, out.Truncated && len(out.Rooms) == 1 &&
 				out.Rooms[0].Name == "general", err
+		}},
+		{"activity", func() (chatlet.Served, bool, error) {
+			out, err := c.Activity(ctx, "jane", chatlet.ActivityQuery{Cursor: "c5",
+				Marks: chatlet.ReaderMarks{Known: true}}, linear)
+			return out.Served, out.ReadState && out.NextCursor == "c5", err
+		}},
+		{"threads", func() (chatlet.Served, bool, error) {
+			out, err := c.Threads(ctx, "jane", chatlet.ThreadsQuery{Cursor: "c6",
+				Marks: chatlet.ReaderMarks{Known: true, Following: []chatlet.ThreadRef{
+					{ChannelID: "room-1", RootID: "m-1"}}}}, linear)
+			return out.Served, out.ReadState && out.NextCursor == "c6", err
+		}},
+		{"saved", func() (chatlet.Served, bool, error) {
+			out, err := c.Saved(ctx, "jane", chatlet.SavedQuery{Saved: []chatlet.SavedMark{
+				{ChannelID: "room-1", MessageID: "m-2"}}}, linear)
+			return out.Served, len(out.Saved) == 1 && out.Saved[0].Mark.MessageID == "m-2", err
+		}},
+		{"sent", func() (chatlet.Served, bool, error) {
+			out, err := c.Sent(ctx, "jane", chatlet.SentQuery{Cursor: "c7"}, linear)
+			return out.Served, out.NextCursor == "c7", err
+		}},
+		{"links", func() (chatlet.Served, bool, error) {
+			out, err := c.Links(ctx, "jane", chatlet.LinksQuery{ChannelID: "room-1"}, linear)
+			return out.Served, out.ChannelID == "room-1", err
+		}},
+		{"message", func() (chatlet.Served, bool, error) {
+			out, err := c.Message(ctx, "jane", chatlet.MessageQuery{ChannelID: "room-1",
+				MessageID: "m-3"}, linear)
+			return out.Served, out.View.Message.ID == "m-3", err
 		}},
 	} {
 		served, carried, err := tc.read()

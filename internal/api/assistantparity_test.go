@@ -480,7 +480,7 @@ func (noCodingRuns) Get(context.Context, string) (sandbox.PendingRun, bool, erro
 // reads the room, the person's own seat and the seats' names through its grant
 // before the read itself, and the walk holds each of those to the person's own
 // request as well. Any other room is one nobody holds.
-type parityChat struct{}
+type parityChat struct{ noReaderViews }
 
 // parityDirect is parityChat's one room, which has no name: who is in it is
 // all it is said by.

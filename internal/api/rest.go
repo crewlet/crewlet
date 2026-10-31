@@ -200,6 +200,19 @@ var namedRoutes = []struct {
 	// half is the `mark_chat_read` tool, which the dashboard calls through
 	// /operator/act like every other write.
 	{method: "GET", pattern: "/chatlet/mentions", what: "chat_mentions"},
+	// THE READER'S OWN VIEWS, each about the caller rather than a room
+	// (Activity, the threads they follow, what they saved and what they
+	// sent), and a room's shared links and one of its messages, which are
+	// under the room they read.
+	{method: "GET", pattern: "/chatlet/activity", what: "chat_activity"},
+	{method: "GET", pattern: "/chatlet/threads", what: "chat_threads"},
+	{method: "GET", pattern: "/chatlet/saved", what: "chat_saved"},
+	{method: "GET", pattern: "/chatlet/sent", what: "chat_sent"},
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/links", what: "chat_links",
+		path: map[string]string{"channel_id": "channel_id"}},
+	{method: "GET", pattern: "/chatlet/channels/{channel_id}/messages/{message_id}",
+		what: "chat_message",
+		path: map[string]string{"channel_id": "channel_id", "message_id": "message_id"}},
 	// RANKED, over every room the caller may read. Its own route beside
 	// the transcript for the reason the board's search is one beside the
 	// board: a transcript is a position in one room and keeps that room's

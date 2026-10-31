@@ -169,7 +169,7 @@ func (emptyFiles) Files(context.Context, worklet.FileQuery) (worklet.FileListing
 
 // emptyChat is the chat reader and its keyword index with nothing in them, on
 // emptyWork's terms: this sweep is about which NAMES exist.
-type emptyChat struct{}
+type emptyChat struct{ noReaderViews }
 
 func (emptyChat) Channels(context.Context, string, chatlet.ChannelsQuery,
 	statelog.Freshness) (chatlet.ChannelListing, error) {
