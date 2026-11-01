@@ -426,9 +426,11 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // target, or of every readable repository — with their trains, a target's
 // landings above its green and a repository's green rows, each held to the
 // grant on its repository; and the repositories holding a live entry, or one
-// repository's entries, which its home's queue works from (queue_due). A
-// seat's read on a node that holds no chart is that node's
-// code.ErrNotServing — it ran nothing — so the walk asks the next.
+// repository's entries, which its home's queue works from (queue_due); and
+// a repository's push mirror with the green rows it publishes, read in one
+// snapshot by the home that pushes it (mirror_push). A seat's read on a
+// node that holds no chart is that node's code.ErrNotServing — it ran
+// nothing — so the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
 // repositories it lists, and whether it reads one: code.JudgeRead) — and the
@@ -440,10 +442,12 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // `branch_changes` read, a repository's `expunge_tips`, the `compaction_due`,
 // `publication_due`, `expunge_due`, `imports_due`, `mirrors_due`, `indexed`,
 // `changes_due`, `checks_due`, `checks_queued`, `checks_running` and
-// `queue_due` listings, and a check's box's admission's `check_box` — so each
-// is answered there as a last resort: a check's box's admission among them,
-// which a node behind the company's configuration may therefore answer, since
-// the attempt's row it reads is the box's authority and no chart judges it.
+// `queue_due` listings, a check's box's admission's `check_box` and a push
+// mirror's `mirror_push` — so each is answered there as a last resort: a
+// check's box's admission among them, which a node behind the company's
+// configuration may therefore answer, since the attempt's row it reads is the
+// box's authority and no chart judges it. A push mirror's read is the home's,
+// which judges the seat it pushes as itself (code.MirrorSeatRefusal).
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {
