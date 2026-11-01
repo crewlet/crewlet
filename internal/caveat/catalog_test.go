@@ -73,6 +73,7 @@ var refusalSamples = map[string]caveat.Refusal{
 	"ArtifactBreaksPolicy": caveat.ArtifactBreaksPolicy(),
 	"ArtifactQuotaReached": caveat.ArtifactQuotaReached(),
 	"ArtifactTrashed":      caveat.ArtifactTrashed(),
+	"MembersChanged":       caveat.MembersChanged(),
 	"ModelAtLimit":         caveat.ModelAtLimit(),
 	"TokenBudgetSpent":     caveat.TokenBudgetSpent(caveat.CompanyTokenBudget()),
 	"TokenBudgetSpent (a seat's)": caveat.TokenBudgetSpent(

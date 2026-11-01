@@ -306,11 +306,14 @@ var domainErrors = map[string]map[string]classRow{
 		"ErrArchived":      {err: chatlet.ErrArchived, means: objectState},
 		"ErrReactionsFull": {err: chatlet.ErrReactionsFull, means: objectState},
 		"ErrConflict":      {err: chatlet.ErrConflict, means: lostRace},
-		"ErrForbidden":     {err: chatlet.ErrForbidden, means: notPermitted},
-		"ErrInvalid":       {err: chatlet.ErrInvalid, means: malformed},
-		"ErrNameTaken":     {err: chatlet.ErrNameTaken, means: taken},
-		"ErrNotFound":      {err: chatlet.ErrNotFound, means: absent},
-		"ErrRoomExists":    {err: chatlet.ErrRoomExists, means: taken},
+		// A MEMBERSHIP STATED AGAINST MEMBERS THAT HAVE SINCE MOVED: the
+		// caller reads them again, as a stale version is read again.
+		"ErrMembersChanged": {err: chatlet.ErrMembersChanged, means: staleRead},
+		"ErrForbidden":      {err: chatlet.ErrForbidden, means: notPermitted},
+		"ErrInvalid":        {err: chatlet.ErrInvalid, means: malformed},
+		"ErrNameTaken":      {err: chatlet.ErrNameTaken, means: taken},
+		"ErrNotFound":       {err: chatlet.ErrNotFound, means: absent},
+		"ErrRoomExists":     {err: chatlet.ErrRoomExists, means: taken},
 		// THIS NODE'S CONDITION, NOT A PERMISSION: the same call lands
 		// once the node is upgraded.
 		"ErrUnknownKind":  {err: chatlet.ErrUnknownKind, means: nodeCondition},

@@ -34,15 +34,30 @@ func TestAStarredRoomTheReaderMayReadIsInTheirRail(t *testing.T) {
 		t.Fatalf("create the private room: %v", err)
 	}
 	r.drain()
+	fresh := statelog.Freshness{Level: statelog.ReadStale}
+	stars := chatlet.ChannelsQuery{
+		Starred: []string{team.Channel.ID, private.Channel.ID, mine.Channel.ID, team.Channel.ID},
+	}
+
+	// WHILE HE MAY READ IT, the private room he starred is his and listed.
+	before, err := r.reader().Channels(t.Context(), "miles", stars, fresh)
+	if err != nil {
+		t.Fatalf("read miles's rail before he leaves: %v", err)
+	}
+	if !slices.ContainsFunc(before.Channels, func(c chatlet.ChannelSummary) bool {
+		return c.Channel.ID == private.Channel.ID && c.Member
+	}) {
+		t.Fatal("the private room miles is in and starred is not in his rail")
+	}
+
+	// TAKEN OUT OF IT, he may no longer read it, and the same star lists
+	// nothing: the rail asks the one visibility rule, not the star.
 	if _, err := r.store.Leave(t.Context(), person("miles"), private.Channel.ID); err != nil {
 		t.Fatalf("miles leaves the private room: %v", err)
 	}
 	r.drain()
 
-	fresh := statelog.Freshness{Level: statelog.ReadStale}
-	rail, err := r.reader().Channels(t.Context(), "miles", chatlet.ChannelsQuery{
-		Starred: []string{team.Channel.ID, private.Channel.ID, mine.Channel.ID, team.Channel.ID},
-	}, fresh)
+	rail, err := r.reader().Channels(t.Context(), "miles", stars, fresh)
 	if err != nil {
 		t.Fatalf("read miles's rail: %v", err)
 	}

@@ -124,6 +124,16 @@ func ArtifactTrashed() Refusal {
 		"then try again."}
 }
 
+// MembersChanged is a room's membership stated against members that changed
+// before the change landed: somebody added, removed or moved a member while
+// the person was looking, so the whole set they would have written is not
+// written over it.
+func MembersChanged() Refusal {
+	return Refusal{person: "The members of this room changed while you were " +
+		"looking, so nothing was changed. Check the members again, then make " +
+		"the change."}
+}
+
 // ValueInWrongForm is a change refused before it was made because the request
 // sent a value in a form it does not take (ADR-0059's misread). WHO READS IT is
 // mostly a person who approved an assistant's action, on the act route or the

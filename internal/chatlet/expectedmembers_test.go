@@ -48,9 +48,12 @@ func TestAMembershipStatedAgainstAReadIsRefusedWhenTheRoomMoved(t *testing.T) {
 	r.drain()
 
 	_, err = r.store.SetMembers(t.Context(), person("jane"), room, toggled, &read)
-	if !errors.Is(err, chatlet.ErrConflict) {
+	if !errors.Is(err, chatlet.ErrMembersChanged) {
 		t.Fatalf("a toggle built from a read kim has since left answered %v, want %v",
-			err, chatlet.ErrConflict)
+			err, chatlet.ErrMembersChanged)
+	}
+	if said := chatlet.Sentence(err); said != "the members of #deal-room changed after they were read" {
+		t.Errorf("the refusal says %q, want the room it names and nothing else", said)
 	}
 	r.drain()
 	if inRoom("kim") {
@@ -85,9 +88,9 @@ func TestAMembershipStatedAgainstAReadIsRefusedWhenTheRoomMoved(t *testing.T) {
 	stale := members("eng", "jane")
 	if _, err := r.store.SetMembers(t.Context(), person("jane"), room,
 		[]chatlet.Member{{Handle: "eng"}, {Handle: "jane"}, {Handle: "bob"}}, &stale); !errors.Is(err,
-		chatlet.ErrConflict) {
+		chatlet.ErrMembersChanged) {
 		t.Fatalf("a set built before eng's following changed answered %v, want %v",
-			err, chatlet.ErrConflict)
+			err, chatlet.ErrMembersChanged)
 	}
 
 	// NO EXPECTATION is the caller that states the whole set from its own

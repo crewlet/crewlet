@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -389,6 +390,10 @@ func chatClass(err error) (tools.Refusal, bool) {
 		return tools.RefusalForbidden, true
 	case errors.Is(err, chatlet.ErrNameTaken), errors.Is(err, chatlet.ErrRoomExists):
 		return tools.RefusalExists, true
+	case errors.Is(err, chatlet.ErrMembersChanged):
+		// A READ OUTGROWN, NOT A RACE LOST: the members moved after the
+		// caller read them, and reading them again is the cure.
+		return tools.RefusalStaleVersion, true
 	case errors.Is(err, chatlet.ErrConflict), errors.Is(err, chatlet.ErrArchived),
 		errors.Is(err, chatlet.ErrReactionsFull):
 		// A LOST RACE, AND THE STATE OF THE ROOM OR THE MESSAGE THE CALL IS
@@ -484,6 +489,14 @@ func chatWriteFailure(ctx context.Context, name string, err error, next string) 
 			name, chatlet.Sentence(err)))
 	case class == tools.RefusalExists:
 		return refusedBy(class, err, fmt.Sprintf("%s: %s.", name, chatlet.Sentence(err)))
+	case errors.Is(err, chatlet.ErrMembersChanged):
+		// NOT A RACE LOST BUT A READ OUTGROWN: the membership was stated
+		// against members the room no longer holds, so what to read again
+		// is the room's members, and a person is told it in their words.
+		return toPerson(refusedBy(class, err, fmt.Sprintf("%s was refused: %s, so "+
+			"nothing was written. Read the room's members again and state the "+
+			"change against what it holds now.", name, chatlet.Sentence(err))),
+			caveat.MembersChanged())
 	case class == tools.RefusalConflict:
 		// A LOST RACE, in words that say which read comes before a
 		// retry. A tool of another domain tells it in [statelog.LostRace]

@@ -1180,6 +1180,14 @@ func chatMembersPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
+		// THE MEMBERSHIP THE CARD WAS DRAWN FROM rides the write as its
+		// expectation, so the tool refuses it in the store's own snapshot if
+		// the room's members moved after this read: the approval's re-read of
+		// the room ([room.bound]) narrows that window and cannot close it.
+		if req.Body, err = withActArg(req.Body, "expected_members",
+			membersArgument(r.members)); err != nil {
+			return proposal.Preview{}, err
+		}
 		var c changes
 		c.fact("room", "Room", r.called())
 		for _, m := range next {

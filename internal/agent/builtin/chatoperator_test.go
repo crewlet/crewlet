@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -450,6 +451,38 @@ func TestTheMembershipACallerReadIsHandedOverAsItsExpectation(t *testing.T) {
 	}
 	if len(f.keys) != 0 {
 		t.Errorf("an expectation naming nobody reached the store: %d writes", len(f.keys))
+	}
+}
+
+// A MEMBERSHIP STATED AGAINST MEMBERS THAT CHANGED IS TOLD AS THAT.
+//
+// The store refuses a whole set whose expectation the room has moved past
+// (chatlet.ErrMembersChanged): a stale read, which the caller cures by reading
+// the members again. The conflict sentence ("the room kept changing under this
+// write") is not what happened, and a person approving or pressing the change
+// is owed their own words for it, so the tool says which read to make again
+// and carries the person's refusal.
+//
+// Mutation: drop the ErrMembersChanged case, and the generic sentence and no
+// person's words come back.
+func TestAMembershipStatedAgainstChangedMembersSaysSo(t *testing.T) {
+	t.Parallel()
+	f := newFakeChat()
+	f.writeErr = fmt.Errorf("%w: the members of #launch changed after they were read",
+		chatlet.ErrMembersChanged)
+	tool := operatorChat(t, f, nil, nil)[chatlet.SetChannelMembersTool]
+	got := invokeOperator(t, tool, map[string]any{"channel": chatRoomID,
+		"members": []any{"bob"}, "expected_members": []any{"bob", "ana"}})
+	if tools.RefusalOf(got) != tools.RefusalStaleVersion ||
+		!strings.Contains(got.Output, "the members of #launch changed after they were read") ||
+		!strings.Contains(got.Output, "Read the room's members again") ||
+		strings.Contains(got.Output, "kept changing") {
+		t.Errorf("a stale membership answered %+v, want a stale version naming the read to "+
+			"make again", got)
+	}
+	if got.PersonRefusal != caveat.MembersChanged() {
+		t.Errorf("the person is told %q, want the catalog's words for changed members",
+			got.PersonRefusal.Person())
 	}
 }
 

@@ -313,6 +313,14 @@ var (
 	// ErrConflict reports a write that lost its race too many times.
 	ErrConflict = errors.New("chatlet: the room kept changing under this write")
 
+	// ErrMembersChanged reports a membership stated against a read the room
+	// has since moved past ([Store.SetMembers]' expected members): a STALE
+	// READ, which a reader cures by reading the members again, and not a race
+	// this write lost, which [ErrConflict] reports. Told apart so a surface
+	// says which read to make again rather than "it kept changing", which is
+	// not what happened.
+	ErrMembersChanged = errors.New("chatlet: the room's members changed after they were read")
+
 	// ErrArchived reports a room that takes no new messages: a post or a
 	// reply. An edit, a delete and a reaction are still taken there — see
 	// the head of this file for why an archive closes nothing else.
@@ -1125,7 +1133,7 @@ func (a ChannelAuthority) archives(room Channel) error {
 // who never meant to grant it. expected is that read: the membership (each
 // handle and its following) the caller built the set from. When it is not
 // nil and the room, AS THIS SNAPSHOT HOLDS IT, holds anything else, the write
-// is refused with [ErrConflict], and the caller reads the room again.
+// is refused with [ErrMembersChanged], and the caller reads the room again.
 //
 // The room's revision cannot stand in for it: [ChannelRevision] moves with
 // every message said in the room, so a busy room would refuse every change
@@ -1165,8 +1173,8 @@ func (s *Store) SetMembers(ctx context.Context, actor Actor, channelID string,
 		}
 		if expected != nil && !slices.Equal(sortedMembers(members), held) &&
 			!slices.Equal(sortedMembers(*expected), held) {
-			return nil, fmt.Errorf("%w: %s's members changed after you read "+
-				"them. Read them again, then try again", ErrConflict, room.called())
+			return nil, fmt.Errorf("%w: the members of %s changed after they "+
+				"were read", ErrMembersChanged, room.called())
 		}
 		return members, nil
 	})
