@@ -57,7 +57,6 @@ func TestExecutorPromptListsNoToolAndCarriesItsIdentity(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(engineer(), ExecutorInput{
 		AvailableTools: []string{"submit_work", "post_message", "create_issue"},
-		MCPServers:     []string{"github"},
 	}).Text
 	contains(t, p, "## Your turn", "Engineer", "Acme")
 	excludes(t, p, "## Tools to discover", "## Available tools", "MCP server `github`",

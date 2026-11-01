@@ -119,6 +119,13 @@ type AgentRunRequest struct {
 	// above.
 	Surface *tools.Surface
 
+	// Skills are the Tool Skills the run's harness is handed as its own
+	// (handedskills.go): written into its box, listed to its model, and
+	// loaded with its own skill tool — each load its harness reports
+	// recorded on the run's bridge session as the run's load_tool_skill
+	// call of the skill's key ([HandedSkills.Listed]). Nil hands none.
+	Skills HandedSkills
+
 	// Spend is what the calls Surface serves cost the engine, counted
 	// apart from this segment because they happen after it — see
 	// [BridgedSpend]. The launcher records its running total with every
@@ -219,6 +226,10 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// delivered only once the launch has opened its job ([Runner.steerBriefed]).
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, notes, history, built, fresh)
+	// ITS TOOL SKILLS, handed to its harness as the harness's own rather
+	// than listed in its prompt (handedskills.go), matched against the
+	// surface it is launched with.
+	handed := r.handSkills(ctx, built)
 	// AND ASKED AGAIN once the brief exists, before anything is on the
 	// record: assembling it rewrites the prior rounds' payloads past their
 	// budgets with the seat's auxiliary model, charged to the same counters,
@@ -253,6 +264,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		Brief:      user.Text,
 		Notes:      fresh,
 		Surface:    surface,
+		Skills:     handed,
 		Spend:      bridged,
 		Round:      round,
 		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, round, f) },
@@ -276,7 +288,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	}
 	r.steerBriefed(ctx, round, launched.LaunchID, fresh)
 
-	r.recordAgentSuspension(round, surface, history, began, time.Since(began))
+	r.recordAgentSuspension(round, surface, history, began, time.Since(began), handed)
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
 }
 
@@ -352,6 +364,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// already holds every note it read.
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, "", history, built, fresh)
+	// ITS TOOL SKILLS HANDED AGAIN, as every launch hands them: the box's
+	// copy is the run's artefact, written afresh at every start, and a
+	// session carried on keeps what it loaded, which the rebuilt guard
+	// already holds.
+	handed := r.handSkills(ctx, built)
 	if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
@@ -376,6 +393,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			SignInReplaced: isRotated(carry),
 		},
 		Surface:    surface,
+		Skills:     handed,
 		Spend:      bridged,
 		Round:      state.Round,
 		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, phase.Execute, state.Round, f) },
@@ -400,7 +418,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		launchedAt = began
 	}
 	r.recordAgentSuspension(state.Round, surface, history, launchedAt,
-		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began))
+		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began), handed)
 	// THE ROUND'S CALLS SO FAR, the run's before it asked or was cut off:
 	// they happened and stay on the round's record, as an EARLIER ATTEMPT's
 	// ([turn.Work.Inherited]) — the job before made them, and a retry of this
@@ -410,12 +428,16 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 
 // recordAgentSuspension captures what the run's collection needs.
 func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, history []ledger.Iteration,
-	began time.Time, launched time.Duration,
+	began time.Time, launched time.Duration, handed HandedSkills,
 ) {
 	state := execstate.State{
 		Version:      execstate.Version,
 		ActiveTools:  surface.Active(),
 		LoadedSkills: r.loadedSkills(),
+		// THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, which every
+		// later opening of its bridge reads a reported load by, and every
+		// rebuild of its guard names a refusal by (handedskills.go).
+		NativeSkills: handed.Listed(),
 		Round:        round,
 		// THE LAUNCH'S HALF OF THE PHASE, and where it began, for the
 		// record the collection publishes. See [execstate.State.LaunchMS]
@@ -524,6 +546,9 @@ func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.St
 	}
 	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, called)
 	r.observeLoads(surface, called)
+	// AND THE NAMES ITS HARNESS WAS HANDED ITS SKILLS UNDER, so a call the
+	// rebuilt guard refuses names the skill as the run's harness lists it.
+	r.handedAs(state.NativeSkills)
 	return surface, nil
 }
 

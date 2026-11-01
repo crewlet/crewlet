@@ -76,7 +76,6 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 		ThreadContext:     "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:    "- prefers short replies",
 		RelevantKnowledge: "- **Runbook**: steps",
-		Skills:            allSkills(),
 	}
 	// What a round actually changes, and where it goes: the user message.
 	var userMessages []string
@@ -143,10 +142,7 @@ func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 func TestTheWholeTurnIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
-	exec := ExecutorInput{
-		AvailableTools: []string{"post_message"},
-		Skills:         allSkills(),
-	}
+	exec := ExecutorInput{AvailableTools: []string{"post_message"}}
 	review := ReviewInput{Intent: "Post.", Outcome: "delivered", Skills: allSkills()}
 	stableAcrossRounds(t, "turn",
 		func(int) string { return BuildExecutor(seat, exec).Text + BuildReview(seat, review).Text },
@@ -162,20 +158,21 @@ func TestAssemblyIsDeterministic(t *testing.T) {
 	// A wide MCP surface, given out of order, so a leaked order has plenty
 	// of room to show.
 	seat := seatIn(acme(), "eng")
+	worker := []Phase{PhaseSubagent}
 	cat := &fakeCatalogue{skills: []fakeSkill{
-		{key: "mcp:slack", mcpServer: "slack", summary: "S"},
-		{key: "mcp:github", mcpServer: "github", summary: "G"},
-		{key: "mcp:atlassian", mcpServer: "atlassian", summary: "A"},
-		{key: "mcp:mattermost", mcpServer: "mattermost", summary: "M"},
+		{key: "mcp:slack", mcpServer: "slack", summary: "S", phases: worker},
+		{key: "mcp:github", mcpServer: "github", summary: "G", phases: worker},
+		{key: "mcp:atlassian", mcpServer: "atlassian", summary: "A", phases: worker},
+		{key: "mcp:mattermost", mcpServer: "mattermost", summary: "M", phases: worker},
 	}}
-	in := ExecutorInput{Skills: cat, MCPServers: []string{
+	in := SubagentInput{ParentSystemPrompt: "P", Skills: cat, MCPServers: []string{
 		"slack", "custom-b", "github", "mattermost", "gitlab", "custom-a", "atlassian",
 	}}
 
 	const builds = 200
-	first := BuildExecutor(seat, in).Text
+	first := BuildSubagent(seat, in).Text
 	for i := 2; i <= builds; i++ {
-		if got := BuildExecutor(seat, in).Text; got != first {
+		if got := BuildSubagent(seat, in).Text; got != first {
 			t.Fatalf("build %d of %d differs from the first\n%s", i, builds, firstDiff(first, got))
 		}
 	}

@@ -60,6 +60,13 @@ type Blocked struct {
 	// making. A bare key reads as an obstacle.
 	Skill string
 	Title string
+
+	// Listed is the name the session's harness lists the skill under, where
+	// the session was handed it as the harness's own ([Guard.HandedAs]):
+	// its model loads it with the harness's own skill tool, which is the
+	// call the refusal then names. Empty for a session that loads through
+	// load_tool_skill.
+	Listed string
 }
 
 // Error renders the refusal the model sees.
@@ -72,6 +79,13 @@ func (b Blocked) Error() string {
 	about := ""
 	if b.Title != "" {
 		about = " (" + b.Title + ")"
+	}
+	if b.Listed != "" {
+		// THE HARNESS'S OWN SKILL, by the name it lists it under: the model
+		// was never told a key, and its harness's tool is the loader it has.
+		return fmt.Sprintf("%s is covered by the required skill %s%s, which you have not "+
+			"loaded yet. Load the skill %s with your skill tool first, then retry %s.",
+			b.Tool, b.Listed, about, b.Listed, b.Tool)
 	}
 	return fmt.Sprintf("%s is covered by the required tool skill %q%s, which "+
 		"has not been loaded in this session. Call "+toolname.LoadToolSkill+"(key=%q) "+
@@ -86,6 +100,9 @@ type Guard struct {
 
 	mu     sync.Mutex
 	loaded map[string]bool
+	// handed is the name each skill the session's harness was handed as its
+	// own is listed under, by key ([Guard.HandedAs]).
+	handed map[string]string
 }
 
 // NewGuard arms the guard for one phase session, or returns nil.
@@ -143,6 +160,22 @@ func (g *Guard) Restore(keys []string) {
 			g.loaded[key] = true
 		}
 	}
+}
+
+// HandedAs records that the session's harness was handed skills as its own —
+// listed, by key, under the name its model loads each by — so a refusal names
+// the skill as that harness lists it and its own tool as the loader
+// ([Blocked.Listed]). A load is still the session's [Guard.Observe] of
+// load_tool_skill: the harness reports each, and the bridge records it as that
+// call (internal/api/mcpbridge, skills.go). Replaces what an earlier call
+// recorded: a launch hands its harness one set.
+func (g *Guard) HandedAs(listed map[string]string) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.handed = maps.Clone(listed)
 }
 
 // LoadedKeys is what this session has loaded, sorted.
@@ -207,13 +240,13 @@ func (g *Guard) Blocking(tool, server string) *Blocked {
 	if g == nil || slices.Contains(ExemptTools, tool) {
 		return nil
 	}
-	loaded := g.loadedSet()
+	loaded, handed := g.state()
 
 	for _, s := range g.registry.Matching(g.phase, g.surface) {
 		if !s.Required || loaded[s.Key] || !s.Trigger.Covers(tool, server) {
 			continue
 		}
-		return &Blocked{Tool: tool, Skill: s.Key, Title: s.Title}
+		return &Blocked{Tool: tool, Skill: s.Key, Title: s.Title, Listed: handed[s.Key]}
 	}
 	return nil
 }
@@ -254,7 +287,14 @@ func (g *Guard) Render(text string) string {
 // holding its own while waiting on another is the shape a deadlock is made
 // of.
 func (g *Guard) loadedSet() map[string]bool {
+	loaded, _ := g.state()
+	return loaded
+}
+
+// state copies the loaded keys and the handed names out from under the lock,
+// for the reason [Guard.loadedSet] gives.
+func (g *Guard) state() (loaded map[string]bool, handed map[string]string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return maps.Clone(g.loaded)
+	return maps.Clone(g.loaded), maps.Clone(g.handed)
 }

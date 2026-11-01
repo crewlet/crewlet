@@ -271,3 +271,51 @@ func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
 			"the run loaded over the bridge, %v", got, want)
 	}
 }
+
+// A REBUILT GUARD NAMES A SKILL AS THE RUN'S HARNESS LISTS IT: the names its
+// launch handed its skills under are on the parked state, and every rebuild
+// of the run's surface — a reopened run's, a carried-on run's, a collection's
+// — hands them to its guard, so a call refused after a restart or a seat move
+// names the skill the run's model can load, not a key it was never told.
+//
+// Mutation: rebuild the guard without the parked names, and the refusal sends
+// the run to load_tool_skill, which its harness is never listed.
+func TestARebuiltGuardNamesASkillAsTheRunsHarnessListsIt(t *testing.T) {
+	t.Parallel()
+	registry := skills.NewRegistry()
+	if _, err := registry.PutPage(skills.Skill{Key: "standups", Title: "Standups",
+		Summary: "how to report", Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+		SourcePageID: "standups-page"}); err != nil {
+		t.Fatalf("PutPage: %v", err)
+	}
+	reg := tools.NewRegistry()
+	for _, name := range []string{"slack_post", toolname.LoadToolSkill} {
+		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register %s: %v", name, err)
+		}
+	}
+	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	r, err := New(Config{
+		Registry: reg, Models: &phase.Registry{}, Launcher: stubLauncher{},
+		Sessions: testHost(t), Skills: registry,
+		Seat: prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
+		Resume: &Resume{State: execstate.State{
+			Version: execstate.Version, Round: 1,
+			ActiveTools:  []string{"slack_post", toolname.LoadToolSkill},
+			NativeSkills: map[string]string{"crewlet:standups": "standups"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	r.mu.Lock()
+	guard := r.guard
+	r.mu.Unlock()
+	blocked := guard.Blocking("slack_post", "")
+	if blocked == nil || blocked.Listed != "crewlet:standups" {
+		t.Fatalf("the rebuilt guard refuses as %+v, want the skill named crewlet:standups", blocked)
+	}
+}

@@ -122,8 +122,6 @@ func richExecutorInput() ExecutorInput {
 		PersonalMemory:      "# Diary\n- Ana likes threads",
 		RelevantKnowledge:   "## Runbook: deploys\n1. tag\n2. ship 🚢",
 		ThreadContext:       "- Ana: ## not a heading of ours\n- Bo: ok",
-		Skills:              richSkills(),
-		MCPServers:          []string{"atlassian", "github"},
 	}
 }
 

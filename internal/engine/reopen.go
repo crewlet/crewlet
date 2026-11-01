@@ -160,6 +160,10 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		// THE SEAT'S FENCE AS THIS NODE HOLDS IT NOW: the grant the launch
 		// was fenced on is another node's, or this one's before a restart.
 		Fence: e.seatFence(handle),
+		// THE SKILLS ITS HARNESS WAS HANDED AS ITS OWN, by the names its
+		// launch handed them under, which its box still lists: a load it
+		// reports here is read as the launch's opening read one.
+		Skills: state.NativeSkills,
 	}
 	// AND THE RUN'S NOTE INBOX, built from its record alone — its turn, its
 	// job and its round — so a note to the turn reaches the run between its

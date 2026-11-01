@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -79,10 +80,14 @@ func toolSkill(key, tool string, required bool) skills.Skill {
 	}
 }
 
-// A PUBLISHED PAGE BECOMES A CATALOGUE ENTRY. The point of sourcing skills
-// from the knowledge base is that publishing one is a wiki edit — no
-// restart, no deploy, no config push.
-func TestAPublishedSkillReachesTheExecutorsPrompt(t *testing.T) {
+// A PUBLISHED PAGE BECOMES ONE OF THE EXECUTOR'S OWN SKILLS. The point of
+// sourcing skills from the knowledge base is that publishing one is a wiki
+// edit — no restart, no deploy, no config push — and a seat's executor is
+// handed it as its harness's own skill: listed to its model by name and
+// description, the required note included so the model learns the contract
+// up front rather than from a blocked call, and its body loaded only when the
+// model asks for it. Its prompt lists no catalogue.
+func TestAPublishedSkillIsHandedToTheExecutorsHarness(t *testing.T) {
 	t.Parallel()
 	n := start(t)
 	waitForSeat(t, n, "ceo")
@@ -91,24 +96,20 @@ func TestAPublishedSkillReachesTheExecutorsPrompt(t *testing.T) {
 	n.wake(t, "ceo", "How did the week go?")
 	waitForTurn(t, n)
 
-	system := executorPrompt(t, n)
-	for _, want := range []string{
-		"## Tool skills", "recall-conventions",
-		"how this company uses query_episodes",
-		// The REQUIRED marker and its note, so the model learns the
-		// contract up front rather than from a blocked call: the guard's
-		// error is the recovery path, not the discovery path.
-		"(required — load before use)", "load_tool_skill(key)",
-	} {
-		if !strings.Contains(system, want) {
-			t.Fatalf("the executor prompt is missing %q:\n%s", want, tail(system))
-		}
+	want := "crewlet:recall-conventions — how this company uses query_episodes " +
+		"Required: load this skill before you call the tools it covers."
+	if listed := executorSkills(t, n); !slices.Contains(listed, want) {
+		t.Fatalf("the executor's harness listed %q, want %q", listed, want)
 	}
-	// The BODY is not inlined — the catalogue is a menu, and a company
-	// with twenty servers would otherwise spend its prompt on
-	// documentation for tools this turn will not touch.
-	if strings.Contains(system, "Always pass the ticket id") {
-		t.Fatalf("the body was inlined into the catalogue:\n%s", tail(system))
+	system := executorPrompt(t, n)
+	for _, unwanted := range []string{"## Tool skills", "recall-conventions", "load_tool_skill",
+		// The BODY is in front of nobody until it is loaded: a company
+		// with twenty servers would otherwise spend every request on
+		// documentation for tools this turn will not touch.
+		"Always pass the ticket id"} {
+		if strings.Contains(system, unwanted) {
+			t.Fatalf("the executor's prompt carries %q:\n%s", unwanted, tail(system))
+		}
 	}
 }
 
@@ -122,8 +123,10 @@ func TestASkillForAnAbsentToolIsNotOffered(t *testing.T) {
 	n.wake(t, "ceo", "How did the week go?")
 	waitForTurn(t, n)
 
-	if system := executorPrompt(t, n); strings.Contains(system, "jira-conventions") {
-		t.Fatalf("a skill for an absent tool was offered:\n%s", tail(system))
+	for _, listed := range executorSkills(t, n) {
+		if strings.Contains(listed, "jira-conventions") {
+			t.Fatalf("a skill for an absent tool was handed to the executor's harness: %q", listed)
+		}
 	}
 }
 
@@ -140,6 +143,23 @@ func TestNoSkillsMeansNoCatalogue(t *testing.T) {
 	if system := executorPrompt(t, n); strings.Contains(system, "## Tool skills") {
 		t.Fatalf("a company with no skills got a catalogue:\n%s", tail(system))
 	}
+	if listed := executorSkills(t, n); len(listed) != 0 {
+		t.Fatalf("a company with no skills handed the executor's harness %q", listed)
+	}
+}
+
+// executorSkills is the skills of its own the executor's harness listed to its
+// model on its first request ([modelRequest.Skills]).
+func executorSkills(t *testing.T, n *node) []string {
+	t.Helper()
+	phases, listed := n.model.seen(), n.model.skillsListed()
+	for i, phase := range phases {
+		if phase == "execute" && i < len(listed) {
+			return listed[i]
+		}
+	}
+	t.Fatalf("no executor call was made; phases = %v", phases)
+	return nil
 }
 
 // A TRASHED PAGE TAKES ITS SKILL WITH IT: the skill stops being offered as
