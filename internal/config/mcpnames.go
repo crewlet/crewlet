@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // WHAT AN MCP SERVER ENTRY MAY NAME: its own name, the prefix of its tools,
@@ -28,7 +28,7 @@ import (
 // one still applies, and is warned about, because nothing about running
 // depends on a name being well formed. Two of them are also held where the
 // engine acts on the value, since a document cannot always show it: a tool's
-// name is held to [cliprofile.ToolNameMax] where the MCP bridge files it, and
+// name is held to [harnessprofile.ToolNameMax] where the MCP bridge files it, and
 // an address written with a ${VAR} in it is judged once that resolves, before
 // the server is dialled ([MCPAddressProblem]).
 
@@ -39,7 +39,7 @@ import (
 // credentials under, a path segment of the routes that act on it, and, for a
 // server an executor's box runs, the middle of every tool name the box's CLI
 // hands its model (`mcp__<name>__<tool>` for Claude Code), under the same 64
-// characters [cliprofile.ModelToolNameMax] counts. 32 keeps it a short
+// characters [harnessprofile.ModelToolNameMax] counts. 32 keeps it a short
 // identifier in all of them, and leaves such a box tool 25 characters of its
 // own.
 const MaxMCPServerName = 32
@@ -56,9 +56,9 @@ var mcpServerName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 var headerName = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 // MaxMCPToolPrefix is the longest `tool_prefix` a server may take: one less
-// than [cliprofile.ToolNameMax], so a prefixed name has room for at least one
+// than [harnessprofile.ToolNameMax], so a prefixed name has room for at least one
 // character of the tool's own.
-func MaxMCPToolPrefix() int { return cliprofile.ToolNameMax() - 1 }
+func MaxMCPToolPrefix() int { return harnessprofile.ToolNameMax() - 1 }
 
 // validateMCPNames refuses every name and address an `mcp_servers` entry, or
 // a seat's or a unit's `mcp_env` block for it, holds that no client can use.
@@ -131,7 +131,7 @@ func (m *MCPServer) validateName(p *problems, path Path) {
 func (m *MCPServer) validateToolPrefix(p *problems, path Path) {
 	switch prefix := m.ToolPrefix; {
 	case prefix == "":
-	case !cliprofile.ToolNameChars(prefix):
+	case !harnessprofile.ToolNameChars(prefix):
 		p.add(path, ErrUnknownValue,
 			"%q holds characters a model's tool name cannot: a prefix is put in front "+
 				"of every tool the server serves, so use only letters, digits, _ and -", prefix)
@@ -140,7 +140,7 @@ func (m *MCPServer) validateToolPrefix(p *problems, path Path) {
 			"is %d characters, and a tool's whole name, prefix included, is at most %d "+
 				"beside the longest prefix a coding CLI gives the engine's tools: a "+
 				"prefix of at most %d leaves room for a name. Keep it short",
-			len(prefix), cliprofile.ToolNameMax(), MaxMCPToolPrefix())
+			len(prefix), harnessprofile.ToolNameMax(), MaxMCPToolPrefix())
 	}
 }
 

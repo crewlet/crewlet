@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // WHICH OF A SERVER'S TOOLS ARE NOT OFFERED UNDER THEIR NAME, AND WHY.
@@ -17,7 +17,7 @@ import (
 // model, and each is decided where the engine can see it:
 //
 //   - a name holding characters no model's tool name can, or one too long
-//     to fit beside the longest CLI prefix ([cliprofile.ToolNameMax]), is
+//     to fit beside the longest CLI prefix ([harnessprofile.ToolNameMax]), is
 //     REFUSED here, when the bridge builds the server's tools from a listing:
 //     it is never filed, so it is neither offered nor callable, and never
 //     shadows a tool that could be. Never cut short to fit: a shortened name
@@ -42,7 +42,7 @@ const (
 	// cannot, which is anything but letters, digits, `_` and `-`.
 	NameCharacters NameRefusal = "characters"
 	// NameTooLong is a name that, prefix included, is longer than
-	// [cliprofile.ToolNameMax].
+	// [harnessprofile.ToolNameMax].
 	NameTooLong NameRefusal = "too_long"
 	// NameBuiltin is a name a built-in tool holds, and built-ins are
 	// filed first.
@@ -74,9 +74,9 @@ type ShadowedTool struct {
 // measured in characters a model counts.
 func nameRefusal(name string) NameRefusal {
 	switch {
-	case !cliprofile.ToolNameChars(name):
+	case !harnessprofile.ToolNameChars(name):
 		return NameCharacters
-	case len(name) > cliprofile.ToolNameMax():
+	case len(name) > harnessprofile.ToolNameMax():
 		return NameTooLong
 	}
 	return ""
@@ -87,14 +87,14 @@ func nameRefusal(name string) NameRefusal {
 func (r NameRefusal) Sentence(tool, prefix string) string {
 	switch r {
 	case NameCharacters:
-		if prefix != "" && !cliprofile.ToolNameChars(prefix) {
+		if prefix != "" && !harnessprofile.ToolNameChars(prefix) {
 			return fmt.Sprintf("%q is not offered: the server's tool_prefix %q holds characters "+
 				"a model's tool name cannot. Use only letters, digits, _ and - in it", tool, prefix)
 		}
 		return fmt.Sprintf("%q is not offered: the server names it with characters a model's "+
 			"tool name cannot hold, which is anything but letters, digits, _ and -", tool)
 	case NameTooLong:
-		most := cliprofile.ToolNameMax()
+		most := harnessprofile.ToolNameMax()
 		over := len(tool) - most
 		switch {
 		case prefix != "" && over < len(prefix):

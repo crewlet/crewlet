@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -44,7 +44,7 @@ func standIn(name, tool string, shared bool) string {
 func TestAToolLostToItsNameReachesTheHeartbeat(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	long := strings.Repeat("l", cliprofile.ToolNameMax()+1)
+	long := strings.Repeat("l", harnessprofile.ToolNameMax()+1)
 	company := specCompany(t, `
 name: Acme
 providers:
@@ -112,7 +112,7 @@ roles:
 	if entry, ok := surface.Lookup("lookup_colleague"); !ok || entry.Origin != tools.OriginBuiltin {
 		t.Errorf("the seat's lookup_colleague is %q's, want the built-in", entry.Origin)
 	}
-	for _, name := range []string{"read.file", long, long[:cliprofile.ToolNameMax()]} {
+	for _, name := range []string{"read.file", long, long[:harnessprofile.ToolNameMax()]} {
 		if _, ok := surface.Lookup(name); ok {
 			t.Errorf("the seat is offered %q, a name no model can be handed", name)
 		}

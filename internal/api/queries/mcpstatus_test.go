@@ -16,7 +16,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // mcpCompany declares a shared server, a per-seat template and a server no
@@ -124,7 +124,7 @@ func mcpFleet(t *testing.T) coord.Backend {
 
 // longGitHubTool is a name github's tool_prefix pushes one character over
 // the longest a coding CLI can hand its model.
-var longGitHubTool = "gh_" + strings.Repeat("x", cliprofile.ToolNameMax()-2)
+var longGitHubTool = "gh_" + strings.Repeat("x", harnessprofile.ToolNameMax()-2)
 
 // A SERVER'S TOOLS LOST TO THEIR NAMES ARE ONE LIST ACROSS THE FLEET, each
 // tool once however many nodes name it, sorted, each with the engine's

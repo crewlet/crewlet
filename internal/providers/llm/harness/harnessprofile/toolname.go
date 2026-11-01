@@ -1,4 +1,4 @@
-package cliprofile
+package harnessprofile
 
 import (
 	"fmt"
@@ -56,7 +56,7 @@ var toolNameMax = sync.OnceValue(func() int {
 		if err != nil {
 			// The table is embedded from this repository; builtins
 			// panics on the same failure, for the same reason.
-			panic(fmt.Sprintf("cliprofile: profiles.yaml: %v", err))
+			panic(fmt.Sprintf("harnessprofile: profiles.yaml: %v", err))
 		}
 		for _, p := range table {
 			all = append(all, p)

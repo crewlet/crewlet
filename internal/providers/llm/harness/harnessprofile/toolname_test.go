@@ -1,4 +1,4 @@
-package cliprofile
+package harnessprofile
 
 import (
 	"strings"
