@@ -189,10 +189,14 @@ func TestAnAnnouncingWriterResolvesItsSeats(t *testing.T) {
 // of dev's change's head that fails it names dev — the change's owner, by the
 // agent id its day is filed under — and so does an errored attempt past the
 // home's own requeue; an ending that passes, and an errored one the home
-// queues again, name nobody, since no day counts them (`checks_failed`).
+// queues again, name nobody, since no day counts them (`checks_failed`). A
+// failure a person's CI reports of that head names dev and the change too,
+// though its row names no change: it is the failure its checks_failed wake
+// tells dev of, and the gate holds the merge on it alike.
 //
-// Mutation: name the owner on every head ending — the passing one names dev,
-// red.
+// Mutations: name the owner on every head ending — the passing one names dev,
+// red; name no owner for a reported ending (drop applied's arm reading the
+// routing) — the CI's failure counts on nobody, red.
 func TestAFailedHeadCheckIsAnnouncedOnItsOwnersSeat(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -207,14 +211,20 @@ func TestAFailedHeadCheckIsAnnouncedOnItsOwnersSeat(t *testing.T) {
 	for attempt := 1; attempt <= code.AutoRequeueAttempts; attempt++ {
 		runCheck(t, w, key("e2e", attempt), change, 1, code.CheckStateErrored, code.CheckReasonRunnerLost)
 	}
-	waitAnnouncedOf(t, stream, "code_check_finished", 2+code.AutoRequeueAttempts)
+	for name, state := range map[string]code.CheckState{"ci": code.CheckStateFailed,
+		"ci-lint": code.CheckStatePassed} {
+		res, err := w.Publish(t.Context(), reporting(key(name, 1), state, "https://ci.example.com/1"))
+		requireChecked(t, name+" reported", res, err)
+	}
+	waitAnnouncedOf(t, stream, "code_check_finished", 4+code.AutoRequeueAttempts)
 	for _, ev := range stream.of("code_check_finished") {
 		p := ev.Data.(*types.CodeCheckFinished)
 		fails := p.State == "failed" || p.Attempt == code.AutoRequeueAttempts
-		owned := p.Owner == "dev" && p.OwnerKind == "agent" && p.Agent == "agent-dev"
+		owned := p.Owner == "dev" && p.OwnerKind == "agent" && p.Agent == "agent-dev" && p.ChangeID == change
 		if owned != fails || (!fails && p.Owner+p.Agent != "") {
-			t.Errorf("%s attempt %d (%s) names owner %q, agent %q: want dev's seat named exactly where the "+
-				"ending fails the head", p.Name, p.Attempt, p.State, p.Owner, p.Agent)
+			t.Errorf("%s attempt %d (%s, %s) names owner %q, agent %q of change %q: want dev's seat and "+
+				"%s named exactly where the ending fails the head", p.Name, p.Attempt, p.State, p.Placement,
+				p.Owner, p.Agent, p.ChangeID, change)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -39,6 +41,8 @@ type gitHome struct {
 	work string
 	repo string
 	e    *estate
+	// logs, where set, is what the home's loop logs to.
+	logs *lines
 }
 
 // newGitHome is a fleet holding codetest.RepoName declared under settings.
@@ -138,9 +142,14 @@ func (h *gitHome) homeLoop(t *testing.T, n *nudges, backstop time.Duration, now 
 	if err != nil {
 		t.Fatal(err)
 	}
-	l, err := home.New(home.Options{Estate: h.e, Placement: asNode{placement: p, node: node.ID()}, Nudges: n,
+	o := home.Options{Estate: h.e, Placement: asNode{placement: p, node: node.ID()}, Nudges: n,
 		Cache: node.Cache(), Git: node.Pool(), Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node.ID(),
-		Metrics: rec, Now: now})
+		Share:   units(2),
+		Metrics: rec, Now: now}
+	if h.logs != nil {
+		o.Logger = slog.New(slog.NewTextHandler(h.logs, nil))
+	}
+	l, err := home.New(o)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -251,6 +260,105 @@ func TestMergeabilityRunsInAScratch(t *testing.T) {
 	}
 }
 
+// A MERGE'S LANDING THAT DECIDED NOTHING FAILS THE TURN: a change owing its
+// merge alone whose head its target came to hold — found by the merge's
+// ancestry, its landing asked of the committer — whose landing the committer
+// answers busy ends its turn FAILED, counted so and logged
+// code_home_turn_failed, with no merge recorded of it.
+//
+// Mutation: drop the landing's error on the merge branch of the change's step
+// (answer `true` and the other steps' errors alone once the merge found it
+// landed), and the turn counts worked.
+func TestAMergesLandingThatDecidedNothingFailsTheTurn(t *testing.T) {
+	t.Parallel()
+	h := newGitHome(t, codetest.Settings())
+	base := h.commit(map[string]string{"a.go": "a\n"}, "base")
+	h.git("checkout", "-q", "-b", "change", base)
+	head := h.commit(map[string]string{"a.go": "a, changed\n"}, "a change")
+	h.git("checkout", "-q", "main")
+	h.git("merge", "-q", "--ff-only", "change")
+	tip := h.commit(map[string]string{"b.go": "b\n"}, "main moves past the change")
+	h.push("refs/heads/main", "refs/heads/change")
+	h.e.owe(h.repo, h.due(head, tip))
+	h.e.mu.Lock()
+	h.e.landRefusal = code.ChangeRefusalBusy
+	h.e.mu.Unlock()
+	h.logs = &lines{}
+	_, rec := h.homeLoop(t, newNudges(), time.Hour, nil)
+	waitTurns(t, rec, 1)
+	assertTurnFailed(t, rec, h.logs)
+	if _, landings := h.e.wrote(); len(landings) != 1 || landings[0].HeadOID != head || landings[0].TargetOID != tip {
+		t.Errorf("the turn asked the landings %+v, want the change's once, at %s into %s", landings, head, tip)
+	}
+	if merged := h.e.merged(); len(merged) != 0 {
+		t.Errorf("the turn recorded %+v of a change its ancestry found landed, want no merge", merged)
+	}
+}
+
+// A MERGE IS TIMED ALONE: crewlet.code.home.merge.duration observes a home's
+// merge when the merge answers, never the record of it on the change — a
+// change writer that takes an hour on the home's clock adds nothing to it —
+// and observes a preview only once its merge-tree ran: a preview its asker's
+// grant refuses is no merge, and observes nothing.
+//
+// Mutations: observe the home's merge once its record has answered, and it
+// takes the writer's hour; observe a preview from its start, and the refused
+// one is observed as a failed merge.
+func TestAMergeIsTimedAlone(t *testing.T) {
+	t.Parallel()
+	settings := codetest.Settings()
+	settings.Visibility = code.VisibilityUnit
+	h := newGitHome(t, settings)
+	base := h.commit(map[string]string{"a.go": "a\n"}, "base")
+	h.git("checkout", "-q", "-b", "change", base)
+	head := h.commit(map[string]string{"a.go": "a, changed\n"}, "a change")
+	h.git("checkout", "-q", "main")
+	tip := h.commit(map[string]string{"b.go": "b\n"}, "main moves")
+	h.push("refs/heads/main", "refs/heads/change")
+
+	c := &clock{now: time.Now().UTC()}
+	h.e.mu.Lock()
+	h.e.recording = func() { c.advance(time.Hour) }
+	h.e.mu.Unlock()
+	h.e.owe(h.repo, h.due(head, tip))
+	_, rec := h.homeLoop(t, newNudges(), time.Hour, c.Now)
+	h.e.waitMerged(t, 1, 30*time.Second)
+	waitTurns(t, rec, 1)
+	n, sum := observed(rec, metrics.CodeHomeMergeDuration, metrics.Attrs{"work": "mergeability", "outcome": "clean"})
+	if n != 1 || sum >= float64(time.Hour.Milliseconds()) {
+		t.Errorf("the home's merge was observed %d times summing %.0f ms, want once, without its record's hour", n,
+			sum)
+	}
+
+	prec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := h.node()
+	p, err := home.NewPreviews(home.PreviewOptions{NodeID: node.ID(), Cache: node.Cache(), Git: node.Pool(),
+		Share: node.Share(), Roster: codetest.FixtureRoster, Fetched: (&fetches{}).record, Metrics: prec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Stop(context.WithoutCancel(t.Context())) })
+	if _, err := p.MergePreview(t.Context(), code.MergePreviewQuery{RepoID: h.repo, Base: tip, Head: head,
+		Home: true, Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "outsider"}}); !errors.Is(err,
+		code.ErrNotPermitted) {
+		t.Fatalf("the outsider's preview answered %v, want %v", err, code.ErrNotPermitted)
+	}
+	if n, _ := observed(prec, metrics.CodeHomeMergeDuration, metrics.Attrs{"work": "preview"}); n != 0 {
+		t.Errorf("a preview its asker's grant refused was observed %d times as a merge, want none", n)
+	}
+	if _, err := p.MergePreview(t.Context(), code.MergePreviewQuery{RepoID: h.repo, Base: tip, Head: head,
+		Home: true, Asker: person}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := observed(prec, metrics.CodeHomeMergeDuration, metrics.Attrs{"work": "preview",
+		"outcome": "clean"}); n != 1 {
+		t.Errorf("a preview that merged was observed %d times, want once, clean", n)
+	}
+}
+
 // A CONFLICT NAMES ITS PATHS: a home's merge that leaves paths conflicted
 // records each once, in git's order — a content conflict, a modification
 // against a deletion, two adds of one path, a nested path — and never a path
@@ -351,18 +459,21 @@ func (c *clock) advance(d time.Duration) {
 }
 
 // A TARGET MOVE RECHECKS WITHIN ITS BUDGET: the changes a moved target asks
-// merged again are merged the oldest first, and no more of them in one window
-// of the home's backstop than a repository's budget — whichever turns, a
+// merged again are merged the oldest first, and no more of them between two
+// of the home's paced passes than a repository's budget — whichever turns, a
 // pass's or a nudge's, run them — each listing asking only what is left of the
 // budget, and asked at the home's clock less its refresh; a new head
 // revision's merge takes none of the budget, merged at once while the budget
-// is spent; and the next window merges the recheck the last one had no room
-// for.
+// is spent; a pass a watch's gap asks early renews nothing; and the next paced
+// pass merges the recheck the last one had no room for, however soon after
+// the last one's its turn runs on the clock.
 //
 // Mutations: spend nothing on a recheck, and the third is merged in the first
-// window; count a new revision's merge against the budget, and it waits for
-// the next window; ask the listing for the whole budget every turn, and the
-// nudged turn merges past it.
+// pass; count a new revision's merge against the budget, and it waits for the
+// next pass; ask the listing for the whole budget every turn, and the nudged
+// turn merges past it; renew the share on a gap's pass, and the gap's turn
+// merges the leftover; renew it on no tick, and the next paced pass merges
+// nothing.
 func TestATargetMoveRechecksWithinItsBudget(t *testing.T) {
 	t.Parallel()
 	h := newGitHome(t, codetest.Settings())
@@ -385,7 +496,11 @@ func TestATargetMoveRechecksWithinItsBudget(t *testing.T) {
 		h.e.recheck(h.repo, again)
 	}
 	n := newNudges()
-	_, rec := h.homeLoop(t, n, time.Hour, c.Now, func(l *home.Loop) { home.SetMergesPerPass(l, 2) })
+	ticks := make(chan time.Time)
+	_, rec := h.homeLoop(t, n, time.Hour, c.Now, func(l *home.Loop) {
+		home.SetMergesPerPass(l, 2)
+		home.SetTicks(l, ticks)
+	})
 
 	merged := h.e.waitMerged(t, 2, 30*time.Second)
 	waitTurns(t, rec, 1)
@@ -423,9 +538,23 @@ func TestATargetMoveRechecksWithinItsBudget(t *testing.T) {
 		t.Fatalf("the nudged turn asked %d rechecks, want none: the window's budget is spent", last.Rechecks)
 	}
 
-	// THE NEXT WINDOW merges the recheck the first had no room for.
-	c.advance(time.Hour)
-	n.subject(t, h.repo, 91)
+	// A PASS A GAP ASKS EARLY is no paced pass, and renews no share: its turn
+	// merges nothing.
+	n.gap(t, 91)
+	waitTurns(t, rec, 3)
+	h.e.mu.Lock()
+	last = h.e.asked[len(h.e.asked)-1]
+	h.e.mu.Unlock()
+	if last.Rechecks != 0 || len(h.e.merged()) != 3 {
+		t.Fatalf("the gap's pass asked %d rechecks and the home merged %d, want none past the 3: a gap renews "+
+			"no share", last.Rechecks, len(h.e.merged()))
+	}
+
+	// THE NEXT PACED PASS merges the recheck the first had no room for —
+	// whenever its turn comes on the clock, here a backstop less a
+	// millisecond after the first's.
+	c.advance(home.Backstop - time.Millisecond)
+	ticks <- c.Now()
 	merged = h.e.waitMerged(t, 4, 30*time.Second)
 	if merged[3].HeadOID != heads[2] {
 		t.Fatalf("the next window merged %s, want the recheck left over, %s", merged[3].HeadOID, heads[2])
@@ -658,6 +787,92 @@ func TestAMergePreviewIsAnsweredAsAReadByObjectIDIs(t *testing.T) {
 	}
 }
 
+// A REPEATED MERGE PREVIEW RUNS NO GIT: the second preview of the same two
+// commits — by another principal, its grant judged as the first's was — is
+// answered from the node's memo with no git process at all, the same state
+// and conflicted paths as the first, and is still recorded as its asker's
+// read of the `visibility: unit` repository; a preview of two other commits
+// merges as any first does.
+//
+// Mutations: memoize nothing, and the second preview runs git; answer a hit
+// before judging the grant, and the outsider is answered.
+func TestARepeatedMergePreviewRunsNoGit(t *testing.T) {
+	t.Parallel()
+	settings := codetest.Settings()
+	settings.Visibility = code.VisibilityUnit
+	h := newGitHome(t, settings)
+	base := h.commit(map[string]string{"a.go": "a\n", "b.go": "b\n"}, "base")
+	h.git("checkout", "-q", "-b", "conflict", base)
+	head := h.commit(map[string]string{"b.go": "b, one way\n"}, "a conflicting change")
+	h.git("checkout", "-q", "-b", "clean", base)
+	clean := h.commit(map[string]string{"a.go": "a, changed\n"}, "a clean change")
+	h.git("checkout", "-q", "main")
+	tip := h.commit(map[string]string{"b.go": "b, the other way\n"}, "main moves")
+	h.push("refs/heads/main", "refs/heads/conflict", "refs/heads/clean")
+	node := h.node()
+	git := &countedGit{PreviewPool: node.Pool()}
+	recorded := &fetches{}
+	p, err := home.NewPreviews(home.PreviewOptions{NodeID: node.ID(), Cache: node.Cache(), Git: git,
+		Share: node.Share(), Roster: codetest.FixtureRoster, Fetched: recorded.record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Stop(context.WithoutCancel(t.Context())) })
+	ask := func(asker code.Principal, head string) (code.MergePreviewAnswer, error) {
+		return p.MergePreview(t.Context(), code.MergePreviewQuery{RepoID: h.repo, Asker: asker, Base: tip,
+			Head: head, Home: true})
+	}
+
+	first, err := ask(person, head)
+	if err != nil || first.State != code.MergeConflict || !slices.Equal(first.Conflicts, []string{"b.go"}) {
+		t.Fatalf("the first preview answered (%+v, %v), want a conflict in b.go", first, err)
+	}
+	ran := git.count()
+	if ran == 0 {
+		t.Fatal("the premise: the first preview ran no git")
+	}
+	if _, err := ask(code.Principal{Kind: code.PrincipalAgent, Seat: "outsider"}, head); !errors.Is(err,
+		code.ErrNotPermitted) {
+		t.Errorf("an outsider's preview of the memoized merge answered %v, want %v", err, code.ErrNotPermitted)
+	}
+	again, err := ask(alice, head)
+	if err != nil || again.State != first.State || !slices.Equal(again.Conflicts, first.Conflicts) ||
+		again.ConflictsOmitted != first.ConflictsOmitted {
+		t.Fatalf("the repeated preview answered (%+v, %v), want the first's %+v", again, err, first)
+	}
+	if got := git.count(); got != ran {
+		t.Errorf("the repeated preview ran %d git processes, want none: it is the memo's", got-ran)
+	}
+	if got := recorded.all(); len(got) != 2 || got[1].Principal != alice.Seat || got[1].Kind != home.PreviewReadKind {
+		t.Errorf("the previews were recorded as %+v, want the first's read and the repeated one's by %s", got,
+			alice.Seat)
+	}
+	if other, err := ask(person, clean); err != nil || other.State != code.MergeClean || git.count() == ran {
+		t.Errorf("a preview of two other commits answered (%+v, %v) running %d git processes, want a clean "+
+			"merge of its own", other, err, git.count()-ran)
+	}
+}
+
+// countedGit is a node's pool, counting every git process it runs.
+type countedGit struct {
+	home.PreviewPool
+	mu   sync.Mutex
+	runs int
+}
+
+func (g *countedGit) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	g.mu.Lock()
+	g.runs++
+	g.mu.Unlock()
+	return g.PreviewPool.Run(ctx, c)
+}
+
+func (g *countedGit) count() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.runs
+}
+
 // BenchmarkMergeability is one home's merge of a change into its moved target
 // over a copy of the repository on its git node — the step a change's
 // mergeability is recorded by, and what a moved target's rechecks cost a home
@@ -710,7 +925,7 @@ func BenchmarkMergeability(b *testing.B) {
 			node := h.node()
 			l, err := home.New(home.Options{Estate: h.e, Placement: asNode{placement: &placement{}, node: node.ID()},
 				Nudges: newNudges(), Cache: node.Cache(), Git: node.Pool(), Chains: unqueued{t: b}, Tasks: unqueued{t: b},
-				NodeID: node.ID()})
+				Share: units(2), NodeID: node.ID()})
 			if err != nil {
 				b.Fatal(err)
 			}

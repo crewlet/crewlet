@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -168,8 +169,16 @@ func TestTheCodeReasonsAreInPrecedenceOrder(t *testing.T) {
 // raiser an answer replies to; and the participants a close tells. Nobody hears
 // of their own write.
 //
+// AND ONLY A RECORD WITH AN AUDIENCE: a revision's facts that ask nobody, and
+// a comment that mentions only a handle the chart does not hold, outside any
+// thread, concern nobody — so each carries no routing at all, and no mention
+// beside it, and its apply writes no notice. The routing is the ONE copy of a
+// record's mentions: every record here carries none of its asker's.
+//
 // Mutation: stamp no routing on one of the decides, or read the watchers off
-// another role, and the walk fails at that record.
+// another role, and the walk fails at that record; stamp a routing whatever
+// the audience, and the facts carry one, red; keep the asker's mentions on the
+// record, and the comment carries them, red.
 func TestEveryChangeRecordCarriesItsRouting(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -225,9 +234,29 @@ func TestEveryChangeRecordCarriesItsRouting(t *testing.T) {
 			r.ThreadParticipants, heard(code.Concerns([]*code.ChangeRouting{r})))
 	}
 
+	// NO AUDIENCE, NO ROUTING: facts that ask nobody — plat-lead is asked
+	// already, so no lead is fallen back to — and a comment whose one
+	// mention the chart lacks, outside any thread.
+	unheard := func(what string, p statelog.Position) {
+		t.Helper()
+		if routings := routingAt(t, n, p); len(routings) != 0 {
+			t.Fatalf("the %s, which concerns nobody, carries the routing %+v", what, routings[0])
+		}
+		if body := string(n.recordAt(p).Mutation); strings.Contains(body, `"mentions"`) ||
+			strings.Contains(body, `"routing"`) {
+			t.Fatalf("the %s, which concerns nobody, recorded %s; want no routing and no mention", what, body)
+		}
+		if got := noticesOf(t, n, p); len(got) != 0 {
+			t.Fatalf("the %s, which concerns nobody, wrote the notices %v", what, got)
+		}
+	}
 	facts := converse(t, w, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
-	if r := one("revise", facts.Position); r.Actor != "" {
-		t.Fatalf("the home's revise names %q as its actor, want nobody", r.Actor)
+	unheard("revise", facts.Position)
+	aside := saying(repo, change, ada, "", "Retrying twice, @nobody-here?")
+	aside.Comment.Mentions = []string{"nobody-here"}
+	unheard("comment mentioning nobody the chart holds", converse(t, w, aside).Position)
+	if body := string(n.recordAt(said.Position).Mutation); strings.Count(body, `"mentions"`) != 1 {
+		t.Fatalf("the comment mentioning reader recorded %s; want its mentions in its routing alone", body)
 	}
 
 	reviewed := converse(t, w, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil,

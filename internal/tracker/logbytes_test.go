@@ -116,24 +116,38 @@ const (
 // text — a 2 KiB description, a 1 KiB summary, comment and finding body —
 // alone in its record, by the log's growth. A publication is a compaction,
 // measured there beside them because the committer's compact path forms it.
+//
+// A record carries its change's routing only where somebody hears of it
+// (internal/code's routingFor): the facts, the merge, the comments and the
+// thread resolved of the reference change concern nobody, so theirs are
+// measured without one. A re-evaluation that keeps its row's outcome — a
+// recheck of a moved target that merges as before, a refresh whose readiness
+// is the row's — records what it moved alone (code.MergeabilityKept): the
+// recheck its tip, the refresh the versions and the checks position it was
+// judged at. The refresh that turns the change ready is the full record,
+// routed to whoever may merge it.
 const (
-	codeChangeOpenBytes     = 3_430
-	codeChangeEditBytes     = 3_100
-	codeReviewersBytes      = 1_190
-	codeReviseBytes         = 1_640
-	codeMergeabilityBytes   = 1_340
-	codeReviewFindingsBytes = 5_030
-	codeReviewBytes         = 2_340
-	codeAnswerBytes         = 1_290
-	codeCommentBytes        = 2_280
-	codeThreadResolveBytes  = 1_160
-	codeMergeBytes          = 1_990
-	codeEnqueueBytes        = 980
+	codeChangeOpenBytes           = 3_100
+	codeChangeEditBytes           = 2_770
+	codeReviewersBytes            = 1_190
+	codeReviseBytes               = 1_330
+	codeMergeabilityBytes         = 1_030
+	codeMergeabilityRecheckBytes  = 880
+	codeMergeabilityRefreshBytes  = 860
+	codeMergeabilityReadyBytes    = 1_460
+	codeCheckDispatchedEmptyBytes = 840
+	codeReviewFindingsBytes       = 5_030
+	codeReviewBytes               = 2_340
+	codeAnswerBytes               = 1_290
+	codeCommentBytes              = 1_950
+	codeThreadResolveBytes        = 840
+	codeMergeBytes                = 1_990
+	codeEnqueueBytes              = 980
 	// A queued change as its home's queue worker takes it on: its train of one
 	// candidate, a check of the candidate's tip queued (its claim, its box and
 	// its ending carry a head's keys, priced at theirs) and its landing.
-	codeCandidateBytes            = 1_300
-	codeCandidateCheckQueuedBytes = 1_020
+	codeCandidateBytes            = 1_290
+	codeCandidateCheckQueuedBytes = 1_010
 	codeLandBytes                 = 1_530
 	codeCheckQueuedBytes          = 970
 	codeCheckDispatchedBytes      = 970
@@ -156,32 +170,43 @@ const (
 // then an approving review, and is merged deleting its source — and its home
 // records every revision's facts and its merge into the target, and the
 // readiness it stores again after the ask, the two reviews and the answer
-// (code.Mergeability.Refresh). That is the day at its least: no checks file,
-// no queue, and a target that never moves under a live change. At its most,
-// every change is queued first, its home rechecks it at every pass while its
-// target moves (internal/code/home's MergeabilityRefresh, ten minutes, over a
-// working day of eight hours), and its target's checks file defines three
-// checks, each of every revision queued, claimed, its box named and ended,
-// beside the head's dispatch. Every queued change is then taken on by its
-// home's queue worker: recorded in a train of its own — one candidate, the
-// change merged onto its target's tip, as a change reaching its target a few
-// an hour is — its three checks, required, queued on the candidate's tip
-// (purpose candidate, no dispatch record), each claimed, its box named and
-// ended, and the train landed in a land record. One train a change is the
-// most: a burst queued faster than its checks shares a train, and a landing,
-// and costs less. And at the most every change's landing lies above its
-// target's green row — landed ahead of its checks, as a person's override
-// merge or push into a branch whose gate requires them lands — so its home's
-// tip work checks it: the three checks queued on the landed commit (purpose
-// tip, no dispatch record), each claimed, its box named and ended, and a
-// green moving the target's green row onto it. One a change is the most,
-// since each landing is the newest when its tip is judged; a burst landing
-// faster than its checks coalesces onto its newest and costs less. The most
-// is each shape's own, never one change's path through them: it prices a
-// change's merge, its queue's landing and its landing's tip checks alike. A
-// broken is a red tip's, at the rate a merged result fails a check both heads
-// passed, and an ejection a red or conflicting candidate's, neither of which
-// the reference company's day has (codeLogNegligible).
+// (code.Mergeability.Refresh): three that keep it not ready, each recorded by
+// the versions it moved, and the approval's, which turns the change ready
+// and tells its owner, the full record. That is the day at its least: no
+// checks file, no queue, and a target that never moves under a live change.
+// At its most, every change is queued first, its home rechecks it at every
+// pass while its target moves (internal/code/home's MergeabilityRefresh, ten
+// minutes, over a working day of eight hours) — each recheck merging clean
+// again, so recorded by its tip alone — and its target's checks file defines
+// three checks, each of every revision queued, claimed, its box named and
+// ended, beside the head's dispatch. A head's checks move its readiness's
+// inputs too (internal/code's changesdue.go, refreshDue: an attempt queued or
+// ended past the row's checks position), so its home refreshes once for the
+// three its dispatch queued together, in one pass, and once for each ending —
+// four a revision at the most, every one keeping the readiness (the one a
+// change that turns it ready is the approval's, above, at the most as at the
+// least: either the approval or the last ending turns it, never both). And a
+// moved target's checks file is read again where no head is dispatched, a
+// dispatch of no head (internal/code/home's ChecksFileRefresh, ten minutes) —
+// at the most one for every change's target at every pass, as if no two
+// changes shared one. A queued change lands through its home's queue
+// worker: a train of it — one candidate of one entry, since a queue that
+// keeps up batches nothing (internal/code/home's BatchOf: min(batch,
+// ⌈waiting/depth⌉) entries a candidate) — and the landing of that tested
+// prefix, telling its authors it merged — its candidate checked first by its
+// target's required checks, at the most all three, queued by the queue worker
+// naming the candidate, each claimed, its box named and ended. It appends no
+// merge record, so the most, which prices both, errs high by a merge a change. And at the
+// most every change's landing lies above its target's green row — landed
+// ahead of its checks, as a person's override merge or push into a branch
+// whose gate requires them lands — so its home's tip work checks it: the three
+// checks queued on the landed commit (purpose tip, no dispatch record),
+// each claimed, its box named and ended, and a green moving the target's
+// green row onto it. One a change is the most, since each landing is the
+// newest when its tip is judged; a burst landing faster than its checks
+// coalesces onto its newest and costs less. A broken is a red tip's, at the
+// rate a merged result fails a check both heads passed, which the reference
+// company's day has none of (codeLogNegligible).
 //
 // A PUBLICATION names every pack its layer covers. At the least the
 // reference company's packs are each named once, in a busy repository's tail
@@ -191,14 +216,16 @@ const (
 // compact.PublishMinInterval (ten minutes), which its pushes, a few an hour,
 // never outrun.
 const (
-	referenceChangesADay      = referencePushesADay / 10
-	referenceRevisionsADay    = referencePushesADay
-	referenceRefreshesAChange = 4
-	referenceRechecksAChange  = 8 * 60 / 10
-	referenceChecksAHead      = 3
-	referenceChecksACandidate = referenceChecksAHead
-	referenceChecksATip       = referenceChecksAHead
-	referencePublishPacks     = 64
+	referenceChangesADay           = referencePushesADay / 10
+	referenceRevisionsADay         = referencePushesADay
+	referenceKeptRefreshesAChange  = 3
+	referenceReadyRefreshesAChange = 1
+	referenceRechecksAChange       = 8 * 60 / 10
+	referenceChecksAHead           = 3
+	referenceCheckRefreshesAHead   = 1 + referenceChecksAHead
+	referenceChecksATip            = referenceChecksAHead
+	referenceChecksACandidate      = referenceChecksAHead
+	referencePublishPacks          = 64
 )
 
 // codeLogTerm is one term of the code log's day: the bytes a day one SHAPE of
@@ -270,31 +297,42 @@ func codeLogDay() []codeLogTerm {
 			codeAnswerBytes, false},
 		{code.OpComment, "a seat's 1 KiB comment, two a change", 2 * changes, codeCommentBytes, false},
 		{code.OpThreadResolve, "a thread resolved, one a change", changes, codeThreadResolveBytes, false},
-		{code.OpMerge, "a merge of the change deleting its source, one a change", changes, codeMergeBytes,
-			false},
-		{code.OpRevise, "a revision's facts, one a push", revisions, codeReviseBytes, false},
-		{code.OpMergeability, "a revision's merge into its target, one a push", revisions,
-			codeMergeabilityBytes, false},
-		{code.OpMergeability, "the stored readiness refreshed after an ask, a review or an answer, four a " +
-			"change", referenceRefreshesAChange * changes, codeMergeabilityBytes, false},
-		{code.OpMergeability, "a recheck of a moved target at every pass of its home over a working day",
-			referenceRechecksAChange * changes, codeMergeabilityBytes, true},
+		{code.OpMerge, "a merge of the change deleting its source, one a change — and at the most beside " +
+			"a queued change's train and landing, which it does not take", changes, codeMergeBytes, false},
+		{code.OpRevise, "a revision's facts asking nobody, one a push, carrying no routing", revisions,
+			codeReviseBytes, false},
+		{code.OpMergeability, "a revision's merge into its target, one a push, not ready and so carrying " +
+			"no routing", revisions, codeMergeabilityBytes, false},
+		{code.OpMergeability, "the refresh that turns a change ready, routed to whoever may merge it, " +
+			"one a change", referenceReadyRefreshesAChange * changes, codeMergeabilityReadyBytes, false},
+		{code.OpMergeabilityKept, "a refresh that keeps the stored readiness after an ask, a review or an " +
+			"answer, three a change, by the versions and the checks position it moved",
+			referenceKeptRefreshesAChange * changes, codeMergeabilityRefreshBytes, false},
+		{code.OpMergeabilityKept, "a refresh that keeps the stored readiness after a head's checks were " +
+			"queued or one ended, four a push", referenceCheckRefreshesAHead * revisions,
+			codeMergeabilityRefreshBytes, true},
+		{code.OpMergeabilityKept, "a recheck of a moved target merging clean again at every pass of its " +
+			"home over a working day, by its tip", referenceRechecksAChange * changes,
+			codeMergeabilityRecheckBytes, true},
 		{code.OpEnqueue, "a change queued into its target, one a change", changes, codeEnqueueBytes, true},
-		{code.OpCandidate, "a train of one candidate recorded by its home's queue worker, the change merged " +
-			"onto its target's tip with the pack its merge wrote, one a change", changes, codeCandidateBytes, true},
-		{code.OpCheckQueued, "a check of a queue's candidate queued by its home's queue worker, naming the " +
-			"candidate and the base it was built onto, three a change", candidates,
+		{code.OpCandidate, "a queued change's train, one candidate of one entry naming the pack its merge " +
+			"wrote, one a change", changes, codeCandidateBytes, true},
+		{code.OpLand, "the landing of a queued change's tested prefix, its source deleted, routed to its " +
+			"authors, one a change", changes, codeLandBytes, true},
+		{code.OpCheckQueued, "a required check of a queued change's candidate queued by its home's queue " +
+			"worker, naming the candidate and its train's base, three a change", candidates,
 			codeCandidateCheckQueuedBytes, true},
-		{code.OpCheckStarted, "a candidate check claimed by its runner, three a change — a head's claim's " +
+		{code.OpCheckStarted, "a candidate's check claimed by its runner, three a change — a head's claim's " +
 			"keys", candidates, codeCheckStartedBytes, true},
-		{code.OpCheckStarted, "a candidate check's box named by its runner, three a change — a head's box's " +
-			"keys", candidates, codeCheckNamedBytes, true},
-		{code.OpCheckFinished, "a candidate check ended, three a change — a head's ending's keys", candidates,
-			codeCheckFinishedBytes, true},
-		{code.OpLand, "a train of one queued change landed by its home's queue worker, its source deleted, " +
-			"one a change", changes, codeLandBytes, true},
+		{code.OpCheckStarted, "a candidate's check's box named by its runner, three a change — a head's " +
+			"box's keys", candidates, codeCheckNamedBytes, true},
+		{code.OpCheckFinished, "a candidate's check ended, three a change — a head's ending's keys",
+			candidates, codeCheckFinishedBytes, true},
 		{code.OpCheckQueued, "a check of a revision queued, three a push", checks, codeCheckQueuedBytes, true},
 		{code.OpCheckDispatched, "a head's dispatch, one a push", revisions, codeCheckDispatchedBytes, true},
+		{code.OpCheckDispatched, "a moved target's checks file read again dispatching no head, at the " +
+			"most one for every change's target at every pass of its home over a working day",
+			referenceRechecksAChange * changes, codeCheckDispatchedEmptyBytes, true},
 		{code.OpCheckStarted, "a check claimed by its runner, three a push", checks, codeCheckStartedBytes,
 			true},
 		{code.OpCheckStarted, "a check's box named by its runner, three a push", checks,
@@ -377,7 +415,7 @@ var codeLogNegligible = map[code.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 11 % of the day's least of 24.7 MB — a company whose seats work so reads it in " +
+		"MB a day, 12 % of the day's least of 22.1 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"code.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -777,18 +815,17 @@ var codeLogFields = map[code.OpKind]struct {
 	code.OpChangeOpen: {
 		payload: reflect.TypeFor[code.ChangeOpen](),
 		carried: []string{"repo_id", "change_id", "source_ref", "target_ref", "head", "title", "body",
-			"owner.kind", "owner.seat", "work_item", "turn_id", "routing.change_id", "routing.change_ref",
-			"routing.repo_name", "routing.title", "routing.actor", "routing.owner", "routing.owner_kind",
-			"routing.work_item"},
+			"owner.kind", "owner.seat", "work_item", "turn_id"},
 		absent: absent(principalAbsent("owner", "kind", "seat"),
-			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
-				"owner_kind", "work_item"),
 			map[string]string{
 				"draft": "a draft's open, and the reference change opens ready",
 				"run_id": "the coding run a change is opened for by the engine (internal/engine's run " +
 					"changes) rather than by a tool: one UUID more",
-				"mentions": "the handles a description mentions (at most code.MaxMentions, 32), and the " +
-					"reference text mentions nobody",
+				"mentions": "the asker's mentions, which the committer holds into the routing and takes off " +
+					"the record (code's withRouting)",
+				"routing": "whom an open concerns — the handles its description mentions (at most " +
+					"code.MaxMentions, 32), with the change's context, about three hundred bytes — and the " +
+					"reference text mentions nobody, so it carries none",
 			}),
 	},
 	code.OpReviewers: {
@@ -805,11 +842,12 @@ var codeLogFields = map[code.OpKind]struct {
 		payload: reflect.TypeFor[code.Revise](),
 		carried: []string{"repo_id", "change_id", "n", "head_oid", "target_ref", "target_oid",
 			"target_position", "base_oid", "base_tree", "head_tree", "patch_id", "touched", "node",
-			"owners_digest", "routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title",
-			"routing.owner", "routing.owner_kind", "routing.work_item"},
-		absent: absent(routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "owner",
-			"owner_kind", "work_item"),
+			"owners_digest"},
+		absent: absent(
 			map[string]string{
+				"routing": "whom a revision's facts concern — the path owners they ask, the reviewers " +
+					"asked to look again, an unreviewed change's lead — with the change's context, and " +
+					"the reference revisions ask nobody, so they carry none",
 				"patch_id_omitted": "a patch too large to identify, and the reference revision's is small",
 				"touches_all": "a revision touching more paths than code.MaxTouchedBytes holds, which " +
 					"names none, and the reference revision touches five",
@@ -819,31 +857,34 @@ var codeLogFields = map[code.OpKind]struct {
 					"repositories declare none",
 				"asked":          "the reviewers a revision's owners ask, likewise",
 				"skipped_owners": "the path owners a revision could not ask, likewise",
-				"re_review": "the reviewers a revision after a review asks again — a handle each on the " +
-					"revisions that follow a review",
-				"lead_fallback": "the lead an unreviewed change falls back to, and the reference change " +
-					"asks its reviewer",
 			}),
 	},
 	code.OpMergeability: {
 		payload: reflect.TypeFor[code.Mergeability](),
+		// Two shapes: a revision's merge, which concerns nobody and carries
+		// no routing, and the refresh that turns the change ready, which
+		// carries its routing to whoever may merge it, and its checks'
+		// position where a checks file defines some.
 		carried: []string{"repo_id", "change_id", "revision", "head_oid", "target_ref", "target_oid",
-			"target_position", "state", "node", "change_version", "readiness_version", "routing.change_id",
-			"routing.change_ref", "routing.repo_name", "routing.title", "routing.owner", "routing.owner_kind",
-			"routing.work_item"},
+			"target_position", "state", "node", "change_version", "readiness_version", "checks_position",
+			"refresh", "ready", "routing.change_id", "routing.change_ref", "routing.repo_name",
+			"routing.title", "routing.owner", "routing.owner_kind", "routing.work_item", "routing.ready_for"},
 		absent: absent(routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "owner",
-			"owner_kind", "work_item"),
+			"owner_kind", "work_item", "ready_for"),
 			map[string]string{
 				"conflicts": "the conflicted paths of a merge that conflicts (at most code.MaxConflictBytes), " +
 					"and the reference change merges clean",
 				"conflicts_omitted": "a conflict past that bound, likewise",
-				"refresh": "a refresh of the stored readiness, a flag on a record that names no merge — " +
-					"the same frame less a merge's facts, which the day prices at a merge's",
-				"ready":        "the readiness flag, set once a change is ready: a few bytes",
-				"waits_person": "a readiness that waits on a person, a flag, and the reference reviews are seats'",
-				"checks_position": "the position of the checks a readiness waits on, where a checks file " +
-					"defines some: a few dozen bytes on the day's most",
+				"waits_person":      "a readiness that waits on a person, a flag, and the reference reviews are seats'",
 			}),
+	},
+	code.OpMergeabilityKept: {
+		// Two shapes: a recheck's, its tip and the position that moved
+		// the branch there; and a refresh's, the versions and the checks
+		// position its readiness was judged at.
+		payload: reflect.TypeFor[code.MergeabilityKept](),
+		carried: []string{"repo_id", "change_id", "revision", "target_oid", "target_position",
+			"change_version", "readiness_version", "checks_position"},
 	},
 	code.OpReview: {
 		payload: reflect.TypeFor[code.Review](),
@@ -861,7 +902,8 @@ var codeLogFields = map[code.OpKind]struct {
 					"suggest none: at most its finding's own lines again",
 				"carries": "the earlier findings a review carries forward, an id each, and the reference " +
 					"reviews raise their own",
-				"mentions": "the handles a summary mentions, and the reference text mentions nobody",
+				"mentions": "the asker's mentions, which the writer holds into the routing and takes off " +
+					"the record (code's withRouting)",
 			}),
 	},
 	code.OpFindingResolve: {
@@ -881,27 +923,28 @@ var codeLogFields = map[code.OpKind]struct {
 	code.OpComment: {
 		payload: reflect.TypeFor[code.Comment](),
 		carried: []string{"repo_id", "change_id", "comment_id", "thread_id", "by.kind", "by.seat", "body",
-			"turn_id", "routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title",
-			"routing.actor", "routing.owner", "routing.owner_kind", "routing.work_item"},
+			"turn_id"},
 		absent: absent(principalAbsent("by", "kind", "seat"),
-			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
-				"owner_kind", "work_item"),
 			map[string]string{
 				"parent_id":  "a reply's parent, and the reference comments open their threads",
 				"finding_id": "the finding a comment discusses, an id where it does",
 				"anchor": "a comment on a line of a revision — its revision, path, side, line and blob, " +
 					"about a hundred bytes — and the reference comments are on the change",
-				"mentions": "the handles a comment mentions, and the reference text mentions nobody",
+				"mentions": "the asker's mentions, which the writer holds into the routing and takes off " +
+					"the record (code's withRouting)",
+				"routing": "whom a comment concerns — the handles it mentions, its thread's other " +
+					"participants — with the change's context, about three hundred bytes, and the " +
+					"reference comments mention nobody and open their threads, so they carry none",
 			}),
 	},
 	code.OpThreadResolve: {
 		payload: reflect.TypeFor[code.ThreadResolve](),
-		carried: []string{"repo_id", "change_id", "thread_id", "resolved", "by.kind", "by.seat",
-			"routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title", "routing.actor",
-			"routing.owner", "routing.owner_kind", "routing.work_item"},
+		carried: []string{"repo_id", "change_id", "thread_id", "resolved", "by.kind", "by.seat"},
 		absent: absent(principalAbsent("by", "kind", "seat"),
-			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
-				"owner_kind", "work_item")),
+			map[string]string{
+				"routing": "whom a resolution concerns — its thread's other participants — with the " +
+					"change's context, and the reference thread is its author's alone, so it carries none",
+			}),
 	},
 	code.OpMerge: {
 		payload: reflect.TypeFor[code.Merge](),
@@ -1547,12 +1590,12 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"half of the records are the turns", referenceTurnsADay * whole.turn / records, 0.45, 0.55},
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
-		{"the code log takes about twice this log's day at its least", codeLeast, 1.9, 2.2},
-		{"and about seven and a half times it at its most", codeMost, 7.25, 7.75},
+		{"the code log takes nearly twice this log's day at its least", codeLeast, 1.75, 1.95},
+		{"and about eight and a half times it at its most", codeMost, 8.25, 8.75},
 		{"two thirds is below that range", share / codeLeast, 0, 1},
-		{"so a code log at two thirds of this log's ceiling fills in about a third of this log's " +
-			"time at its least", share / codeLeast, 0.29, 0.36},
-		{"and in under a tenth of it at its most", share / codeMost, 0, 0.1},
+		{"so a code log at two thirds of this log's ceiling fills in a little over a third of this log's " +
+			"time at its least", share / codeLeast, 0.34, 0.4},
+		{"and in under a tenth of it at its most", share / codeMost, 0.05, 0.1},
 		{"two thirds is at the least of what a company whose seats only push takes", share / pushOnlyLeast,
 			0.95, 1.1},
 		{"and under the most of it, where a CI polls and every push is published", share / pushOnlyMost,
@@ -1693,8 +1736,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		"internal/config/bootstrap.go": {
 			"two thirds is the least of what a company whose seats only push writes here, and BELOW " +
 				"what a company whose seats work through changes writes",
-			"take about twice to about seven and a half times what its tracker writes and its seats' " +
-				"reads take a day",
+			"take nearly twice to about eight and a half times what its tracker writes and its " +
+				"seats' reads take a day",
 		},
 		"internal/code/limits.go": {
 			fmt.Sprintf("against the tracker's measured %s MB of records and %s MB of barriers",
@@ -1719,8 +1762,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 				"a push, measured) and publish their layers, the barriers its git clients' reads append "+
 				"(%d bytes a read)", spaced(codePushRecordBytes), codeCompactionBytes+codeSweepBytes,
 				code.BarrierRecordBytes),
-			"take about twice to about seven and a half times what its tracker writes and its seats' " +
-				"reads take a day",
+			"take nearly twice to about eight and a half times what its tracker writes and its " +
+				"seats' reads take a day",
 			fmt.Sprintf("priced as its coding box's, %s bytes alone in its record, and %s", spaced(
 				codePushRecordBytes), spaced(referenceChangesADay)),
 			fmt.Sprintf("the code log takes %s–%s MB a day against the %s MB its tracker writes and its "+
@@ -1734,8 +1777,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("at their measured sizes (%s)", changeFigures),
 			fmt.Sprintf("(a train %s bytes, a candidate's check queued %s, a landing %s)",
 				spaced(codeCandidateBytes), spaced(codeCandidateCheckQueuedBytes), spaced(codeLandBytes)),
-			"in about a third of the mutation log's time where its seats open changes, and in under a " +
-				"tenth where its checks run and its targets move",
+			"in a little over a third of the mutation log's time where its seats open changes, and in " +
+				"under a tenth where its checks run and its targets move",
 			fmt.Sprintf("the changes' records alone, %s MB a day at their least, are more than the "+
 				"mutation log's whole day", mb(changeLeast, 1)),
 		},
@@ -1802,7 +1845,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // figure, a change's edits, is held to it here.
 //
 // Mutation: declare an op, a kind, a way or a manager in the code domain, add
-// a key to a priced op's payload, or drop the land's term from codeLogDay, and
+// a key to a priced op's payload, or take an op out of codeLogDay and
+// codeLogNegligible both — drop the land's term from codeLogDay, say — and
 // this fails naming it; take the compactor's poll off code.ReadCompactionDue
 // and it fails saying the walk found no writer.
 func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
@@ -1846,7 +1890,10 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	for name, bytes := range map[string]int64{
 		"open": codeChangeOpenBytes, "edit": codeChangeEditBytes, "reviewers": codeReviewersBytes,
 		"revise": codeReviseBytes, "mergeability": codeMergeabilityBytes,
-		"review_findings": codeReviewFindingsBytes, "review": codeReviewBytes, "answer": codeAnswerBytes,
+		"mergeability_recheck": codeMergeabilityRecheckBytes,
+		"mergeability_refresh": codeMergeabilityRefreshBytes, "mergeability_ready": codeMergeabilityReadyBytes,
+		"check_dispatched_empty": codeCheckDispatchedEmptyBytes, "review_findings": codeReviewFindingsBytes,
+		"review": codeReviewBytes, "answer": codeAnswerBytes,
 		"comment": codeCommentBytes, "thread_resolve": codeThreadResolveBytes, "merge": codeMergeBytes,
 		"enqueue": codeEnqueueBytes, "check_queued": codeCheckQueuedBytes,
 		"check_dispatched": codeCheckDispatchedBytes, "check_started": codeCheckStartedBytes,

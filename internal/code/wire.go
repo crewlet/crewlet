@@ -996,8 +996,8 @@ const (
 	// mergeability against the branch it merges into, or whose mergeability
 	// is due again, by id; with one, the first two kinds of that repository,
 	// by source branch, each with its target's tip as the rows hold it
-	// ([ChangeDue]), beside the repository's path owners, and the third
-	// oldest first. The engine's own read, as `compaction_due` is: what its
+	// ([ChangeDue]), beside the repository's path owners where a change of
+	// the page owes its facts, and the third oldest first. The engine's own read, as `compaction_due` is: what its
 	// home polls and is nudged into reading.
 	ReadChangesDue ReadKind = "changes_due"
 	// ReadIndexed is the active and archived repositories searched by index
@@ -1435,8 +1435,9 @@ type ReadAnswer struct {
 	// DueRepos is a `changes_due` listing's page of repositories, by id;
 	// DueChanges a page of one repository's due changes, by source branch,
 	// beside PathOwners, its path owners as its settings carry them, read in
-	// the same snapshot — what its home matches the touched paths against —
-	// and, on its first page, Rechecks: the changes whose merge is due again,
+	// the same snapshot — what its home matches the touched paths against,
+	// so answered only beside a change owing its facts — and, on its first
+	// page, Rechecks: the changes whose merge is due again,
 	// the oldest recorded first ([ChangesDueQuery.Rechecks]). A `checks_due`
 	// read answers in the same two fields — its repositories in DueRepos, one
 	// repository's heads owing their checks work in DueChanges, each with what
@@ -2435,8 +2436,9 @@ type RoutedPage struct {
 	// none is, `nobody` for a change opened since RetainedFrom, every one of
 	// whose notices would still be kept, and `swept` for one opened before
 	// it, whose notices a sweep was entitled to take and the applier never
-	// to write. Every record about a change carries its routing, so its
-	// records always announced: `quiet` and `unknown` are never this read's.
+	// to write. Every record about a change says whom it concerns — its
+	// routing, or none for nobody — so its records always announced:
+	// `quiet` and `unknown` are never this read's.
 	Delivery routing.Delivery `json:"delivery"`
 	// RetainedFrom is the instant from which every notice is kept, a seat's
 	// and a person's alike: the read's instant less [SeatNoticeHorizon], the
@@ -2876,6 +2878,17 @@ func (k GitReadKind) Unstampable() bool {
 // held to no grant and is recorded as nobody's read — the git node's one test
 // of all three.
 func (q GitQuery) EnginesOwn() bool { return q.Kind.EnginesOwn() || q.Check != nil }
+
+// SeatWork is the unit of the answering node's seat git-work share q's git
+// takes ([GitShare.Take]): the engine's own ([SeatWorkEngine]) for a read the
+// engine makes on its own account, a seat's read ([SeatWorkRead]) for every
+// other.
+func (q GitQuery) SeatWork() SeatWork {
+	if q.EnginesOwn() {
+		return SeatWorkEngine
+	}
+	return SeatWorkRead
+}
 
 // GitQuery is one read of a repository by object id: exactly the sub-query of
 // its Kind is set.

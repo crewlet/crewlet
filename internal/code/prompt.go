@@ -136,7 +136,10 @@ func wakeOpener(reason Reason, meta map[string]string) string {
 	case ReasonFindingReplied:
 		return "Somebody answered a finding you raised on change " + ref + "."
 	case ReasonReadyToMerge:
-		return "Your change " + ref + " is ready to merge."
+		// NOT "your change": the wake reaches the authors who may merge it,
+		// and where none may, the lead of the repository's owner, whose change
+		// it is not.
+		return "Change " + ref + " is ready to merge: every precondition its target's gate asks is met."
 	case ReasonMerged:
 		return "Your change " + ref + " was merged."
 	case ReasonReviewSubmitted:
@@ -177,19 +180,28 @@ func wakeHandling(reason Reason) string {
 			"code changes."
 	case ReasonTargetBroken:
 		return "Get the branch green again, whichever way is faster: read what failed with " +
-			"`code_get_check_failures`, then revert the landing — branch from the target with " +
-			"`code_create_branch`, revert the landing's commit there with `code_revert`, and open a change of " +
-			"it with `code_open_change` — or open a change that fixes it forward. Say which on the change " +
-			"with `code_comment_on_change`, so the others it woke do not do it twice."
+			"`code_get_check_failures`, then revert the change with `code_revert_change` — one write that " +
+			"opens \"Revert <repo>!<n>\" into the same target, and with `merge` also merges it as its gate " +
+			"allows — or open a change that fixes it forward. Say which on the change with " +
+			"`code_comment_on_change`, so the others it woke do not do it twice."
 	case ReasonDequeued:
 		return "Read why with `code_get_change`: its `merge_readiness` names what no longer holds. Fix that " +
-			"on the change, and say on it with `code_comment_on_change` when it is ready to queue again."
+			"on the change, then queue it again with `code_merge_change` from the head you read " +
+			"(`expected_head`) — or, where it is not yours to queue, say on it with `code_comment_on_change` " +
+			"that it is ready to queue again."
 	case ReasonMention, ReasonThread, ReasonFindingReplied:
 		return "Answer on the change with `code_comment_on_change`, in the thread you are answering, " +
 			"so the answer sits beside the question."
 	case ReasonReadyToMerge:
-		return "Every precondition of its merge is met. Say so to whoever merges it — where the work " +
-			"item it implements is tracked, or on the change with `code_comment_on_change`."
+		// THE WAKE REACHES WHOEVER MAY MERGE IT (M5-D26): its authors whom the
+		// gate lets merge it, else the owning unit's lead — so it offers the
+		// merge, and the lead's way out where the gate or the lead says the
+		// merge is somebody else's.
+		return "You hear it because you may merge it, or — where none of its authors may — because you " +
+			"lead the unit that owns the repository. Merge it with `code_merge_change` from the head you " +
+			"read (`expected_head`): on a target whose gate requires a check that puts it in the queue, " +
+			"which merges it once its checks pass. Where the gate does not let you merge it, or it is " +
+			"better somebody else's to merge, say who should on the change with `code_comment_on_change`."
 	case ReasonLeadFallback:
 		return "Ask somebody who may review it with `code_request_review`, or review it yourself with " +
 			"`code_review_change`."

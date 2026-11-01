@@ -274,8 +274,9 @@ Usage:
   crewlet objects migrate     Move the company's files to an S3 bucket: copy on a
                               live fleet, then -final in maintenance mode
   crewlet code <cmd>          The engine's own git host: status, verify a node's cache,
-                              import a repository, export a bundle (credential is
-                              git's helper)
+                              import a repository the node fetches (or -local, pushed
+                              from this machine), export a bundle, purge-unreachable
+                              (credential is git's helper)
   crewlet fleet broker <cmd>  The fleet broker's members, as the nodes advertise them
                               and as its metadata group counts them: list, and
                               remove a member that is gone for good

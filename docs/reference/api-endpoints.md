@@ -5052,7 +5052,9 @@ write answers its `op_id` here, and takes it back, by the tracker's own rule
 (`code.native`), it serves the code reads too — `code_list_repos`,
 `code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare`,
 `code_landed_in`, `code_log`, `code_blame`, and a repository's changes,
-`code_list_changes` and `code_get_change`, and a commit's checks, `code_get_check_failures` (see [The company's code](../guides/tools-and-mcp.md#the-companys-code)) —
+`code_list_changes` and `code_get_change`, a commit's checks, `code_get_check_failures`,
+and a search across every repository, `code_search`, the
+[`code_search` question](#get-codesearch) as a tool (see [The company's code](../guides/tools-and-mcp.md#the-companys-code)) —
 read as you, so every repository, and none recorded as `operator_acted` — and,
 where the code host's writes are served, the code writes: `code_commit_files`,
 `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
@@ -5065,7 +5067,8 @@ where the code host's writes are served, the code writes: `code_commit_files`,
 `code_rerun_checks` and `code_report_check` — the last your own CI's report of a check, which no seat
 is given ([External CI](../guides/code.md#external-ci)) — and a repository's `code_purge_unreachable`,
 a purge of its unreachable objects that no seat is given either and that asks a fresh proof of who
-you are — each made as the human seat you
+you are, and `code_import_repo`, a repository created from one at another host, which no seat is given
+either — each made as the human seat you
 hold through the credential you came with (a token bound to nobody writes
 nothing), each answering its `op_id` here and taking it back by the tracker's
 own rule, and each one `operator_acted`. And

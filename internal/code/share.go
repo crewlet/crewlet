@@ -55,9 +55,11 @@ import (
 type SeatWork string
 
 const (
-	// SeatWorkRead is a server-side read of a repository by object id: the
-	// git a read's kind runs (internal/code/query), and a merge preview's
-	// merge (internal/code/home), a read of two commits by their ids too.
+	// SeatWorkRead is a principal's server-side read of a repository by
+	// object id: the git a read's kind runs (internal/code/query) for a seat
+	// or a person, and a merge preview's merge (internal/code/home), a read
+	// of two commits by their ids too — never the engine's own read
+	// ([SeatWorkEngine]).
 	SeatWorkRead SeatWork = "read"
 	// SeatWorkWrite is an engine write's BUILD (internal/code/host): its git
 	// from its read of what every path the change names and every directory
@@ -70,10 +72,19 @@ const (
 	// row, which hold no read-lane slot; and a branch created or deleted
 	// builds nothing and takes no unit.
 	SeatWorkWrite SeatWork = "write"
+	// SeatWorkEngine is a read THE ENGINE makes on its own account
+	// ([GitQuery.EnginesOwn]): a revision's facts or a commit's checks file
+	// a repository's home reads (internal/code/home), and a read made for a
+	// check. It is no seat's, but it runs the same git in the same lane as a
+	// seat's read, so it takes its unit of the same share — and is COUNTED
+	// APART, because a home's background reads counted as seats' would hide
+	// from an operator what holds the share while the seats' reads are sent
+	// on (internal/code/home bounds its own to leave the seats a unit).
+	SeatWorkEngine SeatWork = "engine"
 )
 
 // SeatWorks is the closed set.
-func SeatWorks() []SeatWork { return []SeatWork{SeatWorkRead, SeatWorkWrite} }
+func SeatWorks() []SeatWork { return []SeatWork{SeatWorkRead, SeatWorkWrite, SeatWorkEngine} }
 
 // Valid reports a kind of seat git work this build knows.
 func (w SeatWork) Valid() bool { return slices.Contains(SeatWorks(), w) }

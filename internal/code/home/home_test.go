@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"go/build"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -58,6 +59,14 @@ type estate struct {
 	revises   []code.Revise
 	merges    []code.Mergeability
 	landings  []code.ChangeLanded
+	// landRefusal and landErr are what every landing is answered while
+	// either is set — a refusal that decided nothing, or a call that failed —
+	// the change left on the list as its rows would leave it.
+	landRefusal code.ChangeRefusal
+	landErr     error
+	// recording, where set, runs as each mergeability is recorded: a case's
+	// slow change writer.
+	recording func()
 	changed   chan struct{}
 }
 
@@ -186,6 +195,9 @@ func (e *estate) Converse(_ context.Context, w code.ConversationWrite) (code.Con
 		// A MERGE RECORDS THE READINESS beside it, and a refresh records it
 		// alone: either leaves the change owing no refresh.
 		e.merges = append(e.merges, *w.Mergeability)
+		if e.recording != nil {
+			e.recording()
+		}
 		e.done(w.Mergeability.RepoID, w.Mergeability.ChangeID, func(d *code.ChangeDue) {
 			d.MergeDue, d.RefreshDue = false, false
 		})
@@ -219,6 +231,12 @@ func (e *estate) Change(_ context.Context, p code.ChangeProposal) (code.ChangeRe
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.landings = append(e.landings, *p.Landed)
+	switch {
+	case e.landErr != nil:
+		return code.ChangeResult{}, e.landErr
+	case e.landRefusal != "":
+		return code.ChangeResult{Refusal: e.landRefusal, Detail: "the case's committer decided nothing"}, nil
+	}
 	e.done(p.Landed.RepoID, p.Landed.ChangeID, func(d *code.ChangeDue) { d.FactsDue, d.MergeDue = false, false })
 	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.Landed.ChangeID, Position: e.at}, nil
 }
@@ -417,6 +435,12 @@ type stopped struct{}
 
 func (stopped) Stop() {}
 
+// units is a seat git-work share of so many units, as a loop sizes its own
+// reads by it.
+type units int
+
+func (u units) Units() int { return int(u) }
+
 // loopOn is node's loop over e, p and n, its backstop backstop, started, with
 // a recorder of its own; stopped when the case ends. Its cache and pool are
 // stand-ins no merge reaches ([unmerged]): every change its cases hold owes
@@ -426,7 +450,8 @@ func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 
 	t.Helper()
 	return loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
-		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node},
+		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node,
+		Share: units(2)},
 		backstop)
 }
 
@@ -452,7 +477,7 @@ func loopOver(t *testing.T, o home.Options, backstop time.Duration) (*home.Loop,
 // unmerged is the cache and the pool of a loop whose cases hold no change that
 // owes a merge: whatever reaches either is the case's failure, since nothing
 // the case holds asks one.
-type unmerged struct{ t *testing.T }
+type unmerged struct{ t testing.TB }
 
 func (u unmerged) Holds(string) bool {
 	u.t.Error("a loop whose changes owe no merge asked whether its cache holds a copy")
@@ -495,6 +520,30 @@ func (u unqueued) CloseWorkItem(context.Context, home.TaskClose) error {
 
 // oid is a whole object id made of c.
 func oid(c string) string { return strings.Repeat(c, 40)[:40] }
+
+// observed is how many observations rec holds of the histogram name under
+// attrs, and their sum.
+func observed(rec *metrics.Recorder, name string, attrs metrics.Attrs) (uint64, float64) {
+	var (
+		n   uint64
+		sum float64
+	)
+	for _, s := range rec.Read() {
+		if s.Name != name {
+			continue
+		}
+		match := true
+		for k, v := range attrs {
+			if s.Attrs[k] != v {
+				match = false
+			}
+		}
+		if match {
+			n, sum = n+s.Count, sum+s.Sum
+		}
+	}
+	return n, sum
+}
 
 // counted is what rec counts of name under attrs.
 func counted(rec *metrics.Recorder, name string, attrs metrics.Attrs) uint64 {
@@ -643,6 +692,73 @@ func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 	}
 }
 
+// A WATCH THAT BEGINS AS THE LOOP STOPS IS STOPPED: a watch of the code log
+// that returns from its beginning once the loop's Stop has taken the watches
+// — before Stop has ended the loop's life, the window the case holds open
+// (home.BeginStop) — is stopped by the loop at once, before the pass that
+// follows reads its listing, never stored where nothing would stop it; and no
+// further watch is begun.
+//
+// Mutation: decide by the life's end rather than by stopped, and the watch is
+// stored, still running when the pass reads.
+func TestAWatchThatBeginsAsTheLoopStopsIsStopped(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	n := &slowWatch{entered: make(chan struct{}), release: make(chan struct{})}
+	l, _ := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: &placement{}, node: "node-a"},
+		Nudges: n, Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t},
+		Share: units(2), NodeID: "node-a"}, time.Hour)
+	select {
+	case <-n.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the loop never began its watch")
+	}
+	home.BeginStop(l)
+	close(n.release)
+	e.waitReads(t, 1)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.begun) != 1 || !n.begun[0].stopped {
+		t.Fatalf("the loop began %d watches, the first stopped %t once its pass read; want the one watch "+
+			"that began as the loop stopped, stopped", len(n.begun), len(n.begun) > 0 && n.begun[0].stopped)
+	}
+}
+
+// slowWatch is a code log whose first watch returns only once the case
+// releases it, saying when it is entered; every watch it hands out records
+// whether it was stopped.
+type slowWatch struct {
+	mu      sync.Mutex
+	begun   []*stopWatch
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (n *slowWatch) Watch(context.Context, string, home.Nudged) (home.Watching, error) {
+	n.mu.Lock()
+	first := len(n.begun) == 0
+	w := &stopWatch{n: n}
+	n.begun = append(n.begun, w)
+	n.mu.Unlock()
+	if first {
+		close(n.entered)
+		<-n.release
+	}
+	return w, nil
+}
+
+// stopWatch is one watch of a slowWatch.
+type stopWatch struct {
+	n       *slowWatch
+	stopped bool
+}
+
+func (w *stopWatch) Stop() {
+	w.n.mu.Lock()
+	defer w.n.mu.Unlock()
+	w.stopped = true
+}
+
 // A CHANGE WHOSE HEAD IS IN ITS TARGET IS LANDED: its facts read, finding the
 // head inside the target's tip — the target moved past it — the home asks the
 // committer for the landing, at the change's revision and head and the tip it
@@ -681,6 +797,85 @@ func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
 		t.Fatalf("change 2's facts are %+v, want them matched to %v under digest %s at the tip's position %s",
 			r, matched, digest, measured.TipPosition)
 	}
+}
+
+// A LANDING THAT DECIDED NOTHING FAILS THE TURN: a change whose head its
+// target holds, owing its facts and its merge, whose landing the committer
+// answers busy — or whose Change call fails before any answer — ends its
+// turn FAILED, counted so and logged code_home_turn_failed, and that turn does
+// no more work on the change: no merge is asked of it (the loop's cache and
+// pool are stand-ins any use of which fails the case), and the landing is
+// asked once. A repository whose landings keep failing reads as failing,
+// never as healthy.
+//
+// Mutation: drop the landing's error on the facts branch of the change's step
+// (answer `true, nil` once a landing was asked), and both turns count worked.
+func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
+	t.Parallel()
+	for name, refuse := range map[string]func(*estate){
+		"the committer answers busy": func(e *estate) { e.landRefusal = code.ChangeRefusalBusy },
+		"the Change call fails": func(e *estate) {
+			e.landErr = errors.New("the router reached no committer")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newEstate()
+			due := e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("a"),
+				HeadInTarget: true, Touched: []string{}})
+			e.mu.Lock()
+			e.due[repoA][0].MergeDue = true
+			refuse(e)
+			e.mu.Unlock()
+			logs := &lines{}
+			p := &placement{homes: map[string]string{repoA: "node-a"}}
+			_, rec := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: "node-a"},
+				Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
+				Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2),
+				Logger: slog.New(slog.NewTextHandler(logs, nil))},
+				time.Hour)
+			waitTurns(t, rec, 1)
+			assertTurnFailed(t, rec, logs)
+			if _, landings := e.wrote(); len(landings) != 1 || landings[0].ChangeID != due.ID {
+				t.Errorf("the turn asked the landings %+v, want change 1's once", landings)
+			}
+			if merged := e.merged(); len(merged) != 0 {
+				t.Errorf("the turn recorded %+v of a change it found landed, want nothing more of it", merged)
+			}
+		})
+	}
+}
+
+// assertTurnFailed fails t unless rec counts the change work's one turn
+// failed and none worked, and logs hold code_home_turn_failed.
+func assertTurnFailed(t *testing.T, rec *metrics.Recorder, logs *lines) {
+	t.Helper()
+	failed := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges, "outcome": "failed"})
+	worked := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges, "outcome": "worked"})
+	if failed != 1 || worked != 0 {
+		t.Errorf("the turn whose landing decided nothing counted failed=%d worked=%d, want failed=1", failed, worked)
+	}
+	if !strings.Contains(logs.String(), "code_home_turn_failed") {
+		t.Errorf("the turn whose landing decided nothing logged no code_home_turn_failed: %s", logs.String())
+	}
+}
+
+// lines is a log a case reads while the loop's goroutines write it.
+type lines struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lines) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lines) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
 
 // A HOME REFRESHES A READINESS WITHOUT A MERGE: a change owing only a refresh

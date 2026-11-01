@@ -148,7 +148,13 @@ func (c *codeWrites) Lifecycle(_ context.Context, r code.LifecycleRequest) (code
 	repo := siteDetail().RepoRef
 	if r.Kind == code.LifecycleCreate {
 		id, _ := code.RepoIDOf(r.OpID)
-		repo = code.RepoRef{ID: id, Name: r.Name, Status: code.RepoStatusActive, Kind: r.Create.Kind,
+		// A CREATE THAT IMPORTS — its own import, or a pull mirror's first
+		// fetch — makes its repository importing, as the applier does.
+		status := code.RepoStatusActive
+		if r.Import != nil || r.Create.MirrorFrom != nil {
+			status = code.RepoStatusImporting
+		}
+		repo = code.RepoRef{ID: id, Name: r.Name, Status: status, Kind: r.Create.Kind,
 			Owner: r.Create.Owner, Visibility: r.Create.Visibility, Search: r.Create.Search,
 			DefaultBranch: r.Create.DefaultBranch}
 	}
@@ -242,10 +248,11 @@ func (c *codeWrites) changesAsked() ([]code.ChangeProposal, []code.ConversationW
 }
 
 // writeDeps is codeDeps over host, with the code host's writes and the turn's
-// holds wired to writer.
+// holds wired to writer — and a code search finding nothing, so every code
+// tool a surface can offer is offered, as the engine offers them all.
 func writeDeps(host builtin.CodeReader, writer *codeWrites) builtin.CodeDeps {
 	deps := codeDeps(host)
-	deps.Writer, deps.Holder = writer, writer
+	deps.Writer, deps.Holder, deps.Searcher = writer, writer, &codeSearches{}
 	return deps
 }
 
@@ -1250,6 +1257,7 @@ func holdingCall(name string) (map[string]any, bool) {
 			"expected_head": revHead(3)},
 		builtin.CodeRebaseChangeTool:     {"repo": repo, "change": 7, "expected_head": revHead(3)},
 		builtin.CodeGetCheckFailuresTool: {"repo": repo, "sha": mainOID, "checked_for": "main", "name": "unit"},
+		builtin.CodeSearchTool:           {"repo": repo, "query": "needle"},
 		builtin.CodeRerunChecksTool: {"repo": repo, "sha": mainOID, "checked_for": "main",
 			"checks": []any{map[string]any{"name": "unit", "attempt": 1}}},
 		// A REPORT IS A PERSON'S (TestAReportIsAPersons): no seat's turn
@@ -1257,9 +1265,11 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeReportCheckTool: nil,
 		// A PURGE IS A PERSON'S (TestOnlyAPersonPurges), likewise.
 		builtin.CodePurgeUnreachableTool: nil,
-		builtin.CodeMergeChangeTool:      {"repo": repo, "change": 7, "expected_head": revHead(3)},
-		builtin.CodeDequeueChangeTool:    {"repo": repo, "change": 7},
-		builtin.CodeRevertChangeTool:     {"repo": repo, "change": 7},
+		// AN IMPORT IS A PERSON'S (TestOnlyAPersonImports), likewise.
+		builtin.CodeImportRepoTool:    nil,
+		builtin.CodeMergeChangeTool:   {"repo": repo, "change": 7, "expected_head": revHead(3)},
+		builtin.CodeDequeueChangeTool: {"repo": repo, "change": 7},
+		builtin.CodeRevertChangeTool:  {"repo": repo, "change": 7},
 	}
 	args, ok := rows[name]
 	return args, ok

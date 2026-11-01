@@ -1055,6 +1055,9 @@ func (c *Committer) refuseQueued(rc *repoCommitter, carried []*queued) {
 type round struct {
 	entries []PushEntry
 	answers []decided
+	// ejected is the changes whose live queue entry the round's record ejects
+	// by moving their head ([batchMoves]).
+	ejected []string
 }
 
 // commit publishes one batch as ONE record and answers every proposal in it —
@@ -1124,7 +1127,7 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 			last = round{}
 			now := c.now()
 			formed := verdicts.formed
-			entries, answers, changeRows, version, err := decideBatch(ctx, tx, repoID, proposals, limits,
+			entries, answers, moves, version, err := decideBatch(ctx, tx, repoID, proposals, limits,
 				retention, seats, now, &verdicts)
 			if c.formedInRound != nil {
 				c.formedInRound(verdicts.formed - formed)
@@ -1132,7 +1135,7 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			last = round{entries: entries, answers: answers}
+			last = round{entries: entries, answers: answers, ejected: moves.ejected}
 			if len(entries) == 0 {
 				return statelog.Decision{Version: version}, nil
 			}
@@ -1141,7 +1144,7 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if err := withinRecord(decision, entries, changeRows); err != nil {
+			if err := withinRecord(decision, entries, moves.rows); err != nil {
 				return statelog.Decision{}, err
 			}
 			decision.Version = version
@@ -1158,6 +1161,14 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 		q.answer <- answers[i]
 	}
 	c.announceOpened(repoID, pushOpenings(answers))
+	// A QUEUED CHANGE WHOSE HEAD THE RECORD MOVED left its queue in the
+	// record's own apply, which no queue record names: announced once, from
+	// this node, once the record applied here — never for a record the
+	// ledger collapsed this batch onto, whose own batch announced it.
+	if err == nil && res.Outcome == statelog.OutcomeApplied && !res.Position.IsZero() && !res.Collapsed &&
+		len(last.ejected) > 0 {
+		c.announcePushEjections(repoID, last.ejected, res.Position)
+	}
 	return carried
 }
 

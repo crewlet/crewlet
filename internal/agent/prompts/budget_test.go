@@ -99,6 +99,14 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // merge spends a round on every poll, which no tool's answer reaches a seat
 // early enough to stop. Measured at ~1067, so ~3% is left, as before it.
 //
+// 1100 -> 1150 for a section, deliberately: `code_search` says where something
+// is defined, used or mentioned is found with one search across every
+// repository the seat reads — search before reading whole trees — which took
+// the prompt from ~1067 to ~1112 (~45, its heading with it): a seat that walks
+// trees file by file with code_read to find where something lives spends a
+// round and its context on every file that does not hold it, which no tool's
+// description reaches a seat early enough to stop. ~3% is left, as before it.
+//
 // IT BOUNDS THE PROSE, NOT THE ROSTER. The reference lead has one direct
 // report, so what this number holds down is the contract text — the part that
 // grows when somebody writes a paragraph. What a roster costs is bounded by
@@ -108,7 +116,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t)).Text
-	withinBudget(t, "executor", p, 1100)
+	withinBudget(t, "executor", p, 1150)
 }
 
 // THE REFERENCE RENDERS EVERY GATED SECTION. A budget measured on an input
@@ -119,8 +127,8 @@ func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t))
-	for _, key := range []string{"escalation", "sandbox", "workers", KeyCodeHistory, KeyCodeWrites,
-		KeyDiscoverableTools} {
+	for _, key := range []string{"escalation", "sandbox", "workers", KeyCodeHistory, KeyCodeSearch, KeyCodeWrites,
+		KeyCodeMerging, KeyDiscoverableTools} {
 		if _, ok := slice(p, key); !ok {
 			t.Errorf("the reference executor renders no %q section, so the budgets "+
 				"below are measured on a smaller prompt than production's", key)
@@ -187,7 +195,7 @@ func referenceExecutor(t *testing.T) ExecutorInput {
 		AvailableTools: append([]string{
 			"activate_tool", escalationTool, "create_work_item", "delegate",
 			"list_mcp_server_tools", "run_sandbox", "submit_work",
-		}, slices.Concat(CodeHistoryTools(), CodeWriteTools(), CodeMergeTools())...),
+		}, slices.Concat(CodeHistoryTools(), CodeSearchTools(), CodeWriteTools(), CodeMergeTools())...),
 		Workers:       referenceWorkers(),
 		OffersSandbox: true,
 	}
@@ -319,6 +327,10 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 // 2620 -> 2680 for the code merging guidance (~56 tokens), the same exception
 // once more: rendered only for a seat holding `code_merge_change`. The turn
 // measured ~2,598 with it, ~1% under the old figure, so ~3% headroom again.
+//
+// 2680 -> 2720 for the code search guidance (~45 tokens), the same exception
+// once more: rendered only for a seat holding `code_search`. The turn
+// measures ~2,643 with it by the executor's own ~45, so ~3% headroom again.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
@@ -343,7 +355,7 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 // wholeTurnBudget is the budget TestTheWholeTurnStaysUnderBudget holds the
 // turn to, and the size its control has to exceed: one number, so the control
 // cannot go on proving the allowance against a budget the assertion left.
-const wholeTurnBudget = 2680
+const wholeTurnBudget = 2720
 
 // THE LADDER, and it is an order rather than a set: a lead reads profiles,
 // then names, then one line telling it where the rest of its team went.

@@ -359,8 +359,14 @@ func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules) (Conversatio
 			if d.payload == nil {
 				return statelog.Decision{Version: d.version}, nil
 			}
-			decision, err := recordFor(stamp, subject, op, scope, cw.OpID, Actor{ID: w.nodeID, Kind: ActorSystem},
-				d.payload, w.now())
+			formed := op
+			if d.op != "" {
+				// THE RECORD THE DECIDE FORMED in place of the one the write
+				// carries: a mergeability kept by what it moved.
+				formed = d.op
+			}
+			decision, err := recordFor(stamp, subject, formed, scope, cw.OpID,
+				Actor{ID: w.nodeID, Kind: ActorSystem}, d.payload, w.now())
 			if err != nil {
 				return statelog.Decision{}, err
 			}

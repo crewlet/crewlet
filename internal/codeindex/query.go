@@ -129,6 +129,35 @@ func ParseQuery(text string) (Query, error) {
 	return q, nil
 }
 
+// Beside adds the filters a surface carries BESIDE the text — a tool's
+// argument, a URL's parameter, a screen's control — by the rule ParseQuery
+// reads the same filters in the text by, so a search is one search however
+// its filters arrive: a repository or a path widens it as one more repo: or
+// path: does, named once however often it is named; and a ref is the one ref
+// it reads, so one beside a different ref: is refused, as two ref: filters
+// are. An empty value adds nothing. Each refusal is a *QueryError; the
+// filters' own grammar is Validate's, after.
+//
+// ONE RULE, ON THE GRAMMAR'S SIDE, because two surfaces carry these filters —
+// the `code_search` question's parameters and the seat tool's arguments —
+// and a rule each surface wrote for itself would let one search read two ways.
+func (q *Query) Beside(repo, path, ref string) error {
+	repo, path, ref = strings.TrimSpace(repo), strings.TrimSpace(path), strings.TrimSpace(ref)
+	if ref != "" {
+		if q.Ref != "" && q.Ref != ref {
+			return refuse(ErrBadQuery, "ref %s beside ref:%s: a search reads one ref", ref, q.Ref)
+		}
+		q.Ref = ref
+	}
+	if repo != "" && !slices.Contains(q.Repos, repo) {
+		q.Repos = append(q.Repos, repo)
+	}
+	if path != "" && !slices.Contains(q.Paths, path) {
+		q.Paths = append(q.Paths, path)
+	}
+	return nil
+}
+
 // filterOf is word as a filter: its key and value, or false where it is none
 // — not one of the three words, or nothing after the colon.
 func filterOf(word string) (key, value string, ok bool) {

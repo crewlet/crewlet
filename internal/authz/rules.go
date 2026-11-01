@@ -126,6 +126,12 @@ const (
 	// the change's repository, as every read of the repository's rows is.
 	ActionCodeListChanges Action = "code_list_changes"
 	ActionCodeGetChange   Action = "code_get_change"
+	// ActionCodeSearch is the tool `code_search`: the lines matching a
+	// search across every repository the asker may read, each repository
+	// judged by the grant its answering git node derives. The question of
+	// the same name, on REST and the socket, is decided by ActionCodeRead,
+	// the dotted verb every code question is decided by.
+	ActionCodeSearch Action = "code_search"
 	// ActionCodeRepoReaders is WHO READ a `visibility: unit` repository —
 	// the operator tool `code_repo_readers` and the query registry's
 	// question of the same name, on `GET /code/repos/{name}/readers` and
@@ -206,6 +212,10 @@ const (
 	// unreachable objects: a request its maintainer serves by expunging
 	// every object no ref reaches.
 	ActionCodePurgeUnreachable Action = "code_purge_unreachable"
+	// ActionCodeImportRepo is a person's create of a project repository
+	// filled from one at another host, once or kept in step as a pull
+	// mirror.
+	ActionCodeImportRepo Action = "code_import_repo"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
@@ -812,6 +822,11 @@ var rules = map[Action]rule{
 	// read of one such change is refused `not_permitted`.
 	ActionCodeListChanges: {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeGetChange:   {class: ClassEverybody, recency: iam.RecencyAny},
+	// A SEARCH IS A READ OF EVERY REPOSITORY IT COVERS, on the same footing:
+	// admitted for every principal, and judged per repository where it is
+	// answered — a repository the asker may not read is never searched, and
+	// one a repo: filter names is refused `not_permitted`.
+	ActionCodeSearch: {class: ClassEverybody, recency: iam.RecencyAny},
 	// AND THE CODE WRITE TOOLS, on code.git's own footing: the gate admits
 	// every principal and the repository decides — an engine write by the
 	// grant's ref rule and the protections, a lifecycle request by the one
@@ -876,6 +891,16 @@ var rules = map[Action]rule{
 	// ([ActionWorkPurge]). EVERYBODY at the gate, since who maintains the
 	// repository is its grant, which the tool judges once it is read.
 	ActionCodePurgeUnreachable: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyStepUp},
+	// AN IMPORT IS A PERSON'S (U49 a), on the footing of every create: it
+	// has the code host DIAL ANOTHER HOST for the company — once, or for
+	// good as a pull mirror — which a model's say-so would point at any URL
+	// a page it read named, so never an agent's; and the deciding data node
+	// refuses a seat's create carrying an import or a mirror again, whatever
+	// its grant. EVERYBODY at the gate and no step-up: every person
+	// maintains every repository (ADR-0058) and may create a project for any
+	// owner the chart holds, and an import, like a create, takes nothing
+	// away — a mistaken one is deleted as any repository is.
+	ActionCodeImportRepo: {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the

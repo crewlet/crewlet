@@ -127,6 +127,31 @@ const codeHistorySection = "\n## Reading the company's code" +
 const codeHistoryBoxSentence = " A repository `run_sandbox` clones is blobless — each " +
 	"file's contents fetched as git needs them — so its history is for building, not for answering questions."
 
+// KeyCodeSearch is the outline key of the guidance on searching the company's
+// code.
+const KeyCodeSearch = "code_search"
+
+// CodeSearchTools are the code tools [codeSearchSection]'s claim rests on: the
+// search. The section renders only where the executor holds it — registered
+// where the engine's search is wired, beside the reads, which a seat holds
+// all of or none — so no prompt sends a seat to a search its surface does not
+// carry. Exported for internal/agent/builtin's test that holds it to the tool
+// that package registers, which this package cannot import.
+func CodeSearchTools() []string { return []string{"code_search"} }
+
+// codeSearchSection is the one rule about SEARCHING the company's code that no
+// tool's description reaches a seat early enough to make: the choice between
+// one search across the repositories it reads, which the git nodes answer from
+// an index where a repository keeps one, and walking trees file by file with
+// code_read to find where something lives, a round each and the turn's context
+// spent on files that do not hold it. How a search is written — its filters,
+// its mode, its pages, and that an unfiltered one reads only the repositories
+// that keep an index — is the tool's description, not repeated here: "every
+// repository" would be false of a `search: grep` one no repo: names.
+const codeSearchSection = "\n## Searching the company's code" +
+	"\nWhere something is defined, used or mentioned is found with `code_search` " +
+	"across the repositories you can read — search before reading whole trees."
+
 // KeyCodeWrites is the outline key of the guidance on changing the company's
 // own code.
 const KeyCodeWrites = "code_writes"
@@ -377,11 +402,16 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 		}
 		b.Heading(KeyCodeHistory, section...)
 	}
-	// AND HOW TO CHANGE IT, right after: the same choice made for a write.
+	// AND HOW TO FIND WHAT TO READ, right after: the choice made before a
+	// read, of a search over every repository rather than a walk of one.
+	if holdsAll(in.AvailableTools, CodeSearchTools()) {
+		b.Heading(KeyCodeSearch, codeSearchSection)
+	}
+	// AND HOW TO CHANGE IT, after both: the same choice made for a write.
 	if holdsAll(in.AvailableTools, CodeWriteTools()) {
 		b.Heading(KeyCodeWrites, codeWritesSection)
 	}
-	// AND HOW A CHANGE MERGES, last of the three: what to do while it waits.
+	// AND HOW A CHANGE MERGES, last of the four: what to do while it waits.
 	if holdsAll(in.AvailableTools, CodeMergeTools()) {
 		b.Heading(KeyCodeMerging, codeMergingSection)
 	}

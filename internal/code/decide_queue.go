@@ -163,7 +163,9 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 		if err != nil {
 			return queueDecision{}, err
 		}
-		routings = append(routings, *routed)
+		if routed != nil {
+			routings = append(routings, *routed)
+		}
 	}
 	room, err := routingRoomBeside(e)
 	if err != nil {
@@ -380,7 +382,9 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 		if err != nil {
 			return queueDecision{}, err
 		}
-		routings = append(routings, *routed)
+		if routed != nil {
+			routings = append(routings, *routed)
+		}
 	}
 	room, err := routingRoomBeside(stamped)
 	if err != nil {
@@ -842,12 +846,56 @@ func queueRecordHeld(ctx context.Context, tx *sql.Tx, p QueueProposal, at statel
 }
 
 // announceEjected publishes a code_queue_ejected event for each entry the
-// eject at at put out, on this node's event stream, bounded by
+// eject at at put out ([Committer.announceEjections]).
+func (c *Committer) announceEjected(e Eject, at statelog.Position) {
+	c.announceEjections(e.RepoID, at, func(context.Context, *sql.Tx) ([]Ejection, error) {
+		return e.Entries, nil
+	})
+}
+
+// announcePushEjections publishes a code_queue_ejected event for each live
+// queue entry of the changes the push record at at moved the heads of
+// (ejected, [batchMoves]) — ended head_moved by the record's own apply, which
+// no queue record names, so without this a seat's day counted none of the
+// commonest ejection while the queue read listed every one. Each entry is the
+// one the record ended — its change's entry ended at the record's position,
+// ejected head_moved, read from this node's rows: one statement over the
+// changes, a seek of code_queue_change_idx each ([pushEjectedSQL]).
+func (c *Committer) announcePushEjections(repoID string, ejected []string, at statelog.Position) {
+	c.announceEjections(repoID, at, func(ctx context.Context, tx *sql.Tx) ([]Ejection, error) {
+		list, err := jsonList(ejected)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := tx.QueryContext(ctx, pushEjectedSQL, list, at.Packed(), string(QueueEjected),
+			string(EjectHeadMoved))
+		if err != nil {
+			return nil, fmt.Errorf("code: read the entries the push at %s ejected: %w", at, err)
+		}
+		defer func() { _ = rows.Close() }()
+		var out []Ejection
+		for rows.Next() {
+			x := Ejection{Reason: EjectHeadMoved}
+			if err := rows.Scan(&x.EntryID); err != nil {
+				return nil, fmt.Errorf("code: scan an entry the push at %s ejected: %w", at, err)
+			}
+			out = append(out, x)
+		}
+		return out, rows.Err()
+	})
+}
+
+// announceEjections publishes a code_queue_ejected event for each entry read
+// puts out of repoID's queues at at, on this node's event stream, bounded by
 // [checkEventBudget] under the committer's own lifetime, as a merge's event is
 // ([Committer.announce]): each names the entry's change by its repository and
 // number, read from this node's rows, and a stream that does not take one is
-// logged — the entry's row still says it was ejected.
-func (c *Committer) announceEjected(e Eject, at statelog.Position) {
+// logged — the entry's row still says it was ejected. read is asked inside
+// the one read, so the entries it names and the rows that describe them are
+// one snapshot.
+func (c *Committer) announceEjections(repoID string, at statelog.Position,
+	read func(context.Context, *sql.Tx) ([]Ejection, error)) {
+
 	if c.events == nil {
 		return
 	}
@@ -855,6 +903,11 @@ func (c *Committer) announceEjected(e Eject, at statelog.Position) {
 	defer cancel()
 	var out []types.CodeQueueEjected
 	if err := c.db.Read(ctx, func(tx *sql.Tx) error {
+		ejections, err := read(ctx, tx)
+		if err != nil || len(ejections) == 0 {
+			return err
+		}
+		e := Eject{RepoID: repoID, Entries: ejections}
 		var repoName string
 		switch err := tx.QueryRowContext(ctx, repoNameSQL, e.RepoID).Scan(&repoName); {
 		case errors.Is(err, sql.ErrNoRows):
@@ -904,7 +957,7 @@ func (c *Committer) announceEjected(e Eject, at statelog.Position) {
 		}
 		return nil
 	}); err != nil {
-		c.log.WarnContext(ctx, "code_queue_ejected_unpublished", "repo", e.RepoID, "position", at.String(),
+		c.log.WarnContext(ctx, "code_queue_ejected_unpublished", "repo", repoID, "position", at.String(),
 			"error", err.Error(), "detail", "the activity feed and the event log do not hold this ejection; the "+
 				"entries' rows on the code log still do")
 		return
@@ -913,7 +966,7 @@ func (c *Committer) announceEjected(e Eject, at statelog.Position) {
 		ev := events.New(x, events.TraceContext{})
 		ev.Source = c.nodeID
 		if err := c.events.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-			c.log.WarnContext(ctx, "code_queue_ejected_unpublished", "repo", e.RepoID, "entry", x.EntryID,
+			c.log.WarnContext(ctx, "code_queue_ejected_unpublished", "repo", repoID, "entry", x.EntryID,
 				"error", err.Error(), "detail", "the activity feed and the event log do not hold this ejection; "+
 					"the entry's row on the code log still does")
 		}
@@ -985,10 +1038,15 @@ func ejectedDetail(x Ejection) (string, error) {
 // its last landing by the landings' key; a landing by its key, its commit and
 // whether it is broken, and what a broken one announces; and the landings a
 // green marks, counted over the key's
-// range above the target's green row.
+// range above the target's green row; and the entries a push record ended by
+// moving their changes' heads, driven from the list of the changes, one seek
+// of code_queue_change_idx a change.
 const (
 	entriesNamedSQL = `SELECT ` + qualifiedEntryColumns + ` FROM json_each(?1) AS j
 		CROSS JOIN code_queue AS q WHERE q.repo_id = ?2 AND q.entry_id = CAST(j.value AS TEXT)`
+	pushEjectedSQL = `SELECT q.entry_id FROM json_each(?) AS j
+		CROSS JOIN code_queue AS q INDEXED BY code_queue_change_idx
+		WHERE q.change_id = CAST(j.value AS TEXT) AND q.ended_position = ? AND q.state = ? AND q.end_reason = ?`
 	trainAtSQL = `SELECT COUNT(*) FROM code_candidates INDEXED BY code_candidates_train_idx
 		WHERE repo_id = ? AND target_ref = ? AND train = ? AND position = ?`
 	landingTipSQL = `SELECT commit_oid FROM code_landings WHERE repo_id = ? AND target_ref = ? AND position = ?

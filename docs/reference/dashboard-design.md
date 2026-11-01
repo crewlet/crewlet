@@ -7259,7 +7259,7 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   brought, a seat's turn and work item as the engine stamped them, how it was
   built (a client's `git push`, or a commit the engine built from a tool's
   call) and its pack. **The history is asked in brief** (`brief`): a push
-  carries up to a thousand ref updates — `crewlet code import` sends that many
+  carries up to a thousand ref updates — `crewlet code import -local` sends that many
   at a time — and the commits it introduced, which no row draws, so read whole
   a page of an imported repository was megabytes that every poll sent again,
   and twenty thousand lines a render. A row draws five refs at most, its

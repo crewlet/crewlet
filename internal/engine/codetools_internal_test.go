@@ -13,7 +13,8 @@ import (
 
 // THE CODE TOOLS ARE OFFERED WHERE THE CODE HOST IS SERVED, through the running
 // wiring: a company whose node's runtime serves its repositories holds the
-// twelve in every seat's registry — equipped at the apply, after the runtime it
+// twelve reads and code_search, over the engine's own search, in every seat's
+// registry — equipped at the apply, after the runtime it
 // starts — and the operator's halves read the same deps; a company that hosts
 // no code is given none, whose tools would answer every call that no
 // repository is served. The terms are [OperatorCode]'s, the code host's REST
@@ -23,18 +24,18 @@ import (
 // router) → the company hosting none holds the tools, red; equip dropping
 // deps.Code, or CodeToolDeps leaving out who a turn is acting for or the chart
 // that decides them (the requester ceiling) → the company hosting code holds
-// none, red.
+// none, red; CodeToolDeps leaving out the search → no code_search, red.
 func TestTheCodeToolsAreOfferedWhereTheCodeHostIsServed(t *testing.T) {
 	t.Parallel()
 	t.Run("hosting code", func(t *testing.T) {
 		t.Parallel()
 		e := newSandboxNode(t, parseCompany(t, codeHostCompany))
 		if deps := CodeToolDeps(e); deps.Code == nil || deps.CloneURL == nil || deps.Requesters == nil ||
-			deps.Chart == nil {
-			t.Fatalf("a node serving the code host offers no code tools, or none decided again for whoever "+
-				"woke a turn: %+v", deps)
+			deps.Chart == nil || deps.Searcher == nil {
+			t.Fatalf("a node serving the code host offers no code tools, none decided again for whoever "+
+				"woke a turn, or no search: %+v", deps)
 		}
-		for _, name := range builtin.CodeToolNames() {
+		for _, name := range append(builtin.CodeToolNames(), builtin.CodeSearchTool) {
 			if _, ok := e.Company().Tools.Lookup(name); !ok {
 				t.Errorf("a seat of a company hosting code holds no %s", name)
 			}
@@ -43,10 +44,10 @@ func TestTheCodeToolsAreOfferedWhereTheCodeHostIsServed(t *testing.T) {
 	t.Run("hosting none", func(t *testing.T) {
 		t.Parallel()
 		e := newSandboxNode(t, parseCompany(t, nativeCleanupCompany))
-		if deps := CodeToolDeps(e); deps.Code != nil {
+		if deps := CodeToolDeps(e); deps.Code != nil || deps.Searcher != nil {
 			t.Error("a node of a company hosting no code offers the code tools")
 		}
-		for _, name := range builtin.CodeToolNames() {
+		for _, name := range append(builtin.CodeToolNames(), builtin.CodeSearchTool) {
 			if _, ok := e.Company().Tools.Lookup(name); ok {
 				t.Errorf("a seat of a company hosting no code holds %s", name)
 			}
@@ -107,7 +108,8 @@ type unwrittenCode struct{ builtin.CodeWriter }
 // caps it below write — no repository's grant would let one of its calls
 // through — and so does the executor's guidance on changing code, which is
 // gated on holding them; and a human-only write (code_report_check, a person's
-// own CI's report, and code_purge_unreachable, a person's purge) is shown to
+// own CI's report, code_purge_unreachable, a person's purge, and
+// code_import_repo, a person's import) is shown to
 // no seat at any tier, since the authority table refuses every seat it. Every seat is shown the reads. Read off what the executor sends its
 // model, because the decision is the epoch's and the leaving out is the
 // runner's, and either half alone could drop it.

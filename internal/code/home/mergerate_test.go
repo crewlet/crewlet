@@ -36,7 +36,7 @@ func TestTheQueuePricesItsMergeRateAtTheRoundsItTimed(t *testing.T) {
 	rows := newQueueRows(oid("a"), 2, 1)
 	l, err := home.New(home.Options{Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: &queueChains{},
-		Tasks: &queueTasks{}, NodeID: "git-a", Now: c.Now})
+		Tasks: &queueTasks{}, NodeID: "git-a", Share: units(2), Now: c.Now})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestAQueueThisNodeNoLongerTurnsIsForgotten(t *testing.T) {
 	rows := newQueueRows(oid("a"), 2, 1)
 	l, err := home.New(home.Options{Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: &queueChains{},
-		Tasks: &queueTasks{}, NodeID: "git-a", Now: c.Now})
+		Tasks: &queueTasks{}, NodeID: "git-a", Share: units(2), Now: c.Now})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -48,10 +48,12 @@ import (
 //   - changes_requested, review_submitted: the change's authors, by the
 //     review's verdict.
 //   - checks_failed: the authors and the record's actor — the pusher of the
-//     head the check measured — on the ending of a check of the change's
-//     head that failed, or errored past the home's own requeue: the one
-//     reason that is news to its actor too ([Reason.WakesActor]), since a
-//     pusher learns that their commit fails its checks only from this.
+//     head the check measured, or the person whose CI reported it — on the
+//     ending of a check of the change's current head that failed, or errored
+//     past the home's own requeue, whether the engine ran it or a person's
+//     CI reported it onto the same rows: the one reason that is news to its
+//     actor too ([Reason.WakesActor]), since a pusher learns that their
+//     commit fails its checks only from this.
 //   - target_broken: the authors and the effective lead of the repository's
 //     owner, on the broken record naming the landing that merged the change
 //     — never an enqueuer, since only a landing ahead of its checks, which
@@ -82,6 +84,21 @@ import (
 // A push that moves no change concerns nobody: a head move, a close by a
 // deleted source branch and a push to a ref no change uses are bookkeeping —
 // what a change's page says, never what a wake is for.
+//
+// # A record with no audience carries no routing
+//
+// The snapshot is stamped only where some role the record's op routes by is
+// filled ([routingFor] answers nil otherwise): a comment nobody is mentioned
+// in, said outside any thread, a thread's resolution, a revision's facts that
+// ask nobody, and a mergeability that turns nothing tell nobody, and the
+// change's context — its reference, its repository, its title, its owner and
+// its work item, about three hundred bytes a record at the reference
+// company's — would ride every such record on every node's log for a fan-out
+// of none. A record without a routing takes the path an empty audience took:
+// [RoutingsOf] names none for it, so the applier writes no notice and the
+// feed acknowledges it without a wake. Where there IS an audience the routing
+// stays whole, context included, because the feed's node routes a record
+// without reading a row it may lag on.
 //
 // # ready_to_merge is announced by ONE record, and why it is that one
 //
@@ -129,10 +146,10 @@ import (
 // Once a build without them has run, each op's payload takes {Name:
 // "<Payload>.Routing", Since: 2, Op: "<op>", Path: []string{"mutation",
 // "routing"}} in versionedFields — a push's {Name: "PushEntry.Routing", Since:
-// 2, Op: "push", Path: []string{"mutation", "pushes", "routing"}} — and an
-// open's, an edit's, a review's and a comment's mentions {Name:
-// "<Payload>.Mentions", Since: 2, Op: "<op>", Path: []string{"mutation",
-// "mentions"}}, with RecordVersion at 2, its line under "What each version
+// 2, Op: "push", Path: []string{"mutation", "pushes", "routing"}} — while an
+// open's, an edit's, a review's and a comment's mentions ride the routing
+// alone (withRouting takes the asker's off the record) and take no row of
+// their own; with RecordVersion at 2, its line under "What each version
 // added" and a Carrying record in the statelogtest candidate: such a build
 // would apply the record and tell nobody, where it must retain it.
 
@@ -580,14 +597,22 @@ func keptRoutings(routings []ChangeRouting, room, rows int) ([]ChangeRouting, er
 }
 
 // withRouting is payload with r stamped on it — every payload of a change's
-// records takes one ([RoutingsOf]).
+// records takes one ([RoutingsOf]), nil where the record concerns nobody.
+//
+// AND THE ASKER'S MENTIONS TAKEN OFF an open, an edit, a comment and a review:
+// what the asker named is the request, which [routingFor] holds to the
+// deciding chart into the routing's mentions — every one the chart holds,
+// each marked a person or a seat — and the routing's are the copy every
+// reader reads (the applier's participants and notices, the feed's wakes).
+// Recorded beside them they would be a second copy nobody reads, of a list
+// that may name handles the chart does not hold, on every node's log.
 func withRouting(payload any, r *ChangeRouting) any {
 	switch p := payload.(type) {
 	case ChangeOpen:
-		p.Routing = r
+		p.Routing, p.Mentions = r, nil
 		return p
 	case ChangeEdit:
-		p.Routing = r
+		p.Routing, p.Mentions = r, nil
 		return p
 	case ChangeDraft:
 		p.Routing = r
@@ -608,13 +633,13 @@ func withRouting(payload any, r *ChangeRouting) any {
 		p.Routing = r
 		return p
 	case Comment:
-		p.Routing = r
+		p.Routing, p.Mentions = r, nil
 		return p
 	case ThreadResolve:
 		p.Routing = r
 		return p
 	case Review:
-		p.Routing = r
+		p.Routing, p.Mentions = r, nil
 		return p
 	case FindingResolve:
 		p.Routing = r
@@ -685,7 +710,8 @@ type concerning struct {
 	thread       string
 }
 
-// routingFor is the routing of one record about a change, read in the deciding
+// routingFor is the routing of one record about a change — nil for a record
+// whose op fills no role, which carries none (this file's head) — read in the deciding
 // snapshot tx — THE ONE FUNCTION every writer of a change's records stamps its
 // routing by, so the committer and the change writer never disagree about whom
 // a record concerns. Each role is read in its key's order and bounded
@@ -783,6 +809,12 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 			return nil, err
 		}
 		r.ThreadParticipants = parties(said)
+	}
+	if len(Concerns([]*ChangeRouting{r})) == 0 {
+		// NOBODY TO TELL: no role the record's op routes by is filled, so the
+		// record carries no routing at all (this file's head) — never the
+		// change's context for a fan-out of none.
+		return nil, nil
 	}
 	for handle := range persons {
 		r.Persons = append(r.Persons, handle)

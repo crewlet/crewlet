@@ -517,7 +517,7 @@ func (r *read) compute(ctx context.Context, at cursor) (code.GitAnswer, error) {
 		}
 	}
 	r.index(commitsOf(r.q, objs))
-	release, err := r.s.o.Share.Take(ctx, code.SeatWorkRead)
+	release, err := r.s.o.Share.Take(ctx, r.q.SeatWork())
 	if err != nil {
 		if code.AnswerDue(ctx) {
 			return code.GitAnswer{}, r.unready(code.UnreadyShare, fmt.Sprintf("%s's seat git work held its whole "+

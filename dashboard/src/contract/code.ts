@@ -188,12 +188,12 @@ export const CODE_PHRASES: Readonly<Record<string, { short: string; about: strin
     checks_failed: {
       short: "a check of yours failed",
       about: "an author, a check failed",
-      why: "a check of the head of a change you wrote failed",
+      why: "a check of the head of a change you wrote, or one your CI reported, failed",
     },
     target_broken: {
       short: "it broke its target",
       about: "told its landing broke the target",
-      why: "a required check fails on the landing of a change you wrote, queued or own the repository of",
+      why: "a required check fails on the landing of a change you wrote, or of one whose repository you lead",
     },
     conflicted: {
       short: "yours conflicts",

@@ -29,7 +29,17 @@ import (
 //     whole, the largest gesture on a change at the reference text;
 //   - reviewers: its ask of one reviewer, with a short note;
 //   - revise: its home's facts of a revision touching five paths;
-//   - mergeability: its home's merge of a revision into its target, clean;
+//   - mergeability: its home's merge of a revision into its target, clean —
+//     not ready, so it concerns nobody and carries no routing;
+//   - mergeability_recheck: its home's recheck of a moved target that merges
+//     clean again, kept by its tip (code.MergeabilityKept);
+//   - mergeability_refresh: its home's refresh once one of its head's checks
+//     was queued, its readiness unchanged, kept by the versions and the
+//     checks position it was judged at — the widest kept refresh, a checks
+//     position beside the versions, which the day prices every one at;
+//   - mergeability_ready: the refresh that finds the change ready once it is
+//     approved and its check passed, the full record routed to whoever may
+//     merge it;
 //   - review_findings: a seat's review asking for changes, its summary the
 //     reference text's 1 KiB remark and two findings each a 1 KiB body,
 //     naming its turn and its model as code_review_change stamps them;
@@ -45,18 +55,21 @@ import (
 //   - enqueue: the same change queued into a target whose gate lands
 //     through a queue, deleting its source as the merge does;
 //   - candidate, candidate_check_queued and land: that entry as its home's
-//     queue worker takes it on — a train of one candidate, the change merged
-//     onto its target's tip, with the pack its merge wrote; one required
-//     check of the candidate's tip, queued as the worker queues it (purpose
-//     candidate, naming the candidate and the base it was built onto, its
-//     definition carried), whose claim, box and ending carry a head's keys
-//     and so are priced at theirs; and, the check passed, the train landed
-//     in one land record, its routing and its source's deletion stamped by
-//     the decide;
+//     queue worker takes it on — a train of one candidate of one entry, as a
+//     queue that keeps up builds, the change merged onto its target's tip,
+//     naming the pack its merge wrote; one required check of the candidate's
+//     tip, queued as the worker queues it (purpose candidate, naming the
+//     candidate and the base it was built onto, its definition carried),
+//     whose claim, box and ending carry a head's keys and so are priced at
+//     theirs; and, the check passed, the train's tested prefix landed in one
+//     land record, routed to the change's authors, whom it tells the change
+//     merged, its source's deletion stamped by the decide;
 //   - check_queued, check_dispatched, check_started, check_named and
 //     check_finished: one check of a head, as its home queues it (its
 //     definition carried) and records the head's dispatch, its runner claims
 //     it and names its box, and the runner ends it passed;
+//   - check_dispatched_empty: a moved target's checks file read again with
+//     no head to dispatch, at most one a moved target per pass of its home;
 //   - tip_check_queued: one check of a landing's tip, as its home's tip work
 //     queues it (purpose tip, naming the base whose checks file defines it,
 //     its definition carried, and no change); its claim, its box and its
@@ -79,20 +92,24 @@ import (
 // authored one, and a record the writers grow past its figure, or shrink
 // well below it, is a code log's day the docs no longer state.
 var changeRecordBytes = map[string]int64{
-	"open":                   3_430,
-	"edit":                   3_100,
+	"open":                   3_100,
+	"edit":                   2_770,
 	"reviewers":              1_190,
-	"revise":                 1_640,
-	"mergeability":           1_340,
+	"revise":                 1_330,
+	"mergeability":           1_030,
+	"mergeability_recheck":   880,
+	"mergeability_refresh":   860,
+	"mergeability_ready":     1_460,
+	"check_dispatched_empty": 840,
 	"review_findings":        5_030,
 	"review":                 2_340,
 	"answer":                 1_290,
-	"comment":                2_280,
-	"thread_resolve":         1_160,
+	"comment":                1_950,
+	"thread_resolve":         840,
 	"merge":                  1_990,
 	"enqueue":                980,
-	"candidate":              1_300,
-	"candidate_check_queued": 1_020,
+	"candidate":              1_290,
+	"candidate_check_queued": 1_010,
 	"land":                   1_530,
 	"check_queued":           970,
 	"check_dispatched":       970,
@@ -289,10 +306,11 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 			TimeoutSeconds: 600}, Required: true, Reason: code.QueueDispatch})
 
 	// THE QUEUED CHANGE TAKEN ON BY ITS HOME'S QUEUE WORKER: a train of one
-	// candidate, the change merged onto main's tip as M; the required check
-	// queued on the candidate's tip as the worker queues it, under the checks
-	// file at the train's base, then claimed and passed by its runner; and
-	// the train's tested prefix landed.
+	// candidate of one entry — the queue keeping up — the change merged onto
+	// main's tip as M; the required check queued on the candidate's tip as
+	// the worker queues it, under the checks file at the train's base, then
+	// claimed and passed by its runner; and the train's tested prefix landed,
+	// telling the change's authors it merged.
 	train := training(queue, oidOf("A"), enqueued.Enqueue.EntryID, oidOf("M"))
 	took("candidate", func() {
 		res, err := c.ProposeQueue(t.Context(), train)
@@ -326,6 +344,57 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 			code.LandEntry{EntryID: enqueued.Enqueue.EntryID, ChangeID: queued, Commit: oidOf("M")}))
 		requireRecorded(t, res, err)
 	})
+
+	// A MOVED TARGET'S CHECKS FILE READ AGAIN with no head to dispatch: the
+	// home's dispatch of none, which still records the tip it read.
+	checked("check_dispatched_empty", code.OpCheckDispatched, code.CheckDispatched{RepoID: repo,
+		Target: mainRef, Tip: tip, TipPosition: at, DefsOID: defs, DispatchedAt: harnessAt})
+
+	// A CHANGE'S RE-EVALUATIONS, on a change of its own into a gated main:
+	// its home's merge of it (not ready, so concerning nobody), then a
+	// recheck of its moved target that merges clean again and a refresh
+	// after one of its head's checks was queued, each keeping the row's
+	// outcome; then the refresh that finds it ready once approved and its
+	// check passed, routed to whoever may merge it.
+	// It carries the reference change's title and work item, which the
+	// ready record's routing names.
+	gated := suiteSettings()
+	gated.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	gated.Protections[0].Gate = queueGate()
+	kept := n.ensure("kept", gated, t1).RepoID
+	n.push(kept, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
+		set(featureRef, code.ZeroOID, oidOf("B"))))
+	keptOpen := opening(kept, featureRef, mainRef, dev)
+	keptOpen.Open.Title, keptOpen.Open.WorkItem = open.Open.Title, open.Open.WorkItem
+	keptOpened, err := c.ProposeChange(t.Context(), keptOpen)
+	requireChanged(t, keptOpened, err)
+	keptChange := keptOpened.ChangeID
+	converse(t, w, n.revising(kept, keptChange, 1, oidOf("B"), mainRef, nil, "upload/retry.go"))
+	converse(t, w, n.merging(kept, keptChange, 1, oidOf("B"), mainRef, code.MergeClean))
+	n.push(kept, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("A2"))))
+	took("mergeability_recheck", func() {
+		converse(t, w, n.merging(kept, keptChange, 1, oidOf("B"), mainRef, code.MergeClean))
+	})
+	refresh := func() code.ConversationWrite {
+		return code.ConversationWrite{OpID: statelog.NewOpID(time.Now(), ""), Mergeability: &code.Mergeability{
+			RepoID: kept, ChangeID: keptChange, Revision: 1, HeadOID: oidOf("B"), TargetRef: mainRef,
+			Refresh: true, Node: n.id}}
+	}
+	unit := code.CheckKey{RepoID: kept, OID: oidOf("B"), Target: mainRef, Name: "unit", Attempt: 1}
+	if _, err := n.publishCheck(kept, code.OpCheckQueued, code.CheckQueued{CheckKey: unit,
+		Purpose: code.PurposeHead, ChangeID: keptChange, Revision: 1, DefsOID: defs, Def: &code.CheckDef{
+			Name: "unit", Run: "go test ./...", TimeoutSeconds: 600}, Required: true,
+		Reason: code.QueueDispatch}); err != nil {
+		t.Fatalf("queue the kept change's check: %v", err)
+	}
+	took("mergeability_refresh", func() { converse(t, w, refresh()) })
+	converse(t, w, reviewing(kept, keptChange, platLead, 1, code.VerdictApprove, nil))
+	if _, err := n.publishCheck(kept, code.OpCheckFinished, code.CheckFinished{CheckKey: unit,
+		State: code.CheckStatePassed, Reason: code.CheckReasonExit, ExitCode: &exit, DurationMs: 41_200,
+		Summary: "exit 0 after 41s", FinishedAt: harnessAt.Add(41 * time.Second)}); err != nil {
+		t.Fatalf("end the kept change's check: %v", err)
+	}
+	took("mergeability_ready", func() { converse(t, w, refresh()) })
 
 	// THE SAME CHANGE LANDED AHEAD OF ITS CHECKS, by a person's override
 	// past its target's queue: its tip judged broken where its required

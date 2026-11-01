@@ -624,6 +624,10 @@ func registeredStatements() map[string]statement {
 		"review row": {reviewRowSQL, []any{"review-1"}, []string{"sqlite_autoindex_code_reviews_1 (id=?)"}},
 		"live change on": {liveChangeOnSQL, []any{"repo-1", "refs/heads/f000001"},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		// A FAILED CHECK A PERSON'S CI REPORTED finds the live change at
+		// its head on its target (checkswriter.go's headChangeIn).
+		"live change at head": {liveChangeAtHeadSQL, []any{"repo-1", "refs/heads/main", oid("head-1-3")},
+			[]string{"code_changes_target_idx (repo_id=? AND target_ref=? AND head_oid=?)"}},
 		// THE LIVE CHANGES A PUSH RECORD MOVES — a decide's and an apply's —
 		// driven from the list of its branches, and from the list of the
 		// targets and heads its commands set: one seek of an index partial on
@@ -732,6 +736,8 @@ func registeredStatements() map[string]statement {
 			[]string{mergeabilityKey + " (change_id=?)"}},
 		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, true, false, "repo-1-change-000001",
 			2, "refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
+		"keep mergeability": {keptMergeabilitySQL, []any{true, oid("t"), 6000, 7000, true, 5, 4, 5000,
+			"repo-1-change-000001", 2}, []string{mergeabilityKey + " (change_id=?)"}},
 		// THE POSITION OF A HEAD'S CHECKS a mergeability's decide stamps: every
 		// attempt at the commit for the change's target, a range of
 		// code_checks' key.
@@ -856,6 +862,11 @@ func registeredStatements() map[string]statement {
 		// the repositories by their key, two seeks each.
 		"entries named": {entriesNamedSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
 			[]string{"SCAN json_each AS j", "sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		// THE ENTRIES A PUSH EJECTED, which its committer announces
+		// (decide_queue.go's announcePushEjections).
+		"entries a push ejected": {pushEjectedSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`,
+			1000, "ejected", "head_moved"},
+			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
 		"test an entry": {testEntrySQL, []any{"train-1", "candidate-1", oid("m"), "repo-1", "entry-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
 		"eject an entry": {ejectEntrySQL, []any{1, 1000, "check_failed", "", "repo-1", "entry-1"},

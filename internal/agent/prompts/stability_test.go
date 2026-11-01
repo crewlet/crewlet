@@ -78,7 +78,7 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 		// code tools for the same reason, for the code guidance — the
 		// reads' and the writes'.
 		AvailableTools: append([]string{"post_message", "refresh_memory", "comment_on_work_item"},
-			slices.Concat(CodeHistoryTools(), CodeWriteTools(), CodeMergeTools())...),
+			slices.Concat(CodeHistoryTools(), CodeSearchTools(), CodeWriteTools(), CodeMergeTools())...),
 		ThreadContext:     "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:    "- prefers short replies",
 		RelevantKnowledge: "- **Runbook**: steps",

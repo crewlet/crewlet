@@ -457,7 +457,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	}
 	homeLoop, err := codehome.New(codehome.Options{
 		Estate: homeEstate, Placement: e.router, Nudges: codeNudges{log: codeLog.log, runner: codeLog.runner},
-		Cache: c, Git: pool, Chains: chains, Tasks: e.queueTasks(), NodeID: nodeID, Metrics: e.metrics,
+		Cache: c, Git: pool, Chains: chains, Tasks: e.queueTasks(), Share: share, NodeID: nodeID, Metrics: e.metrics,
 	})
 	if err != nil {
 		h.Stop(context.WithoutCancel(ctx))

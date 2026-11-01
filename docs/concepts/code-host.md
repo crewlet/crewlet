@@ -872,7 +872,7 @@ length, so a push of some six hundred such refs of the longest reaches the
 bound first. The receiving node measures a push's ref updates as it reads
 them, with everything the rest of the push could add at its largest, and
 refuses one past the bound before anything of it is run or stored.
-[`crewlet code import`](../reference/cli.md#crewlet-code-import) cuts each
+[`crewlet code import -local`](../reference/cli.md#crewlet-code-import--local) cuts each
 batch of refs it pushes by the same rule, so an import never meets it.
 
 What a repository holds is its packs **as the pushes stored them** until its
@@ -4569,9 +4569,15 @@ commit](#engine-built-commits) takes its unit of the same share — one share a
 node, so seats' reads and writes between them never hold more than half —
 and gives it back before its push lands. What the share holds is the read's
 or the build's own git; the short checks of what either names, before it,
-wait in the lane's queue like any short read. `crewlet.code.seatwork.held` is
-the share held now and `crewlet.code.seatwork.waits` how long every unit asked
-for waited, by the `work` it was for and whether it came free in time — the
+wait in the lane's queue like any short read. The engine's own reads — a
+revision's facts and a checks file a repository's home reads, and a read made
+for a check — run the same git, so they take their unit of the same share,
+and a home leaves its node's seats at least one unit wherever the share holds
+two or more ([The home's change work](#the-homes-change-work)).
+`crewlet.code.seatwork.held` is the share held now and
+`crewlet.code.seatwork.waits` how long every unit asked for waited, by the
+`work` it was for (`read`, `write`, or `engine` for the engine's own) and
+whether it came free in time — the
 wait is a term of the attempt a read or a write is given on one git node
 ([Metrics](../reference/metrics.md)).
 
@@ -4697,7 +4703,13 @@ unfiltered search of a company would make thousands of
 (`internal/codesearch`). A search naming one repository is the read above.
 A person or a script asks it as the question `code_search`
 ([`GET /code/search`](../reference/api-endpoints.md#get-codesearch)), which
-takes no `session` floor: it answers at the tip it names.
+takes no `session` floor: it answers at the tip it names. A seat, and a
+person's own assistant, ask it as the tool of the same name
+([The company's code](../guides/tools-and-mcp.md#the-companys-code)), its
+lines fenced and paged under one tool answer; in a seat's turn, the
+repositories it names are resolved first, as every code tool's are, and the
+search is floored at this node's own pushes to them, so a seat finds what it
+pushed.
 
 ```mermaid
 sequenceDiagram
@@ -5398,7 +5410,13 @@ Two things put a repository's work in front of its home:
   pass.
 
 There is no lease: two nodes that each take themselves for a repository's
-home both read, and the records' own guards take one. A node works two
+home both read, and the records' own guards take one. A node's own git
+reads — a revision's facts, a checks file — each hold a unit of its [seat
+git-work share](#server-side-reads), so the home
+runs at most all but one of the share's units of them at once, at least one:
+its seats keep a unit wherever the share has two (a node of four cores or
+more), and on a smaller node a seat's read waits behind one of the home's at
+the most. A node works two
 repositories at once, one turn of a minute at the most each, a repository
 with more due work than a turn finishing it at the passes that follow.
 `crewlet.code.home.passes` counts the turns by what became of them,
@@ -5458,6 +5476,19 @@ it names no asker.
   waits behind the same first ones every refresh. On a change's page the
   mergeability says which tip it is of — "as of" that tip — until then. An
   `unknown` merge is tried again on the same pace.
+- **What a re-evaluation moved, and nothing more.** A recheck of a moved
+  target whose merge says what the row says — the same state, the same
+  conflicted paths and the same count of the rest — and a
+  [refresh](#merge-readiness) whose readiness is the row's, ready or not and
+  waiting on a person or not as before, are recorded as a
+  `mergeability_kept`: the change, its revision, and only what moved — the
+  recheck's tip and the position that moved the branch there, the versions
+  and the checks position a refresh judged the readiness at. Its apply moves
+  those columns, and a recheck's instant, under the guard the full record's
+  is decided by, and nothing else, so a conflicted change is not carried
+  again, paths and all, every ten minutes its target moves. Whatever turns
+  — a new revision or target, a state, a conflict list, a readiness — is the
+  whole `mergeability` record, since it is what somebody may be told of.
 
 | Table | A row for | What it holds |
 |---|---|---|
@@ -5485,7 +5516,12 @@ preview and the change it would open say one thing — its state, the
 conflicted paths a record would hold and how many more there were — merged in
 a scratch of its own, in the node's read lane under one unit of its seat
 git-work share ([Fair share](#fair-share)), within a read's ten seconds of git:
-a merge that runs out of them answers `unknown`. A comparison's question
+a merge that runs out of them answers `unknown`. A merge is a function of the
+two commits and the git that ran it, so a decided one is kept in the node's
+memo of answers by object id, beside the comparison it sits by: the same two
+commits previewed again — by anybody whose grant reads the repository, and
+recorded as their read all the same — are answered from it with no git run.
+An `unknown` merge is never kept. A comparison's question
 asks one beside its answer — the `preview` of `GET
 /code/repos/{name}/compare` ([A repository's
 content](../reference/api-endpoints.md#a-repositorys-content)) — and a
@@ -5702,8 +5738,10 @@ change as whoever enqueued it.
   the checks), `conflict` (naming up to 100 paths), `gate_unmet`,
   `head_moved` or `not_fast_forward` — and abandons the train they were in.
   The node whose committer landed it announces a `code_queue_ejected` event
-  for each, fed to the activity feed. A dequeue of an entry a train tests
-  abandons the train too.
+  for each, fed to the activity feed. A push that moves a queued change's
+  head ejects its entry `head_moved` in the push's own record, and the node
+  whose committer landed the push announces that ejection the same way. A
+  dequeue of an entry a train tests abandons the train too.
 - A **land** lands up to 64 entries in ONE record: a train's tested
   **prefix** — its candidates from the first, in order, up to one whose tip
   every required check passed on. **Its
@@ -6035,8 +6073,9 @@ heads' whole diff.
 
 ## Who a change wakes
 
-Every record about a change carries **whom it concerns**: who made it, and the
-people and seats each reason it routes under reaches, as the deciding node's
+Every record about a change that concerns anybody carries **whom it
+concerns**: who made it, and the people and seats each reason it routes under
+reaches, as the deciding node's
 rows and chart held them when it decided the record. The node that decides
 the record stamps it — the repository's committer for an open, an edit, a
 close, a landing, a push and the merge gate's records (a merge, a dequeue, a
@@ -6049,12 +6088,22 @@ withdrawn, an author pushes, a thread grows — and an audience derived from
 them minutes later on another node would tell different people about the same
 record.
 
+A record whose audience is nobody — a comment that mentions nobody the chart
+holds, said outside any thread; a thread resolved; a revision's facts that ask
+nobody; a merge or a readiness that turns nothing — carries no snapshot at all,
+and is read exactly as one whose audience is empty: no notice, and no wake.
+Where somebody hears, the snapshot is whole, the change's name, title, owner
+and work item with it, since the node that wakes a seat routes the record
+without reading rows it may not have applied yet. What the asker named in a
+write — its mentions — is the request: the record carries the mentions the
+chart holds, in the snapshot, and not the asker's list beside them.
+
 | Reason | Who hears it | On |
 |---|---|---|
 | `mention` | Every handle the text names that the chart holds — at most 32 a write | An open, an edit, a review, a comment; a push's options |
 | `review_requested` | A reviewer asked who was not asked already; a path owner a revision's facts ask | An ask for review; a revision's facts |
 | `changes_requested` | The change's authors | A review asking for changes |
-| `checks_failed` | The change's authors, and whoever pushed the head the check measured | The ending of a check of the change's current head that failed, or that errored past the home's own requeue (its third attempt, or an error its infrastructure did not cause) |
+| `checks_failed` | The change's authors, and whoever pushed the head the check measured — or, for a check a person's CI reported, that person | The ending of a check of the change's current head that failed, or that errored past the home's own requeue (its third attempt, or an error its infrastructure did not cause) — run by the engine, or reported by a person's CI ([External CI](../guides/code.md#external-ci)), whose report names no change and fails the head of the live change (open or draft) into its target at that commit |
 | `target_broken` | The change's authors and the effective lead of the repository's owner — never an enqueuer: a queue's landing lands green, so only a landing ahead of its checks, a person's override merge or push, can be broken | The broken record that names the landing that merged the change — a check the target requires fails on the landed tip |
 | `conflicted` | The change's authors | The merge that **turns** into a conflict — not every recheck that finds it one still; the queue's ejection of the change for a merge that conflicts |
 | `dequeued` | The change's authors, and whoever put it in the queue | A record that put the change's entry out of its target's queue: an ejection, or a dequeue somebody asked |
@@ -6081,7 +6130,8 @@ record.
   the queue lands an entry on its enqueuer's account. A check of a head that
   fails is the one exception: it is news to whoever pushed that head above
   all, since nothing else they did tells them, so they hear it as the
-  record's actor.
+  record's actor — and where a person's CI reported the failure, that person
+  is its actor and hears it, in their inbox, beside the authors.
 - **A record of several changes keeps what fits.** A queue's ejection and a
   landing name every change they put out or land, each with its own audience,
   and a record must land whatever it would tell: where the audiences of all
@@ -6181,9 +6231,16 @@ stops after its record committed loses no wake.
   findings and requests for changes, `code_comment_on_change` for a mention or
   a thread, `code_get_check_failures` for a failed check — and
   `code_rerun_checks` for an attempt its infrastructure ended — and, for a
-  branch a landing broke, a revert of the landing's commit made with the
-  tools that write a branch (`code_create_branch`, `code_revert`,
-  `code_open_change`), or a fix forward. It always reads the change itself
+  branch a landing broke, the change's revert with `code_revert_change`
+  ([A change reverted](#a-change-reverted)) — one write that opens
+  `Revert <repo>!<n>` into the same target and, asked to, merges it — or a
+  fix forward, either said on the change with `code_comment_on_change` so
+  the others the record woke do not do it twice. A change ready to merge is
+  offered its merge, `code_merge_change`, since that wake reaches whoever may
+  make it, and `code_comment_on_change` to say who should where the gate or
+  its reader says it is somebody else's; a change put out of its queue is
+  offered the same merge, to queue it again once what no longer held is
+  fixed. It always reads the change itself
   first, with `code_get_change`: the wake says what happened, not what the
   change is. `mention`, `review_requested`, `changes_requested`,
   `checks_failed`, `target_broken`, `conflicted`, `dequeued`,

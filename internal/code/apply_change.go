@@ -401,20 +401,7 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 	// THE MOVED CHANGES LEAVE THEIR QUEUES: a head moved ejects a live
 	// entry, a merge or a close dequeues it — each list one statement a
 	// chunk, a seek of code_queue_change_idx a change.
-	var ejected, merged, closed []string
-	for _, id := range w.touched {
-		if w.opened[id] || !b.queued[id] {
-			continue
-		}
-		switch pushWrite(b.rows[id], false) {
-		case changeMerged:
-			merged = append(merged, id)
-		case changeStateMoved:
-			closed = append(closed, id)
-		default:
-			ejected = append(ejected, id)
-		}
-	}
+	ejected, merged, closed := b.queueEnds()
 	for _, end := range []struct {
 		ids    []string
 		state  QueueState

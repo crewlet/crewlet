@@ -1861,18 +1861,22 @@ type Stream struct {
 	// stream a repository's refs, packs and settings move on.
 	//
 	// UNSET DERIVES IT beside the mutation log's, at two thirds of that
-	// log's ceiling as set or derived, clamped to 1 GiB..1 TiB. The ratio is
-	// meant to be the byte rate, at which a blocked trim reaches either
-	// ceiling in the same time; two thirds is the least of what a company
+	// log's ceiling as set or derived, clamped to 1 GiB..1 TiB. Two thirds
+	// is not the byte rate, at which a blocked trim would reach either
+	// ceiling in the same time: the log is reserved on every node whether or
+	// not the company hosts code (below), so its share is weighed against
+	// what the other logs give up for it — a first boot's mutation log
+	// about a fifth shorter — and a share at the byte rate would cost every
+	// company far more ([DerivedCodeLogNumerator] has both). By the byte
+	// rate, two thirds is the least of what a company
 	// whose seats only push writes here, and BELOW what a company whose
 	// seats work through changes writes: its push records, the records that
 	// compact their packs, publish their layers and sweep what each
 	// compaction retired, the barriers its git clients' reads append, and
 	// its changes' records — opens, reviews, comments, merges, every
 	// revision's facts and mergeability, and its queue's and checks' where
-	// they run — take about twice to about seven and a half times what its
-	// tracker writes and its seats' reads take a day
-	// ([DerivedCodeLogNumerator] has the arithmetic). Such a company sets
+	// they run — take nearly twice to about eight and a half times what its
+	// tracker writes and its seats' reads take a day. Such a company sets
 	// this field to the ratio its two logs' crewlet.statelog.log.bytes_per_day
 	// show before the first boot, or raises the log with `crewlet retention
 	// set-capacity` once it exists.

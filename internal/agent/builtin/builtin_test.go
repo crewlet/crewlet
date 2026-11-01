@@ -368,11 +368,16 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// and a report is a check result on the same rows — neither a
 		// worker's to make under its parent's grant.
 		builtin.CodeGetCheckFailuresTool: false,
-		builtin.CodeRerunChecksTool:      true,
-		builtin.CodeReportCheckTool:      true,
+		// A SEARCH OF THE COMPANY'S CODE: a read, and a worker's to make.
+		builtin.CodeSearchTool:      false,
+		builtin.CodeRerunChecksTool: true,
+		builtin.CodeReportCheckTool: true,
 		// A REPOSITORY'S PURGE: a request every reader of the repository's
 		// history loses objects to.
 		builtin.CodePurgeUnreachableTool: true,
+		// A REPOSITORY IMPORTED: a new project every colleague reads,
+		// filled from another host.
+		builtin.CodeImportRepoTool: true,
 
 		// THE DEPLOYMENT'S HEALTH: two reads of what the fleet already
 		// publishes, which a worker of a granted seat may be handed.

@@ -167,11 +167,13 @@ func (n *node) dueRepos() []string {
 // retarget puts both back; a change whose target branch is gone is due
 // nothing, and neither is one of an archived repository. The engine's own read
 // names no asker, the instant its home's refresh is paced by, and only it
-// names a due repository.
+// names a due repository. The path owners ride only a page naming a change
+// that owes its facts.
 //
 // Mutations: take facts of a change's head revision against another branch for
 // its facts, and the retargeted change drops off the listing; take the facts
-// for the merge, and a change whose facts are recorded owes no merge.
+// for the merge, and a change whose facts are recorded owes no merge; answer
+// the owners on every page, and the page owing only a merge carries them.
 func TestTheDueListingIsTheRows(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -196,9 +198,16 @@ func TestTheDueListingIsTheRows(t *testing.T) {
 	res, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go"))
 	requireConversed(t, res, err)
 	want.FactsDue = false
-	if got, _ := n.dueChanges(repo); len(got) != 1 || got[0] != want {
+	got, gotOwners := n.dueChanges(repo)
+	if len(got) != 1 || got[0] != want {
 		t.Fatalf("a change whose head revision holds its facts is due as %+v, want %+v: its merge still owed",
 			got, want)
+	}
+	// THE OWNERS RIDE ONLY A PAGE NAMING A CHANGE OWING ITS FACTS: they are
+	// what the home matches a revision's touched paths against, and nothing
+	// else on the page reads them.
+	if len(gotOwners) != 0 {
+		t.Fatalf("a page naming no change owing its facts answered the path owners %+v, want none", gotOwners)
 	}
 	res, err = w.Converse(ctx, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
 	requireConversed(t, res, err)

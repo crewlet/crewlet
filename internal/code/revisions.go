@@ -499,6 +499,30 @@ func (b *changeBook) queuedMoved() int {
 	return n
 }
 
+// queueEnds is how the book's moves end the live queue entries of the
+// changes they reached that hold one — none of those it opened, which no queue
+// holds yet: a change whose head moved is ejected (head_moved), a merged one
+// and a closed one dequeued. The apply ends the entries by it, and the decide
+// names the ejected to the committer, which announces each
+// (Committer.announcePushEjections): the same model, so the two agree.
+func (b *changeBook) queueEnds() (ejected, merged, closed []string) {
+	w := &b.writes
+	for _, id := range w.touched {
+		if w.opened[id] || !b.queued[id] {
+			continue
+		}
+		switch pushWrite(b.rows[id], false) {
+		case changeMerged:
+			merged = append(merged, id)
+		case changeStateMoved:
+			closed = append(closed, id)
+		default:
+			ejected = append(ejected, id)
+		}
+	}
+	return ejected, merged, closed
+}
+
 // moved is how many changes the book's moves reached.
 func (b *changeBook) moved() int { return len(b.writes.touched) }
 

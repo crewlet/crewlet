@@ -9,18 +9,35 @@ import (
 )
 
 // SetBackstop sets l's backstop — its passes' interval and a turn's bound —
-// and the window its moved targets' merges are counted in, so a suite proves a
-// pass catches what a nudge missed, and a pass's merges keep to their share,
-// without waiting a minute for either. Before Start.
-func SetBackstop(l *Loop, d time.Duration) {
-	l.backstop = d
-	l.changes.rechecks.window = d
-}
+// so a suite proves a pass catches what a nudge missed without waiting a
+// minute for it. Before Start.
+func SetBackstop(l *Loop, d time.Duration) { l.backstop = d }
+
+// SetTicks paces l's passes by ticks in place of a ticker of its backstop, so
+// a suite begins each paced pass — and with it each repository's new share of
+// a pass's rechecks — exactly when it sends one. Before Start.
+func SetTicks(l *Loop, ticks <-chan time.Time) { l.ticks = ticks }
+
+// SetConcurrency sets how many turns l runs at once, so BenchmarkHomeLoop
+// measures the values [Concurrency] is chosen among. Before Start.
+func SetConcurrency(l *Loop, n int) { l.turnsAtOnce = n }
 
 // SetMergesPerPass sets how many merges of its moved targets one repository's
-// window holds on l, so a suite proves the budget with a few changes rather
-// than [MergeabilityPerPass] of them. Before Start.
+// share of a pass holds on l, so a suite proves the budget with a few changes
+// rather than [MergeabilityPerPass] of them. Before Start.
 func SetMergesPerPass(l *Loop, n int) { l.changes.rechecks.perPass = n }
+
+// BeginStop is the first half of l's Stop and nothing more: stopped set
+// under the loop's mutex and its watches taken, its life NOT yet ended — the
+// window between Stop letting the mutex go and ending the life, which a case
+// cannot otherwise reach, held open so the case proves what a watch that
+// begins inside it does. The case's own Stop ends the rest.
+func BeginStop(l *Loop) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.stopped = true
+	l.watches = make([]Watching, len(nudgeFilters))
+}
 
 // CheckWork is l's check work's turn of repoID, its rows read at floor: what
 // a nudge or a pass schedules for the checks worker, run on the case's own

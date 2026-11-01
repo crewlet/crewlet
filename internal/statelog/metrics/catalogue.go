@@ -1046,19 +1046,26 @@ func Catalogue() []Instrument {
 			Shows: "One merge of a change's head into its target's tip on this " +
 				"git node — `git merge-tree --write-tree` in a scratch of its " +
 				"own, never in a cache — by `work`: `mergeability`, the home's " +
-				"own, recorded on the change, its ancestry asked first and its " +
-				"merge given thirty seconds of the maintenance lane; or " +
-				"`preview`, a comparison's merge preview a person or a seat " +
-				"asked, given a read's ten seconds of the read lane under a " +
-				"unit of the node's seat git-work share. `outcome`: `clean`, " +
-				"`conflict`, `unknown` — the merge ran out of its time and " +
-				"decided nothing, which a change's home records and asks " +
-				"again ten minutes on — `landed`, the home's ancestry finding " +
-				"the head inside its target, the change landed with no merge " +
-				"run, and `failed`, a merge that could not run (a busy lane, a " +
-				"copy that would not sync). `unknown` climbing is changes past " +
-				"what a merge decides in its time; `failed` climbing on the " +
-				"`mergeability` work, a home whose maintenance lane is full.",
+				"own, its ancestry asked first and its merge given thirty " +
+				"seconds of the maintenance lane, timed from the copy's sync to " +
+				"the ancestry's or the merge's answer — never the record of it " +
+				"on the change or the landing, which are the change writer's " +
+				"and the committer's; or `preview`, a comparison's merge " +
+				"preview a person or a seat asked, given a read's ten seconds " +
+				"of the read lane under a unit of the node's seat git-work " +
+				"share, its merge-tree alone timed: a preview refused before " +
+				"it (not held, not permitted, a commit absent), or answered " +
+				"from the node's memo of the same two commits, is no merge, and " +
+				"is not observed. `outcome`: `clean`, `conflict`, `unknown` — " +
+				"the merge ran out of its time and decided nothing, which a " +
+				"change's home records and asks again ten minutes on — " +
+				"`landed`, the home's ancestry finding the head inside its " +
+				"target, the change landed with no merge run, and `failed`, a " +
+				"merge that could not run (a copy that would not sync, a busy " +
+				"lane, git failing) or a preview's merge its asker's attempt " +
+				"ended first. `unknown` climbing is changes past what a merge " +
+				"decides in its time; `failed` climbing on the `mergeability` " +
+				"work, a home whose maintenance lane is full.",
 		},
 		{
 			Name: CodeCompactRuns, Kind: KindCounter, Unit: UnitCount,
@@ -2117,8 +2124,9 @@ func Catalogue() []Instrument {
 			Shows: "Seat git work running at once on this git node, of half its " +
 				"read lane: the units of the node's seat git-work share held " +
 				"now — server-side reads of a repository by object id running " +
-				"their git, and the builds of engine writes, a seat's or a " +
-				"person's commit made through a tool. The share is half of " +
+				"their git, the engine's own among them, and the builds of " +
+				"engine writes, a seat's or a person's commit made through a " +
+				"tool. The share is half of " +
 				"`git.max_processes` " +
 				"(at least one), and the other half of the read lane stays the " +
 				"node's own and its persons' — a push's scans, a sync's peel, " +
@@ -2134,9 +2142,12 @@ func Catalogue() []Instrument {
 				"share asked for waited, by `outcome` — `granted`, taken " +
 				"within two seconds; `unready`, none free in two seconds, " +
 				"answered so the asker is served by another git node, its " +
-				"wait the whole two — and by `work` (`read`: a server-side " +
-				"read of a repository by object id; `write`: the build of an " +
-				"engine write, a commit made through a tool). One whose " +
+				"wait the whole two — and by `work` (`read`: a seat's or a " +
+				"person's server-side read of a repository by object id; " +
+				"`write`: the build of an engine write, a commit made through " +
+				"a tool; `engine`: the engine's own read — a revision's facts " +
+				"or a checks file a repository's home reads, or a read made " +
+				"for a check). One whose " +
 				"caller went away while it waited is not counted. The wait " +
 				"is a whole term of the attempt a seat's read or write is " +
 				"given on one git node, so the `granted` tail nearing two " +

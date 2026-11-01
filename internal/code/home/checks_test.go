@@ -132,7 +132,7 @@ func checkLoop(t *testing.T, e *checkEstate) *home.Loop {
 	t.Helper()
 	l, err := home.New(home.Options{Estate: e, Placement: asNode{placement: &placement{}, node: "git-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
-		Tasks: unqueued{t: t}, NodeID: "git-a"})
+		Tasks: unqueued{t: t}, Share: units(2), NodeID: "git-a"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

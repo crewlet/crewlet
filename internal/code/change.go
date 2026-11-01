@@ -262,7 +262,9 @@ type ChangeOpen struct {
 	// Mentions is the handles the change's title and body name, as its
 	// asker resolved them against the chart it acts in, at most
 	// [MaxMentions]; the committer holds them to its own chart, and each
-	// is told ([ReasonMention]).
+	// is told ([ReasonMention]). THE ASKER'S, never the record's: the
+	// committer holds them into the routing's mentions, their one copy,
+	// and takes them off the record it appends (withRouting).
 	Mentions []string `json:"mentions,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// COMMITTER from its snapshot and chart; an asker sends none.

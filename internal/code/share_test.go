@@ -189,6 +189,68 @@ func TestAWritesBuildDrawsOnTheSeatShare(t *testing.T) {
 	}
 }
 
+// THE ENGINE'S OWN READS ARE COUNTED APART FROM THE SEATS': a revision's
+// facts and a commit's checks file, which a repository's home reads, and a
+// read made for a check take their unit as `work=engine`, and every other
+// read as a seat's (`work=read`) — and the engine's unit is one of the SAME
+// share, so a seat's read beside it waits as beside another seat's. Counted
+// as a seat's read, a home's background facts reads holding a small node's
+// one unit read to an operator as the seats' own load.
+//
+// Mutation: SeatWork answering read for every query — the facts read counts
+// work=read, red.
+func TestTheEnginesOwnReadsAreCountedApartFromSeats(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		name string
+		q    code.GitQuery
+		want code.SeatWork
+	}{
+		{"a revision's facts", code.GitQuery{Kind: code.GitRevisionFacts}, code.SeatWorkEngine},
+		{"a checks file", code.GitQuery{Kind: code.GitChecksFile}, code.SeatWorkEngine},
+		{"a read made for a check", code.GitQuery{Kind: code.GitBlob, Check: &code.CheckKey{}}, code.SeatWorkEngine},
+		{"a seat's tree", code.GitQuery{Kind: code.GitTree}, code.SeatWorkRead},
+		{"a seat's diff", code.GitQuery{Kind: code.GitDiff}, code.SeatWorkRead},
+	} {
+		if got := row.q.SeatWork(); got != row.want {
+			t.Errorf("%s takes a unit as %q, want %q", row.name, got, row.want)
+		}
+	}
+
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := code.NewGitShare("git-a", 2, rec)
+	code.SetShareWait(s, 50*time.Millisecond)
+	ctx := t.Context()
+	facts, err := s.Take(ctx, code.GitQuery{Kind: code.GitRevisionFacts}.SeatWork())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Take(ctx, code.SeatWorkRead)
+	var unready *code.ErrGitUnready
+	if !errors.As(err, &unready) || unready.Reason != code.UnreadyShare {
+		t.Fatalf("a seat's read beside the engine's own on a one-unit share = %v, want ErrGitUnready{share}", err)
+	}
+	facts()
+	for _, row := range []struct {
+		work, outcome string
+		want          uint64
+	}{{"engine", "granted", 1}, {"read", "unready", 1}, {"read", "granted", 0}} {
+		got := uint64(0)
+		for _, snap := range rec.Read() {
+			if snap.Name == metrics.CodeSeatworkWaits && snap.Attrs["work"] == row.work &&
+				snap.Attrs["outcome"] == row.outcome {
+				got = snap.Count
+			}
+		}
+		if got != row.want {
+			t.Errorf("waits{work=%s, outcome=%s} counts %d, want %d", row.work, row.outcome, got, row.want)
+		}
+	}
+}
+
 // gauge is the gauge name's reading.
 func gauge(rec *metrics.Recorder, name string) float64 {
 	for _, s := range rec.Read() {
