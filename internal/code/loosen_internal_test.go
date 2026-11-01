@@ -249,8 +249,8 @@ func TestAGateChangeNamesEveryGateField(t *testing.T) {
 
 	// EACH FIELD CHANGED ALONE, decoded as a tool's argument is.
 	values := map[string]string{
-		"merge_by": `"persons"`, "approvals": `"none"`, "approvals_unless": `["whitespace_only"]`,
-		"human_paths": `[{"glob":"web/**"}]`, "checks": `["e2e","unit"]`, "landing": `{"depth":2}`,
+		"merge_by": `"persons"`, "approvals": `"none"`, "approvals_unless": `{"add":["whitespace_only"]}`,
+		"human_paths": `{"put":[{"glob":"web/**"}]}`, "checks": `{"remove":["lint"]}`, "landing": `{"depth":2}`,
 		"owners_approve": `false`, "delete_source": `"none"`, "agents_edit_checks": `true`,
 	}
 	if got := slices.Sorted(maps.Keys(values)); !slices.Equal(got, slices.Sorted(slices.Values(GateChangeFields()))) {
@@ -297,6 +297,94 @@ func asObject(t *testing.T, g MergeGate) map[string]any {
 	}
 	// THE OMITTED KEYS TOO, so a field a change empties is a key that moved.
 	for _, key := range GateChangeFields() {
+		if _, ok := out[key]; !ok {
+			out[key] = nil
+		}
+	}
+	return out
+}
+
+// A PROTECT CHANGE NAMES EVERY PUSH CONTROL, by the rule's own spelling, and
+// sets exactly the one it names. A control added to PushRule that
+// ProtectChange cannot name is one no tool can change — and one a change of
+// any other field could not keep — and ProtectControlFields is what a tool
+// takes, so the three are held to one another: every PushRule field but its
+// pattern has a ProtectChange field of its Go name and JSON key, and
+// ProtectControlFields lists exactly their keys in PushRule's order. Then a
+// change of each control, decoded from its JSON as a tool's call is, resolved
+// against a rule the snapshot holds, changes that control and keeps every
+// other, the gate included — and a change naming none keeps the rule whole.
+//
+// Mutation: leave allow_delete out of ProtectChange.rule — its change leaves
+// the rule as it was, red.
+func TestAProtectChangeNamesEveryPushControl(t *testing.T) {
+	t.Parallel()
+	push, change := reflect.TypeFor[PushRule](), reflect.TypeFor[ProtectChange]()
+	var keys []string
+	for i := range push.NumField() {
+		f := push.Field(i)
+		if f.Name == "Pattern" {
+			continue
+		}
+		c, ok := change.FieldByName(f.Name)
+		switch {
+		case !ok:
+			t.Errorf("PushRule.%s has no field in ProtectChange: no request could change it", f.Name)
+			continue
+		case jsonKey(c) != jsonKey(f):
+			t.Errorf("PushRule.%s is spelled %q, and ProtectChange.%s %q", f.Name, jsonKey(f), c.Name, jsonKey(c))
+		}
+		keys = append(keys, jsonKey(f))
+	}
+	if !slices.Equal(ProtectControlFields(), keys) {
+		t.Errorf("ProtectControlFields is %v, want PushRule's keys in its order, %v", ProtectControlFields(), keys)
+	}
+
+	const main = "refs/heads/main"
+	gate := strictGate()
+	held := []Protection{{PushRule: PushRule{Pattern: main, DirectPush: DirectNone, AllowForce: true}, Gate: &gate}}
+	values := map[string]string{"allow_force": `false`, "allow_delete": `true`, "direct_push": `"persons"`}
+	if got := slices.Sorted(maps.Keys(values)); !slices.Equal(got, slices.Sorted(slices.Values(keys))) {
+		t.Fatalf("the cases name %v, want every control a change names, %v", got, keys)
+	}
+	before := pushObject(t, held[0].PushRule)
+	for field, value := range values {
+		dec := json.NewDecoder(bytes.NewReader([]byte(`{"pattern":"` + main + `","` + field + `":` + value + `}`)))
+		dec.DisallowUnknownFields()
+		var c ProtectChange
+		if err := dec.Decode(&c); err != nil {
+			t.Errorf("a change of %s does not decode: %v", field, err)
+			continue
+		}
+		rule := c.rule(held)
+		if rule == nil || rule.Gate == nil || !rule.Gate.Equal(gate) {
+			t.Errorf("a change of %s leaves the rule %+v, want the held gate kept", field, rule)
+			continue
+		}
+		after := pushObject(t, rule.PushRule)
+		for key := range maps.Keys(before) {
+			if changed := !reflect.DeepEqual(before[key], after[key]); changed != (key == field) {
+				t.Errorf("a change of %s leaves %s %v, from %v", field, key, after[key], before[key])
+			}
+		}
+	}
+	if rule := (ProtectChange{Pattern: main}).rule(held); rule == nil || !rule.Equal(held[0]) {
+		t.Errorf("a change naming nothing leaves the rule %+v, want %+v", rule, held[0])
+	}
+}
+
+// pushObject is p as its JSON object, every control's key present.
+func pushObject(t *testing.T, p PushRule) map[string]any {
+	t.Helper()
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range ProtectControlFields() {
 		if _, ok := out[key]; !ok {
 			out[key] = nil
 		}

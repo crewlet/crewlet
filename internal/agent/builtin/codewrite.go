@@ -731,9 +731,9 @@ func (t *codeRepoWrite) Description() string {
 	case CodeRestoreRepoTool:
 		return "Restore a deleted repository as it was."
 	}
-	return "Set the protection of the branches or tags a pattern names, or take it away (`remove`). A call " +
-		"sets direct_push, allow_force and allow_delete whole; a merge gate field changes that field alone, " +
-		"the rest of the branch's gate kept (`remove_gate` drops it)."
+	return "Set the protection of the branches or tags a pattern names, or take it away (`remove`). Each " +
+		"field changes that field alone, the rest of the rule kept (a new rule: direct_push persons, no " +
+		"force or delete, no gate); `remove_gate` drops the merge gate."
 }
 
 // ownerShape is how an owner argument is spelled, as the read tools answer
@@ -774,7 +774,7 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 			"description": "refs/heads/<glob> or refs/tags/<glob>; `*` within a name, `**` across them."}
 		props["direct_push"] = map[string]any{"type": "string",
 			"enum":        []string{string(code.DirectPersons), string(code.DirectNone)},
-			"description": "A person's alone (also when left out), or nobody's."}
+			"description": "A person's alone, or nobody's."}
 		props["allow_force"] = map[string]any{"type": "boolean"}
 		props["allow_delete"] = map[string]any{"type": "boolean"}
 		props["remove"] = map[string]any{"type": "boolean"}
@@ -794,15 +794,25 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 func gateParams(props map[string]any) {
 	enum := func(values []string) map[string]any { return map[string]any{"type": "string", "enum": values} }
 	list := func(item map[string]any) map[string]any { return map[string]any{"type": "array", "items": item} }
+	object := func(fields map[string]any) map[string]any {
+		return map[string]any{"type": "object", "properties": fields}
+	}
+	// A LIST CHANGES ITEM BY ITEM ([code.ListChange], [code.HumanPathsChange]):
+	// what it adds and what it removes, never the list whole.
+	change := func(item map[string]any) map[string]any {
+		return object(map[string]any{"add": list(item), "remove": list(item)})
+	}
 	classes := list(enum(spelled(code.PathClasses())))
 	props["merge_by"] = enum(spelled(code.MergeBys()))
 	props["approvals"] = enum(spelled(code.ApprovalCounts()))
-	props["approvals_unless"] = classes
-	props["human_paths"] = list(map[string]any{"type": "object", "properties": map[string]any{
-		"glob": map[string]any{"type": "string"}, "unless": classes}, "required": []string{"glob"}})
-	props["checks"] = list(map[string]any{"type": "string"})
-	props["landing"] = map[string]any{"type": "object", "properties": map[string]any{
-		"depth": map[string]any{"type": "integer"}, "batch": map[string]any{"type": "integer"}}}
+	props["approvals_unless"] = change(enum(spelled(code.PathClasses())))
+	props["human_paths"] = object(map[string]any{
+		"put": list(map[string]any{"type": "object", "properties": map[string]any{
+			"glob": map[string]any{"type": "string"}, "unless": classes}, "required": []string{"glob"}}),
+		"remove": list(map[string]any{"type": "string"})})
+	props["checks"] = change(map[string]any{"type": "string"})
+	props["landing"] = object(map[string]any{
+		"depth": map[string]any{"type": "integer"}, "batch": map[string]any{"type": "integer"}})
 	props["delete_source"] = enum(spelled(code.DeleteSources()))
 	for _, flag := range []string{"owners_approve", "agents_edit_checks"} {
 		props[flag] = map[string]any{"type": "boolean"}
@@ -900,22 +910,25 @@ func (t *codeRepoWrite) request(args map[string]any) (code.LifecycleRequest, *to
 			tool, clip(pattern)))
 		return code.LifecycleRequest{}, &r
 	}
-	change := code.ProtectChange{Pattern: pattern}
-	if !argBool(args, "remove") {
-		// A DIRECT_PUSH LEFT OUT IS PERSONS, as code.repos reads an unset
-		// one: every rule holds at least a seat's direct push, so no value
-		// of it means "anyone who may write" — what a ref no rule matches
-		// already means — and a rule carrying none is one no record may
-		// carry, refused by the request's own validation. Like allow_force
-		// and allow_delete left out, it is the rule's least: the call sets
-		// the pattern's push controls whole.
-		direct := cmp.Or(strings.TrimSpace(argString(args, "direct_push")), string(code.DirectPersons))
-		change.Rule = &code.Protection{PushRule: code.PushRule{Pattern: pattern, DirectPush: code.DirectPush(direct),
-			AllowForce: argBool(args, "allow_force"), AllowDelete: argBool(args, "allow_delete")}}
+	// EACH PUSH CONTROL THE CALL NAMES, and only those: the deciding data
+	// node keeps every control left out as the pattern's rule holds it in the
+	// snapshot it decides in — or its least, persons and off, on a pattern no
+	// rule holds yet ([code.ProtectChange]) — so a call that requires a check
+	// leaves a frozen branch frozen. Decoded by the code host's own spelling,
+	// sent beside a removal too, so the request's own validation refuses the
+	// two together rather than this tool dropping what its caller said.
+	controls := map[string]any{}
+	for _, field := range code.ProtectControlFields() {
+		if v, ok := args[field]; ok {
+			controls[field] = v
+		}
 	}
-	// THE MERGE GATE AS A CHANGE, never whole, sent beside a removal too, so
-	// the request's own validation refuses the two together rather than this
-	// tool dropping what its caller said.
+	var change code.ProtectChange
+	if err := decodeArg(controls, &change); err != nil {
+		r := failed(fmt.Sprintf("%s: a push control is not as the schema says: %v.", tool, err))
+		return code.LifecycleRequest{}, &r
+	}
+	change.Pattern, change.Remove = pattern, argBool(args, "remove")
 	gate, refusal := gateChangeArg(tool, args)
 	if refusal != nil {
 		return code.LifecycleRequest{}, refusal

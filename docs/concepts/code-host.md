@@ -348,9 +348,10 @@ stricter of the floor and the `merge_by` of every rule matching its branch, a
 rule with no gate reading as `writers`.
 
 A repository a tool made takes its gates through `code_protect_branch`, a
-field at a time, each field a call leaves out kept as the branch's gate has it
-— or defaulted as above, on a branch whose rule has none — and only a person
-loosens one ([Who may change a protection](#who-may-change-a-protection)).
+field at a time and a list an item at a time, each field a call leaves out
+kept as the branch's gate has it — or defaulted as above, on a branch whose
+rule has none — and only a person loosens one ([Who may change a
+protection](#who-may-change-a-protection)).
 
 A gate is **recorded, answered and judged, and a merge is held to it**:
 every change into a gated branch is judged under it, its readiness listing
@@ -586,17 +587,26 @@ and a restore through the tools brings it back.
 ### Who may change a protection
 
 A repository a tool made changes its [protection rules](#protection-rules) one
-pattern at a time, with `code_protect_branch`. A call sets the rule's push
-controls — `direct_push`, `allow_force` and `allow_delete` — whole, each it
-leaves out taking its least (`persons`, off, off), and changes the branch's
-[merge gate](#merge-gates) **a field at a time**: each gate field it names
-replaces that field, every field it leaves out stays as the gate has it — or
-takes its default, on a branch whose rule has no gate yet — and `remove_gate`
-takes the gate away. The deciding data node puts the change in the gate its
-own rows hold, never a gate the caller read elsewhere, so two calls changing
-two fields of one gate at once both keep theirs; and it refuses a gate the
-change leaves weighing past the 8 KiB a gate may. The call answers the rule as
-it now stands, its gate whole.
+pattern at a time, with `code_protect_branch`, and **a call changes only what
+it names**. Each push control it names — `direct_push`, `allow_force`,
+`allow_delete` — replaces that control, and each it leaves out stays as the
+rule has it, or takes its least (`persons`, off, off) on a pattern no rule
+holds yet: a call that only requires a check leaves a branch frozen at
+`direct_push: none` frozen. It changes the branch's [merge gate](#merge-gates)
+**a field at a time** too: `merge_by`, `approvals`, `landing`,
+`owners_approve`, `delete_source` and `agents_edit_checks` each replace that
+field; the lists change **item by item** — `checks` and `approvals_unless` take
+`{"add": [...], "remove": [...]}`, and `human_paths` takes `{"put": [{"glob",
+"unless"}], "remove": [glob]}`, a glob put replacing that glob's entry — so
+requiring one more check is `checks: {"add": ["e2e"]}`, never the list resent;
+every field it leaves out stays as the gate has it — or takes its default, on
+a branch whose rule has no gate yet — and `remove_gate` takes the gate away.
+The deciding data node puts the change in the rule its own rows hold, never a
+rule or a list the caller read elsewhere, so two calls changing two controls,
+two fields or two items of one list at once — two checks added — both keep
+theirs; and it refuses a gate the change leaves past a list's bound or
+weighing past the 8 KiB a gate may. The call answers the rule as it now
+stands, its gate whole.
 
 **A protection binds every seat, its unit's lead included.** A seat whose
 grant maintains the repository may add a rule or tighten one, and never remove

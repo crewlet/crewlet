@@ -417,37 +417,96 @@ func (c PathOwnersChange) applyTo(owners []PathOwner) []PathOwner {
 }
 
 // ProtectChange is one pattern's rule as a protect request changes it, which
-// the decide RESOLVES against the rules its own snapshot holds: a nil Rule
-// removes the pattern's rule.
+// the decide RESOLVES against the rule its own snapshot holds for the pattern:
+// EVERY CONTROL IT LEAVES NIL IS KEPT as that rule has it — never sent whole,
+// which a caller could form only from a read made in another transaction, so a
+// request changing one control would reset every other it had not read: a
+// person's assistant asked to require a check would hand a branch frozen at
+// direct_push none back to direct pushes, unseen, and a seat asking the same
+// would be refused a loosening it never named. A pattern with no rule yet
+// takes each control's least where the change leaves it out — direct_push
+// persons ([config.CodeDirectPush.Resolved], as a declaration leaving it out
+// does), allow_force and allow_delete off — so a change naming nothing
+// protects a pattern no rule held and changes nothing on one a rule holds.
+// Remove takes the pattern's rule away, its gate with it, and names nothing
+// else.
+//
+// A REQUEST IS NO RECORD, so none of these fields takes a versionedFields
+// row: the record a protect request leads to carries the repository's
+// settings whole, whose rules' push controls are the code domain's base
+// format and whose gates take the row [MergeGate] names. It crosses the
+// estate's wire to whichever data node decides it, under the code domain's
+// stated condition — no build carrying the domain has run without it, none of
+// the domain being on main — so every node asked it reads it.
 type ProtectChange struct {
 	// Pattern is refs/heads/<glob> or refs/tags/<glob> (gitref's grammar).
 	Pattern string `json:"pattern"`
-	// Rule is what the pattern's push is held to — allow_force, allow_delete
-	// and direct_push, set whole. Its own Pattern is left empty or names the
-	// same pattern, and its Gate is left nil: the merge gate the rule ends
-	// with is the decide's to resolve, from Gate.
-	Rule *Protection `json:"rule,omitempty"`
+	// Remove takes the pattern's rule away.
+	Remove bool `json:"remove,omitempty"`
+	// DirectPush, AllowForce and AllowDelete are what the pattern's push is
+	// held to, each changed alone ([PushRule]).
+	DirectPush  *DirectPush `json:"direct_push,omitempty"`
+	AllowForce  *bool       `json:"allow_force,omitempty"`
+	AllowDelete *bool       `json:"allow_delete,omitempty"`
 	// Gate changes the rule's merge gate ([GateChange]), resolved against the
 	// gate the pattern's rule carries in the decide's snapshot: nil keeps that
 	// gate as it stands, and a rule the pattern did not have yet takes none.
 	Gate *GateChange `json:"gate,omitempty"`
 }
 
+// ProtectControlFields is every push control a [ProtectChange] may name, by
+// the name a request spells it — the rule's own — in [PushRule]'s order: what
+// a tool takes for a rule's push. TestAProtectChangeNamesEveryPushControl
+// holds it to both types.
+func ProtectControlFields() []string { return []string{"allow_force", "allow_delete", "direct_push"} }
+
+// named is every push control and the gate c names, in
+// [ProtectControlFields]' order and then the gate: what a removal may not
+// name.
+func (c ProtectChange) named() []string {
+	var out []string
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{{"allow_force", c.AllowForce != nil}, {"allow_delete", c.AllowDelete != nil},
+		{"direct_push", c.DirectPush != nil}, {"gate", c.Gate != nil}} {
+		if f.set {
+			out = append(out, f.name)
+		}
+	}
+	return out
+}
+
+// leastRule is the rule a pattern no rule holds starts from: every push
+// control at its least, and no merge gate.
+func leastRule(pattern string) Protection {
+	return Protection{PushRule: PushRule{Pattern: pattern,
+		DirectPush: DirectPush(config.CodeDirectPush("").Resolved())}}
+}
+
 // rule is the rule c leaves its pattern with, given held — the rules the
-// decide's snapshot read: nil where c removes it, and otherwise c's push
-// controls with the merge gate RESOLVED from the one the pattern's rule in
-// held carries ([GateChange.resolve]).
+// decide's snapshot read: nil where c removes it, and otherwise the rule held
+// carries for the pattern — or [leastRule] where it carries none — with each
+// control c names put in it and the merge gate RESOLVED from the one that
+// rule carries ([GateChange.resolve]).
 func (c ProtectChange) rule(held []Protection) *Protection {
-	if c.Rule == nil {
+	if c.Remove {
 		return nil
 	}
-	rule := *c.Rule
-	rule.Pattern = c.Pattern
-	var gate *MergeGate
+	rule := leastRule(c.Pattern)
 	if i := slices.IndexFunc(held, func(p Protection) bool { return p.Pattern == c.Pattern }); i >= 0 {
-		gate = held[i].Gate
+		rule = held[i]
 	}
-	rule.Gate = c.Gate.resolve(gate)
+	if c.DirectPush != nil {
+		rule.DirectPush = *c.DirectPush
+	}
+	if c.AllowForce != nil {
+		rule.AllowForce = *c.AllowForce
+	}
+	if c.AllowDelete != nil {
+		rule.AllowDelete = *c.AllowDelete
+	}
+	rule.Gate = c.Gate.resolve(rule.Gate)
 	return &rule
 }
 
@@ -624,42 +683,36 @@ func (r LifecycleRequest) invalid() string {
 			return "change." + why
 		}
 	case LifecycleProtect:
-		switch {
-		case !gitref.ValidPattern(r.Protect.Pattern):
-			return fmt.Sprintf("protect.pattern: %q is not a protection pattern", r.Protect.Pattern)
-		case r.Protect.Rule != nil && r.Protect.Rule.Pattern != "" && r.Protect.Rule.Pattern != r.Protect.Pattern:
-			return fmt.Sprintf("protect.rule.pattern: %q is not the change's pattern %q",
-				r.Protect.Rule.Pattern, r.Protect.Pattern)
-		case r.Protect.Rule != nil && r.Protect.Rule.Gate != nil:
-			// ONE WAY TO SAY A GATE: as a change the decide resolves, never
-			// whole — a whole gate is one its caller could form only from a
-			// read made in another transaction ([GateChange]).
-			return "protect.rule.gate: a request changes the rule's merge gate through protect.gate, which " +
-				"the decide resolves against the gate the repository holds, and carries none whole"
+		p := r.Protect
+		switch named := p.named(); {
+		case !gitref.ValidPattern(p.Pattern):
+			return fmt.Sprintf("protect.pattern: %q is not a protection pattern", p.Pattern)
+		case p.Remove && len(named) > 0:
+			return fmt.Sprintf("protect.remove: a request removing the pattern's rule takes its gate with it and "+
+				"names nothing else, and this one names %s", listed(named))
+		case p.Remove:
+			return ""
 		}
-		// THE RULE IS HELD HERE TO WHAT A RECORD MAY CARRY, before any
-		// decide: left to the settings a decide forms, a rule no record may
-		// carry was refused naming its index among the repository's stored
-		// rules rather than the field its caller sent, and only once the
-		// request had been judged — a seat that may not protect the
-		// repository was told so of a request no node could decide. So is
-		// each field a gate change names: only the resolved gate's whole
-		// weight waits for the decide, which alone reads what it keeps.
-		if r.Protect.Rule != nil {
-			rule := *r.Protect.Rule
-			rule.Pattern = r.Protect.Pattern
-			if why := rule.invalid(); why != "" {
-				return "protect.rule." + why
-			}
+		// THE CONTROLS ARE HELD HERE TO WHAT A RECORD MAY CARRY, before any
+		// decide, on the rule they form on a pattern no rule holds: left to
+		// the settings a decide forms, a rule no record may carry was refused
+		// naming its index among the repository's stored rules rather than the
+		// field its caller sent, and only once the request had been judged — a
+		// seat that may not protect the repository was told so of a request no
+		// node could decide. A control a record may not carry on that rule it
+		// may carry on none: a direct_push this build does not know, or
+		// allow_force on a tag. So is each field a gate change names: only the
+		// resolved gate's whole weight waits for the decide, which alone reads
+		// what it keeps.
+		probe := ProtectChange{Pattern: p.Pattern, DirectPush: p.DirectPush, AllowForce: p.AllowForce,
+			AllowDelete: p.AllowDelete}.rule(nil)
+		if why := probe.invalid(); why != "" {
+			return "protect." + why
 		}
-		if g := r.Protect.Gate; g != nil {
-			switch {
-			case r.Protect.Rule == nil:
-				return "protect.gate: a request removing the pattern's rule takes its gate with it, and " +
-					"changes none"
-			case strings.HasPrefix(r.Protect.Pattern, "refs/tags/"):
+		if g := p.Gate; g != nil {
+			if strings.HasPrefix(p.Pattern, "refs/tags/") {
 				return fmt.Sprintf("protect.gate: a tag never moves, so no merge reaches %s and a merge gate "+
-					"has nothing to hold", r.Protect.Pattern)
+					"has nothing to hold", p.Pattern)
 			}
 			switch field, why := g.invalid(); {
 			case why == "":
@@ -1596,12 +1649,12 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 				"its seat's own", v.Name)
 			return nil, "", nil
 		}
-		// RESOLVED AGAINST THE ROWS THIS DECIDE READ: the rule's gate is the
-		// one this snapshot holds for the pattern — among the rules read
-		// whole beside the row, which alone carry a gate — with the change's
-		// fields put in it, so another request's change to another field
-		// meanwhile is kept, and the loosening judged is the one the record
-		// would make.
+		// RESOLVED AGAINST THE ROWS THIS DECIDE READ: the rule is the one this
+		// snapshot holds for the pattern — among the rules read whole beside
+		// the row, which alone carry a gate — with the change's push controls
+		// and gate fields put in it, so another request's change to another
+		// control or field meanwhile is kept, and the loosening judged is the
+		// one the record would make.
 		rule := req.Protect.rule(rules)
 		if rule != nil {
 			// ITS WHOLE WEIGHT HERE, naming the field its caller sent: the

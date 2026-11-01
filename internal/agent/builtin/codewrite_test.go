@@ -766,46 +766,61 @@ func TestARerunOfACodeWriteIsTheSamePush(t *testing.T) {
 	}
 }
 
-// A PROTECTION WITH NO DIRECT_PUSH IS A PERSONS RULE, as code.repos reads an
-// unset one: the call sets the pattern's whole rule, and every rule a record
-// may carry holds at least a seat's direct push, so a rule the call leaves
-// without one is sent as persons — never as a value the request's own
-// validation refuses (protect.rule.direct_push), which would refuse every
-// such call. A value the call states is sent as stated, and one the domain
-// does not know is refused as the call's own mistake, with nothing sent.
+// A PROTECT CALL SENDS ONLY THE PUSH CONTROLS IT NAMES: code_protect_branch
+// sends direct_push, allow_force and allow_delete each where the call names
+// it, a false flag as itself, and none it leaves out — the deciding data node
+// keeps every control left out as the pattern's rule holds it, or takes its
+// least on a new rule — so a call that changes only the gate, or nothing,
+// sends no control at all. A value the domain does not know, or a control of
+// another type than the schema's, is refused as the call's own mistake, with
+// nothing sent.
 //
-// Mutation: drop the default → the call left without direct_push is refused,
-// red.
-func TestAProtectionWithNoDirectPushIsAPersonsRule(t *testing.T) {
+// Mutation: send every control, defaulting each left out to its least — the
+// call naming none sends direct_push persons and both flags off, red.
+func TestAProtectCallSendsOnlyThePushControlsItNames(t *testing.T) {
 	t.Parallel()
 	writer := &codeWrites{}
 	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
 	turn := writerTurn(t)
+	none, persons, on, off := code.DirectNone, code.DirectPersons, true, false
 	for _, c := range []struct {
-		direct any
-		want   code.DirectPush
-	}{{nil, code.DirectPersons}, {"none", code.DirectNone}, {"persons", code.DirectPersons}} {
+		args map[string]any
+		want code.ProtectChange
+	}{
+		{map[string]any{}, code.ProtectChange{}},
+		{map[string]any{"checks": map[string]any{"add": []any{"unit"}}}, code.ProtectChange{
+			Gate: &code.GateChange{Checks: &code.ListChange[string]{Add: []string{"unit"}}}}},
+		{map[string]any{"direct_push": "none"}, code.ProtectChange{DirectPush: &none}},
+		{map[string]any{"direct_push": "persons", "allow_force": true}, code.ProtectChange{DirectPush: &persons,
+			AllowForce: &on}},
+		{map[string]any{"allow_delete": false}, code.ProtectChange{AllowDelete: &off}},
+	} {
 		args := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
-		if c.direct != nil {
-			args["direct_push"] = c.direct
-		}
-		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, args)
-		if got.Failed {
-			t.Fatalf("a protection with direct_push %v answered %q", c.direct, got.Output)
+		maps.Copy(args, c.args)
+		if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, args); got.Failed {
+			t.Fatalf("a protection naming %v answered %q", c.args, got.Output)
 		}
 		_, lifecycles := writer.asked()
-		sent := lifecycles[len(lifecycles)-1].Protect
-		if sent == nil || sent.Rule == nil || sent.Rule.DirectPush != c.want {
-			t.Errorf("a protection with direct_push %v sent %+v, want direct_push %s", c.direct, sent, c.want)
+		want := c.want
+		want.Pattern = "refs/heads/main"
+		if sent := lifecycles[len(lifecycles)-1].Protect; sent == nil || !reflect.DeepEqual(*sent, want) {
+			t.Errorf("a protection naming %v sent %+v, want %+v", c.args, sent, want)
 		}
 	}
-	_, before := writer.asked()
-	got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool,
-		map[string]any{"repo": "site", "pattern": "refs/heads/main", "direct_push": "everyone"})
-	if _, after := writer.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
-		len(after) != len(before) {
-		t.Errorf("a direct_push the domain does not know answered %q as %s, with %d requests sent", got.Output,
-			tools.RefusalOf(got), len(after)-len(before))
+	for name, args := range map[string]map[string]any{
+		"a direct_push the domain does not know": {"direct_push": "everyone"},
+		"an allow_force that is no boolean":      {"allow_force": "yes"},
+		"a control beside the rule's removal":    {"remove": true, "allow_delete": true},
+	} {
+		call := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
+		maps.Copy(call, args)
+		_, before := writer.asked()
+		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, call)
+		if _, after := writer.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+			len(after) != len(before) {
+			t.Errorf("%s answered %q as %s, with %d requests sent", name, got.Output, tools.RefusalOf(got),
+				len(after)-len(before))
+		}
 	}
 }
 
@@ -886,9 +901,9 @@ func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) 
 // A PROTECTION CHANGES ITS MERGE GATE A FIELD AT A TIME: code_protect_branch
 // sends each gate field a call names as a change the deciding data node
 // resolves against the gate its own rows hold — decoded by the domain's own
-// spelling of a change, so the schema takes every field a change names — no
-// change where the call names no gate field, and the gate's removal where it
-// says remove_gate. A field no change could take — a value the domain does
+// spelling of a change, so the schema takes every field a change names, a
+// list's as the items it adds and removes — no change where the call names no
+// gate field, and the gate's removal where it says remove_gate. A field no change could take — a value the domain does
 // not know, a field the landing lacks, a gate on a tag, remove_gate beside a
 // field or a field beside the rule's removal — is refused invalid with nothing
 // sent. The answer names the rule as it applied, its gate whole, and no other
@@ -936,16 +951,18 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 
 	got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, map[string]any{
 		"repo": "site", "pattern": "refs/heads/main", "direct_push": "none", "merge_by": "persons",
-		"checks": []any{"unit", "lint"}, "landing": map[string]any{"depth": 2}, "owners_approve": false,
+		"checks": map[string]any{"add": []any{"unit"}, "remove": []any{"e2e"}}, "landing": map[string]any{"depth": 2},
+		"owners_approve": false,
 	})
 	if got.Failed {
 		t.Fatalf("a protection changing four gate fields answered %q", got.Output)
 	}
 	persons, depth, off := code.MergeByPersons, 2, false
-	want := &code.GateChange{MergeBy: &persons, Checks: &[]string{"unit", "lint"},
+	want := &code.GateChange{MergeBy: &persons,
+		Checks:  &code.ListChange[string]{Add: []string{"unit"}, Remove: []string{"e2e"}},
 		Landing: &code.LandingChange{Depth: &depth}, OwnersApprove: &off}
 	if change := sent(); change == nil || !reflect.DeepEqual(change.Gate, want) ||
-		change.Rule == nil || change.Rule.DirectPush != code.DirectNone {
+		change.DirectPush == nil || *change.DirectPush != code.DirectNone {
 		t.Errorf("a protection changing four gate fields sent %+v, want direct_push none and the change %+v",
 			change, want)
 	}
@@ -978,9 +995,10 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 	for name, args := range map[string]map[string]any{
 		"an unknown merge_by":              {"merge_by": "everyone"},
 		"a field the landing lacks":        {"landing": map[string]any{"speed": 2}},
-		"a gate on a tag":                  {"pattern": "refs/tags/v*", "checks": []any{"unit"}},
-		"remove_gate beside a field":       {"remove_gate": true, "checks": []any{"unit"}},
-		"a gate beside the rule's removal": {"remove": true, "checks": []any{"unit"}},
+		"a list sent whole":                {"checks": []any{"unit"}},
+		"a gate on a tag":                  {"pattern": "refs/tags/v*", "checks": map[string]any{"add": []any{"unit"}}},
+		"remove_gate beside a field":       {"remove_gate": true, "checks": map[string]any{"add": []any{"unit"}}},
+		"a gate beside the rule's removal": {"remove": true, "checks": map[string]any{"add": []any{"unit"}}},
 	} {
 		call := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
 		maps.Copy(call, args)

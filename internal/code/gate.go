@@ -325,9 +325,8 @@ func (g MergeGate) fieldsInvalid() (field, why string) {
 	}
 	for k, name := range g.Checks {
 		switch {
-		case !config.ValidCodeCheckName(name):
-			return fmt.Sprintf("checks[%d]", k), fmt.Sprintf("%q is not a check's name: a lowercase letter "+
-				"or digit, then up to %d more of them, '.', '_' and '-'", name, MaxCheckNameBytes-1)
+		case checkInvalid(name) != "":
+			return fmt.Sprintf("checks[%d]", k), checkInvalid(name)
 		case k > 0 && g.Checks[k-1] >= name:
 			return fmt.Sprintf("checks[%d]", k), fmt.Sprintf("%q is not after %q — a gate's checks are "+
 				"sorted and each named once", name, g.Checks[k-1])
@@ -343,18 +342,37 @@ func (g MergeGate) fieldsInvalid() (field, why string) {
 func classesInvalid(at string, list []ChangeClass) (field, why string) {
 	for k, c := range list {
 		field := fmt.Sprintf("%s[%d]", at, k)
-		switch {
-		case c == ChangeClassNoCodeChange:
-			return field, "no_code_change is a revision's class, never a path's: an approval already carries " +
-				"across a revision that changed nothing, so it has nothing to exempt"
-		case !slices.Contains(PathClasses(), c):
-			return field, fmt.Sprintf("%q is not one of %v", c, PathClasses())
-		case k > 0 && list[k-1] >= c:
+		if why := classInvalid(c); why != "" {
+			return field, why
+		}
+		if k > 0 && list[k-1] >= c {
 			return field, fmt.Sprintf("%q is not after %q — the classes are sorted and each named once", c,
 				list[k-1])
 		}
 	}
 	return "", ""
+}
+
+// classInvalid is why c is no class that exempts a change, or "": a PATH
+// class, no_code_change named for why it is none.
+func classInvalid(c ChangeClass) string {
+	switch {
+	case c == ChangeClassNoCodeChange:
+		return "no_code_change is a revision's class, never a path's: an approval already carries " +
+			"across a revision that changed nothing, so it has nothing to exempt"
+	case !slices.Contains(PathClasses(), c):
+		return fmt.Sprintf("%q is not one of %v", c, PathClasses())
+	}
+	return ""
+}
+
+// checkInvalid is why name is no check's name, or "".
+func checkInvalid(name string) string {
+	if config.ValidCodeCheckName(name) {
+		return ""
+	}
+	return fmt.Sprintf("%q is not a check's name: a lowercase letter or digit, then up to %d more of them, "+
+		"'.', '_' and '-'", name, MaxCheckNameBytes-1)
 }
 
 // LoosenedBy is every way g — the gate a protect request leaves a rule with —
@@ -492,9 +510,14 @@ func defaultGate() MergeGate {
 // requests changing two fields of one gate at once would each send the
 // other's field as it had read it, and the later record would undo the
 // earlier change — an approval it required, a check it added — unseen. Each
-// field it names REPLACES that field, a list as a list; every field it leaves
-// nil is kept as the rule's gate has it, or takes its default where the rule
-// has none ([defaultGate]), so naming one field forms a gate, as a declaration
+// scalar it names REPLACES that field; each LIST it names is changed item by
+// item ([ListChange], [HumanPathsChange]), for the same reason one level down:
+// requiring one more check is the commonest edit a gate takes, and a list
+// sent whole is one formed from a read made elsewhere, so two requests each
+// adding a check would each drop the other's — silently for a person, and as
+// a refused "drops" for a seat that only added. Every field it leaves nil is
+// kept as the rule's gate has it, or takes its default where the rule has
+// none ([defaultGate]), so naming one field forms a gate, as a declaration
 // naming one does. Remove takes the gate away and names no field.
 //
 // A REQUEST IS NO RECORD, so this type takes no versionedFields row: the
@@ -508,17 +531,151 @@ type GateChange struct {
 	Remove    bool       `json:"remove,omitempty"`
 	MergeBy   *MergeBy   `json:"merge_by,omitempty"`
 	Approvals *Approvals `json:"approvals,omitempty"`
-	// ApprovalsUnless, HumanPaths and Checks are each the field's whole new
-	// list, in any order — the resolution puts it in the one a record carries
-	// ([CanonicalGate]) — and an empty one names none.
-	ApprovalsUnless *[]ChangeClass `json:"approvals_unless,omitempty"`
-	HumanPaths      *[]HumanPath   `json:"human_paths,omitempty"`
-	Checks          *[]string      `json:"checks,omitempty"`
+	// ApprovalsUnless, HumanPaths and Checks each change the field's list
+	// item by item; the resolution puts what it leaves in the one order a
+	// record carries ([CanonicalGate]).
+	ApprovalsUnless *ListChange[ChangeClass] `json:"approvals_unless,omitempty"`
+	HumanPaths      *HumanPathsChange        `json:"human_paths,omitempty"`
+	Checks          *ListChange[string]      `json:"checks,omitempty"`
 	// Landing changes the landing a field at a time.
 	Landing          *LandingChange `json:"landing,omitempty"`
 	OwnersApprove    *bool          `json:"owners_approve,omitempty"`
 	DeleteSource     *DeleteSource  `json:"delete_source,omitempty"`
 	AgentsEditChecks *bool          `json:"agents_edit_checks,omitempty"`
+}
+
+// ListChange is a gate change's change to one of the gate's lists of values —
+// its exempting classes or its required checks: values ADDED beside those it
+// holds and values REMOVED from them, applied by the decide to the list its
+// snapshot holds ([ListChange.applyTo]), so a value added that the list holds
+// already is added as nothing and one removed that it does not hold is
+// removed as nothing.
+type ListChange[T ~string] struct {
+	Add    []T `json:"add,omitempty"`
+	Remove []T `json:"remove,omitempty"`
+}
+
+// invalid is where c, the gate's field at, is no change and why, or two empty
+// strings: a value at least, at most limit in each list — a list longer than
+// the field may hold adds or removes nothing a record could carry — each a
+// value valid holds of the field (its why, or ""), each once in its list, and
+// none both added and removed, which is two requests rather than one.
+func (c ListChange[T]) invalid(at string, limit int, valid func(T) string) (field, why string) {
+	if len(c.Add) == 0 && len(c.Remove) == 0 {
+		return at, "a change adds or removes one at least"
+	}
+	for _, l := range []struct {
+		name   string
+		values []T
+	}{{"add", c.Add}, {"remove", c.Remove}} {
+		if len(l.values) > limit {
+			return at + "." + l.name, fmt.Sprintf("%d, past the %d the field may hold", len(l.values), limit)
+		}
+		for k, v := range l.values {
+			item := fmt.Sprintf("%s.%s[%d]", at, l.name, k)
+			if why := valid(v); why != "" {
+				return item, why
+			}
+			if slices.Contains(l.values[:k], v) {
+				return item, fmt.Sprintf("%q is listed twice", v)
+			}
+			if l.name == "remove" && slices.Contains(c.Add, v) {
+				return item, fmt.Sprintf("%q is added by the same change; ask one or the other", v)
+			}
+		}
+	}
+	return "", ""
+}
+
+// applyTo is list — the field as the gate holds it — with c applied: a copy,
+// never list's own array, which is the snapshot's row; nil where nothing is
+// left, as a gate that names none encodes it.
+func (c ListChange[T]) applyTo(list []T) []T {
+	out := slices.DeleteFunc(slices.Clone(list), func(v T) bool { return slices.Contains(c.Remove, v) })
+	for _, v := range c.Add {
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// HumanPathsChange is a gate change's change to its human paths, keyed by
+// glob: each entry Put sets that glob's entry — added, or its unless replaced
+// where the gate has the glob — and each glob Remove names is taken away,
+// applied by the decide to the human paths its snapshot holds
+// ([HumanPathsChange.applyTo]).
+type HumanPathsChange struct {
+	Put    []HumanPath `json:"put,omitempty"`
+	Remove []string    `json:"remove,omitempty"`
+}
+
+// invalid is where c is no change and why, or two empty strings: an entry at
+// least, at most [MaxHumanPaths] in each list, every glob one gitref reads and
+// each once, every unless of path classes each once, and no glob both put and
+// removed.
+func (c HumanPathsChange) invalid() (field, why string) {
+	if len(c.Put) == 0 && len(c.Remove) == 0 {
+		return "human_paths", "a change puts or removes a glob at least"
+	}
+	globs := make([]string, len(c.Put))
+	for i, h := range c.Put {
+		globs[i] = h.Glob
+	}
+	for _, l := range []struct {
+		name  string
+		globs []string
+	}{{"put", globs}, {"remove", c.Remove}} {
+		if len(l.globs) > MaxHumanPaths {
+			return "human_paths." + l.name, fmt.Sprintf("%d, past the %d a gate may name", len(l.globs),
+				MaxHumanPaths)
+		}
+		for k, glob := range l.globs {
+			at := fmt.Sprintf("human_paths.%s[%d]", l.name, k)
+			if l.name == "put" {
+				at += ".glob"
+			}
+			switch _, err := gitref.ParsePathGlob(glob); {
+			case err != nil:
+				return at, fmt.Sprintf("%q is not a path glob: %v", glob, err)
+			case slices.Contains(l.globs[:k], glob):
+				return at, fmt.Sprintf("%q is listed twice", glob)
+			case l.name == "remove" && slices.Contains(globs, glob):
+				return at, fmt.Sprintf("%q is put by the same change; ask one or the other", glob)
+			}
+		}
+	}
+	for k, h := range c.Put {
+		for i, class := range h.Unless {
+			at := fmt.Sprintf("human_paths.put[%d].unless[%d]", k, i)
+			if why := classInvalid(class); why != "" {
+				return at, why
+			}
+			if slices.Contains(h.Unless[:i], class) {
+				return at, fmt.Sprintf("%q is listed twice", class)
+			}
+		}
+	}
+	return "", ""
+}
+
+// applyTo is paths — the gate's, as its snapshot holds them — with c applied:
+// a copy, nil where nothing is left.
+func (c HumanPathsChange) applyTo(paths []HumanPath) []HumanPath {
+	out := slices.DeleteFunc(slices.Clone(paths), func(h HumanPath) bool {
+		return slices.Contains(c.Remove, h.Glob) ||
+			slices.ContainsFunc(c.Put, func(put HumanPath) bool { return put.Glob == h.Glob })
+	})
+	for _, h := range c.Put {
+		out = append(out, HumanPath{Glob: h.Glob, Unless: slices.Clone(h.Unless)})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // LandingChange is a gate change's change to the landing: each field it
@@ -574,11 +731,13 @@ func (c GateChange) named() []string {
 // invalid is where c is no change a request may carry and why — field a path
 // below the request's gate, "" for the change whole — or two empty strings: a
 // removal naming no field, or a change naming one at least, a landing's
-// change one of its own at least; and each field it names one a record may
+// change one of its own at least, each list's change an item at least, each
+// item a value the list may hold and named once ([ListChange.invalid],
+// [HumanPathsChange.invalid]); and each field it names one a record may
 // carry, judged on the gate it forms on a rule with none ([defaultGate]),
-// since a field refused there is refused whatever gate it changes. The gate's
-// whole weight is left to the decide, which alone reads what the change keeps
-// of the rule's gate.
+// since a field refused there is refused whatever gate it changes. A list's
+// length and the gate's whole weight are left to the decide, which alone
+// reads what the change keeps of the rule's gate.
 func (c GateChange) invalid() (field, why string) {
 	named := c.named()
 	switch {
@@ -592,11 +751,31 @@ func (c GateChange) invalid() (field, why string) {
 	case c.Landing != nil && *c.Landing == (LandingChange{}):
 		return "landing", "a change of the landing names its depth or batch at least"
 	}
+	// EACH LIST'S CHANGE ON ITS OWN, naming the item its caller sent: the
+	// gate a change forms on a rule with none holds what it adds, and nothing
+	// of what it removes.
+	if l := c.ApprovalsUnless; l != nil {
+		if field, why := l.invalid("approvals_unless", len(PathClasses()), classInvalid); why != "" {
+			return field, why
+		}
+	}
+	if l := c.HumanPaths; l != nil {
+		if field, why := l.invalid(); why != "" {
+			return field, why
+		}
+	}
+	if l := c.Checks; l != nil {
+		if field, why := l.invalid("checks", MaxRequiredChecks, checkInvalid); why != "" {
+			return field, why
+		}
+	}
 	return c.applyTo(defaultGate()).fieldsInvalid()
 }
 
-// applyTo is base with every field c names put in it, in the one form a
-// record carries a gate in ([CanonicalGate]). Remove is its caller's to read.
+// applyTo is base with every field c names put in it — a scalar replaced, a
+// list changed item by item — in the one form a record carries a gate in
+// ([CanonicalGate]), sharing no array with base. Remove is its caller's to
+// read.
 func (c GateChange) applyTo(base MergeGate) MergeGate {
 	g := base
 	if c.MergeBy != nil {
@@ -606,13 +785,13 @@ func (c GateChange) applyTo(base MergeGate) MergeGate {
 		g.Approvals = *c.Approvals
 	}
 	if c.ApprovalsUnless != nil {
-		g.ApprovalsUnless = *c.ApprovalsUnless
+		g.ApprovalsUnless = c.ApprovalsUnless.applyTo(base.ApprovalsUnless)
 	}
 	if c.HumanPaths != nil {
-		g.HumanPaths = *c.HumanPaths
+		g.HumanPaths = c.HumanPaths.applyTo(base.HumanPaths)
 	}
 	if c.Checks != nil {
-		g.Checks = *c.Checks
+		g.Checks = c.Checks.applyTo(base.Checks)
 	}
 	if l := c.Landing; l != nil {
 		if l.Depth != nil {

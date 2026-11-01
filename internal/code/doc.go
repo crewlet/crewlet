@@ -1020,12 +1020,16 @@
 // the rules whole beside the row, as it reads the path owners
 // ([protectionsIn]): the lifecycle decides and the reconcile.
 //
-// A TOOL CHANGES A GATE A FIELD AT A TIME ([GateChange]): a protect request
-// names the fields it replaces, and the lifecycle decide puts them in the gate
-// its own snapshot holds for the pattern, every other field kept — or
-// defaulted, on a rule with none — since a gate whole is one a caller could
-// form only from a read made elsewhere, and two requests changing two fields
-// at once would each undo the other's. A seat's change is weighed field by
+// A TOOL CHANGES A RULE A CONTROL AT A TIME AND A GATE A FIELD AT A TIME
+// ([ProtectChange], [GateChange]): a protect request names the push controls
+// and gate scalars it replaces and the items it adds to or removes from a
+// gate's lists ([ListChange], [HumanPathsChange]), and the lifecycle decide
+// puts them in the rule its own snapshot holds for the pattern, every other
+// control, field and item kept — or at its least or default, on a pattern
+// with no rule or a rule with no gate — since a rule, a gate or a list whole
+// is one a caller could form only from a read made elsewhere, and two
+// requests changing two of them at once — two checks added — would each undo
+// the other's. A seat's change is weighed field by
 // field ([MergeGate.LoosenedBy]): it raises a field and only a person lowers
 // one. The decide judges and resolves against the rules it reads whole beside
 // the row, which alone carry a gate, and the request's answer names the

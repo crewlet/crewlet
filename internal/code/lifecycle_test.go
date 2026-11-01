@@ -59,31 +59,57 @@ func lcSettings(actor code.Principal, id string, change code.RepoChange) code.Li
 	return req
 }
 
-// lcProtect sets pattern's rule on the repository id; a nil rule removes it.
+// lcProtect sets pattern's rule on the repository id to rule's push controls,
+// naming all three, so the rule ends with them whatever it held; a nil rule
+// removes it.
 func lcProtect(actor code.Principal, id, pattern string, rule *code.Protection) code.LifecycleRequest {
 	req := lcOn(code.LifecycleProtect, actor, id)
-	req.Protect = &code.ProtectChange{Pattern: pattern, Rule: rule}
+	req.Protect = &code.ProtectChange{Pattern: pattern, Remove: rule == nil}
+	if rule != nil {
+		req.Protect.DirectPush, req.Protect.AllowForce = ptr(rule.DirectPush), ptr(rule.AllowForce)
+		req.Protect.AllowDelete = ptr(rule.AllowDelete)
+	}
 	return req
 }
 
 // lcGate sets pattern's rule on the repository id, its merge gate changed by
-// gate.
+// gate: its push controls rule's, or — a nil rule — none named, every one
+// kept as the rule holds it.
 func lcGate(actor code.Principal, id, pattern string, rule *code.Protection,
 	gate code.GateChange) code.LifecycleRequest {
 
-	req := lcProtect(actor, id, pattern, rule)
+	req := lcOn(code.LifecycleProtect, actor, id)
+	if rule != nil {
+		req = lcProtect(actor, id, pattern, rule)
+	}
+	req.Protect = cmp.Or(req.Protect, &code.ProtectChange{Pattern: pattern})
 	req.Protect.Gate = &gate
 	return req
 }
 
-// gateTo is the change that leaves a rule's gate g, whatever it held: every
-// field named.
+// gateTo is the change that leaves a rule's gate g where the rule held none,
+// or held one whose lists g's hold: every field named, each list's values
+// added — a list's change adds and removes, and never says the list whole.
 func gateTo(g code.MergeGate) code.GateChange {
-	return code.GateChange{MergeBy: ptr(g.MergeBy), Approvals: ptr(g.Approvals),
-		ApprovalsUnless: ptr(g.ApprovalsUnless), HumanPaths: ptr(g.HumanPaths), Checks: ptr(g.Checks),
+	c := code.GateChange{MergeBy: ptr(g.MergeBy), Approvals: ptr(g.Approvals),
 		Landing:       &code.LandingChange{Depth: ptr(g.Landing.Depth), Batch: ptr(g.Landing.Batch)},
 		OwnersApprove: ptr(g.OwnersApprove), DeleteSource: ptr(g.DeleteSource),
 		AgentsEditChecks: ptr(g.AgentsEditChecks)}
+	if len(g.ApprovalsUnless) > 0 {
+		c.ApprovalsUnless = &code.ListChange[code.ChangeClass]{Add: g.ApprovalsUnless}
+	}
+	if len(g.HumanPaths) > 0 {
+		c.HumanPaths = &code.HumanPathsChange{Put: g.HumanPaths}
+	}
+	if len(g.Checks) > 0 {
+		c.Checks = &code.ListChange[string]{Add: g.Checks}
+	}
+	return c
+}
+
+// addChecks is the change requiring names beside the checks a gate requires.
+func addChecks(names ...string) code.GateChange {
+	return code.GateChange{Checks: &code.ListChange[string]{Add: names}}
 }
 
 // ptr is a pointer to v: a field a change names.
@@ -498,18 +524,20 @@ func TestAProtectionChangeIsResolvedInsideTheDecide(t *testing.T) {
 
 // A PROTECT REQUEST IS REFUSED A RULE NO RECORD MAY CARRY at its own
 // validation, naming the field its caller sent — a direct_push this build does
-// not know, unset among them, allow_force on a tag, a rule carrying a gate
-// whole rather than the change the decide resolves, and a gate change no rule
-// could take: on a tag, beside the rule's removal, naming nothing, removing the
-// gate and naming a field, or naming a field a record may not carry — for
-// whoever asks and before any decide judges who may: a person, the unit's lead
-// and a member that may not protect the repository are all told the one
-// thing, and nothing is written. A rule a record may carry passes, a branch
-// rule's gate change included.
+// not know, empty among them, allow_force on a tag, a removal naming a control
+// or a gate change, and a gate change no rule could take: on a tag, naming
+// nothing, removing the gate and naming a field, naming a field a record may
+// not carry, or a list's change that is none — naming no item, an item twice,
+// one both added and removed, or a value the list may not hold — for whoever
+// asks and before any decide judges who may: a person, the unit's lead and a
+// member that may not protect the repository are all told the one thing, and
+// nothing is written. A rule a record may carry passes, a branch rule's gate
+// change included.
 //
-// Mutation: drop the gate change's check from the request's validation — the
+// Mutations: drop the gate change's check from the request's validation — the
 // change naming nothing reaches the decide, resolves to the default gate and
-// lands, red.
+// lands, red; drop the both-added-and-removed check from ListChange.invalid —
+// the check added and removed at once reaches the decide and lands, red.
 func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -518,37 +546,48 @@ func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
 	end := n.end()
 	gate := aGate()
 	const main, tags = "refs/heads/main", "refs/tags/v*"
+	unit := addChecks("unit")
 	for _, tc := range []struct {
 		pattern string
-		rule    *code.Protection
-		gate    *code.GateChange
+		change  code.ProtectChange
 		field   string
 	}{
-		{main, &code.Protection{}, nil, "protect.rule.direct_push"},
-		{main, &code.Protection{PushRule: code.PushRule{DirectPush: "maintainers"}}, nil, "protect.rule.direct_push"},
-		{tags, &code.Protection{PushRule: code.PushRule{DirectPush: code.DirectPersons, AllowForce: true}}, nil,
-			"protect.rule.allow_force"},
-		{main, &code.Protection{PushRule: code.PushRule{DirectPush: code.DirectPersons}, Gate: &gate}, nil,
-			"protect.rule.gate"},
-		{tags, persons, &code.GateChange{Checks: ptr([]string{"unit"})}, "protect.gate"},
-		{main, nil, &code.GateChange{Checks: ptr([]string{"unit"})}, "protect.gate"},
-		{main, persons, &code.GateChange{}, "protect.gate"},
-		{main, persons, &code.GateChange{Remove: true, Checks: ptr([]string{"unit"})}, "protect.gate.remove"},
-		{main, persons, &code.GateChange{MergeBy: ptr(code.MergeBy("everyone"))}, "protect.gate.merge_by"},
-		{main, persons, &code.GateChange{ApprovalsUnless: ptr([]code.ChangeClass{code.ChangeClassNoCodeChange})},
-			"protect.gate.approvals_unless[0]"},
-		{main, persons, &code.GateChange{Checks: ptr([]string{"unit", "unit"})}, "protect.gate.checks[1]"},
-		{main, persons, &code.GateChange{Landing: &code.LandingChange{Depth: ptr(code.MaxQueueDepth + 1)}},
-			"protect.gate.landing.depth"},
-		{main, persons, &code.GateChange{Landing: &code.LandingChange{}}, "protect.gate.landing"},
+		{main, code.ProtectChange{DirectPush: ptr(code.DirectPush(""))}, "protect.direct_push"},
+		{main, code.ProtectChange{DirectPush: ptr(code.DirectPush("maintainers"))}, "protect.direct_push"},
+		{tags, code.ProtectChange{AllowForce: ptr(true)}, "protect.allow_force"},
+		{main, code.ProtectChange{Remove: true, AllowDelete: ptr(false)}, "protect.remove"},
+		{main, code.ProtectChange{Remove: true, Gate: &unit}, "protect.remove"},
+		{tags, code.ProtectChange{Gate: &unit}, "protect.gate"},
+		{main, code.ProtectChange{Gate: &code.GateChange{}}, "protect.gate"},
+		{main, code.ProtectChange{Gate: &code.GateChange{Remove: true, Checks: unit.Checks}}, "protect.gate.remove"},
+		{main, code.ProtectChange{Gate: &code.GateChange{MergeBy: ptr(code.MergeBy("everyone"))}},
+			"protect.gate.merge_by"},
+		{main, code.ProtectChange{Gate: &code.GateChange{ApprovalsUnless: &code.ListChange[code.ChangeClass]{
+			Add: []code.ChangeClass{code.ChangeClassNoCodeChange}}}}, "protect.gate.approvals_unless.add[0]"},
+		{main, code.ProtectChange{Gate: &code.GateChange{Checks: &code.ListChange[string]{}}},
+			"protect.gate.checks"},
+		{main, code.ProtectChange{Gate: ptr(addChecks("unit", "unit"))}, "protect.gate.checks.add[1]"},
+		{main, code.ProtectChange{Gate: ptr(addChecks("Unit"))}, "protect.gate.checks.add[0]"},
+		{main, code.ProtectChange{Gate: &code.GateChange{Checks: &code.ListChange[string]{Add: []string{"unit"},
+			Remove: []string{"unit"}}}}, "protect.gate.checks.remove[0]"},
+		{main, code.ProtectChange{Gate: &code.GateChange{HumanPaths: &code.HumanPathsChange{
+			Put: []code.HumanPath{{Glob: "web/**"}}, Remove: []string{"web/**"}}}}, "protect.gate.human_paths.remove[0]"},
+		{main, code.ProtectChange{Gate: &code.GateChange{HumanPaths: &code.HumanPathsChange{
+			Put: []code.HumanPath{{Glob: "web/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly,
+				code.ChangeClassCommentOnly}}}}}}, "protect.gate.human_paths.put[0].unless[1]"},
+		{main, code.ProtectChange{Gate: &code.GateChange{Landing: &code.LandingChange{
+			Depth: ptr(code.MaxQueueDepth + 1)}}}, "protect.gate.landing.depth"},
+		{main, code.ProtectChange{Gate: &code.GateChange{Landing: &code.LandingChange{}}}, "protect.gate.landing"},
 	} {
 		for _, actor := range []code.Principal{lcPerson, agent("cto"), agent("dev")} {
-			req := lcProtect(actor, id, tc.pattern, tc.rule)
-			req.Protect.Gate = tc.gate
+			req := lcOn(code.LifecycleProtect, actor, id)
+			change := tc.change
+			change.Pattern = tc.pattern
+			req.Protect = &change
 			_, err := n.store.Lifecycle(t.Context(), req)
 			if !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), tc.field+":") {
-				t.Errorf("%s protecting %s with %+v and the gate change %+v = %v, want ErrInvalid naming %s",
-					cmp.Or(actor.Seat, actor.OperatorID), tc.pattern, tc.rule, tc.gate, err, tc.field)
+				t.Errorf("%s protecting %s with %+v = %v, want ErrInvalid naming %s",
+					cmp.Or(actor.Seat, actor.OperatorID), tc.pattern, tc.change, err, tc.field)
 			}
 		}
 	}

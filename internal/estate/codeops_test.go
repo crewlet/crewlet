@@ -1512,13 +1512,14 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.mu.Unlock()
 	desc, branch, vis, search := "the app, renamed", "trunk", code.VisibilityUnit, code.SearchIndexed
 	owner := code.Owner{Kind: code.OwnerUnit, Ref: "plat"}
-	// A GATE CHANGE OF EVERY FIELD, a list emptied and a flag turned off
-	// among them: an empty list and a false flag are changes, which must
-	// cross as themselves and never as fields left out.
+	// A PROTECT CHANGE OF EVERY CONTROL AND GATE FIELD, a list's items added
+	// and removed and a flag turned off among them: a false flag is a change,
+	// which must cross as itself and never as a field left out.
 	mergeBy, approvals, depth := code.MergeByMaintainers, code.ApprovalsOne, 2
 	classes := []code.ChangeClass{code.ChangeClassCommentOnly}
+	removed := []code.ChangeClass{code.ChangeClassWhitespaceOnly}
 	humanPaths := []code.HumanPath{{Glob: "deploy/**", Unless: classes}}
-	noChecks, deleteSource, on, off := []string{}, code.DeleteNone, true, false
+	direct, deleteSource, on, off := code.DirectPersons, code.DeleteNone, true, false
 	op := "019a0c2e-0000-7000-8000-0000000000f0.code_test"
 	for name, r := range map[string]code.LifecycleRequest{
 		"a create": {Kind: code.LifecycleCreate, OpID: op, Actor: seat, Name: "dev.app",
@@ -1534,15 +1535,17 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 					Remove: []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Paths: []string{"a"}}},
 				}}},
 		"a protection": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
-			Protect: &code.ProtectChange{Pattern: "refs/heads/release/*", Rule: &code.Protection{
-				PushRule: code.PushRule{Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true,
-					DirectPush: code.DirectPersons}}, Gate: &code.GateChange{MergeBy: &mergeBy,
-				Approvals: &approvals, ApprovalsUnless: &classes, HumanPaths: &humanPaths, Checks: &noChecks,
-				Landing:       &code.LandingChange{Depth: &depth, Batch: &depth},
-				OwnersApprove: &on, DeleteSource: &deleteSource, AgentsEditChecks: &off}}},
+			Protect: &code.ProtectChange{Pattern: "refs/heads/release/*", AllowForce: &on, AllowDelete: &off,
+				DirectPush: &direct, Gate: &code.GateChange{MergeBy: &mergeBy, Approvals: &approvals,
+					ApprovalsUnless: &code.ListChange[code.ChangeClass]{Add: classes, Remove: removed},
+					HumanPaths:      &code.HumanPathsChange{Put: humanPaths, Remove: []string{"web/**"}},
+					Checks:          &code.ListChange[string]{Remove: []string{"lint"}},
+					Landing:         &code.LandingChange{Depth: &depth, Batch: &depth},
+					OwnersApprove:   &on, DeleteSource: &deleteSource, AgentsEditChecks: &off}}},
 		"a gate's removal": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
-			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Rule: &code.Protection{
-				PushRule: code.PushRule{DirectPush: code.DirectNone}}, Gate: &code.GateChange{Remove: true}}},
+			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Gate: &code.GateChange{Remove: true}}},
+		"a rule's removal": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
+			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Remove: true}},
 		"a delete": {Kind: code.LifecycleDelete, OpID: op, Actor: seat, RepoID: ref.ID, Reason: "done with it"},
 		"a hold": {Kind: code.LifecycleHold, OpID: op, Actor: seat, RepoID: ref.ID, TurnID: "turn-1",
 			Seen: at},
