@@ -280,13 +280,15 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 // thing that wants room here should take it out of the allowance rather than
 // out of the budget.
 //
-// 2385 -> 2525 for the code guidance (~83 tokens) and the code writes
-// guidance (~72), the one exception that rule has met, and why: each section
+// 2385 -> 2525 for the code guidance (~91 tokens) and the code writes
+// guidance (~71), the one exception that rule has met, and why: each section
 // is rendered only for a seat of a company hosting code (and serving its
 // writes), while the allowance is every lead's in every company — taken out
 // of it, the room would be charged to leads whose prompt never carries the
-// sections. The turn is ~2,448 with both, so ~3% headroom, with nothing taken
-// from the allowance.
+// sections. Measured merged with main's prompts at ~2,476 with both — the
+// turn's own prose ~1,396, the allowance spending ~987 and the human
+// colleagues note ~93 — so ~2% headroom, with nothing taken from the
+// allowance.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
