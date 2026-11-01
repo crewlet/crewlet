@@ -145,7 +145,7 @@ const MaxEjectionsShown = defaultQueueLimit
 // ejections files into out what repository repo's queues put out in the last
 // [QueueEjectionsShown] — its target's alone, where target names one — newest
 // first, at most [MaxEjectionsShown]: one seek of an index partial on the
-// ejections alone (replicated 0101), the repository's or the target's, from
+// ejections alone (replicated 0104), the repository's or the target's, from
 // the newest down to the horizon, so the read touches the rows it answers and
 // never the entries the queue LANDED meanwhile — which a healthy queue ends
 // thousands of a day, and an index of every ended entry walked to find a
@@ -694,7 +694,7 @@ func (e queueEntry) row(repo string, number int64, place int) QueueRow {
 // trains by code_candidates_train_idx; its landings above a place by their
 // key; its green row, and a repository's, by theirs; and a repository's
 // ejections, or one target's, newest first by the index partial on them
-// (replicated 0101). Every read of code_queue by a partial index repeats its
+// (replicated 0104). Every read of code_queue by a partial index repeats its
 // predicate verbatim.
 // The numbers of a page's changes are [changeNumbersIn]'s, registered as the
 // committer's.
