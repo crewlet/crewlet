@@ -394,6 +394,18 @@ sign in a `kind: human` seat the same way, where they sit in the chart. See
 reviewing code is MCP; *writing* it is the sandbox (`role.sandbox`),
 which needs `providers.sandbox` configured. See
 [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
+Where the company hosts its code in the engine (`code.native`), a seat's
+coding runs clone and push the company's repositories themselves:
+`run_sandbox` names them in its `repos`, and each box reaches them at
+`/box/git/` with its run's own credential. That takes one line of every
+seat node's environment, not the company file: `CREWLET_BOX_GIT_URL`, the
+base a box dials, `/box/git` included, on a git node's public listener
+(its `api.public` port where Tier A sets one) or a balancer over the git
+nodes — `https://` wherever the URL leaves the box's host, since each
+request carries the run's token. Without it a launch naming a
+repository is refused (`sandbox_git_url_unset`). Tell them so when they
+turn on both, and see
+[Repositories on this company's code host](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/#repositories-on-this-companys-code-host).
 
 **The engine ships no tool-skill prose.** If they want agents to know
 *how* to use a tool, that is a knowledge-base page published with
