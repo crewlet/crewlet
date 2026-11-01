@@ -203,7 +203,7 @@ func (r *runRig) collect(t *testing.T, turnID string) error {
 		t.Fatalf("polling run %s: %v, %v; want it ended", turnID, state, err)
 	}
 	row = r.row(t, turnID)
-	completion := types.SandboxRunCompleted{
+	completion := types.ExecutorFinished{
 		Agent: row.AgentID, AgentHandle: row.AgentHandle, RoleName: row.Role,
 		TurnID: row.TurnID, WorkKey: row.WorkKey, LaunchID: row.LaunchID,
 		SandboxID: row.SandboxID, CodingAgent: row.CodingAgent,

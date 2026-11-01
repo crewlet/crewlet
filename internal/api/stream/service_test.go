@@ -250,8 +250,8 @@ func TestAReconcilePushesTheSeatsItMoved(t *testing.T) {
 	s.RefreshPlacement()
 	drain(c)
 
-	s.ReconcileSandboxes([]livestate.SandboxRecord{{Entry: livestate.SandboxEntry{
-		TurnID: "tn-1", AgentID: "a-coder", Role: "Coder", Status: livestate.SandboxAwaiting,
+	s.ReconcileExecutors([]livestate.ExecutorRecord{{Entry: livestate.ExecutorEntry{
+		TurnID: "tn-1", AgentID: "a-coder", Role: "Coder", Status: livestate.ExecutorAwaiting,
 	}}}, clock)
 	rows := agentRows(t, drain(c))
 	if len(rows) != 1 || rows[0]["agent_id"] != "a-coder" ||
@@ -333,11 +333,11 @@ func TestSandboxAndBudgetPushTheirOwnKinds(t *testing.T) {
 	t.Parallel()
 	s, c := newService(t, stream.Options{})
 
-	s.Ingest(envelope("sandbox_run_started", map[string]any{
+	s.Ingest(envelope("executor_launched", map[string]any{
 		"turn_id": "tn-1", "role": "Coder",
 	}))
-	if kinds := kindsOf(c); !contains(kinds, stream.KindSandboxes) {
-		t.Errorf("kinds = %v, want a sandboxes push", kinds)
+	if kinds := kindsOf(c); !contains(kinds, stream.KindExecutors) {
+		t.Errorf("kinds = %v, want an executors push", kinds)
 	}
 
 	s.Ingest(livestate.Envelope{
@@ -359,14 +359,14 @@ func TestSandboxAndBudgetPushTheirOwnKinds(t *testing.T) {
 func TestAReconcilePushesTheSandboxSetOnlyWhenItMoved(t *testing.T) {
 	t.Parallel()
 	s, c := newService(t, stream.Options{})
-	record := livestate.SandboxRecord{Entry: livestate.SandboxEntry{
-		TurnID: "tn-1", Role: "Coder", Status: livestate.SandboxRunning,
+	record := livestate.ExecutorRecord{Entry: livestate.ExecutorEntry{
+		TurnID: "tn-1", Role: "Coder", Status: livestate.ExecutorRunning,
 	}}
-	s.ReconcileSandboxes([]livestate.SandboxRecord{record}, clock)
-	if kinds := kindsOf(c); !slices.Equal(kinds, []stream.Kind{stream.KindSandboxes}) {
-		t.Fatalf("kinds = %v, want one sandboxes push", kinds)
+	s.ReconcileExecutors([]livestate.ExecutorRecord{record}, clock)
+	if kinds := kindsOf(c); !slices.Equal(kinds, []stream.Kind{stream.KindExecutors}) {
+		t.Fatalf("kinds = %v, want one executors push", kinds)
 	}
-	s.ReconcileSandboxes([]livestate.SandboxRecord{record}, clock.Add(time.Second))
+	s.ReconcileExecutors([]livestate.ExecutorRecord{record}, clock.Add(time.Second))
 	if kinds := kindsOf(c); len(kinds) != 0 {
 		t.Errorf("kinds = %v, want nothing pushed for a reconcile that moved nothing", kinds)
 	}
@@ -500,7 +500,7 @@ func TestASnapshotIsBuiltFromMemoryAlone(t *testing.T) {
 	s.Ingest(envelope("agent_phase_started", map[string]any{"agent_id": "a-lead", "role": "Lead", "task_id": "t-1"}))
 
 	snap := s.Snapshot(reader)
-	for _, key := range []string{"health", "agents", "events", "sandboxes", "tokens", "budget"} {
+	for _, key := range []string{"health", "agents", "events", "executors", "tokens", "budget"} {
 		if _, present := snap[key]; !present {
 			t.Errorf("snapshot is missing %q", key)
 		}

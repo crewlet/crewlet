@@ -30,7 +30,7 @@ import type {
   AgentRow,
   BudgetWindow,
   ConfigRole,
-  SandboxEntry,
+  ExecutorEntry,
   ScheduleRow,
   SeatActivityRow,
   TurnRow,
@@ -85,7 +85,7 @@ describe("which live row is the seat's", () => {
 describe("which coding run is the seat's", () => {
   const seat = { name: "SWE", handle: "swe-platform" } as Parameters<typeof seatRun>[1];
   const run = (turn: string, role: string, handle: string) =>
-    ({ turn_id: turn, role, agent_handle: handle }) as SandboxEntry;
+    ({ turn_id: turn, role, agent_handle: handle }) as ExecutorEntry;
 
   // A SIBLING'S RUN parked on a question is not this seat's question.
   test("a run is the seat's by its handle, never a sibling's by the shared role name", () => {

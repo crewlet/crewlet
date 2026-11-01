@@ -77,10 +77,10 @@ func OpenedAnswerer(seal *AnswerSeal, run PendingRun) string {
 
 // Deliver puts one answer on the control topic of the seat that holds the run
 // it names, refusing one that names no run or no question
-// ([types.SandboxAnswerGiven.LaunchID]) before anything is read or published.
+// ([types.ExecutorAnswerGiven.LaunchID]) before anything is read or published.
 //
 // THE RUN'S OWN ROW DECIDES THE TOPIC, read here by the turn the answer names,
-// and the answer is stamped with that row's seat ([types.SandboxAnswerGiven]
+// and the answer is stamped with that row's seat ([types.ExecutorAnswerGiven]
 // .Agent): a control topic is addressed by the seat's agent id, derived from
 // its handle (ADR-0013). The coordinator that consumes it compares the same
 // id against the row again ([Coordinator.AnswerByTurn]), so an answer that
@@ -103,12 +103,12 @@ func OpenedAnswerer(seal *AnswerSeal, run PendingRun) string {
 // than told it failed: a second answer to the same question is harmless — the
 // first to be consumed resumes the run and the other is announced
 // not_awaiting, because each names the question it answers
-// ([types.SandboxAnswerGiven.LaunchID]) and the run is no longer waiting on it
+// ([types.ExecutorAnswerGiven.LaunchID]) and the run is no longer waiting on it
 // whatever it waits on by then — while telling a person their answer was
 // refused when it is on its way would have them give it somewhere else. A row
 // that could not be read is reported the same way, for the same reason:
 // answering again is safe either way.
-func (d AnswerDesk) Deliver(ctx context.Context, given types.SandboxAnswerGiven) (uuid.UUID, error) {
+func (d AnswerDesk) Deliver(ctx context.Context, given types.ExecutorAnswerGiven) (uuid.UUID, error) {
 	if strings.TrimSpace(given.TurnID) == "" {
 		return uuid.Nil, errors.New("sandbox: an answer names no run")
 	}

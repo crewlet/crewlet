@@ -27,7 +27,7 @@ type deskFake struct {
 	runs       map[string]sandbox.PendingRun
 	readErr    error
 	deliverErr error
-	delivered  []types.SandboxAnswerGiven
+	delivered  []types.ExecutorAnswerGiven
 	// seal opens a run's recorded answer for who gave it, as the node's
 	// desk does; nil opens nothing.
 	seal *sandbox.AnswerSeal
@@ -72,7 +72,7 @@ func (d *deskFake) Run(_ context.Context, turnID string) (sandbox.PendingRun, bo
 // deliveredID is the id deskFake answers every delivery with.
 var deliveredID = uuid.MustParse("6f1c2b8e-3d4a-4e5f-9a0b-1c2d3e4f5a6b")
 
-func (d *deskFake) Deliver(_ context.Context, given types.SandboxAnswerGiven) (uuid.UUID, error) {
+func (d *deskFake) Deliver(_ context.Context, given types.ExecutorAnswerGiven) (uuid.UUID, error) {
 	d.delivered = append(d.delivered, given)
 	return deliveredID, d.deliverErr
 }
@@ -142,7 +142,7 @@ func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	}
 	// AS THE PERSON, in iam.ActorFor's three halves, about the run's seat
 	// by its id.
-	want := types.SandboxAnswerGiven{
+	want := types.ExecutorAnswerGiven{
 		TurnID: "t1", Agent: ctoSeat(t).String(), AgentHandle: "agent-cto",
 		Answer: "use main", AnsweredBy: "ops", AnsweredByKind: "human",
 		OperatorID: "session:ops-1", LaunchID: "launch-t1",

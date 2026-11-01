@@ -1727,7 +1727,7 @@ func (e *Engine) failSuspension(ctx context.Context, rt *sandboxRuntime, turnID,
 	}
 	log.ErrorContext(ctx, event, args...)
 	if err := rt.coordinator.FailRun(ctx, turnID,
-		types.SandboxFailureSuspensionUnrecorded, detail); err != nil {
+		types.ExecutorFailureSuspensionUnrecorded, detail); err != nil {
 		log.WarnContext(ctx, "sandbox_suspension_settle_failed", "turn_id", turnID, "error", err,
 			"detail", "the run's record could not be read, so its box was not reclaimed; the "+
 				"seat's next recovery pass reaps a run left launching")

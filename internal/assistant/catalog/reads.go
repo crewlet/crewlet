@@ -552,17 +552,17 @@ func readTools() []Tool {
 			Names: map[string]Directory{"handle": DirSeat},
 		},
 		{
-			Name: "list_coding_runs", Phrase: "list coding runs",
+			Name: "list_executors", Phrase: "list coding runs",
 			Description: "Coding runs in flight and recent, including any parked on a question.",
 			schema:      object(nil, map[string]*schema{}),
-			Routes:      []string{"GET /sandbox-runs"}, Fence: true,
+			Routes:      []string{"GET /executors"}, Fence: true,
 			// A RUN'S QUESTION IS THE CODING CLI'S, a third party's model
 			// working from a brief that may be an outside chat message or a
 			// webhook's payload, read by the one rule for a coding run's
 			// words (provenance.CodingRun) wherever it is read.
 			TrustOf: outsideWhere("runs", "question"),
 			Build: func(map[string]any) (exec.Request, error) {
-				return get("GET /sandbox-runs", nil, nil)
+				return get("GET /executors", nil, nil)
 			},
 			Cards: one(cards.Spec{Table: &cards.Table{Title: "Coding runs", Rows: "runs",
 				Brief: []string{"agent", "status", "task", "started"},

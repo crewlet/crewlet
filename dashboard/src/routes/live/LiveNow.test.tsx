@@ -119,7 +119,7 @@ function mount({
   const base: Record<string, Answer> = {
     viewer: JANE,
     work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
-    sandbox_runs: { runs: [] },
+    executors: { runs: [] },
     phases: { phases: [], next: {}, exhausted: true },
     event_series: {
       bucket: "minute",
@@ -474,7 +474,7 @@ test("an empty In a box says where a finished run's record is", async () => {
 test("a parked run is a row of Waiting on a person with its audience and Answer", async () => {
   mount({
     answers: {
-      sandbox_runs: {
+      executors: {
         runs: [
           {
             turn_id: "t-parked",

@@ -299,7 +299,7 @@ const RUN = "85e7b505-6dc9-478f-8501-1f2e3d4c5b6a";
 
 test("a coding run is named by the task it was given", async () => {
   mount(`#/live/runs/${RUN}`, <RunScreen turnId={RUN} />, {
-    sandbox_runs: {
+    executors: {
       runs: [
         {
           turn_id: RUN,

@@ -51,7 +51,7 @@ const MaxRunAnswerBytes = sandbox.MaxAskContextBytes
 // [sandbox.AnswerDesk] is the implementation.
 type RunDesk interface {
 	Run(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
-	Deliver(ctx context.Context, given types.SandboxAnswerGiven) (uuid.UUID, error)
+	Deliver(ctx context.Context, given types.ExecutorAnswerGiven) (uuid.UUID, error)
 	// Answerer is who gave run's recorded answer, empty where the seal does
 	// not open here.
 	Answerer(run sandbox.PendingRun) string
@@ -111,7 +111,7 @@ type runParties struct {
 // what says what became of it: `answered` on that question once it is
 // recorded, the id among the question's `declined_answers` if the run let it
 // go, or a new question if the run moved past this one first. Each is also
-// announced as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone`,
+// announced as `executor_answered` (`resumed`, `not_awaiting`, `gone`,
 // `declined` or `unoffered`). What it refuses up front is what this node can know: a run that
 // is not waiting for an answer (`not_running`).
 //
@@ -144,7 +144,7 @@ func (t *answerRun) Description() string {
 		"any other coding run. Use this for any parked run, including one " +
 		"started by a schedule, an assignment or a colleague, which has no " +
 		"conversation to reply in. Find parked runs and their questions on the " +
-		"sandbox-runs board."
+		"executors board."
 }
 
 func (t *answerRun) Parameters() map[string]any {
@@ -153,19 +153,19 @@ func (t *answerRun) Parameters() map[string]any {
 		"properties": map[string]any{
 			"turn_id": map[string]any{
 				"type":        "string",
-				"description": "The turn id of the parked run — its `turn_id` on the sandbox-runs board.",
+				"description": "The turn id of the parked run — its `turn_id` on the executors board.",
 			},
 			"launch_id": map[string]any{
 				"type": "string",
 				"description": "The question you are answering: the run's `launch_id` on the " +
-					"sandbox-runs board, read with the question. A run that has moved on to " +
+					"executors board, read with the question. A run that has moved on to " +
 					"another question since refuses the answer, so it never answers one you did " +
 					"not see.",
 			},
 			"choice": map[string]any{
 				"type": "string",
 				"description": "The id of the option chosen, where the run's question " +
-					"offers options: one of its `decision.options` on the sandbox-runs board.",
+					"offers options: one of its `decision.options` on the executors board.",
 			},
 			"answer": map[string]any{
 				"type": "string",
@@ -203,7 +203,7 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	launchID := strings.TrimSpace(argString(args, "launch_id"))
 	if launchID == "" {
 		return failed(AnswerRunTool + " needs a `launch_id`: the question you are answering, " +
-			"the run's `launch_id` read with it on the sandbox-runs board."), nil
+			"the run's `launch_id` read with it on the executors board."), nil
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
 	choice := strings.TrimSpace(argString(args, "choice"))
@@ -253,7 +253,7 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if launchID != run.LaunchID {
 		return toPerson(refused(tools.RefusalStaleVersion, fmt.Sprintf("Run %s has moved on to "+
 			"another question since the one you answered (launch %s): read its question "+
-			"again on the sandbox-runs board and answer that one. Nothing was answered.",
+			"again on the executors board and answer that one. Nothing was answered.",
 			clip(turnID), clip(launchID))), caveat.QuestionChanged()), nil
 	}
 	// THE CHOICE NAMES AN OPTION OF THIS QUESTION, checked against the
@@ -276,7 +276,7 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// answers AS that seat, kind human, with the credential they acted
 	// through beside it. The desk reads the run's row again to stamp the
 	// seat it delivers to, so a seat named here is only ever the same one.
-	given := types.SandboxAnswerGiven{
+	given := types.ExecutorAnswerGiven{
 		TurnID: run.TurnID, Agent: parties.seat.String(), AgentHandle: parties.handle,
 		Answer: answer, Choice: choice, AnsweredBy: actor.Handle,
 		AnsweredByKind: string(actor.Kind),

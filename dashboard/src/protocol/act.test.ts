@@ -525,7 +525,7 @@ describe("what a change came to", () => {
     floors.onWritten((domain, refreshes) => heard.push([domain, refreshes]));
     const result = await act("answer_run", { turn_id: "t-1", launch_id: "q1" }, { floors });
     expect(result).toMatchObject({ kind: "refused", code: "stale_version" });
-    expect(heard).toEqual([[null, ["sandbox_runs", "decisions"]]]);
+    expect(heard).toEqual([[null, ["executors", "decisions"]]]);
   });
 
   // A REFUSAL THAT SAYS THE SCREEN IS OUT OF DATE ASKS AGAIN, without a floor:

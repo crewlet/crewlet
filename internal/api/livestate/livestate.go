@@ -164,14 +164,14 @@ var failureEvents = map[string]struct{}{
 	"budget_exhausted":  {},
 }
 
-// sandboxEvents feed the running-sandboxes panel: started → tracked;
+// executorEvents feed the running-executors panel: started → tracked;
 // clarification → awaiting a person; completed, failed or stopped → dropped.
-var sandboxEvents = map[string]struct{}{
-	"sandbox_run_started":             {},
-	"sandbox_clarification_requested": {},
-	"sandbox_run_completed":           {},
-	"sandbox_run_failed":              {},
-	"sandbox_run_stopped":             {},
+var executorEvents = map[string]struct{}{
+	"executor_launched": {},
+	"executor_asked":    {},
+	"executor_finished": {},
+	"executor_failed":   {},
+	"executor_stopped":  {},
 }
 
 // agentLive is the incrementally-maintained state of one seat.
@@ -271,8 +271,8 @@ type LiveState struct {
 
 	agents map[string]*agentLive
 
-	// sandboxes are in-flight detached jobs, keyed by kick-off turn id.
-	sandboxes map[string]*heldSandbox
+	// executors are in-flight detached jobs, keyed by kick-off turn id.
+	executors map[string]*heldExecutor
 
 	// endedRuns remembers how each run the events ended did, so a
 	// reconcile that read the durable record before it caught up does not
@@ -381,7 +381,7 @@ type LiveState struct {
 func New(opts ...Option) *LiveState {
 	s := &LiveState{
 		agents:        map[string]*agentLive{},
-		sandboxes:     map[string]*heldSandbox{},
+		executors:     map[string]*heldExecutor{},
 		endedRuns:     newBoundedSet[runEnd](dedupeLimit),
 		endedTurns:    newBoundedSet[stamp](dedupeLimit),
 		feedLimit:     EventFeedLimit,
@@ -609,14 +609,14 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 	// Detached sandbox lifecycle, then stop: these do not drive the seat
 	// state machine below. A LOST run is the one exception that reaches a
 	// seat: it settles the parked turn that was waiting for it.
-	if _, ok := sandboxEvents[env.Type]; ok {
+	if _, ok := executorEvents[env.Type]; ok {
 		// A RUN MOVES ITS SEAT'S STATE: one that starts makes it working,
 		// one that asks a question makes it need somebody, one that ends
 		// returns it to whatever else is true of it.
 		before := s.states()
 		s.applySandbox(*env, payload)
-		change.Sandboxes = true
-		if env.Type == "sandbox_run_failed" && s.endLostRun(*env, payload) {
+		change.Executors = true
+		if env.Type == "executor_failed" && s.endLostRun(*env, payload) {
 			change.agentMoved(str(payload, "agent_id"))
 		}
 		s.noteMoved(before, &change)

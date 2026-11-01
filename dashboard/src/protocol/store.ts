@@ -33,7 +33,7 @@ import type {
   OrgProjection,
   OverlayRow,
   Rollup,
-  SandboxEntry,
+  ExecutorEntry,
   ScheduleRow,
   Snapshot,
   ToolRow,
@@ -353,7 +353,7 @@ export interface StoreState {
    * the durable history each screen loads comes from its own query.
    */
   phases: EventEnvelope[];
-  sandboxes: SandboxEntry[];
+  executors: ExecutorEntry[];
   /**
    * The org chart the engine pushed, or NULL until the first one arrives.
    *
@@ -483,7 +483,7 @@ export type Slice = keyof StoreState;
 const ALL_DATA_SLICES: Slice[] = [
   "agents",
   "events",
-  "sandboxes",
+  "executors",
   "org",
   "tools",
   "tokens",
@@ -497,7 +497,7 @@ function emptyState(): StoreState {
     agents: [],
     events: [],
     phases: [],
-    sandboxes: [],
+    executors: [],
     org: null,
     tools: [],
     health: null,
@@ -585,7 +585,7 @@ export class Store {
     if (!snap) return;
     this.state.agents = snap.agents ?? [];
     this.state.events = (snap.events ?? []).slice(0, MAX_EVENTS);
-    this.state.sandboxes = snap.sandboxes ?? [];
+    this.state.executors = snap.executors ?? [];
     this.state.org = snap.org ?? {};
     this.state.tools = snap.tools ?? [];
     if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
@@ -738,11 +738,11 @@ export class Store {
     this.emit("agents");
   }
 
-  applySandboxes(list: SandboxEntry[] | null | undefined): void {
-    this.state.sandboxes = list ?? [];
+  applyExecutors(list: ExecutorEntry[] | null | undefined): void {
+    this.state.executors = list ?? [];
     // `agents` too: a seat's effective state folds in whether it is parked on
     // a sandbox question, so a sandbox move is a seat move.
-    this.emit("sandboxes", "agents");
+    this.emit("executors", "agents");
   }
 
   applyTokens(rollup: Rollup | null | undefined): void {

@@ -8,7 +8,7 @@
  */
 
 import type { AskAnswer } from "~/components/writes.tsx";
-import type { SandboxRun } from "~/protocol/types.ts";
+import type { ExecutorRow } from "~/protocol/types.ts";
 
 /**
  * An answer a person gave a parked run by its turn (`answer_run`): the option
@@ -56,7 +56,7 @@ export type AnswerFate =
 
 export function answerFate(
   given: GivenAnswer,
-  run: Pick<SandboxRun, "status" | "launch_id" | "declined_answers" | "answer_ids"> | undefined,
+  run: Pick<ExecutorRow, "status" | "launch_id" | "declined_answers" | "answer_ids"> | undefined,
   loaded: boolean,
   /** Whether this answer was already seen recorded on the run, or taken. */
   seenTaken = false,

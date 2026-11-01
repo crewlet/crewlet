@@ -587,7 +587,7 @@ describe("buildWaterfall", () => {
     });
     const events = [
       event("agent_turn_started", 0, { started_at: iso(0) }),
-      event("sandbox_run_started", 3_000, {
+      event("executor_launched", 3_000, {
         launch_id: "L1",
         started_at: iso(3_000),
         coding_agent: "claude-code",
@@ -623,8 +623,8 @@ describe("buildWaterfall", () => {
       durationMs: 4_000,
     });
     const events = [
-      event("sandbox_run_started", 1_000, { launch_id: "L1", started_at: iso(1_000) }),
-      event("sandbox_run_started", 8_000, { launch_id: "L2", started_at: iso(8_000) }),
+      event("executor_launched", 1_000, { launch_id: "L1", started_at: iso(1_000) }),
+      event("executor_launched", 8_000, { launch_id: "L2", started_at: iso(8_000) }),
     ];
     const now = T0 + 30_000;
     const w = buildWaterfall({ events, phases: [first], now, running: true, parked: true });
@@ -637,8 +637,8 @@ describe("buildWaterfall", () => {
 
   test("a run that failed ends at its failure", () => {
     const events = [
-      event("sandbox_run_started", 1_000, { launch_id: "L1", started_at: iso(1_000) }),
-      event("sandbox_run_failed", 4_000, {}),
+      event("executor_launched", 1_000, { launch_id: "L1", started_at: iso(1_000) }),
+      event("executor_failed", 4_000, {}),
     ];
     const w = buildWaterfall({
       events,
@@ -653,8 +653,8 @@ describe("buildWaterfall", () => {
 
   test("a run a person stopped ends at its stop, and is not drawn as a failure", () => {
     const events = [
-      event("sandbox_run_started", 1_000, { launch_id: "L1", started_at: iso(1_000) }),
-      event("sandbox_run_stopped", 4_000, { stopped_by: "jane" }),
+      event("executor_launched", 1_000, { launch_id: "L1", started_at: iso(1_000) }),
+      event("executor_stopped", 4_000, { stopped_by: "jane" }),
     ];
     const w = buildWaterfall({
       events,

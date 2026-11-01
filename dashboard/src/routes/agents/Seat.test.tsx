@@ -2498,7 +2498,7 @@ test("a parked run is answered from its seat with its context and options", asyn
   const { store } = mount("#/company/org/seats/swe", {
     answers: {
       viewer: { ...OPERATOR, acts: EVERY_ACT },
-      sandbox_runs: {
+      executors: {
         runs: [
           {
             turn_id: "t-7",
@@ -2523,7 +2523,7 @@ test("a parked run is answered from its seat with its context and options", asyn
     agents: [WORKING],
   });
   act(() =>
-    store.applySandboxes([
+    store.applyExecutors([
       {
         turn_id: "t-7",
         role: "SWE",

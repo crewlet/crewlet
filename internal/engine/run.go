@@ -943,11 +943,11 @@ type Engine struct {
 	memoryReads     *memread.Reader
 	stopMemoryServe queue.Unsubscribe
 
-	// sandboxTails answers a running coding run's live output from the node
+	// executorTails answers a running coding run's live output from the node
 	// that owns it, sandboxFeeds is this node's readings of the runs it owns,
 	// and stopTailServe withdraws this node as one of its answerers. See
-	// sandboxtail.go.
-	sandboxTails  *sandbox.TailReader
+	// executortail.go.
+	executorTails *sandbox.TailReader
 	sandboxFeeds  *sandbox.LiveFeeds
 	stopTailServe queue.Unsubscribe
 
@@ -2039,8 +2039,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		return nil, fmt.Errorf("engine: serve seats' memory: %w", err)
 	}
 	// AND THE LIVE OUTPUT OF THE CODING RUNS IT OWNS, for the same reason
-	// and at the same point — see sandboxtail.go.
-	if err = e.armSandboxTails(ctx); err != nil {
+	// and at the same point — see executortail.go.
+	if err = e.armExecutorTails(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve coding runs' live output: %w", err)
 	}
 	// AND THE BOXES ON ITS HOST, which no other node can reach — see
@@ -2821,7 +2821,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopMemoryReads(ctx)
 	// And a run's live output, read from boxes this node is about to stop
 	// driving — and a read of a box on its host, asked by a peer.
-	e.stopSandboxTails(ctx)
+	e.stopExecutorTails(ctx)
 	e.stopSandboxHost(ctx)
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
@@ -2967,7 +2967,7 @@ func (e *Engine) mailboxTurn(ctx context.Context, handle string, evs []*events.E
 }
 
 // conditionsFor answers the ownership and posture questions for one seat.
-func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(string) inbox.Conditions {
+func (e *Engine) conditionsFor(executorRows func(string) (bool, bool)) func(string) inbox.Conditions {
 	return func(handle string) inbox.Conditions {
 		_, owned := e.node.Host().MayStart(handle)
 		company := e.Company()
@@ -2976,8 +2976,8 @@ func (e *Engine) conditionsFor(sandboxRuns func(string) (bool, bool)) func(strin
 		// see the seat between the halves — free, with nothing waiting —
 		// which is the delivery this whole seam exists to catch.
 		var heldBySandbox, sandboxAwaitsAnswer bool
-		if sandboxRuns != nil {
-			heldBySandbox, sandboxAwaitsAnswer = sandboxRuns(handle)
+		if executorRows != nil {
+			heldBySandbox, sandboxAwaitsAnswer = executorRows(handle)
 		}
 		paused, known := e.pauseOfHandle(handle)
 		return inbox.Conditions{

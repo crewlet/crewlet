@@ -434,10 +434,10 @@ describe("subscriptions", () => {
   test("a listener on several changed slices is called once", () => {
     const store = new Store();
     const fn = vi.fn();
-    store.subscribe(["sandboxes", "agents"], fn);
+    store.subscribe(["executors", "agents"], fn);
     // A sandbox move IS a seat move — a seat's effective state folds in
     // whether it is parked on a question — so both slices change together.
-    store.applySandboxes([]);
+    store.applyExecutors([]);
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
@@ -928,7 +928,7 @@ describe("a peer this build was not built against", () => {
   test("every kind this build dispatches is not counted", () => {
     const store = new Store();
     const socket = new LiveSocket(store);
-    for (const kind of ["snapshot", "event", "agents", "seats", "sandboxes", "tokens"]) {
+    for (const kind of ["snapshot", "event", "agents", "seats", "executors", "tokens"]) {
       socket.onMessage(JSON.stringify({ kind, data: kind === "snapshot" ? {} : [] }));
     }
     for (const kind of ["budget", "schedules", "org", "tools", "health", "pong"]) {

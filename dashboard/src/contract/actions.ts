@@ -197,7 +197,7 @@ export const ACTIONS = {
     args: ["turn_id", "launch_id", "choice", "answer"],
     domain: null,
     apps: [],
-    refreshes: ["sandbox_runs", "decisions"],
+    refreshes: ["executors", "decisions"],
     scope: "person",
   },
   pause_seat: {

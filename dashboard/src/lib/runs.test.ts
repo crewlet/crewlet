@@ -1,7 +1,7 @@
 /**
  * ONE POLL FOR THE DURABLE CODING-RUN RECORD.
  *
- * The runs board polled `sandbox_runs` every 20 s and the attention queue
+ * The runs board polled `executors` every 20 s and the attention queue
  * every 30 s, so a run that parked on a question reached the board and then,
  * up to ten seconds later, the Inbox — two screens disagreeing about whether
  * anybody was being waited on. Every reader now names `RUNS_POLL_MS`, and this
@@ -17,7 +17,7 @@ import { expect, test } from "vitest";
 import { lineOf, modules, parse, stringValue, walk, type Node } from "../test/source.ts";
 import { RUNS_POLL_MS, runAskTexts } from "./runs.ts";
 
-test("every reader of sandbox_runs polls on RUNS_POLL_MS", () => {
+test("every reader of executors polls on RUNS_POLL_MS", () => {
   const off: string[] = [];
   let sites = 0;
   for (const mod of modules()) {
@@ -28,7 +28,7 @@ test("every reader of sandbox_runs polls on RUNS_POLL_MS", () => {
       const callee = n.callee as Node;
       if (callee.type !== "Identifier" || callee.name !== "useQuery") return;
       const [what, , options] = n.arguments as Node[];
-      if (stringValue(what) !== "sandbox_runs") return;
+      if (stringValue(what) !== "executors") return;
       sites++;
       const poll =
         options?.type === "ObjectExpression"
@@ -45,7 +45,7 @@ test("every reader of sandbox_runs polls on RUNS_POLL_MS", () => {
       }
     });
   }
-  expect(off, "these read sandbox_runs on a poll of their own").toEqual([]);
+  expect(off, "these read executors on a poll of their own").toEqual([]);
   // NOT VACUOUS: the board, a run's page and rail, and the attention queue.
   expect(sites).toBeGreaterThanOrEqual(4);
   expect(RUNS_POLL_MS).toBe(20_000);

@@ -118,8 +118,8 @@ export function inboxSelection(row: InboxRow | null): InboxSelection | null {
     }
     case "condition":
       if (row.item.subject === "seat") return of("seat", row.item.who, "agent");
-      if (row.item.subject === "run" && row.item.id.startsWith("sandbox-")) {
-        return of("run", row.item.id.slice("sandbox-".length), "run");
+      if (row.item.subject === "run" && row.item.id.startsWith("executor-")) {
+        return of("run", row.item.id.slice("executor-".length), "run");
       }
       return null;
     case "notice":
@@ -161,9 +161,9 @@ export function inboxResources(needs: readonly InboxRow[]): InboxResource[] {
     } else if (
       row.kind === "condition" &&
       row.item.subject === "run" &&
-      row.item.id.startsWith("sandbox-")
+      row.item.id.startsWith("executor-")
     ) {
-      add("run", row.item.id.slice("sandbox-".length));
+      add("run", row.item.id.slice("executor-".length));
     }
   }
   return out;

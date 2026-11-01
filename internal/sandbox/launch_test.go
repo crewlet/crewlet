@@ -146,7 +146,7 @@ func TestALaunchIsAnnouncedAndRoutedToTheSeat(t *testing.T) {
 	}
 	got := rig.queue.topics()
 	want := []string{
-		topics.Event(types.SandboxRunStarted{}.EventType()),
+		topics.Event(types.ExecutorLaunched{}.EventType()),
 		sweControl(),
 	}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
@@ -173,7 +173,7 @@ func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 	}
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
-	started := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
+	started := rig.queue.published[0].event.Data.(*types.ExecutorLaunched)
 	if started.WorkItem == nil || *started.WorkItem != item {
 		t.Fatalf("the announcement names %+v, want the turn's item", started.WorkItem)
 	}
@@ -193,7 +193,7 @@ func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
 	run := rig.get("t1")
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
-	started := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
+	started := rig.queue.published[0].event.Data.(*types.ExecutorLaunched)
 	if started.LaunchID == "" || started.LaunchID != run.LaunchID {
 		t.Errorf("the announcement names launch %q; the row holds %q", started.LaunchID, run.LaunchID)
 	}
@@ -218,7 +218,7 @@ func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 	}
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
-	payload := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
+	payload := rig.queue.published[0].event.Data.(*types.ExecutorLaunched)
 	if payload.Task != first {
 		t.Fatalf("the started event's label is %q, want the brief's first line whole", payload.Task)
 	}
@@ -316,7 +316,7 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 			}
 			rig.queue.mu.Lock()
 			defer rig.queue.mu.Unlock()
-			if label := rig.queue.published[0].event.Data.(*types.SandboxRunStarted).Task; label != named {
+			if label := rig.queue.published[0].event.Data.(*types.ExecutorLaunched).Task; label != named {
 				t.Errorf("the run is announced as %q, want %q", label, named)
 			}
 			if label := rig.get("t1").Label; label != named {
@@ -764,7 +764,7 @@ func TestTheStartedEventNamesTheMemberThatTookTheRun(t *testing.T) {
 	}
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
-	started := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
+	started := rig.queue.published[0].event.Data.(*types.ExecutorLaunched)
 	if started.ProviderKey != "spare" || started.Model != "claude-haiku" {
 		t.Fatalf("the announcement names %q/%q, want the member that took the run",
 			started.ProviderKey, started.Model)

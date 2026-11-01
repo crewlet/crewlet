@@ -14,7 +14,7 @@ import type { ViewerState } from "~/lib/viewer.ts";
 import type {
   AgentRow,
   BudgetWindow,
-  SandboxEntry,
+  ExecutorEntry,
   ConfigRole,
   SeatActivityDay,
   ScheduleRow,
@@ -164,8 +164,8 @@ export function liveRow(
  * a sibling's run parked on a question was drawn on this seat's profile and
  * peek as THIS seat's question.
  */
-export function seatRun(sandboxes: readonly SandboxEntry[], seat: Seat): SandboxEntry | null {
-  return sandboxes.find((s) => s.agent_handle === seat.handle) ?? null;
+export function seatRun(executors: readonly ExecutorEntry[], seat: Seat): ExecutorEntry | null {
+  return executors.find((s) => s.agent_handle === seat.handle) ?? null;
 }
 
 // ---------------------------------------------------------------------------

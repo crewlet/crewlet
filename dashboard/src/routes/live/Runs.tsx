@@ -6,7 +6,7 @@
  * minutes later — possibly after a restart, possibly on another node — for
  * the engine's check and the reviewer. So there are two sources and they
  * answer different questions: the live projection knows what is in flight
- * right now, and `sandbox_runs` knows what the store remembers, including runs
+ * right now, and `executors` knows what the store remembers, including runs
  * whose box has already been reclaimed. The screen this replaces showed only
  * the first, so a run parked on a question with its box gone appeared NOWHERE.
  *
@@ -23,7 +23,7 @@
  * # What the page says a run did
  *
  * Two sources, one per half of a run's life. While the job runs, its output is
- * asked of the node that owns it (`sandbox_tail`, every few seconds, only while
+ * asked of the node that owns it (`executor_tail`, every few seconds, only while
  * the page is open); once the run is collected its record is deleted and what
  * it did is the `sandbox` phase its turn published, with the transcript on it.
  * So a run that has settled still has a page: it is the turn's collected runs,
@@ -69,7 +69,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { WITHHELD_WHY, WITHHELD_WORDS, questionWithheld } from "~/lib/access.ts";
-import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
@@ -93,9 +93,9 @@ import { indentJSON } from "~/lib/jsontext.ts";
 import type {
   BridgeCall,
   EventRecord,
-  SandboxEntry,
-  SandboxRun,
-  SandboxStatus,
+  ExecutorEntry,
+  ExecutorRow,
+  ExecutorStatus,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 
@@ -109,7 +109,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
  * while five entries could never match anything. `internal/sandbox/pending.go`
  * is the list.
  */
-const STATUS_TONE: Record<SandboxStatus, "success" | "warning" | "danger" | "info" | "neutral"> = {
+const STATUS_TONE: Record<ExecutorStatus, "success" | "warning" | "danger" | "info" | "neutral"> = {
   launching: "info",
   running: "info",
   resumed: "info",
@@ -124,7 +124,7 @@ const STATUS_TONE: Record<SandboxStatus, "success" | "warning" | "danger" | "inf
 };
 
 /** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
-const AWAITING: SandboxStatus[] = ["awaiting_clarification", "reseed"];
+const AWAITING: ExecutorStatus[] = ["awaiting_clarification", "reseed"];
 
 /**
  * A live projection entry as the run it is.
@@ -134,14 +134,14 @@ const AWAITING: SandboxStatus[] = ["awaiting_clarification", "reseed"];
  * durable row replaces the whole entry the moment the store catches up. A
  * fabricated `direct` here would be a placement a reader plans against.
  */
-function fromLiveBox(box: SandboxEntry): SandboxRun {
+function fromLiveBox(box: ExecutorEntry): ExecutorRow {
   return {
     turn_id: box.turn_id,
     agent_handle: box.agent_handle,
     role: box.role,
     // The live projection types its status as a plain string because it
     // mirrors whatever the run reported; it is the same vocabulary.
-    status: box.status as SandboxStatus,
+    status: box.status as ExecutorStatus,
     coding_agent: box.coding_agent,
     ...(box.provider_key ? { provider_key: box.provider_key } : {}),
     ...(box.model ? { model: box.model } : {}),
@@ -185,8 +185,8 @@ function fromLiveBox(box: SandboxEntry): SandboxRun {
  * two screens folding "what is in a box" their own way is how they come to
  * disagree about whether anything is.
  */
-export function mergeRuns(durable: SandboxRun[], live: SandboxEntry[]): SandboxRun[] {
-  const byTurn = new Map<string, SandboxRun>();
+export function mergeRuns(durable: ExecutorRow[], live: ExecutorEntry[]): ExecutorRow[] {
+  const byTurn = new Map<string, ExecutorRow>();
   for (const run of durable) byTurn.set(run.turn_id, run);
   for (const box of live) {
     if (byTurn.has(box.turn_id)) continue;
@@ -206,7 +206,7 @@ export function mergeRuns(durable: SandboxRun[], live: SandboxEntry[]): SandboxR
  * The placeholder is deliberately NOT what this screen publishes as the run's
  * label: see the `usePageLabels` call below.
  */
-export function runTitle(run: SandboxRun): string {
+export function runTitle(run: ExecutorRow): string {
   if (run.task_description) return run.task_description;
   return run.body_withheld ? `Task ${WITHHELD_WORDS.toLowerCase()}` : "No task was recorded";
 }
@@ -220,7 +220,7 @@ export function runTitle(run: SandboxRun): string {
  * the tone carries it — spelled once in colour and again in a list, it reads
  * as two different facts about one run.
  */
-function runFacts(run: SandboxRun, nameOf: NameOf): Fact[] {
+function runFacts(run: ExecutorRow, nameOf: NameOf): Fact[] {
   return [
     {
       label: "Seat",
@@ -267,7 +267,7 @@ function runFacts(run: SandboxRun, nameOf: NameOf): Fact[] {
  * and a second spelling of one status is how one screen comes to call a
  * `reseed` unremarkable while this one calls it a caution.
  */
-export function RunStatus({ status }: { status: SandboxStatus }) {
+export function RunStatus({ status }: { status: ExecutorStatus }) {
   return (
     <Tag variant={STATUS_TONE[status] ?? "neutral"} dot>
       {status.replace(/_/g, " ")}
@@ -284,7 +284,7 @@ export function RunStatus({ status }: { status: SandboxStatus }) {
  * deadline in the past, and rendering it as one would tell a reader the box
  * was reclaimed in 1970.
  */
-function pauseDeadline(run: SandboxRun): string | null {
+function pauseDeadline(run: ExecutorRow): string | null {
   const paused = tsKey(run.paused_at);
   if (!paused || run.pause_ttl_seconds <= 0) return null;
   return new Date(paused + run.pause_ttl_seconds * 1000).toISOString();
@@ -311,7 +311,7 @@ export function AwaitingBanner({
   now,
   nameOf,
 }: {
-  run: SandboxRun;
+  run: ExecutorRow;
   now: number;
   nameOf: NameOf;
 }) {
@@ -359,7 +359,7 @@ export function AwaitingBanner({
 }
 
 /** What the run is doing, for a run nobody is being waited on by. */
-function doingLine(run: SandboxRun): string {
+function doingLine(run: ExecutorRow): string {
   switch (run.status) {
     case "launching":
       return "Setting up the box.";
@@ -381,7 +381,7 @@ function doingLine(run: SandboxRun): string {
  * is it doing"; two hundred tool calls with their arguments and results is the
  * page's job, and `Open ↗` is one click away.
  */
-function BridgeSummary({ run }: { run: SandboxRun }) {
+function BridgeSummary({ run }: { run: ExecutorRow }) {
   // NOT KNOWN IS NOT NONE — see [BridgeLog]: absent is a log this reader was
   // not sent, and an empty one is a run that has called nothing, said so.
   if (run.bridge_calls === undefined) return null;
@@ -431,9 +431,9 @@ function BridgeSummary({ run }: { run: SandboxRun }) {
  */
 export function RunPeek({ turnId }: { turnId: string }) {
   const now = useNow();
-  const live = useSandboxes();
+  const live = useExecutors();
   const nameOf = useNameOf();
-  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
+  const { data, loading, error, refusal } = useQuery("executors", undefined, {
     enabled: turnId !== "",
     pollMs: RUNS_POLL_MS,
   });
@@ -521,11 +521,11 @@ export function RunPeek({ turnId }: { turnId: string }) {
 
 export function Runs() {
   const seatBadge = useSeatBadgeOf();
-  const live = useSandboxes();
+  const live = useExecutors();
   const now = useNow();
   // Durable runs have no push behind them, so this is the one place a poll is
   // correct — and it is slow, because a run's lifetime is minutes.
-  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
+  const { data, loading, error, refusal } = useQuery("executors", undefined, {
     pollMs: RUNS_POLL_MS,
   });
 
@@ -542,7 +542,7 @@ export function Runs() {
   const { open: openPeek } = usePeekControls();
 
   const openRun = useCallback(
-    (r: SandboxRun, e: DataGridActivationEvent) => {
+    (r: ExecutorRow, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "run", id: r.turn_id });
       // THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's one
       // copy of "which clicks mean elsewhere" and reads a mouse event — ⌘,
@@ -598,8 +598,8 @@ export function Runs() {
             reading "Failed 0" tells an operator nothing failed, when what is
             true is that this is not where failures are recorded. They are on
             the event stream, as the resumed turn's own events, a
-            `sandbox_run_failed` naming the reason, or a
-            `sandbox_run_stopped` naming who stopped it. */}
+            `executor_failed` naming the reason, or a
+            `executor_stopped` naming who stopped it. */}
         <StatCard
           icon={<PackageGlyph size="xs" />}
           label="In the record"
@@ -623,7 +623,7 @@ export function Runs() {
         }
       >
         <Card padding="none">
-          <DataGrid<SandboxRun>
+          <DataGrid<ExecutorRow>
             rows={rows}
             rowKey={(r) => r.turn_id}
             onRowActivate={openRun}
@@ -746,7 +746,7 @@ function useNameOf(): NameOf {
 }
 
 /** The statuses whose job is running now, so its output is asked of its owner. */
-const RUNNING: SandboxStatus[] = ["launching", "running"];
+const RUNNING: ExecutorStatus[] = ["launching", "running"];
 
 /**
  * The `sandbox` phases a turn published — one per collected job, oldest first.
@@ -767,7 +767,7 @@ export function collectedRuns(events: readonly EventRecord[] | undefined): Phase
  *
  * # Two records, one per half of its life
  *
- * The durable row (`sandbox_runs`, merged with the live projection exactly as
+ * The durable row (`executors`, merged with the live projection exactly as
  * the board does) while the run is in flight — its status, its box, the
  * question it is parked on and the bridge's tool log — and the turn's own
  * `sandbox` phases once it is collected. The page reads both, because a run
@@ -782,10 +782,10 @@ export function collectedRuns(events: readonly EventRecord[] | undefined): Phase
 export function RunScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
   const now = useNow();
-  const live = useSandboxes();
+  const live = useExecutors();
   const nameOf = useNameOf();
   const viewer = useViewer();
-  const board = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const board = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   // THE TURN IS THE COMPANY-WIDE TRAIL, an admin's question: everybody else
   // reads the run's own row, and nothing is asked that would be refused.
   const asksTurn = viewer.admin;
@@ -809,7 +809,7 @@ export function RunScreen({ turnId }: { turnId: string }) {
   // WHAT THE RUN IS CALLED, for the breadcrumb, the browser tab and the
   // palette's recents — the task only, never the header's "No task was
   // recorded", which two runs would wear as two identical recents rows. A
-  // collected run's row is gone, and its task is on the `sandbox_run_started`
+  // collected run's row is gone, and its task is on the `executor_launched`
   // its launch published, which the turn holds.
   const task = run?.task_description || launchedTask(turn.data?.events);
   usePageLabels(task ? { [turnId]: task } : {});
@@ -823,7 +823,7 @@ export function RunScreen({ turnId }: { turnId: string }) {
   const settled = !run && collected.length > 0;
   const last = collected[collected.length - 1];
   // TWO READS, AND "NONE" NEEDS BOTH. The page is drawn from the run record
-  // (`sandbox_runs`) and the turn (`turn`), and only when BOTH answered does
+  // (`executors`) and the turn (`turn`), and only when BOTH answered does
   // finding the run in neither mean there is none. It used to say "neither
   // holds a coding run" whenever one of them failed, which is a claim about a
   // record the page never read — "could not read" and "none" are opposite
@@ -931,7 +931,7 @@ export function RunScreen({ turnId }: { turnId: string }) {
             </Card.Header>
             {run.body_withheld ? (
               // ITS OUTPUT IS THE SEAT'S TRAIL, asked only by a reader the
-              // engine sends the run's body to (`sandbox_tail` is decided as
+              // engine sends the run's body to (`executor_tail` is decided as
               // the seat's trail is): everybody else is told what it is doing.
               <p className="t-body">
                 {doingLine(run)} {WITHHELD_WHY}
@@ -998,12 +998,12 @@ export function RunScreen({ turnId }: { turnId: string }) {
 }
 
 /**
- * The task the newest launch of this turn was given — `sandbox_run_started`'s
+ * The task the newest launch of this turn was given — `executor_launched`'s
  * own `task` — or "" when the turn holds no launch.
  */
 export function launchedTask(events: readonly EventRecord[] | undefined): string {
   const started = (events ?? [])
-    .filter((e) => e.type === "sandbox_run_started")
+    .filter((e) => e.type === "executor_launched")
     .sort((a, b) => tsKey(b.timestamp) - tsKey(a.timestamp))[0];
   const task = started?.payload?.task;
   return typeof task === "string" ? task : "";
@@ -1092,7 +1092,7 @@ function CollectedRun({
  * sent (a live entry whose row is not read yet, a body withheld from them)
  * draws no panel, because "made no calls" would be a claim nobody can make.
  */
-export function BridgeLog({ run }: { run: SandboxRun }) {
+export function BridgeLog({ run }: { run: ExecutorRow }) {
   if (run.bridge_calls === undefined) return null;
   const calls = run.bridge_calls;
   const elided = run.bridge_calls_elided ?? 0;
@@ -1146,7 +1146,7 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
  * What a run with an empty bridge log is said to have done: nothing YET while
  * its job may still be working, and nothing at all once it has stopped.
  */
-function noCallsWords(run: SandboxRun): string {
+function noCallsWords(run: ExecutorRow): string {
   return run.status === "launching" || run.status === "running"
     ? "No calls through the MCP bridge yet"
     : "Made no calls through the MCP bridge, not even its submission";

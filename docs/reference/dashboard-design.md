@@ -6023,7 +6023,7 @@ Four rules replace it, and each one names what it fixes.
    publish no start and so could never have been given one. Zero means *not
    measured*, never *took no time*: an executor's rounds ran inside its
    coding CLI's own loop in another process, and that run's wall clock is on
-   `sandbox_run_started` / `sandbox_run_completed` instead.
+   `executor_launched` / `executor_finished` instead.
 
    **And the page says where each one went.** *Relocated* is only better than
    *dropped* if the page says so: a row that reaches the browser and is drawn
@@ -7142,7 +7142,7 @@ coding run and suspended, so no phase is in flight while the engine still
 calls the seat working — for most of the turn, and for hours on a long
 one. So while the turn is parked the Transcript
 leads with a **Coding run** card: the run's live output (the same
-`sandbox_tail` poll the Timeline's run span opens, read off the waterfall's
+`executor_tail` poll the Timeline's run span opens, read off the waterfall's
 own open run span), the coding agent, and **Open the run** to the run's page
 (`#/live/runs/{turn_id}`); the executor's card it parked in is drawn open
 beneath it. A turn that parks while a reader watches therefore keeps
@@ -7264,7 +7264,7 @@ that can.
   collected.
 - **A running coding run is watched, not replayed.** While its span is open
   the trace asks the node that can read the run's box for its live output
-  every three seconds (`sandbox_tail`, see [Watching a run
+  every three seconds (`executor_tail`, see [Watching a run
   live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
   closing the span or the job stopping ends the poll — and only
   `not_running` is stopping: a job still being set up (`launching`), a box
@@ -7284,7 +7284,7 @@ that can.
     is that hook, and not `useQuery`, because the cursor moves with every
     answer and a cursor in a query's parameters re-runs its effect the moment
     an answer lands. It holds at most what the run's record will
-    (`LIVE_OUTPUT_MAX_BYTES` in `contract/sandbox.ts`, the engine's
+    (`LIVE_OUTPUT_MAX_BYTES` in `contract/executor.ts`, the engine's
     `sandbox.MaxRunTextBytes`, held to it by a gate), dropping its FRONT on a
     line past that, and the caption says how much earlier output it no longer
     holds — every figure read from the answer or the view's own count, never
@@ -7333,7 +7333,7 @@ page, and each page draws ITS OBJECT ALONE: `#/live/runs/{turn_id}` and
 `#/live/a2a/{id}` used to draw the whole list with the object tacked on under
 it, so a link to one run landed on a board with the run below the fold.
 
-- **Coding runs** reads the durable run record (`sandbox_runs`) merged with
+- **Coding runs** reads the durable run record (`executors`) merged with
   the live projection, on ONE poll, `RUNS_POLL_MS` (20 s) in `lib/runs.ts` —
   the board, a run's page and rail, and the attention queue Home and the Inbox
   draw all name it, so the board and the Inbox cannot disagree about whether
@@ -7346,7 +7346,7 @@ it, so a link to one run landed on a board with the run below the fold.
     a run whatever launched it. `pending` is the ordinary outcome: the answer
     is on the seat's inbox and the node holding the seat resumes the run.
   - A running run's page polls its live output from the node that owns it
-    (`sandbox_tail`, by the `launch_id` the row names, every 3 s while the page
+    (`executor_tail`, by the `launch_id` the row names, every 3 s while the page
     is open — the same `LiveOutput` the turn trace draws). The view is keyed
     on the turn AND the launch, so a later job starts a view of its own rather
     than appending its output to the last job's; an answer naming the job
@@ -7355,7 +7355,7 @@ it, so a link to one run landed on a board with the run below the fold.
   - A run is collected when its record is deleted, and its page still
     answers: it reads the turn and draws every `sandbox` phase the turn
     published — what the job reported, what it delivered, its tokens and its
-    transcript — named by the task its `sandbox_run_started` carried.
+    transcript — named by the task its `executor_launched` carried.
   - Beside a peek the board keeps the seat and the task and drops the coding
     agent, the placement and the box, in that order, saying so in its footer.
   - The page reads two sources, and "no run" needs BOTH: only when the run

@@ -86,7 +86,7 @@ func (nowhere) Run(context.Context, string) (sandbox.PendingRun, bool, error) {
 	return sandbox.PendingRun{}, false, nil
 }
 
-func (nowhere) Deliver(context.Context, types.SandboxAnswerGiven) (uuid.UUID, error) {
+func (nowhere) Deliver(context.Context, types.ExecutorAnswerGiven) (uuid.UUID, error) {
 	return uuid.Nil, errNowhere
 }
 

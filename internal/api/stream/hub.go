@@ -127,7 +127,7 @@ const (
 	KindEvent     Kind = "event"
 	KindAgents    Kind = "agents"
 	KindSeats     Kind = "seats"
-	KindSandboxes Kind = "sandboxes"
+	KindExecutors Kind = "executors"
 	KindTokens    Kind = "tokens"
 	KindBudget    Kind = "budget"
 	KindSchedules Kind = "schedules"
@@ -193,7 +193,7 @@ var routes = map[Kind]Route{
 	KindEvent:     RouteBroadcast,
 	KindAgents:    RouteBroadcast,
 	KindSeats:     RouteBroadcast,
-	KindSandboxes: RouteBroadcast,
+	KindExecutors: RouteBroadcast,
 	KindTokens:    RouteBroadcast,
 	KindBudget:    RouteBroadcast,
 	KindSchedules: RouteBroadcast,
@@ -312,7 +312,7 @@ var needs = map[Kind]Need{
 	KindEvent:        NeedAdmin,
 	KindAgents:       NeedEverybody,
 	KindSeats:        NeedEverybody,
-	KindSandboxes:    NeedEverybody,
+	KindExecutors:    NeedEverybody,
 	KindTokens:       NeedEverybody,
 	KindBudget:       NeedEverybody,
 	KindSchedules:    NeedEverybody,
@@ -656,16 +656,16 @@ func (r SpendRollup) For(audience Audience) (string, any) {
 	return "overview", tokens.Rollup(r).WithoutEntries()
 }
 
-// SandboxRows are the in-flight coding runs as a [Shaped] payload: each masked
+// ExecutorRows are the in-flight coding runs as a [Shaped] payload: each masked
 // to the reach its reader has over the seat that launched it.
-type SandboxRows []livestate.SandboxEntry
+type ExecutorRows []livestate.ExecutorEntry
 
 // For masks every run for audience. THE READER'S RECORD NAMES THE VARIANT only
 // while some run is parked on a question, because only a question is shown to
 // somebody by who they are; every other push is shared by every reader with
 // the same reach.
-func (rows SandboxRows) For(audience Audience) (string, any) {
-	out := make([]livestate.SandboxEntry, 0, len(rows))
+func (rows ExecutorRows) For(audience Audience) (string, any) {
+	out := make([]livestate.ExecutorEntry, 0, len(rows))
 	asks := false
 	for _, entry := range rows {
 		asks = asks || entry.Question != ""

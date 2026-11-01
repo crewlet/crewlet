@@ -131,7 +131,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
   const mass = preview.ok ? massRemoval(state.baseDraft, after) : null;
   const agents = seats.filter((seat) => kindOf(seat.data) === "agent");
   const working = seats
-    .filter((seat) => isWorking(handleOf(seat), api.agents, api.sandboxes))
+    .filter((seat) => isWorking(handleOf(seat), api.agents, api.executors))
     .map((seat) => seat.data.name);
 
   const blocked =

@@ -284,12 +284,12 @@ type Sources struct {
 	// does not open here, leaves a row's `answered_by` empty.
 	RunAnswers *sandbox.AnswerSeal
 
-	// SandboxTail is a running coding run's live output, ANSWERED BY THE
+	// ExecutorTail is a running coding run's live output, ANSWERED BY THE
 	// NODE THAT OWNS THE RUN (internal/sandbox/livetail.go): the box is
 	// reachable only through the node driving it, and what it has said so
 	// far is on no record anywhere until the run is collected. Nil leaves
 	// the question unregistered.
-	SandboxTail SandboxTails
+	ExecutorTail ExecutorTails
 
 	// Config serves the config family, every one of which is admin's: the
 	// document names every ${VAR} the company holds a credential under.
@@ -771,16 +771,16 @@ func Register(r *Registry, s Sources) {
 		// run was asked, what it asked and what it was answered are its
 		// seat's trail, and its answer withholds them from a reader the
 		// seat's trail is not open to.
-		r.Register("sandbox_runs", Everybody(), s.sandboxRuns)
+		r.Register("executors", Everybody(), s.executorRows)
 	}
-	if s.SandboxTail != nil {
+	if s.ExecutorTail != nil {
 		// ASKED ONLY WHILE SOMEBODY WATCHES: a trace polls it while a
 		// running coding run's span is open, and nothing else does. There
-		// is no event and no row behind it — see [Sources.SandboxTail].
+		// is no event and no row behind it — see [Sources.ExecutorTail].
 		// DECIDED ON THE RUN'S SEAT, as that seat's trail: what a coding
 		// agent prints is its transcript, as a phase record's prompt and
 		// response are, so its lead reads it and an admin reads any.
-		r.Register("sandbox_tail", DecidedBy(authz.ActionSeatTrailRead), s.sandboxTail)
+		r.Register("executor_tail", DecidedBy(authz.ActionSeatTrailRead), s.executorTail)
 	}
 	if s.Retention != nil {
 		// THE DEPLOYMENT'S. The answer names every node in the fleet, its

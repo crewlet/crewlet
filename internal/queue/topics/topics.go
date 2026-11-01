@@ -156,10 +156,11 @@ const (
 	// ObserveRead is where one history question is scattered. Every node
 	// serves it and answers from its own store; the asker merges.
 	ObserveRead = ObservePrefix + "read"
-	// ObserveSandboxTail is where a request for a running coding run's live
-	// output is scattered (internal/sandbox, `sandbox_tail`). Every node
-	// serves it and only the incarnation that owns the run answers.
-	ObserveSandboxTail = ObservePrefix + "sandbox_tail"
+	// ObserveExecutorTail is where a request for the live output of a box an
+	// executor is running in is scattered (internal/sandbox, which answers
+	// the `executor_tail` query). Every node serves it and only the
+	// incarnation that owns the run answers.
+	ObserveExecutorTail = ObservePrefix + "executor_tail"
 
 	// SandboxPrefix prefixes the subjects the code sandbox's nodes reach
 	// each other on about a run's box (internal/sandbox, boxhost.go): a box

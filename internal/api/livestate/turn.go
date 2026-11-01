@@ -229,7 +229,7 @@ func (s *LiveState) applyTurnStarted(agent *agentLive, env Envelope, payload map
 	return !sameTurnOverlay(before, agent.overlay())
 }
 
-// endLostRun is a coding run that was LOST — `sandbox_run_failed`. The turn that
+// endLostRun is a coding run that was LOST — `executor_failed`. The turn that
 // launched it was parked waiting for it, and the run's loss settles that turn
 // like any other lost turn: nothing resumes it, so a turn left on the seat
 // would read as parked for good.

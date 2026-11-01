@@ -38,7 +38,7 @@ import (
 // message fenced under the wake's token among the surface's triage guidance
 // and how to reply, and its salient body is the message. What the answer
 // records is read back to Ana among her answered decisions (ADR-0068:
-// `sandbox_run_answered`'s `answer` is the answer's body there), sealed onto
+// `executor_answered`'s `answer` is the answer's body there), sealed onto
 // the run's row, and handed to the run as her answer, so each must be exactly
 // what she typed, with none of the prompt and no fence line: a fence is a
 // model's. The run reads it fenced (runner.Asked), labelled as the trigger
@@ -70,7 +70,7 @@ func TestAChatReplyToAParkedRunIsRecordedAsWhatThePersonTyped(t *testing.T) {
 	}
 	answered := rig.announced(t)
 	if answered.Answer != typed {
-		t.Errorf("sandbox_run_answered says the answer was %q, want %q: it is the "+
+		t.Errorf("executor_answered says the answer was %q, want %q: it is the "+
 			"answer's body among the person's answered decisions", answered.Answer, typed)
 	}
 	if answered.AnsweredBy != "ana" {
@@ -114,7 +114,7 @@ func newChatAnswerRig(t *testing.T) *chatAnswerRig {
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(ctx)) })
 	rig := &chatAnswerRig{org: o, queue: q, store: sandbox.NewCoordStore(coordmemory.NewFleet())}
-	if err := q.Subscribe(ctx, topics.Event(types.SandboxRunAnswered{}.EventType()), "answered",
+	if err := q.Subscribe(ctx, topics.Event(types.ExecutorAnswered{}.EventType()), "answered",
 		func(_ context.Context, ev *events.Event) queue.Result {
 			rig.mu.Lock()
 			rig.announcing = append(rig.announcing, ev)
@@ -287,8 +287,8 @@ func (rig *chatAnswerRig) resumedWith(t *testing.T) sandbox.AskedRun {
 	return *rig.resumer.resumed()
 }
 
-// announced is the one sandbox_run_answered the answer was recorded with.
-func (rig *chatAnswerRig) announced(t *testing.T) types.SandboxRunAnswered {
+// announced is the one executor_answered the answer was recorded with.
+func (rig *chatAnswerRig) announced(t *testing.T) types.ExecutorAnswered {
 	t.Helper()
 	eventually(t, "the answer to be announced", func() bool {
 		rig.mu.Lock()
@@ -297,9 +297,9 @@ func (rig *chatAnswerRig) announced(t *testing.T) types.SandboxRunAnswered {
 	})
 	rig.mu.Lock()
 	defer rig.mu.Unlock()
-	got, ok := events.DataAs[*types.SandboxRunAnswered](rig.announcing[0])
+	got, ok := events.DataAs[*types.ExecutorAnswered](rig.announcing[0])
 	if !ok || got == nil {
-		t.Fatalf("the announcement is %T, want sandbox_run_answered", rig.announcing[0].Data)
+		t.Fatalf("the announcement is %T, want executor_answered", rig.announcing[0].Data)
 	}
 	return *got
 }

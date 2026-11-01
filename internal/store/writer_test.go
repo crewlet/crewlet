@@ -125,7 +125,7 @@ func TestCategoriesAreKnownValues(t *testing.T) {
 	for _, typ := range []string{
 		"org_started", "task_assigned", "a2a_channel_opened",
 		"decision_requested", "external_notification",
-		"budget_exhausted", "skill_synthesized", "sandbox_run_started",
+		"budget_exhausted", "skill_synthesized", "executor_launched",
 		"config_revision_activated",
 	} {
 		cat, ok := store.Category(typ)

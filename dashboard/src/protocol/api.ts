@@ -28,7 +28,7 @@ import type { Snapshot } from "./types.ts";
  * object beside a snapshot's fields. That shape was tried: the caller guarded
  * with `!snap._error`, which is TRUE for zero, so the one case this whole
  * fallback exists for — the network completely gone — applied the error object
- * as if it were a snapshot and replaced agents, events, sandboxes, org and
+ * as if it were a snapshot and replaced agents, events, executors, org and
  * tools with empties. The page went blank at the exact moment the last state it
  * received was the only thing it had.
  */

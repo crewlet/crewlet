@@ -78,7 +78,7 @@ func (r *coordRig) stopAnnouncements() []announcedStop {
 	defer r.queue.mu.Unlock()
 	var out []announcedStop
 	for _, p := range r.queue.published {
-		payload, ok := p.event.Data.(*types.SandboxRunStopped)
+		payload, ok := p.event.Data.(*types.ExecutorStopped)
 		if !ok || p.topic != topics.Event(payload.EventType()) {
 			continue
 		}
@@ -89,7 +89,7 @@ func (r *coordRig) stopAnnouncements() []announcedStop {
 
 type announcedStop struct {
 	id      string
-	stopped types.SandboxRunStopped
+	stopped types.ExecutorStopped
 }
 
 // stop is the seat's pause reaching this node.
@@ -129,7 +129,7 @@ func TestAStopEndsTheSeatsRunningRunAtOnce(t *testing.T) {
 	}
 	// AND THE JOB'S COMPLETION, WHEN IT COMES, FINDS NOTHING TO CLAIM.
 	rig.runner.Finish(Result{Success: true, Text: "done anyway"})
-	payload := types.SandboxRunCompleted{
+	payload := types.ExecutorFinished{
 		Agent: running.AgentID, AgentHandle: running.AgentHandle, RoleName: running.Role,
 		TurnID: running.TurnID, LaunchID: running.LaunchID,
 		SandboxID: running.SandboxID, CodingAgent: running.CodingAgent,

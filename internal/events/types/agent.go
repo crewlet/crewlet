@@ -412,7 +412,7 @@ type AgentTurnCompleted struct {
 	Failed bool `json:"failed"`
 	// Stopped is true when a PERSON ended the turn — a pause that asked to
 	// stop the running turn reached its next round, or ended the coding run
-	// the turn was parked on ([SandboxRunStopped]) — rather than the turn
+	// the turn was parked on ([ExecutorStopped]) — rather than the turn
 	// finishing or failing. Never both: a stop is not a failure, and read as
 	// one it would list a turn somebody deliberately ended among the ones
 	// that broke. Who stopped it is the turn's [AgentTurnStopped].
@@ -800,7 +800,7 @@ type AgentPhaseCompleted struct {
 	// when this record was published — see [AgentTurnStarted.WorkItem].
 	WorkItem *WorkItem `json:"work_item,omitempty"`
 	// LaunchID names the detached coding run a resumed phase collected —
-	// the job [SandboxRunCompleted.LaunchID] names, which the pending-run
+	// the job [ExecutorFinished.LaunchID] names, which the pending-run
 	// row held when the resume claimed it. A turn can launch more than
 	// once, so one segment of a phase is (turn_id, phase, iteration,
 	// launch_id). Empty on every phase that collected no run.
@@ -825,7 +825,7 @@ type AgentPhaseCompleted struct {
 	// executor's turns happen inside its CLI's own loop, in its box, and
 	// the segment that collects the run replays what that run already did.
 	// The detached run's own wall clock is on its PhaseSandbox record and on
-	// sandbox_run_started / sandbox_run_completed, which is where a reader
+	// executor_launched / executor_finished, which is where a reader
 	// asking how long the CODING took should look.
 	DurationMS int `json:"duration_ms"`
 	// EmptyAnswerRounds counts the rounds in which the model produced

@@ -520,7 +520,7 @@ func seedRun(t *testing.T, log *store.EventLog, runID, workKey string, at time.T
 //
 // Four event types ARE a failure by their very type and carry no `failed`
 // field for the writer to stamp a tag from: llm_unavailable,
-// budget_exhausted, turn.guard_breach and sandbox_run_failed. They are
+// budget_exhausted, turn.guard_breach and executor_failed. They are
 // exactly what a turn that died BEFORE completing a phase leaves behind —
 // a seat refused at the budget gate, a chain whose every model was down, a
 // breached guard — so the turns list answered "not failed" for the one turn

@@ -141,7 +141,7 @@ func reaper(ctx context.Context, t *testing.T, rig *coordRig, store PendingStore
 func abandonedOnce(t *testing.T, rig *coordRig, handedBack bool) {
 	t.Helper()
 	got := rig.failures()
-	if len(got) != 1 || got[0].Reason != types.SandboxFailureAbandoned {
+	if len(got) != 1 || got[0].Reason != types.ExecutorFailureAbandoned {
 		t.Fatalf("announced %+v, want the run lost once, as an abandoned tail", got)
 	}
 	if says := strings.Contains(got[0].Detail, "goes back to the seat"); says != handedBack {
@@ -618,7 +618,7 @@ func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
 		parkOnAQuestion(t, rig)
 		rig.resumer.failWith(ErrResumeAbandoned)
 		rig.resumer.beforeTurn = true
-		given := types.SandboxAnswerGiven{TurnID: "t1", Agent: sweID, AgentHandle: "swe", Answer: "use main",
+		given := types.ExecutorAnswerGiven{TurnID: "t1", Agent: sweID, AgentHandle: "swe", Answer: "use main",
 			LaunchID: rig.get("t1").LaunchID}
 		ev := events.New(given, events.TraceContext{})
 		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerConsumed {
@@ -631,7 +631,7 @@ func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
 		}
 		// THE COPY, ON THE SEAT'S CONTROL TOPIC, finds the run gone, and says so.
 		copied := rig.lastHandedBack(t)
-		answer, _ := events.DataAs[*types.SandboxAnswerGiven](copied)
+		answer, _ := events.DataAs[*types.ExecutorAnswerGiven](copied)
 		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), *answer, copied); d != AnswerNotMine {
 			t.Fatalf("the copy = %q, want it spent on a run that is gone", d)
 		}

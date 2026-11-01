@@ -709,7 +709,7 @@ func TestASuspendedTurnsIndicatorIsHeldUnderItsRun(t *testing.T) {
 	t.Parallel()
 	for name, settle := range map[string]func(*testing.T, *Engine){
 		"a box's completion takes the hold back": func(t *testing.T, e *Engine) {
-			completion := events.New(types.SandboxRunCompleted{TurnID: "run-code"},
+			completion := events.New(types.ExecutorFinished{TurnID: "run-code"},
 				events.TraceContext{})
 			session, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "run-code", completion)
 			if !rejoined || session == nil {
@@ -883,7 +883,7 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	// The run is settled rather than resumed: its record is deleted, its box
 	// reclaimed, and the turn suspended into it is over.
 	if err := rt.coordinator.FailRun(t.Context(), "run-code",
-		types.SandboxFailureSuspensionUnrecorded,
+		types.ExecutorFailureSuspensionUnrecorded,
 		"the suspended conversation could not be written"); err != nil {
 		t.Fatalf("FailRun: %v", err)
 	}
@@ -936,7 +936,7 @@ func TestAnAnsweredClarificationRaisesTheIndicatorAgain(t *testing.T) {
 	// A completion carries no chat conversation, and with no hold left to
 	// take back there is nothing to raise: a parked run's row deliberately
 	// keeps no chat metadata.
-	completion := events.New(types.SandboxRunCompleted{TurnID: "run-box"}, events.TraceContext{})
+	completion := events.New(types.ExecutorFinished{TurnID: "run-box"}, events.TraceContext{})
 	if s, rejoined := e.resumeWorkingStatus(t.Context(), "swe", "run-box", completion); s != nil || rejoined {
 		t.Errorf("a box's completion raised %v (rejoined %v), want neither",
 			s.Conversation(), rejoined)

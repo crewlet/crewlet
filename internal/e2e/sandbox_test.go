@@ -763,12 +763,12 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 	}
 }
 
-// board reads the sandbox-runs answer over the query surface, exactly as the
+// board reads the executors answer over the query surface, exactly as the
 // dashboard does.
 func (n *codingNode) board(t *testing.T) []map[string]any {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		n.server.URL+"/query/sandbox_runs", nil)
+		n.server.URL+"/query/executors", nil)
 	if err != nil {
 		t.Fatalf("build the request: %v", err)
 	}
@@ -778,7 +778,7 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		t.Fatalf("GET /query/sandbox_runs = %d", res.StatusCode)
+		t.Fatalf("GET /query/executors = %d", res.StatusCode)
 	}
 	var payload struct {
 		Runs []map[string]any `json:"runs"`

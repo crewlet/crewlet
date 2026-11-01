@@ -17,9 +17,9 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import type { PhaseRecord } from "~/lib/phases.ts";
 import { buildWaterfall } from "~/lib/waterfall.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
-import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
+import type { EventRecord, ExecutorTailAnswer } from "~/protocol/index.ts";
 import { phaseRecord } from "~/test/phaseRecord.ts";
-import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
+import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { Waterfall, liveState, steerMarks } from "./Waterfall.tsx";
 import { withDerived } from "~/test/org.ts";
 
@@ -65,7 +65,7 @@ function event(type: string, ms: number, payload: Record<string, unknown>): Even
 /** A turn parked on one coding run that is still out. */
 const PARKED = [
   event("agent_turn_started", 0, { started_at: iso(0) }),
-  event("sandbox_run_started", 1_000, {
+  event("executor_launched", 1_000, {
     launch_id: "L1",
     started_at: iso(1_000),
     coding_agent: "claude-code",
@@ -75,7 +75,7 @@ const PARKED = [
 /** Mount the Timeline over a stubbed tail answer, counting the asks. */
 function mount(
   events: EventRecord[],
-  tail: SandboxTailAnswer | Error | ((asked: number) => SandboxTailAnswer | Error),
+  tail: ExecutorTailAnswer | Error | ((asked: number) => ExecutorTailAnswer | Error),
   {
     selected: initial = "",
     now = T0 + 60_000,
@@ -96,7 +96,7 @@ function mount(
     what: string,
     params: unknown,
   ) => {
-    if (what === "sandbox_tail") {
+    if (what === "executor_tail") {
       asked.push(params as Record<string, unknown>);
       // A FUNCTION ANSWERS THE NTH ASK, for a run whose output grows; an
       // ERROR is the engine refusing it.
@@ -138,7 +138,7 @@ async function flush() {
   });
 }
 
-const RUNNING: SandboxTailAnswer = {
+const RUNNING: ExecutorTailAnswer = {
   outcome: "tail",
   turn_id: "turn-1",
   launch_id: "L1",
@@ -174,7 +174,7 @@ describe("a running coding run's live output", () => {
 
     // IT POLLS while open…
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+      await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
     expect(asked).toHaveLength(2);
 
@@ -182,7 +182,7 @@ describe("a running coding run's live output", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close the span" }));
     await flush();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 3);
+      await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS * 3);
     });
     expect(asked).toHaveLength(2);
   });
@@ -272,7 +272,7 @@ describe("a running coding run's live output", () => {
     await flush();
     expect(screen.getByText("running go test ./...")).toBeTruthy();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+      await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
     expect(screen.getByText(said)).toBeTruthy();
     expect(screen.getByText("running go test ./...")).toBeTruthy();
@@ -305,7 +305,7 @@ describe("a running coding run's live output", () => {
       );
       await flush();
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 3);
+        await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS * 3);
       });
       expect(asked).toHaveLength(asks);
       cleanup();
@@ -332,7 +332,7 @@ describe("a running coding run's live output", () => {
     vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
     const lines = ["[tool] bash: go build\n", "[tool] bash: go vet\n", "[tool] bash: go test\n"];
     let end = 0;
-    const answer = (n: number): SandboxTailAnswer => {
+    const answer = (n: number): ExecutorTailAnswer => {
       const text = lines[Math.min(n, lines.length) - 1]!;
       const start = end;
       end += text.length;
@@ -363,7 +363,7 @@ describe("a running coding run's live output", () => {
     Object.defineProperty(pre, "clientHeight", { configurable: true, value: 100 });
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+      await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
     expect(pre.textContent).toContain("go build");
     expect(pre.textContent).toContain("go vet");
@@ -379,7 +379,7 @@ describe("a running coding run's live output", () => {
     pre.scrollTop = 200;
     fireEvent.scroll(pre);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+      await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
     expect(pre.textContent).toContain("go test");
     expect(pre.scrollTop).toBe(200);
@@ -396,7 +396,7 @@ describe("a running coding run's live output", () => {
     await flush();
     expect(screen.getByText("Setting up. Output appears when the agent starts.")).toBeTruthy();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 2);
+      await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS * 2);
     });
     expect(asked.length).toBeGreaterThan(1);
   });
@@ -416,7 +416,7 @@ describe("a running coding run's live output", () => {
     await flush();
     expect(screen.getByText("Waiting for an answer.")).toBeTruthy();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 3);
+      await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS * 3);
     });
     expect(asked).toHaveLength(1);
   });
@@ -591,7 +591,7 @@ describe("a person's note", () => {
 const SETTLED = [
   event("agent_turn_started", 0, { started_at: iso(0) }),
   event("prefetch_summary", 500, { started_at: iso(0), duration_ms: 500 }),
-  event("sandbox_run_started", 1_000, {
+  event("executor_launched", 1_000, {
     launch_id: "L1",
     started_at: iso(1_000),
     coding_agent: "claude-code",
@@ -737,7 +737,7 @@ describe("a live tail's announcements", () => {
     expect(live[0]!.textContent).toBe("Showing the run's live output.");
     expect(live[0]!.contains(screen.getByText("running go test ./..."))).toBe(false);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+      await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS);
     });
     expect(document.querySelector("[role='status']")!.textContent).toBe(
       "Showing the run's live output.",

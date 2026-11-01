@@ -113,7 +113,7 @@ func TestFailureByEventTypeNeedsNoPayloadFlag(t *testing.T) {
 	// Some events ARE a failure by their very type, independent of any
 	// payload flag, and three layers have to agree about which.
 	for _, kind := range []string{
-		"sandbox_run_failed", "llm_unavailable", "budget_exhausted", "turn.guard_breach",
+		"executor_failed", "llm_unavailable", "budget_exhausted", "turn.guard_breach",
 	} {
 		s := livestate.New()
 		s.Apply(env(kind, map[string]any{"agent_id": "Lead"}))
@@ -200,12 +200,12 @@ func sandboxPayload(turnID string) map[string]any {
 	}
 }
 
-func TestASandboxRunIsTrackedThenDropped(t *testing.T) {
+func TestAnExecutorIsTrackedThenDropped(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
+	s.Apply(env("executor_launched", sandboxPayload("tn-1")))
 
-	runs := s.ActiveSandboxes()
+	runs := s.ActiveExecutors()
 	if len(runs) != 1 {
 		t.Fatalf("runs = %d, want 1", len(runs))
 	}
@@ -218,8 +218,8 @@ func TestASandboxRunIsTrackedThenDropped(t *testing.T) {
 			runs[0].ProviderKey, runs[0].Model)
 	}
 
-	s.Apply(env("sandbox_run_completed", map[string]any{"turn_id": "tn-1"}))
-	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+	s.Apply(env("executor_finished", map[string]any{"turn_id": "tn-1"}))
+	if runs := s.ActiveExecutors(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want none after completion", runs)
 	}
 }
@@ -227,12 +227,12 @@ func TestASandboxRunIsTrackedThenDropped(t *testing.T) {
 func TestAClarificationFlipsARunToAwaitingAPerson(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
-	s.Apply(env("sandbox_clarification_requested", map[string]any{
+	s.Apply(env("executor_launched", sandboxPayload("tn-1")))
+	s.Apply(env("executor_asked", map[string]any{
 		"turn_id": "tn-1", "question": "which branch?", "audience": "author",
 	}))
 
-	runs := s.ActiveSandboxes()
+	runs := s.ActiveExecutors()
 	if len(runs) != 1 {
 		t.Fatalf("runs = %d, want 1", len(runs))
 	}
@@ -240,8 +240,8 @@ func TestAClarificationFlipsARunToAwaitingAPerson(t *testing.T) {
 	// "is a person needed?" in. This projection used to write
 	// `awaiting_input`, which the record cannot, so the answer was never
 	// yes for a live run.
-	if runs[0].Status != livestate.SandboxAwaiting {
-		t.Errorf("status = %q, want %q", runs[0].Status, livestate.SandboxAwaiting)
+	if runs[0].Status != livestate.ExecutorAwaiting {
+		t.Errorf("status = %q, want %q", runs[0].Status, livestate.ExecutorAwaiting)
 	}
 	if runs[0].Question != "which branch?" || runs[0].Audience != "author" {
 		t.Errorf("entry = %+v", runs[0])
@@ -258,11 +258,11 @@ func TestAClarificationWithNoPriorStartSynthesizesAnEntry(t *testing.T) {
 	// missed. Dropping the signal would hide a run that is blocked on a
 	// human.
 	s := sandboxState(t)
-	s.Apply(env("sandbox_clarification_requested", map[string]any{
+	s.Apply(env("executor_asked", map[string]any{
 		"turn_id": "tn-1", "role": "Coder", "question": "which branch?",
 	}))
-	runs := s.ActiveSandboxes()
-	if len(runs) != 1 || runs[0].Status != livestate.SandboxAwaiting {
+	runs := s.ActiveExecutors()
+	if len(runs) != 1 || runs[0].Status != livestate.ExecutorAwaiting {
 		t.Fatalf("runs = %+v, want one entry awaiting a person", runs)
 	}
 	if runs[0].Role != "Coder" {
@@ -275,12 +275,12 @@ func TestActiveSandboxesAreOldestFirst(t *testing.T) {
 	// Oldest-first so the longest-running job — the one most likely to
 	// need attention — sorts to the top of the panel.
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-late"),
+	s.Apply(env("executor_launched", sandboxPayload("tn-late"),
 		at("2026-06-14T12:05:00+00:00")))
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-early"),
+	s.Apply(env("executor_launched", sandboxPayload("tn-early"),
 		at("2026-06-14T12:01:00+00:00")))
 
-	runs := s.ActiveSandboxes()
+	runs := s.ActiveExecutors()
 	got := []string{runs[0].TurnID, runs[1].TurnID}
 	if !slices.Equal(got, []string{"tn-early", "tn-late"}) {
 		t.Errorf("order = %v, want oldest first", got)
@@ -290,8 +290,8 @@ func TestActiveSandboxesAreOldestFirst(t *testing.T) {
 func TestASandboxEventWithNoTurnIDIsIgnored(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", map[string]any{"agent_id": "Coder"}))
-	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+	s.Apply(env("executor_launched", map[string]any{"agent_id": "Coder"}))
+	if runs := s.ActiveExecutors(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want none: the entry is keyed by turn id", runs)
 	}
 }
@@ -304,14 +304,14 @@ func TestAParkedRunOlderThanADayIsStillShown(t *testing.T) {
 	// ones least likely to be on screen.
 	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
 	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1"),
+	s.Apply(env("executor_launched", sandboxPayload("tn-1"),
 		at("2026-06-14T12:00:00Z")))
-	s.Apply(env("sandbox_clarification_requested", map[string]any{
+	s.Apply(env("executor_asked", map[string]any{
 		"turn_id": "tn-1", "role": "Coder", "question": "which branch?",
 	}, at("2026-06-14T12:10:00Z")))
 
-	runs := s.ActiveSandboxes()
-	if len(runs) != 1 || runs[0].Status != livestate.SandboxAwaiting {
+	runs := s.ActiveExecutors()
+	if len(runs) != 1 || runs[0].Status != livestate.ExecutorAwaiting {
 		t.Fatalf("runs = %+v, want the three-day-old parked run still shown", runs)
 	}
 	if runs[0].PausedAt != "2026-06-14T12:10:00Z" {
@@ -322,18 +322,18 @@ func TestAParkedRunOlderThanADayIsStillShown(t *testing.T) {
 func TestAFailedRunLeavesTheSandboxesSet(t *testing.T) {
 	t.Parallel()
 	// A run lost to an unreachable box or a stranded claim announces it with
-	// sandbox_run_failed, which this projection read nothing of: the run
+	// executor_failed, which this projection read nothing of: the run
 	// stayed on the panel as running until an age-out took it.
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
-	change := s.Apply(env("sandbox_run_failed", map[string]any{
+	s.Apply(env("executor_launched", sandboxPayload("tn-1")))
+	change := s.Apply(env("executor_failed", map[string]any{
 		"turn_id": "tn-1", "role": "Coder", "reason": "collect_unreachable",
 	}, id("e-failed")))
 
-	if !change.Sandboxes {
+	if !change.Executors {
 		t.Error("a lost run did not move the sandbox set")
 	}
-	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+	if runs := s.ActiveExecutors(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want the lost run gone", runs)
 	}
 }
@@ -344,15 +344,15 @@ func TestAFailedRunLeavesTheSandboxesSet(t *testing.T) {
 func TestAStoppedRunLeavesTheSandboxesSetAtOnce(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
-	change := s.Apply(env("sandbox_run_stopped", map[string]any{
+	s.Apply(env("executor_launched", sandboxPayload("tn-1")))
+	change := s.Apply(env("executor_stopped", map[string]any{
 		"turn_id": "tn-1", "role": "Coder", "stopped_by": "jane", "stopped_by_kind": "human",
 	}, id("e-stopped")))
 
-	if !change.Sandboxes {
+	if !change.Executors {
 		t.Error("a stopped run did not move the sandbox set")
 	}
-	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+	if runs := s.ActiveExecutors(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want the stopped run gone", runs)
 	}
 }
@@ -360,11 +360,11 @@ func TestAStoppedRunLeavesTheSandboxesSetAtOnce(t *testing.T) {
 func TestAStartedRunNamesItsItemAndItsOwner(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", with(sandboxPayload("tn-1"), map[string]any{
+	s.Apply(env("executor_launched", with(sandboxPayload("tn-1"), map[string]any{
 		"node":      "core-1",
 		"work_item": map[string]any{"backend": "native", "id": "t-9", "key": "ENG-9", "project": "p-1"},
 	})))
-	runs := s.ActiveSandboxes()
+	runs := s.ActiveExecutors()
 	if len(runs) != 1 {
 		t.Fatalf("runs = %+v, want one", runs)
 	}
@@ -377,9 +377,9 @@ func TestAStartedRunNamesItsItemAndItsOwner(t *testing.T) {
 }
 
 // record is one durable run as the reconcile is handed it.
-func record(turnID string, status livestate.SandboxStatus, launch string, written time.Time) livestate.SandboxRecord {
-	return livestate.SandboxRecord{
-		Entry: livestate.SandboxEntry{
+func record(turnID string, status livestate.ExecutorStatus, launch string, written time.Time) livestate.ExecutorRecord {
+	return livestate.ExecutorRecord{
+		Entry: livestate.ExecutorEntry{
 			TurnID: turnID, Role: "Coder", AgentHandle: "coder", Status: status,
 			StartedAt: "2026-06-14T11:00:00Z", Owner: "core-2", Task: "from the record",
 		},
@@ -393,13 +393,13 @@ func TestReconcileRemovesARunTheStoreNoLongerHolds(t *testing.T) {
 	// as lossy as a start. The durable record no longer holds the run, and
 	// the record is the truth about which runs exist.
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-ghost")))
+	s.Apply(env("executor_launched", sandboxPayload("tn-ghost")))
 
-	change := s.ReconcileSandboxes(nil, fixtureNow.Add(time.Second))
-	if !change.Sandboxes {
+	change := s.ReconcileExecutors(nil, fixtureNow.Add(time.Second))
+	if !change.Executors {
 		t.Error("dropping a ghost did not move the sandbox set")
 	}
-	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+	if runs := s.ActiveExecutors(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want the run the record no longer holds gone", runs)
 	}
 }
@@ -410,10 +410,10 @@ func TestReconcileKeepsARunStartedWhileTheRecordWasRead(t *testing.T) {
 	// hold it — and the start event this process learned of after the read
 	// began is the newer truth.
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-new")))
+	s.Apply(env("executor_launched", sandboxPayload("tn-new")))
 
-	s.ReconcileSandboxes(nil, fixtureNow.Add(-time.Second))
-	if runs := s.ActiveSandboxes(); len(runs) != 1 {
+	s.ReconcileExecutors(nil, fixtureNow.Add(-time.Second))
+	if runs := s.ActiveExecutors(); len(runs) != 1 {
 		t.Errorf("runs = %+v, want the run started during the read kept", runs)
 	}
 }
@@ -423,17 +423,17 @@ func TestReconcileSeedsWhatTheEventsNeverSaid(t *testing.T) {
 	// A process that came up while runs were in flight — parked on a
 	// question for days, or still coding — saw none of their starts.
 	s := sandboxState(t)
-	change := s.ReconcileSandboxes([]livestate.SandboxRecord{
-		record("tn-parked", livestate.SandboxAwaiting, "l-1", fixtureNow.Add(-72*time.Hour)),
-		record("tn-running", livestate.SandboxRunning, "l-2", fixtureNow.Add(-time.Minute)),
+	change := s.ReconcileExecutors([]livestate.ExecutorRecord{
+		record("tn-parked", livestate.ExecutorAwaiting, "l-1", fixtureNow.Add(-72*time.Hour)),
+		record("tn-running", livestate.ExecutorRunning, "l-2", fixtureNow.Add(-time.Minute)),
 		// A run whose turn has taken its result back is over.
-		record("tn-resumed", livestate.SandboxStatus("resumed"), "l-3", fixtureNow),
+		record("tn-resumed", livestate.ExecutorStatus("resumed"), "l-3", fixtureNow),
 	}, fixtureNow)
 
-	if !change.Sandboxes {
+	if !change.Executors {
 		t.Error("seeding from the record did not move the sandbox set")
 	}
-	runs := s.ActiveSandboxes()
+	runs := s.ActiveExecutors()
 	var got []string
 	for _, r := range runs {
 		got = append(got, r.TurnID+"="+string(r.Status))
@@ -443,10 +443,10 @@ func TestReconcileSeedsWhatTheEventsNeverSaid(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("runs = %v, want %v", got, want)
 	}
-	if again := s.ReconcileSandboxes([]livestate.SandboxRecord{
-		record("tn-parked", livestate.SandboxAwaiting, "l-1", fixtureNow.Add(-72*time.Hour)),
-		record("tn-running", livestate.SandboxRunning, "l-2", fixtureNow.Add(-time.Minute)),
-	}, fixtureNow.Add(time.Second)); again.Sandboxes {
+	if again := s.ReconcileExecutors([]livestate.ExecutorRecord{
+		record("tn-parked", livestate.ExecutorAwaiting, "l-1", fixtureNow.Add(-72*time.Hour)),
+		record("tn-running", livestate.ExecutorRunning, "l-2", fixtureNow.Add(-time.Minute)),
+	}, fixtureNow.Add(time.Second)); again.Executors {
 		t.Error("a reconcile that found nothing new reported a move, which pushes the panel for nothing")
 	}
 }
@@ -457,21 +457,21 @@ func TestReconcileDoesNotResurrectARunWhoseCompletionLanded(t *testing.T) {
 	// completion is announced while the record still says running. Put
 	// back, the finished job would be drawn as running until the next read.
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
-	s.Apply(env("sandbox_run_completed", map[string]any{"turn_id": "tn-1", "launch_id": "l-1"}))
+	s.Apply(env("executor_launched", sandboxPayload("tn-1")))
+	s.Apply(env("executor_finished", map[string]any{"turn_id": "tn-1", "launch_id": "l-1"}))
 
-	s.ReconcileSandboxes([]livestate.SandboxRecord{
-		record("tn-1", livestate.SandboxRunning, "l-1", fixtureNow),
+	s.ReconcileExecutors([]livestate.ExecutorRecord{
+		record("tn-1", livestate.ExecutorRunning, "l-1", fixtureNow),
 	}, fixtureNow.Add(time.Second))
-	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+	if runs := s.ActiveExecutors(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want the completed job kept off the panel", runs)
 	}
 
 	// A RELAUNCH in the same turn is another job, and it is shown.
-	s.ReconcileSandboxes([]livestate.SandboxRecord{
-		record("tn-1", livestate.SandboxRunning, "l-2", fixtureNow.Add(time.Minute)),
+	s.ReconcileExecutors([]livestate.ExecutorRecord{
+		record("tn-1", livestate.ExecutorRunning, "l-2", fixtureNow.Add(time.Minute)),
 	}, fixtureNow.Add(2*time.Second))
-	if runs := s.ActiveSandboxes(); len(runs) != 1 {
+	if runs := s.ActiveExecutors(); len(runs) != 1 {
 		t.Errorf("runs = %+v, want the relaunched job shown", runs)
 	}
 }
@@ -481,15 +481,15 @@ func TestReconcileDoesNotResurrectAFailedRun(t *testing.T) {
 	// A failure names no job, so the record's own last write decides: one
 	// not written since the failure is the failed run's.
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
-	s.Apply(env("sandbox_run_failed", map[string]any{"turn_id": "tn-1"},
+	s.Apply(env("executor_launched", sandboxPayload("tn-1")))
+	s.Apply(env("executor_failed", map[string]any{"turn_id": "tn-1"},
 		at("2026-06-14T12:10:00Z")))
 
 	stale := time.Date(2026, 6, 14, 12, 9, 0, 0, time.UTC)
-	s.ReconcileSandboxes([]livestate.SandboxRecord{
-		record("tn-1", livestate.SandboxRunning, "l-1", stale),
+	s.ReconcileExecutors([]livestate.ExecutorRecord{
+		record("tn-1", livestate.ExecutorRunning, "l-1", stale),
 	}, fixtureNow)
-	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+	if runs := s.ActiveExecutors(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want the failed run kept off the panel", runs)
 	}
 }
@@ -499,14 +499,14 @@ func TestReconcileTakesTheRecordsWordOverAnOlderEvent(t *testing.T) {
 	// The event said running; the record, read later, says the run stopped
 	// to ask a question whose announcement was lost.
 	s := sandboxState(t)
-	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
-	parked := record("tn-1", livestate.SandboxAwaiting, "l-1", fixtureNow)
+	s.Apply(env("executor_launched", sandboxPayload("tn-1")))
+	parked := record("tn-1", livestate.ExecutorAwaiting, "l-1", fixtureNow)
 	parked.Entry.Question = "which branch?"
 	parked.Entry.PausedAt = "2026-06-14T12:20:00Z"
 
-	s.ReconcileSandboxes([]livestate.SandboxRecord{parked}, fixtureNow.Add(time.Second))
-	runs := s.ActiveSandboxes()
-	if len(runs) != 1 || runs[0].Status != livestate.SandboxAwaiting ||
+	s.ReconcileExecutors([]livestate.ExecutorRecord{parked}, fixtureNow.Add(time.Second))
+	runs := s.ActiveExecutors()
+	if len(runs) != 1 || runs[0].Status != livestate.ExecutorAwaiting ||
 		runs[0].Question != "which branch?" || runs[0].Owner != "core-2" {
 		t.Fatalf("runs = %+v, want the record's parked run", runs)
 	}
@@ -524,9 +524,9 @@ func TestASandboxEventDoesNotCreateASeatTheCompanyLacks(t *testing.T) {
 	// would put a row on screen for a seat the roster may not contain, the
 	// moment a coding run of a removed seat started.
 	s := sandboxState(t)
-	change := s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
+	change := s.Apply(env("executor_launched", sandboxPayload("tn-1")))
 
-	if !change.Sandboxes {
+	if !change.Executors {
 		t.Error("the sandbox set did not move")
 	}
 	if len(change.Agents) != 0 {
@@ -539,7 +539,7 @@ func TestASandboxEventDoesNotCreateASeatTheCompanyLacks(t *testing.T) {
 	// The company's own seat moves with its run — matched by the agent id
 	// the run carries, never the role name beside it.
 	s.SetPlacement(map[string]bool{"a-9": true})
-	change = s.Apply(env("sandbox_run_completed", sandboxPayload("tn-1"), id("e2")))
+	change = s.Apply(env("executor_finished", sandboxPayload("tn-1"), id("e2")))
 	if _, moved := change.Agents["a-9"]; !moved {
 		t.Errorf("a run ending did not push its seat: %v", change.Agents)
 	}
@@ -709,8 +709,8 @@ func TestAFailureIsStampedOnTheFrameAndOnTheFeedRow(t *testing.T) {
 func TestAReconcileCarriesWhoAParkedQuestionIsPutTo(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
-	parked := func(turnID string, audience []string) livestate.SandboxRecord {
-		rec := codingRun(turnID, "Coder", livestate.SandboxAwaiting, fixtureNow.Add(-time.Hour))
+	parked := func(turnID string, audience []string) livestate.ExecutorRecord {
+		rec := codingRun(turnID, "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Hour))
 		rec.Entry.Question, rec.Entry.Audience = "which branch?", "dana"
 		rec.Entry.AudienceHandles = audience
 		return rec
@@ -718,28 +718,28 @@ func TestAReconcileCarriesWhoAParkedQuestionIsPutTo(t *testing.T) {
 	// Two runs, so each side of the comparison meets an empty audience
 	// against none: tn-1 is held with none and read with an empty one,
 	// tn-2 the other way round.
-	if !s.ReconcileSandboxes([]livestate.SandboxRecord{parked("tn-1", nil),
-		parked("tn-2", []string{})}, fixtureNow).Sandboxes {
+	if !s.ReconcileExecutors([]livestate.ExecutorRecord{parked("tn-1", nil),
+		parked("tn-2", []string{})}, fixtureNow).Executors {
 		t.Fatal("the first reading of the runs did not move the set")
 	}
-	if s.ReconcileSandboxes([]livestate.SandboxRecord{parked("tn-1", []string{}),
-		parked("tn-2", nil)}, fixtureNow.Add(time.Second)).Sandboxes {
+	if s.ReconcileExecutors([]livestate.ExecutorRecord{parked("tn-1", []string{}),
+		parked("tn-2", nil)}, fixtureNow.Add(time.Second)).Executors {
 		t.Error("an empty audience was read as news where the run had none, or " +
 			"none where it had an empty one")
 	}
-	if !s.ReconcileSandboxes([]livestate.SandboxRecord{parked("tn-1", []string{"dana"}),
-		parked("tn-2", nil)}, fixtureNow.Add(2*time.Second)).Sandboxes {
+	if !s.ReconcileExecutors([]livestate.ExecutorRecord{parked("tn-1", []string{"dana"}),
+		parked("tn-2", nil)}, fixtureNow.Add(2*time.Second)).Executors {
 		t.Error("a reconcile whose only news is who the question is put to did " +
 			"not push the run set")
 	}
-	runs := s.ActiveSandboxes()
-	i := slices.IndexFunc(runs, func(e livestate.SandboxEntry) bool { return e.TurnID == "tn-1" })
+	runs := s.ActiveExecutors()
+	i := slices.IndexFunc(runs, func(e livestate.ExecutorEntry) bool { return e.TurnID == "tn-1" })
 	if i < 0 || !slices.Equal(runs[i].AudienceHandles, []string{"dana"}) {
 		t.Fatalf("the set holds %+v, want tn-1 put to dana", runs)
 	}
 	runs[i].AudienceHandles[0] = "mallory"
-	again := s.ActiveSandboxes()
-	if j := slices.IndexFunc(again, func(e livestate.SandboxEntry) bool {
+	again := s.ActiveExecutors()
+	if j := slices.IndexFunc(again, func(e livestate.ExecutorEntry) bool {
 		return e.TurnID == "tn-1"
 	}); again[j].AudienceHandles[0] != "dana" {
 		t.Errorf("editing the set handed out changed who the projection puts the "+

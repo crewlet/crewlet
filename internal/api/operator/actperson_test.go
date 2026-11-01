@@ -387,7 +387,7 @@ func (parkedRun) Run(_ context.Context, turnID string) (sandbox.PendingRun, bool
 		Question: "which branch?", LaunchID: "launch-t1"}, true, nil
 }
 
-func (parkedRun) Deliver(context.Context, types.SandboxAnswerGiven) (uuid.UUID, error) {
+func (parkedRun) Deliver(context.Context, types.ExecutorAnswerGiven) (uuid.UUID, error) {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("answer-t1")), nil
 }
 

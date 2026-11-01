@@ -25,7 +25,7 @@ export type PushKind =
   | "event"
   | "agents"
   | "seats"
-  | "sandboxes"
+  | "executors"
   | "tokens"
   | "budget"
   | "schedules"

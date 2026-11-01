@@ -146,7 +146,7 @@ const QUIET = {
   },
   company_feed: { rows: [], complete: true },
   work_projects: { projects: [], total: 0, census: {}, complete: true },
-  sandbox_runs: { runs: [] },
+  executors: { runs: [] },
   work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
 };
 
@@ -838,7 +838,7 @@ describe("the decisions", () => {
           total: 2,
           capped: false,
         },
-        sandbox_runs: { runs: [parked, legacy] },
+        executors: { runs: [parked, legacy] },
       },
     });
     await settle();

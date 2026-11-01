@@ -23,7 +23,7 @@ import (
 // answer the run took, only within the window, and only one they gave: a run's
 // question can be put to a whole team, and a teammate's answer is theirs.
 //
-// Mutation: list every `sandbox_run_answered` whatever its outcome, and the
+// Mutation: list every `executor_answered` whatever its outcome, and the
 // answer the run never used is listed as the decision.
 func TestARunsAnsweredQuestionIsAnAnsweredDecision(t *testing.T) {
 	t.Parallel()
@@ -32,7 +32,7 @@ func TestARunsAnsweredQuestionIsAnAnsweredDecision(t *testing.T) {
 	asked := &decision.Decision{Question: "Which suite?", Role: decision.RoleApprover,
 		Recommended: "unit", Options: []decision.Option{
 			{ID: "unit", Label: "The unit suite"}, {ID: "all", Label: "Every suite"}}}
-	answered := func(id string, at time.Time, e types.SandboxRunAnswered) store.EventRecord {
+	answered := func(id string, at time.Time, e types.ExecutorAnswered) store.EventRecord {
 		e.AgentHandle, e.TurnID, e.LaunchID = "swe", "t-"+id, "l-"+id
 		e.Question, e.Decision, e.AskedAt = asked.Question, asked, at.Add(-time.Hour)
 		raw, err := json.Marshal(e)
@@ -46,16 +46,16 @@ func TestARunsAnsweredQuestionIsAnAnsweredDecision(t *testing.T) {
 			Tags: store.ExtractTags(raw)}
 	}
 	recs := []store.EventRecord{
-		answered("taken", now.Add(-time.Hour), types.SandboxRunAnswered{
+		answered("taken", now.Add(-time.Hour), types.ExecutorAnswered{
 			Outcome: types.AnswerResumed, AudienceHandles: []string{"ana"},
 			AnsweredBy: "ana", AnsweredByKind: "human", Choice: "unit"}),
-		answered("unused", now.Add(-2*time.Hour), types.SandboxRunAnswered{
+		answered("unused", now.Add(-2*time.Hour), types.ExecutorAnswered{
 			Outcome: types.AnswerNotAwaiting, AudienceHandles: []string{"ana"},
 			AnsweredBy: "ana", AnsweredByKind: "human", Choice: "all"}),
-		answered("theirs", now.Add(-3*time.Hour), types.SandboxRunAnswered{
+		answered("theirs", now.Add(-3*time.Hour), types.ExecutorAnswered{
 			Outcome: types.AnswerResumed, AudienceHandles: []string{"bo"},
 			AnsweredBy: "bo", AnsweredByKind: "human", Answer: "the slow one"}),
-		answered("stale", now.Add(-worklet.AnsweredWindow-time.Hour), types.SandboxRunAnswered{
+		answered("stale", now.Add(-worklet.AnsweredWindow-time.Hour), types.ExecutorAnswered{
 			Outcome: types.AnswerResumed, AudienceHandles: []string{"ana"},
 			AnsweredBy: "ana", AnsweredByKind: "human", Choice: "all"}),
 	}
@@ -115,7 +115,7 @@ func TestARunsAnsweredQuestionReachesWhoMayReadTheRunAndThePerson(t *testing.T) 
 	asked := &decision.Decision{Question: "Which suite?", Role: decision.RoleApprover,
 		Recommended: "unit", Options: []decision.Option{
 			{ID: "unit", Label: "The unit suite"}, {ID: "all", Label: "Every suite"}}}
-	e := types.SandboxRunAnswered{AgentHandle: "swe", TurnID: "t-1", LaunchID: "l-1",
+	e := types.ExecutorAnswered{AgentHandle: "swe", TurnID: "t-1", LaunchID: "l-1",
 		Question: asked.Question, Decision: asked, Outcome: types.AnswerResumed,
 		AudienceHandles: []string{"bo"}, AnsweredBy: "bo", AnsweredByKind: "human",
 		Choice: "unit", AskedAt: time.Now().UTC().Add(-2 * time.Hour)}

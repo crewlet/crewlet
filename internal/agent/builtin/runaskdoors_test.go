@@ -53,7 +53,7 @@ func TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor(t *testing.T) {
 	}
 
 	answers := map[string]any{
-		"GET /sandbox-runs":      map[string]any{"runs": []any{asked}},
+		"GET /executors":         map[string]any{"runs": []any{asked}},
 		"GET /worklet/decisions": map[string]any{"items": []any{map[string]any{"kind": "run", "run": asked}}},
 		"GET /worklet/decisions/answered": map[string]any{"items": []any{map[string]any{"at": time.Now().UTC(), "run": asked,
 			"answer": map[string]any{"choice": "postgres", "body": "Postgres", "by": "founder"}}}},
@@ -71,7 +71,7 @@ func TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor(t *testing.T) {
 		}
 		return res.Trust
 	}
-	curated := map[string]string{"list_coding_runs": "GET /sandbox-runs",
+	curated := map[string]string{"list_executors": "GET /executors",
 		"list_decisions": "GET /worklet/decisions"}
 	for name, route := range curated {
 		tool, ok := catalog.Lookup(name)

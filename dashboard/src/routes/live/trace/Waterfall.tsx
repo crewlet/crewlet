@@ -37,8 +37,8 @@
  * # A running coding run is watched, not replayed
  *
  * While a coding run's span is open AND a reader has it open, its live output
- * is asked of the node that reads its box every [SANDBOX_TAIL_POLL_MS]
- * (`sandbox_tail`), and the view holds what it is sent — up to what the run's
+ * is asked of the node that reads its box every [EXECUTOR_TAIL_POLL_MS]
+ * (`executor_tail`), and the view holds what it is sent — up to what the run's
  * record will hold — following the end unless the reader scrolled up. Nothing
  * else asks: closing the span, or the run stopping, stops the poll; a job still
  * being set up is not a stopped one. The answer is honest about the ways it can
@@ -77,7 +77,7 @@ import {
 import { deliveredLine, outcomeWords, rounds, type PhaseRecord } from "~/lib/phases.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useLiveTail, type LiveView } from "~/lib/useLiveTail.ts";
-import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
+import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { STEER_BOUNDARIES } from "~/contract/steer.ts";
 import {
   fraction,
@@ -86,7 +86,7 @@ import {
   type SpanKind,
   type Waterfall as Model,
 } from "~/lib/waterfall.ts";
-import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
+import type { EventRecord, ExecutorTailAnswer } from "~/protocol/index.ts";
 
 /** What each kind of span is called in its detail's eyebrow. */
 const KIND_LABEL: Record<SpanKind, string> = {
@@ -810,7 +810,7 @@ export function NoJobCaption() {
 
 /**
  * A running coding run's live output, asked of the node that owns it every
- * [SANDBOX_TAIL_POLL_MS] for as long as this is mounted — which is as long as
+ * [EXECUTOR_TAIL_POLL_MS] for as long as this is mounted — which is as long as
  * a reader has the span (or the run's page) open and the job has not stopped.
  *
  * It HOLDS what it has been sent, up to what the run's record will hold, and is
@@ -944,7 +944,7 @@ export function LiveOutput({
         <span className="t-caption">{fmtBytes(tail.held)} more held until it can be redacted.</span>
       )}
       {!tail.final && (
-        <span className="t-caption">Refreshes every {fmtDuration(SANDBOX_TAIL_POLL_MS)}.</span>
+        <span className="t-caption">Refreshes every {fmtDuration(EXECUTOR_TAIL_POLL_MS)}.</span>
       )}
     </div>
   );
@@ -976,7 +976,7 @@ export function holdingLine(view: LiveView): string {
  * is in. It changes only when the state does, so a live region holding it
  * speaks once per change rather than once per poll.
  */
-export function liveState(answer: SandboxTailAnswer | null | undefined, failed: boolean): string {
+export function liveState(answer: ExecutorTailAnswer | null | undefined, failed: boolean): string {
   if (!answer)
     return failed ? "The run's output could not be read." : "Asking the node that runs it.";
   switch (answer.outcome) {

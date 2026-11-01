@@ -154,7 +154,7 @@ func TestTheSnapshotCarriesOnlyWhatItsAudienceMayRead(t *testing.T) {
 		t.Error("an overview snapshot carries the event feed, which the " +
 			"events question keeps to an admin")
 	}
-	for _, key := range []string{"agents", "org", "tools", "schedules", "sandboxes",
+	for _, key := range []string{"agents", "org", "tools", "schedules", "executors",
 		"tokens", "budget", "health"} {
 		if _, ok := overview[key]; !ok {
 			t.Errorf("an overview snapshot is missing %q, which is everybody's", key)
@@ -438,7 +438,7 @@ func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 	}
 	asked, bystander := person("sam.lee", "analyst"), person("kim.ray", "auditor")
 
-	parked := SandboxRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
+	parked := ExecutorRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
 		Question: "which branch?", AudienceHandles: []string{"analyst"}}}
 	askedName, askedRows := parked.For(asked)
 	byName, byRows := parked.For(bystander)
@@ -446,14 +446,14 @@ func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 		t.Errorf("the reader a question is put to and one it is not share the "+
 			"variant %q, so one encode hands both the same payload", askedName)
 	}
-	if got := askedRows.([]livestate.SandboxEntry)[0].Question; got != "which branch?" {
+	if got := askedRows.([]livestate.ExecutorEntry)[0].Question; got != "which branch?" {
 		t.Errorf("the reader the question is put to was shown %q", got)
 	}
-	if got := byRows.([]livestate.SandboxEntry)[0].Question; got != "" {
+	if got := byRows.([]livestate.ExecutorEntry)[0].Question; got != "" {
 		t.Errorf("a reader the question is not put to was shown %q", got)
 	}
 
-	running := SandboxRows{{TurnID: "turn-2", AgentID: "agent-eng", Task: "fix it",
+	running := ExecutorRows{{TurnID: "turn-2", AgentID: "agent-eng", Task: "fix it",
 		AudienceHandles: []string{"analyst"}}}
 	if a, b := runningName(running, asked), runningName(running, bystander); a != b {
 		t.Errorf("with no run parked on a question two readers of the same reach "+
@@ -462,7 +462,7 @@ func TestACodingRunsQuestionNamesItsReaderInTheVariant(t *testing.T) {
 }
 
 // runningName is the variant rows are pushed to audience under.
-func runningName(rows SandboxRows, audience Audience) string {
+func runningName(rows ExecutorRows, audience Audience) string {
 	name, _ := rows.For(audience)
 	return name
 }
@@ -478,7 +478,7 @@ func runningName(rows SandboxRows, audience Audience) string {
 // admin is not.
 func TestTheSandboxesPushNamesARunsEntryToAnAdminAlone(t *testing.T) {
 	t.Parallel()
-	rows := SandboxRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
+	rows := ExecutorRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
 		ProviderKey: "plan-zulu", Model: "opus"}}
 	lead := iam.Principal{Login: "ana.ruiz", Stage: iam.StageActive, Seat: "eng-lead",
 		Grants: []iam.Grant{iam.GrantWorklet}}
@@ -492,7 +492,7 @@ func TestTheSandboxesPushNamesARunsEntryToAnAdminAlone(t *testing.T) {
 		"the overview":    {NewAudience(overviewPrincipal, nil), false},
 	} {
 		_, data := rows.For(tc.audience)
-		got := data.([]livestate.SandboxEntry)
+		got := data.([]livestate.ExecutorEntry)
 		if len(got) != 1 || (got[0].ProviderKey == "plan-zulu") != tc.entry || got[0].Model != "opus" {
 			t.Errorf("%s is sent %+v, want the entry shown %v and the model always", name, got, tc.entry)
 		}

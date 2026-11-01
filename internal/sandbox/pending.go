@@ -33,7 +33,7 @@ import (
 // A terminal status kept there would be read on every one of those passes for
 // the life of the deployment by readers that all skip it, while what a run
 // ended as is already on the record that outlives it: the phase events of the
-// resumed turn, or its sandbox_run_failed or sandbox_run_stopped announcement.
+// resumed turn, or its executor_failed or executor_stopped announcement.
 const (
 	// StatusLaunching — the job has been started, but the turn has not yet
 	// written the conversation a resume re-enters. The seat is BUSY and a
@@ -293,7 +293,7 @@ type Decision struct {
 	License License
 
 	// Reason and Detail are what the ending announces
-	// ([types.SandboxRunFailed]); an empty Reason announces nothing — unless
+	// ([types.ExecutorFailed]); an empty Reason announces nothing — unless
 	// the ending is a stop ([Decision.Stop]), which announces itself.
 	Reason, Detail string
 
@@ -307,7 +307,7 @@ type Decision struct {
 	// Stop, where set, is the person whose pause ENDED the run
 	// ([Coordinator.StopSeat]), recorded on the row in the write that decides
 	// the ending ([PendingRun.Stop]) — which makes the ending a stop: it
-	// announces [types.SandboxRunStopped] rather than a loss, and closes the
+	// announces [types.ExecutorStopped] rather than a loss, and closes the
 	// turn parked on the run as stopped. Nil for every other ending.
 	Stop *RunStop
 }

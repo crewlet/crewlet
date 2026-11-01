@@ -72,8 +72,8 @@ var turnFields = map[string]class{
 	"work_item": tracker,
 }
 
-// sandboxFields classifies a [SandboxEntry]. The question is the body too, but
-// shown to the people it is put to as well — [SandboxEntry.For]. The entry a
+// sandboxFields classifies a [ExecutorEntry]. The question is the body too, but
+// shown to the people it is put to as well — [ExecutorEntry.For]. The entry a
 // run was launched on is the company's configuration; the model it runs under
 // is what it is doing.
 var sandboxFields = map[string]class{
@@ -243,7 +243,7 @@ func TestEveryLiveFieldIsClassified(t *testing.T) {
 		{reflect.TypeFor[Overlay](), "the overlay family"},
 		{reflect.TypeFor[overlayView](), "the overlay family"},
 		{reflect.TypeFor[LiveTurn](), "the live turn"},
-		{reflect.TypeFor[SandboxEntry](), "the coding run"},
+		{reflect.TypeFor[ExecutorEntry](), "the coding run"},
 	}
 	delegatedTo := map[string][]reflect.Type{
 		"live_call": {reflect.TypeFor[*LiveCall](), reflect.TypeFor[any]()},
@@ -572,7 +572,7 @@ func TestAnOverlayViewStatesLiveCallAndTurnAlways(t *testing.T) {
 // them, and this fails.
 func TestACodingRunShowsItsQuestionToThePeopleItIsPutTo(t *testing.T) {
 	t.Parallel()
-	entry := SandboxEntry{TurnID: "turn-1", Task: "fix the build", Status: SandboxAwaiting,
+	entry := ExecutorEntry{TurnID: "turn-1", Task: "fix the build", Status: ExecutorAwaiting,
 		Question: "which branch?", AudienceHandles: []string{"dana"},
 		WorkItem: &types.WorkItem{Key: "ENG-1"}}
 	for _, tc := range []struct {
@@ -619,7 +619,7 @@ func mustJSON(t *testing.T, v any) []byte {
 // and this fails.
 func TestALiveRunsAskIsItsBodyAndHasOneShape(t *testing.T) {
 	t.Parallel()
-	entry := SandboxEntry{TurnID: "t1", Question: "Which branch?",
+	entry := ExecutorEntry{TurnID: "t1", Question: "Which branch?",
 		QuestionContext: "Both build.", AudienceHandles: []string{"ana"},
 		Decision: &decision.Decision{Question: "Which branch?", Role: decision.RoleApprover,
 			Options: []decision.Option{{ID: "a", Label: "A"}, {ID: "b", Label: "B"}}}}
@@ -631,7 +631,7 @@ func TestALiveRunsAskIsItsBodyAndHasOneShape(t *testing.T) {
 	if stranger.Question != "" || stranger.QuestionContext != "" || stranger.Decision != nil {
 		t.Errorf("a reader the question is not put to was shown %+v", stranger)
 	}
-	raw, err := json.Marshal(SandboxEntry{TurnID: "t2"})
+	raw, err := json.Marshal(ExecutorEntry{TurnID: "t2"})
 	if err != nil {
 		t.Fatal(err)
 	}

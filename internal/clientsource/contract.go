@@ -337,9 +337,9 @@ var contract = []Entry{
 	{"STEER_BOUNDARIES", ReadLiteral, "internal/events/types.TestTheDashboardNamesEverySteerBoundary"},
 
 	// sandbox.ts
-	{"SANDBOX_TAIL_OUTCOMES", ReadLiteral, "internal/sandbox.TestTheDashboardKnowsEveryTailOutcome"},
+	{"EXECUTOR_TAIL_OUTCOMES", ReadLiteral, "internal/sandbox.TestTheDashboardKnowsEveryTailOutcome"},
 	{"LIVE_OUTPUT_MAX_BYTES", ReadScalar, "internal/sandbox.TestTheDashboardHoldsWhatTheRecordWillHold"},
-	{"SANDBOX_TAIL_POLL_MS", ReadScalar, "internal/sandbox.TestTheDashboardPollsPastTheOwnersReuse"},
+	{"EXECUTOR_TAIL_POLL_MS", ReadScalar, "internal/sandbox.TestTheDashboardPollsPastTheOwnersReuse"},
 
 	// assistant.ts
 	{"AssistantEventKind", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},

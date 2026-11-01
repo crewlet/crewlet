@@ -254,7 +254,7 @@ type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box
 // completion is found within seconds of its exit rather than up to an interval
 // later — and a nudge that is lost costs that interval, never the run.
 //
-// On detected completion it publishes SandboxRunCompleted; the coordinator does
+// On detected completion it publishes ExecutorFinished; the coordinator does
 // the at-most-once claim, the collection, and the resume of the suspended
 // Execute loop. A duplicate signal is harmless — successive ticks can both fire
 // before the first claim lands, and queue delivery is at-least-once, but the
@@ -1224,7 +1224,7 @@ func (w *Waiter) reapOne(ctx context.Context, manager *Manager, run PendingRun) 
 // that seat has the parked turn to resume — a single
 // fleet-wide group would hand it to a non-owner (N-1)/N of the time.
 func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
-	completion := types.SandboxRunCompleted{
+	completion := types.ExecutorFinished{
 		Agent:       run.AgentID,
 		AgentHandle: run.AgentHandle,
 		RoleName:    run.Role,

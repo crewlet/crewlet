@@ -86,10 +86,10 @@ import (
 // one-type question and [FailureEventNames] enumerates; between them nothing
 // outside this package needs the map itself.
 var failureEventTypes = map[string]struct{}{
-	"llm_unavailable":    {},
-	"budget_exhausted":   {},
-	"turn.guard_breach":  {},
-	"sandbox_run_failed": {},
+	"llm_unavailable":   {},
+	"budget_exhausted":  {},
+	"turn.guard_breach": {},
+	"executor_failed":   {},
 }
 
 // Failed reports whether the work an event describes failed.

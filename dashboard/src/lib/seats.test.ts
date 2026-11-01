@@ -789,7 +789,7 @@ describe("what a seat is doing", () => {
  */
 describe("no screen derives a seat's state", () => {
   const WORDS = new Set(["working", "idle", "needs", "stopped", "offline"]);
-  const SOURCES = /^(in_progress|live_call|sandboxes|runs|running_calls|stage)$/;
+  const SOURCES = /^(in_progress|live_call|executors|runs|running_calls|stage)$/;
 
   /** Whether an expression reads one of the fields a state could be folded from. */
   const reads = (node: Node | null | undefined): boolean => {

@@ -704,7 +704,7 @@ func TestTheFailedFilterIsTheRuleEveryReadStamps(t *testing.T) {
 		{ID: "tagged", Type: "thing_happened", Tags: map[string]string{"failed": "true"}},
 		{ID: "clean-tag", Type: "thing_happened", Tags: map[string]string{"failed": "false"}},
 		{ID: "untagged", Type: "thing_happened"},
-		{ID: "by-type", Type: "sandbox_run_failed"},
+		{ID: "by-type", Type: "executor_failed"},
 	} {
 		rec.Time = base.Add(time.Minute)
 		rec.Category = "system"
@@ -721,7 +721,7 @@ func TestTheFailedFilterIsTheRuleEveryReadStamps(t *testing.T) {
 		}
 	}
 	// THE TYPE IS THE CATALOGUE'S, read back through the row's own mark
-	// rather than assumed: if `sandbox_run_failed` ever leaves the failure
+	// rather than assumed: if `executor_failed` ever leaves the failure
 	// set this names the case instead of passing on a wrong expectation.
 	all, err := log.List(t.Context(), store.ListQuery{Since: base, Until: base.Add(time.Hour)})
 	if err != nil {
@@ -733,7 +733,7 @@ func TestTheFailedFilterIsTheRuleEveryReadStamps(t *testing.T) {
 		}
 	}
 	if failureType == "" {
-		t.Fatal("sandbox_run_failed is not read back as a failure — pick a type in types.FailureEventNames")
+		t.Fatal("executor_failed is not read back as a failure — pick a type in types.FailureEventNames")
 	}
 	yes, no := true, false
 	for _, c := range []struct {

@@ -353,7 +353,7 @@ type LaunchResult struct {
 // taken ([SeatHold]), in the step that writes its row — before the box is
 // provisioned, and so before the launching turn can return and its seat's
 // consumer go on to the next thing it has. It used to be counted when its
-// [types.SandboxRunStarted] was processed off the seat's control topic, which
+// [types.ExecutorLaunched] was processed off the seat's control topic, which
 // is a separate subscription the launching turn does not wait for: mail
 // already drained beside the launching delivery (the next partition of the
 // same batch) and mail fetched after the turn returned both reached a seat the
@@ -592,12 +592,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// its live output names. The store's own answer rather than a read of the
 	// row back, which could fail and cost the pairing — and which could, in
 	// principle, find a later job than this one.
-	started := types.SandboxRunStarted{
+	started := types.ExecutorLaunched{
 		LaunchID: opened.LaunchID, StartedAt: opened.Launch.StartedAt,
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
 		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
-		// THE MEMBER THAT TOOK IT — see [types.SandboxRunStarted.ProviderKey].
+		// THE MEMBER THAT TOOK IT — see [types.ExecutorLaunched.ProviderKey].
 		ProviderKey: req.ProviderKey, Model: req.Model,
 		// THE IDENTITY on the announcement: this event is read for
 		// display, and what a person means by "which conversation is
@@ -630,7 +630,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		}
 	}
 
-	log.InfoContext(ctx, "sandbox_run_started",
+	log.InfoContext(ctx, "executor_launched",
 		"turn_id", req.Turn.TurnID, "agent", req.Turn.AgentHandle,
 		"sandbox_id", box.ID(), "placement", string(req.Spec.Placement),
 		"coding_agent", req.Spec.CodingAgent, "provider_key", req.ProviderKey,
@@ -973,7 +973,7 @@ func RunEnvFor(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
 // reply, which becomes the ordinary message it looks like. Empty when the row
 // names no routable seat.
 func handBackSubject(agentID string, ev *events.Event) string {
-	if _, ok := events.DataAs[*types.SandboxAnswerGiven](ev); ok {
+	if _, ok := events.DataAs[*types.ExecutorAnswerGiven](ev); ok {
 		return controlSubject(agentID)
 	}
 	return inboxSubject(agentID)

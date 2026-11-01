@@ -390,7 +390,7 @@ function newerDetail(held, older) {
 var ALL_DATA_SLICES = [
 	"agents",
 	"events",
-	"sandboxes",
+	"executors",
 	"org",
 	"tools",
 	"tokens",
@@ -403,7 +403,7 @@ function emptyState() {
 		agents: [],
 		events: [],
 		phases: [],
-		sandboxes: [],
+		executors: [],
 		org: null,
 		tools: [],
 		health: null,
@@ -484,7 +484,7 @@ var Store = class {
 		if (!snap) return;
 		this.state.agents = snap.agents ?? [];
 		this.state.events = (snap.events ?? []).slice(0, 400);
-		this.state.sandboxes = snap.sandboxes ?? [];
+		this.state.executors = snap.executors ?? [];
 		this.state.org = snap.org ?? {};
 		this.state.tools = snap.tools ?? [];
 		if (snap.tokens && snap.tokens.totals) this.state.tokens = snap.tokens;
@@ -624,9 +624,9 @@ var Store = class {
 		});
 		this.emit("agents");
 	}
-	applySandboxes(list) {
-		this.state.sandboxes = list ?? [];
-		this.emit("sandboxes", "agents");
+	applyExecutors(list) {
+		this.state.executors = list ?? [];
+		this.emit("executors", "agents");
 	}
 	applyTokens(rollup) {
 		if (!rollup) return;
@@ -2331,7 +2331,7 @@ function retryAfterMs(seconds) {
 /**
 * The dashboard's single connection to the engine.
 *
-* State arrives as pushes (`snapshot`, then `agents` / `seats` / `sandboxes` /
+* State arrives as pushes (`snapshot`, then `agents` / `seats` / `executors` /
 * `tokens` / `budget` / `event` / `org` / `tools` / `schedules` / `health`), and
 * anything the dashboard needs on demand — a seat's phase history, one event's
 * payload, a trace, a different spend window, the configuration document — is
@@ -3249,8 +3249,8 @@ var LiveSocket = class {
 			case "seats":
 				this.store.applySeats(msg.data);
 				break;
-			case "sandboxes":
-				this.store.applySandboxes(msg.data);
+			case "executors":
+				this.store.applyExecutors(msg.data);
 				break;
 			case "tokens":
 				this.store.applyTokens(msg.data);
@@ -3972,7 +3972,7 @@ var ACTIONS = {
 		],
 		domain: null,
 		apps: [],
-		refreshes: ["sandbox_runs", "decisions"],
+		refreshes: ["executors", "decisions"],
 		scope: "person"
 	},
 	pause_seat: {

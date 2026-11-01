@@ -210,25 +210,25 @@ var categories = map[string]placement{
 	// task object Worklet replaced, and none of them ever had a
 	// publisher. Work's own record is the tracker's log, its history rows
 	// and its change feed.
-	"task_assigned":                   {"task", RateAuthenticated},
-	"sandbox_run_started":             {"task", RateEngine},
-	"sandbox_clarification_requested": {"task", RateEngine},
-	"sandbox_run_completed":           {"task", RateEngine},
+	"task_assigned":     {"task", RateAuthenticated},
+	"executor_launched": {"task", RateEngine},
+	"executor_asked":    {"task", RateEngine},
+	"executor_finished": {"task", RateEngine},
 	// A run settled WITHOUT its turn resuming. Categorised beside the
 	// completion rather than kept live-only: this is the durable record
 	// that a turn was lost, and it is the one an operator goes looking for
 	// after the fact — a live-only failure would be swept before anybody
 	// asked why the work never came back.
-	"sandbox_run_failed": {"task", RateEngine},
+	"executor_failed": {"task", RateEngine},
 	// A run a PERSON ended by pausing its seat with a stop. Kept for the
 	// same reason as the loss beside it — it is the record of why the work
 	// never came back — and apart from it, because a stop is not a failure.
-	"sandbox_run_stopped": {"task", RateEngine},
+	"executor_stopped": {"task", RateEngine},
 	// What an answer to a run's question became, on either route. The chat
 	// route left no record at all, so this is the only account of whether a
 	// person's reply resumed the run, found it already answered, or found it
 	// gone — and of who gave it.
-	"sandbox_run_answered": {"task", RateAuthenticated},
+	"executor_answered":    {"task", RateAuthenticated},
 	"scheduled_task_fired": {"task", RateEngine},
 
 	"a2a_channel_opened": {"a2a", RateEngine},
@@ -430,9 +430,9 @@ var excluded = map[string]Exclusion{
 		"registry is a log line on each node, so a durable row per node " +
 		"would record the same edit once for the wiki and again for every " +
 		"member of the fleet"},
-	"sandbox_answer_given": {Cause: CauseAlreadyRecorded, Reason: "the WAKE an answer by turn puts on the seat's " +
+	"executor_answer_given": {Cause: CauseAlreadyRecorded, Reason: "the WAKE an answer by turn puts on the seat's " +
 		"inbox, and never a turn. What the answer became is " +
-		"sandbox_run_answered, and that a person gave it is their " +
+		"executor_answered, and that a person gave it is their " +
 		"operator_acted row, so categorising this would write a third row " +
 		"for one answer — the reason a2a_request is kept out above"},
 	"reflection_due": {Cause: CauseAlreadyRecorded, Reason: "the WAKE that puts a finished turn in front of " +

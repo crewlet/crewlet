@@ -38,7 +38,7 @@ import { useEffect, useRef, useState } from "react";
 import { useClient, useConnection } from "./store-hooks.ts";
 import { retryDelayMs } from "./useQuery.ts";
 import { utf8Bytes } from "./format.ts";
-import { LIVE_OUTPUT_MAX_BYTES, SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
+import { LIVE_OUTPUT_MAX_BYTES, EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import {
   isLogRefusal,
@@ -46,13 +46,13 @@ import {
   queryErrorCode,
   type LogRefusal,
   type QueryRefusal,
-  type SandboxTailAnswer,
+  type ExecutorTailAnswer,
 } from "~/protocol/index.ts";
 
 /** What a live view holds, and how it asks for the rest. */
 export interface LiveView {
   /** The last answer, its text left out (the view holds that), or null. */
-  answer: SandboxTailAnswer | null;
+  answer: ExecutorTailAnswer | null;
   /** What the view shows. */
   text: string;
   /** The cursor: the reading the view holds, how far, and the owner's digest
@@ -99,9 +99,9 @@ export function cursorParams(view: LiveView): Record<string, unknown> {
  * on screen and ask for a reset next time — never to show a fragment as though
  * it continued the text above it.
  */
-export function foldTail(view: LiveView, answer: SandboxTailAnswer): LiveView {
+export function foldTail(view: LiveView, answer: ExecutorTailAnswer): LiveView {
   const out = answer.output;
-  const kept: SandboxTailAnswer = out ? { ...answer, output: { ...out, text: "" } } : answer;
+  const kept: ExecutorTailAnswer = out ? { ...answer, output: { ...out, text: "" } } : answer;
   const next: LiveView = { ...view, answer: kept, final: answer.outcome === "not_running" };
   if (answer.outcome !== "tail" || !out) return next;
   next.front = out.front ?? false;
@@ -174,14 +174,14 @@ export interface LiveTail extends LiveView {
 }
 
 /**
- * Asks `sandbox_tail` for one job every `pollMs`, chained after each answer, for
+ * Asks `executor_tail` for one job every `pollMs`, chained after each answer, for
  * as long as it is mounted and the job has not stopped — keyed on the job, so
  * a new launch starts a view of its own.
  */
 export function useLiveTail(
   turnId: string,
   launchId: string,
-  pollMs: number = SANDBOX_TAIL_POLL_MS,
+  pollMs: number = EXECUTOR_TAIL_POLL_MS,
 ): LiveTail {
   const { socket } = useClient();
   const { connected } = useConnection();
@@ -209,7 +209,7 @@ export function useLiveTail(
       // until a reconnect or the view is opened again: see "When it stops".
       let noWait = false;
       try {
-        const answer = await socket.query("sandbox_tail", {
+        const answer = await socket.query("executor_tail", {
           turn_id: turnId,
           launch_id: launchId,
           ...cursorParams(view.current),

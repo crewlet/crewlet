@@ -84,10 +84,10 @@ var namedRoutes = []struct {
 	// it asks a member for the metadata group, which the lease table the
 	// fleet view is read from cannot say.
 	{method: "GET", pattern: "/fleet/broker", what: "fleet_broker"},
-	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
+	{method: "GET", pattern: "/executors", what: "executors"},
 	// ONE RUNNING RUN'S LIVE OUTPUT, with the job as `launch_id=`: a run is
 	// one execution of a turn and may launch more than one job.
-	{method: "GET", pattern: "/sandbox-runs/{turn_id}/tail", what: "sandbox_tail", path: map[string]string{"turn_id": "turn_id"}},
+	{method: "GET", pattern: "/executors/{turn_id}/tail", what: "executor_tail", path: map[string]string{"turn_id": "turn_id"}},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
 	// WHERE THE COMPANY'S APPS LIVE IN A BROWSER, everybody's where

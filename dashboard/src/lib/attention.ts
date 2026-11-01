@@ -22,7 +22,7 @@
  * minutes were all inside a silence that claimed to have measured them.
  */
 
-import type { AgentRow, BudgetWindow, OrgBudget, SandboxRun } from "~/protocol/index.ts";
+import type { AgentRow, BudgetWindow, OrgBudget, ExecutorRow } from "~/protocol/index.ts";
 import { entryLimits, limitDetail, limitTitle, type EntryLimit } from "./providerLimit.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
@@ -190,7 +190,7 @@ export interface AttentionInput {
    * carries the window. The live entry says a run is waiting; the record says
    * for how much longer its box is held.
    */
-  runs: SandboxRun[];
+  runs: ExecutorRow[];
   /** `null` before the first report: nothing to judge, so nothing is raised. */
   budget: OrgBudget | null;
   engine: EngineHealth | null;
@@ -323,7 +323,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // box was reaped past its pause TTL and only the question survives.
     if (run.status !== "awaiting_clarification" && run.status !== "reseed") continue;
     out.push({
-      id: `sandbox-${run.turn_id}`,
+      id: `executor-${run.turn_id}`,
       severity: "caution",
       subject: "run",
       icon: "circle-question-mark",
@@ -500,7 +500,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
  * reclaimed on a timer (see the `pause_ttl_seconds` zero-value rule), so the
  * sentence simply ends.
  */
-function waitingDetail(run: SandboxRun, now: number): string {
+function waitingDetail(run: ExecutorRow, now: number): string {
   const asked =
     (run.question ?? "").trim() ||
     (questionWithheld(run)

@@ -78,7 +78,7 @@ export function absorbedInto(event: EventRecord): string {
  * A FAILED row is `went_wrong` whatever its SET says. The failure taxonomy is
  * the engine's (`events.Failed` — the type, the payload's own flag, or the
  * store's tag), and a sandbox run that came back failed is something that went
- * wrong on this turn even though `sandbox_run_completed` is ordinary work.
+ * wrong on this turn even though `executor_finished` is ordinary work.
  *
  * ABSORPTION OUTRANKS EVEN THAT, which is the one precedence worth stating
  * because it looks like an exception and is not: the destination draws the

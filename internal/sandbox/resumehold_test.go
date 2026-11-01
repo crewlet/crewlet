@@ -249,7 +249,7 @@ func TestEveryResumeExitLetsGoOfTheSeat(t *testing.T) {
 			// turn that began publishes its own failed completion.
 			broken := false
 			for _, f := range rig.failures() {
-				broken = broken || f.Reason == types.SandboxFailureResumeBroken
+				broken = broken || f.Reason == types.ExecutorFailureResumeBroken
 			}
 			if broken != beforeTurn {
 				t.Fatalf("resume_broken announced %v, want %v: it is the run's only account "+
@@ -298,7 +298,7 @@ func TestAnAnswerWhoseResumeItsBudgetHeldWaitsUncharged(t *testing.T) {
 // member of the chain and sent the run back to runners every one of which sits
 // out, which the gate, asked again, would admit into again. The case gets the
 // completion's payload and event back, as the waiter announces them.
-func limitedAfterClaim(t *testing.T, rig *coordRig, until time.Time) (types.SandboxRunCompleted, *events.Event) {
+func limitedAfterClaim(t *testing.T, rig *coordRig, until time.Time) (types.ExecutorFinished, *events.Event) {
 	t.Helper()
 	gated(rig)
 	rig.launch("t1")
@@ -452,11 +452,11 @@ func TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain(t *testing.T) {
 // not resumed before its instant.
 func TestAStopEndsTheWaitOfACollectedJobsResume(t *testing.T) {
 	t.Parallel()
-	for name, held := range map[string]func(t *testing.T, rig *coordRig) (types.SandboxRunCompleted, *events.Event){
-		"held here for a limit": func(t *testing.T, rig *coordRig) (types.SandboxRunCompleted, *events.Event) {
+	for name, held := range map[string]func(t *testing.T, rig *coordRig) (types.ExecutorFinished, *events.Event){
+		"held here for a limit": func(t *testing.T, rig *coordRig) (types.ExecutorFinished, *events.Event) {
 			return limitedAfterClaim(t, rig, rig.now.Add(time.Hour))
 		},
-		"held on its row for the budget": func(t *testing.T, rig *coordRig) (types.SandboxRunCompleted, *events.Event) {
+		"held on its row for the budget": func(t *testing.T, rig *coordRig) (types.ExecutorFinished, *events.Event) {
 			rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
 			rig.resumer.failWith(budgetHeld(rig.now.Add(time.Hour)))

@@ -48,7 +48,7 @@ var questionExposures = []Exposure{
 	asked("integrations", "list_integrations"),
 	asked("knowledge", searchKnowledgeTool),
 	asked("containers", "list_spaces"),
-	asked("sandbox_runs", "list_coding_runs"),
+	asked("executors", "list_executors"),
 	asked("work_items", "list_tasks"),
 	asked("work_item", "get_task"),
 	asked("work_comments", "get_task_thread"),

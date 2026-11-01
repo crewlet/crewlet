@@ -31,7 +31,7 @@ func clientNumber(t *testing.T, name string) int64 {
 // branch nothing reaches.
 func TestTheDashboardKnowsEveryTailOutcome(t *testing.T) {
 	t.Parallel()
-	body, err := clientsource.Literal(clientsource.Tree(t), "SANDBOX_TAIL_OUTCOMES")
+	body, err := clientsource.Literal(clientsource.Tree(t), "EXECUTOR_TAIL_OUTCOMES")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestTheDashboardKnowsEveryTailOutcome(t *testing.T) {
 	slices.Sort(engine)
 	if !slices.Equal(client, engine) {
 		t.Errorf("the dashboard names the outcomes %v and the engine answers %v — change "+
-			"contract/sandbox.ts to the engine's set", client, engine)
+			"contract/executor.ts to the engine's set", client, engine)
 	}
 }
 
@@ -57,7 +57,7 @@ func TestTheDashboardHoldsWhatTheRecordWillHold(t *testing.T) {
 	t.Parallel()
 	if got := clientNumber(t, "LIVE_OUTPUT_MAX_BYTES"); got != sandbox.MaxRunTextBytes {
 		t.Errorf("the dashboard holds %d bytes of live output and the engine bounds it at %d — "+
-			"change it in contract/sandbox.ts to the engine's figure", got, sandbox.MaxRunTextBytes)
+			"change it in contract/executor.ts to the engine's figure", got, sandbox.MaxRunTextBytes)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestTheDashboardHoldsWhatTheRecordWillHold(t *testing.T) {
 // budget a poll would begin before its last one's owner could answer.
 func TestTheDashboardPollsPastTheOwnersReuse(t *testing.T) {
 	t.Parallel()
-	poll := time.Duration(clientNumber(t, "SANDBOX_TAIL_POLL_MS")) * time.Millisecond
+	poll := time.Duration(clientNumber(t, "EXECUTOR_TAIL_POLL_MS")) * time.Millisecond
 	if poll <= sandbox.LiveReuse || poll <= sandbox.TailReadBudget {
 		t.Errorf("the dashboard polls every %v, not past the owner's reuse window (%v) and the "+
 			"read budget (%v)", poll, sandbox.LiveReuse, sandbox.TailReadBudget)

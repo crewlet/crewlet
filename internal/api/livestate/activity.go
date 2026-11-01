@@ -198,16 +198,16 @@ func (s *LiveState) runsOf(agentID string) (running, waiting bool) {
 	if agentID == "" {
 		return false, false
 	}
-	for _, held := range s.sandboxes {
+	for _, held := range s.executors {
 		if held.entry.AgentID != agentID {
 			continue
 		}
 		switch held.entry.Status {
 		// AN ANSWERED RUN IS ENGINE WORK: its reply is recorded and its
 		// resume is being driven, so nobody is waited on.
-		case SandboxLaunching, SandboxRunning, SandboxAnswered:
+		case ExecutorLaunching, ExecutorRunning, ExecutorAnswered:
 			running = true
-		case SandboxAwaiting, SandboxReseed:
+		case ExecutorAwaiting, ExecutorReseed:
 			waiting = true
 		}
 	}
@@ -248,7 +248,7 @@ func (s *LiveState) knownSeats() map[string]struct{} {
 	for id := range s.agents {
 		out[id] = struct{}{}
 	}
-	for _, held := range s.sandboxes {
+	for _, held := range s.executors {
 		if held.entry.AgentID != "" {
 			out[held.entry.AgentID] = struct{}{}
 		}

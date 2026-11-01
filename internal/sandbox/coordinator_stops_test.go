@@ -125,7 +125,7 @@ var coordinatorEntries = map[string][]entryDrive{
 	"OnStarted": {{
 		name: "a start event, redelivered or not",
 		call: func(t *testing.T, rig *coordRig) {
-			if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+			if err := rig.coordinator.OnStarted(t.Context(), types.ExecutorLaunched{
 				AgentHandle: "swe", TurnID: "t1",
 			}); err != nil {
 				t.Logf("OnStarted: %v", err)
@@ -219,7 +219,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a suspension that never reached the row",
 		call: func(t *testing.T, rig *coordRig) {
 			if err := rig.coordinator.FailRun(t.Context(), "t1",
-				types.SandboxFailureSuspensionUnrecorded,
+				types.ExecutorFailureSuspensionUnrecorded,
 				"the suspended conversation could not be written"); err != nil {
 				t.Logf("FailRun: %v", err)
 			}
@@ -548,10 +548,10 @@ func answersOnControl(t *testing.T, rig *coordRig) {
 // answerByTurnOnTheRow is the answer answer_run gives t1, naming the question
 // the row is on now, as answer_run names it off the row it checked, whatever
 // status the row was placed in.
-func answerByTurnOnTheRow(t *testing.T, rig *coordRig) types.SandboxAnswerGiven {
+func answerByTurnOnTheRow(t *testing.T, rig *coordRig) types.ExecutorAnswerGiven {
 	t.Helper()
 	run, _, _ := rig.pending.Get(t.Context(), "t1")
-	given := types.SandboxAnswerGiven{
+	given := types.ExecutorAnswerGiven{
 		TurnID: "t1", Agent: sweID, AgentHandle: "swe", Answer: "the release branch",
 		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
 		LaunchID: run.LaunchID,

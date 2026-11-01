@@ -194,7 +194,7 @@ func (e *Engine) boxReader() sandbox.BoxReader {
 
 // armSandboxHost makes this node an answerer of box reads for the boxes on its
 // host, and a listener for the nudges its waiters act on. In every mode, as the
-// tails are ([Engine.armSandboxTails]): a box on this host can be asked about
+// tails are ([Engine.armExecutorTails]): a box on this host can be asked about
 // whatever this node is doing.
 func (e *Engine) armSandboxHost(ctx context.Context) error {
 	if e.boxReads == nil {

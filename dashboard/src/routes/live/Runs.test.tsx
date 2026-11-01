@@ -26,10 +26,10 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
-import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
+import { EXECUTOR_TAIL_POLL_MS } from "~/contract/executor.ts";
 import { overflowing } from "~/testing.tsx";
 import { BridgeLog, RunScreen } from "./Runs.tsx";
-import type { SandboxRun } from "~/protocol/index.ts";
+import type { ExecutorRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
@@ -45,7 +45,7 @@ function render(ui: ReactElement) {
   return rtlRender(<Router>{ui}</Router>);
 }
 
-function run(extra: Partial<SandboxRun> = {}): SandboxRun {
+function run(extra: Partial<ExecutorRow> = {}): ExecutorRow {
   return {
     turn_id: "turn-1",
     agent_handle: "ada",
@@ -343,7 +343,7 @@ async function settle() {
 // press; send `run_id` for `turn_id`, and the write names no run.
 test("a parked run's page answers it by its turn", async () => {
   const { posted } = mountPage({
-    sandbox_runs: {
+    executors: {
       runs: [
         run({
           status: "awaiting_clarification",
@@ -381,7 +381,7 @@ test("a parked run's page answers it by its turn", async () => {
 // it with live links, and this fails.
 test("a parked run's question heads the banner and its dialog reads the context checked", async () => {
   const { posted } = mountPage({
-    sandbox_runs: {
+    executors: {
       runs: [
         run({
           status: "awaiting_clarification",
@@ -433,7 +433,7 @@ test("a parked run's question past the title's cap is clamped, never split", asy
     "Which retry ceiling? The API allows five. " +
     "The client used three, and the gateway retries twice on its own before either. ".repeat(4);
   mountPage({
-    sandbox_runs: {
+    executors: {
       runs: [run({ status: "awaiting_clarification", launch_id: "q1", question })],
     },
     turn: { turn_id: "turn-1", events: [] },
@@ -464,7 +464,7 @@ test("an answer to a question the run moved on from says so and draws the new on
   const parked = (launch: string, question: string) =>
     run({ status: "awaiting_clarification", launch_id: launch, question });
   mountPage({
-    sandbox_runs: () => ({
+    executors: () => ({
       runs: [
         refused
           ? parked("q2", "May I move the fixtures under testdata?")
@@ -511,7 +511,7 @@ test("an answer to a question the run moved on from says so and draws the new on
 // `anchor`, and an address to evil.example.net is a control.
 test("a parked run's question opens only what the dashboard built", async () => {
   mountPage({
-    sandbox_runs: {
+    executors: {
       runs: [
         run({
           status: "awaiting_clarification",
@@ -558,9 +558,9 @@ test("a parked run's question opens only what the dashboard built", async () => 
 // Mutation: ask without `launch_id`, and the engine refuses every read.
 test("a running run's page polls the live output of the job it holds", async () => {
   const { asked } = mountPage({
-    sandbox_runs: { runs: [run({ status: "running", launch_id: "job-2" })] },
+    executors: { runs: [run({ status: "running", launch_id: "job-2" })] },
     turn: { turn_id: "turn-1", events: [] },
-    sandbox_tail: {
+    executor_tail: {
       outcome: "tail",
       turn_id: "turn-1",
       launch_id: "job-2",
@@ -569,7 +569,7 @@ test("a running run's page polls the live output of the job it holds", async () 
     },
   });
   await settle();
-  expect(asked.find((a) => a.what === "sandbox_tail")?.params).toEqual({
+  expect(asked.find((a) => a.what === "executor_tail")?.params).toEqual({
     turn_id: "turn-1",
     launch_id: "job-2",
   });
@@ -586,9 +586,9 @@ test("a running run's page polls the live output of the job it holds", async () 
 test("a run's page keeps asking about a job still being set up", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
   const { asked } = mountPage({
-    sandbox_runs: { runs: [run({ status: "launching", launch_id: "job-1" })] },
+    executors: { runs: [run({ status: "launching", launch_id: "job-1" })] },
     turn: { turn_id: "turn-1", events: [] },
-    sandbox_tail: {
+    executor_tail: {
       outcome: "launching",
       turn_id: "turn-1",
       launch_id: "job-1",
@@ -599,9 +599,9 @@ test("a run's page keeps asking about a job still being set up", async () => {
   expect(await screen.findByText("Setting up. Output appears when the agent starts.")).toBeTruthy();
   expect(screen.queryByText(/no longer running|Stopped\. Output appears/)).toBeNull();
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 2);
+    await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS * 2);
   });
-  expect(asked.filter((a) => a.what === "sandbox_tail").length).toBeGreaterThan(1);
+  expect(asked.filter((a) => a.what === "executor_tail").length).toBeGreaterThan(1);
   vi.useRealTimers();
 });
 
@@ -617,9 +617,9 @@ test("a run's page keeps asking about a job still being set up", async () => {
 test("a run's page follows a later job into a view of its own", async () => {
   let job = "job-1";
   const { asked } = mountPage({
-    sandbox_runs: () => ({ runs: [run({ status: "running", launch_id: job })] }),
+    executors: () => ({ runs: [run({ status: "running", launch_id: job })] }),
     turn: { turn_id: "turn-1", events: [] },
-    sandbox_tail: (params: Record<string, unknown>) => {
+    executor_tail: (params: Record<string, unknown>) => {
       if (params.launch_id === "job-1") {
         if (job === "job-1") {
           job = "job-2";
@@ -648,12 +648,14 @@ test("a run's page follows a later job into a view of its own", async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
   expect(await screen.findByText(/the first job's output/)).toBeTruthy();
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 2);
+    await vi.advanceTimersByTimeAsync(EXECUTOR_TAIL_POLL_MS * 2);
   });
   await settle();
   expect(await screen.findByText(/the second job's output/)).toBeTruthy();
   expect(screen.queryByText(/the first job's output/)).toBeNull();
-  expect(asked.some((a) => a.what === "sandbox_tail" && a.params.launch_id === "job-2")).toBe(true);
+  expect(asked.some((a) => a.what === "executor_tail" && a.params.launch_id === "job-2")).toBe(
+    true,
+  );
   vi.useRealTimers();
 });
 
@@ -680,13 +682,13 @@ function liveOutput(text: string) {
 // Mutation: drop the collected records, and the page claims there is no run.
 test("a collected run's page shows what its job did, off its turn", async () => {
   mountPage({
-    sandbox_runs: { runs: [] },
+    executors: { runs: [] },
     turn: {
       turn_id: "turn-1",
       events: [
         {
           id: "s-1",
-          type: "sandbox_run_started",
+          type: "executor_launched",
           timestamp: "2026-06-15T12:00:00Z",
           source: "SWE",
           actor: "SWE",
@@ -742,7 +744,7 @@ test("a collected run's page shows what its job did, off its turn", async () => 
 // gone.
 test("a collected run's delivered refs say how many the record does not list", async () => {
   mountPage({
-    sandbox_runs: { runs: [] },
+    executors: { runs: [] },
     turn: {
       turn_id: "turn-1",
       events: [
@@ -789,7 +791,7 @@ test("a collected run's delivered refs say how many the record does not list", a
 // (as it was), and the failed board reads as an absent run.
 test("a failed run record is named rather than read as no run", async () => {
   mountPage({
-    sandbox_runs: new Error("unavailable"),
+    executors: new Error("unavailable"),
     turn: { turn_id: "turn-1", events: [] },
   });
   await settle();
@@ -802,7 +804,7 @@ test("a failed run record is named rather than read as no run", async () => {
 
 test("a failed turn is named rather than read as no run", async () => {
   mountPage({
-    sandbox_runs: { runs: [] },
+    executors: { runs: [] },
     turn: new Error("timeout"),
   });
   await settle();
@@ -816,7 +818,7 @@ test("a failed turn is named rather than read as no run", async () => {
 //
 // Mutation: fall back to "No task was recorded" for every run-less page.
 test("a turn with no coding run is headed as having none", async () => {
-  mountPage({ sandbox_runs: { runs: [] }, turn: { turn_id: "turn-1", events: [] } });
+  mountPage({ executors: { runs: [] }, turn: { turn_id: "turn-1", events: [] } });
   await settle();
   expect(screen.getByRole("heading", { name: "No coding run" })).toBeTruthy();
   expect(screen.queryByText("No task was recorded")).toBeNull();
@@ -830,7 +832,7 @@ test("a turn with no coding run is headed as having none", async () => {
 // Mutation: drop the fact, and the page names no entry.
 test("a run's page names the member its job was launched on", async () => {
   mountPage({
-    sandbox_runs: { runs: [run({ provider_key: "spare", model: "claude-haiku" })] },
+    executors: { runs: [run({ provider_key: "spare", model: "claude-haiku" })] },
     turn: { turn_id: "turn-1", events: [] },
   });
   await settle();
@@ -847,7 +849,7 @@ test("a run's page names the member its job was launched on", async () => {
 // is not an admin is told nothing about what the run runs on.
 test("a run's page names its model to a reader the entry is withheld from", async () => {
   mountPage({
-    sandbox_runs: { runs: [run({ model: "claude-haiku" })] },
+    executors: { runs: [run({ model: "claude-haiku" })] },
     turn: { turn_id: "turn-1", events: [] },
   });
   await settle();

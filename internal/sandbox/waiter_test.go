@@ -369,7 +369,7 @@ func TestACompletionIsAnnouncedAndRoutedToTheSeatsOwner(t *testing.T) {
 
 	got := rig.queue.topics()
 	want := []string{
-		topics.Event(types.SandboxRunCompleted{}.EventType()),
+		topics.Event(types.ExecutorFinished{}.EventType()),
 		sweControl(),
 	}
 	if len(got) != len(want) {
@@ -413,7 +413,7 @@ func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
 
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
-	payload, ok := rig.queue.published[0].event.Data.(*types.SandboxRunCompleted)
+	payload, ok := rig.queue.published[0].event.Data.(*types.ExecutorFinished)
 	if !ok {
 		t.Fatalf("payload is %T", rig.queue.published[0].event.Data)
 	}
@@ -1221,7 +1221,7 @@ func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
 
 	rig.queue.mu.Lock()
 	defer rig.queue.mu.Unlock()
-	payload, ok := rig.queue.published[0].event.Data.(*types.SandboxRunCompleted)
+	payload, ok := rig.queue.published[0].event.Data.(*types.ExecutorFinished)
 	if !ok {
 		t.Fatalf("payload is %T", rig.queue.published[0].event.Data)
 	}

@@ -612,7 +612,7 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rig.client(t).Ask(t.Context(), topics.ObserveSandboxTail, raw, 1); err != nil {
+	if _, err := rig.client(t).Ask(t.Context(), topics.ObserveExecutorTail, raw, 1); err != nil {
 		t.Fatal(err)
 	}
 	if readings(served) != 0 || readings(own) != 0 {
@@ -1170,7 +1170,7 @@ func TestTheOwnerLogsATailFailureByWhatClearsIt(t *testing.T) {
 	// fault.
 	rig := newTailRig(t)
 	newer := rig.client(t)
-	stop, err := newer.Serve(t.Context(), topics.ObserveSandboxTail,
+	stop, err := newer.Serve(t.Context(), topics.ObserveExecutorTail,
 		func(context.Context, []byte) ([]byte, error) {
 			return json.Marshal(tailReply{Version: tailWireVersion, Owner: boxOwner,
 				Failed: "a_class_from_a_newer_build"})

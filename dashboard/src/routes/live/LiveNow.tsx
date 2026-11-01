@@ -75,7 +75,7 @@ import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { mergeRuns, RunStatus, runTitle } from "./Runs.tsx";
 import { RecentPhases } from "./RecentPhases.tsx";
-import { useAgents, useEngineHealth, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useAgents, useEngineHealth, useEvents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN } from "~/lib/access.ts";
@@ -87,7 +87,7 @@ import { useNow } from "~/lib/clock.ts";
 import { cutInto, spanOf, useTimeRange, windowLabel } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
-import type { AgentRow, EventSeries, SandboxRun } from "~/protocol/index.ts";
+import type { AgentRow, EventSeries, ExecutorRow } from "~/protocol/index.ts";
 
 /**
  * WHICH WINDOWS THE STRIP HAS: the short end of the shared vocabulary, since
@@ -151,7 +151,7 @@ function runningPhase(row: AgentRow): string {
 export function LiveNow() {
   const now = useNow();
   const agents = useAgents();
-  const sandboxes = useSandboxes();
+  const executors = useExecutors();
   const pushed = useEvents();
   const engine = useEngineHealth();
   const org = useOrg();
@@ -221,11 +221,11 @@ export function LiveNow() {
   // THE DURABLE ROWS AND THE PUSH, folded by the Runs screen's own function:
   // the push is a reconcile behind a box that came up two seconds ago, the
   // store a poll behind it, and neither alone is "right now".
-  const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const runs = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   const inFlight = useMemo(
     () =>
-      mergeRuns(runs.data?.runs ?? [], sandboxes).filter((r) => !seat || r.agent_handle === seat),
-    [runs.data, sandboxes, seat],
+      mergeRuns(runs.data?.runs ?? [], executors).filter((r) => !seat || r.agent_handle === seat),
+    [runs.data, executors, seat],
   );
   const waiting = inFlight.filter((r) => awaitingPerson(r.status));
   const boxed = inFlight.filter((r) => !awaitingPerson(r.status));
@@ -587,7 +587,7 @@ function InBoxRow({
   now,
   onOpen,
 }: {
-  run: SandboxRun;
+  run: ExecutorRow;
   who: string;
   now: number;
   onOpen: () => void;
