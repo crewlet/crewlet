@@ -9263,7 +9263,10 @@ a server that flaps. The `url` is answered with its credentials withheld: the
 value of any query parameter whose name marks a credential (`key`, `token`,
 `secret`, `sig`, `pass`, `auth`, `session`, `credential` and the like, in any
 case) or whose value has a known credential's shape reads `redacted`, as does a
-user name in the address.
+path segment of a known credential's shape, a fragment's credential
+(`#access_token=...`), and a user name in the address. The scheme, host and
+port stay readable, and an address with nothing to withhold is answered exactly
+as written.
 
 `unlisted_annotations` are the entry's `tool_annotations` keys that no
 instance started on a reporting node lists a tool for — by the server's own

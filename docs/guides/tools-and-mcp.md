@@ -1104,7 +1104,8 @@ given the server and the cell each box runs in, and two placements expected to
 fail: a server on a private network given to an `e2b` box, which runs outside
 the company's network, and a local server given to a box that runs its own
 image (`container` or `e2b`), whose image or setup steps must provide the
-command. A server's address is shown with any credential in its query withheld.
+command. A server's address is shown with any credential in it withheld: in its
+query, a path segment, its fragment or a user name.
 
 ### Why a server failed
 
