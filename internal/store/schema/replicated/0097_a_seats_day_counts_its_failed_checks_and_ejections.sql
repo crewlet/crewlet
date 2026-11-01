@@ -1,0 +1,23 @@
+-- A seat's day counts its failed checks and ejections.
+--
+-- A seat's day on a node (usage_turns, the head row 0023 made, which 0093 gave
+-- its changes and reviews) gains what the merge gate did to its changes: the
+-- checks that failed a change's head — failed, or errored past the home's own
+-- requeue — and the ejections of its changes from their targets' queues, each
+-- counted ON THE CHANGE'S OWNER, never on whoever pushed the head or queued
+-- the change. Each is counted by the node that landed the record, off the
+-- event its landing announced (`code_check_finished`, `code_queue_ejected`,
+-- naming the owner's agent id), into the seat record it publishes
+-- (internal/usage, Record.Code, record version 4); a person's change is
+-- counted on no seat, since a person has no seat day.
+--
+-- ON THE HEAD ROW, as 0093's figures are: two more figures of the seat's day,
+-- replaced whole with it under the row's monotone version, read in the same
+-- seek as its turns. A record that carries none writes zeros, which is what a
+-- day with none of them is.
+--
+-- Class: usage_turns stays DIVERGENT (0023): written only by applying a
+-- committed record, and two nodes legitimately hold different days, so it is
+-- in no identity claim.
+ALTER TABLE usage_turns ADD COLUMN checks_failed INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE usage_turns ADD COLUMN ejections     INTEGER NOT NULL DEFAULT 0;

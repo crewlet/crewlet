@@ -910,10 +910,22 @@ func (c *Committer) announceEjected(e Eject, at statelog.Position) {
 			if !ok {
 				continue
 			}
-			out = append(out, types.CodeQueueEjected{RepoID: e.RepoID, RepoName: repoName, EntryID: x.EntryID,
+			ev := types.CodeQueueEjected{RepoID: e.RepoID, RepoName: repoName, EntryID: x.EntryID,
 				ChangeID: entry.ChangeID, Number: numbers[entry.ChangeID], Target: entry.TargetRef,
 				Reason: string(x.Reason), Checks: x.Checks, Paths: x.Paths, EnqueuedBy: entry.EnqueuedBy.Handle,
-				EnqueuedByKind: string(entry.EnqueuedBy.Kind)})
+				EnqueuedByKind: string(entry.EnqueuedBy.Kind)}
+			// THE CHANGE'S OWNER, whose day counts the ejection
+			// (types.CodeQueueEjected.Owner): one seek of the changes' key
+			// an entry, of a record that ejects at most a queue's depth.
+			change, found, err := changeRowIn(ctx, tx, entry.ChangeID)
+			if err != nil {
+				return err
+			}
+			if found {
+				ev.Owner, ev.OwnerKind = change.owner, string(change.ownerKind)
+				ev.OwnerAgent = agentOf(c.agentIDs, change.owner, change.ownerKind)
+			}
+			out = append(out, ev)
 		}
 		return nil
 	}); err != nil {

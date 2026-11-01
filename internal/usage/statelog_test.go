@@ -65,13 +65,19 @@ func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 		rec.RepoName = "platform"
 	case "Record.RepoReadersElided":
 		rec.RepoReadersElided = 3
-	case "Record.Code":
+	case "Record.Code", "Record.Code.ChecksFailed", "Record.Code.Ejections":
 		seat := usage.Record{
 			RecordEnvelope: usage.RecordEnvelope{Writer: "suite-node",
 				Subject: usage.Subject{Kind: usage.KindSeat, Node: "suite-node", Day: "2026-09-23",
 					Seat: "suite-carrying"}},
 			Handle: "dev", Turns: &usage.Turns{Count: 1},
 			Code: &usage.CodeDay{ChangesOpened: 1, ReviewsGiven: 2, FindingsReceived: 3},
+		}
+		switch field.Name {
+		case "Record.Code.ChecksFailed":
+			seat.Code = &usage.CodeDay{ChecksFailed: 2}
+		case "Record.Code.Ejections":
+			seat.Code = &usage.CodeDay{Ejections: 1}
 		}
 		return seat.Encode()
 	default:

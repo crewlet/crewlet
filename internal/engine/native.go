@@ -483,7 +483,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			if n.checksWriter, err = code.NewChecksWriter(code.ChecksWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
-				Events: e.codeEvents(), Metrics: e.metrics, Logger: logging.Get("code"),
+				Events: e.codeEvents(), AgentIDs: e.codeAgentID, Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code checks writer: %w", err)
 			}

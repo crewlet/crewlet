@@ -430,8 +430,13 @@ code_check_finished        # one attempt of a check of a commit ENDED, as
                            # the row kept (a slow runner's exit after its
                            # attempt was errored runner_lost) names it in
                            # `replaces`: a correction of that ending, never
-                           # the attempt's second. STORED AND NOT FED
-                           # (code-host.md, "Who records a check")
+                           # the attempt's second. An ending that FAILS a
+                           # change's head (failed, or errored past the
+                           # home's own requeue) names the change's owner
+                           # with `owner_agent_id`, whose seat day counts it
+                           # once by its attempt as `checks_failed`. STORED
+                           # AND NOT FED (code-host.md, "Who records a
+                           # check")
 change_merged              # a change a MERGE RECORD merged into its
                            # branch: repository by id and name, the change
                            # and its number, the branch, the method and the
@@ -468,8 +473,10 @@ code_queue_ejected         # a merge queue put an entry OUT: repository
                            # number, the branch, why (check_failed,
                            # conflict, gate_unmet, head_moved,
                            # not_fast_forward), the failed checks or the
-                           # conflicted paths, and who enqueued it.
-                           # Published ONCE an entry, by the data node whose
+                           # conflicted paths, who enqueued it, and the
+                           # change's owner with `owner_agent_id`, whose
+                           # seat day counts it once by its entry as
+                           # `ejections`. Published ONCE an entry, by the data node whose
                            # committer landed the eject record — never by an
                            # applier, never for a retry its operation ledger
                            # collapsed. STORED AND FED (code-host.md, "The

@@ -133,6 +133,11 @@ type ChecksWriterOptions struct {
 	// announced on (`code_check_finished`); nil announces none — a node with
 	// no queue records no event of any kind.
 	Events EventPublisher
+	// AgentIDs resolves a seat's handle to the agent id its day is counted
+	// under, as the committer's does ([CommitterOptions.AgentIDs]). REQUIRED
+	// with Events: an ending that fails a change's head is counted on its
+	// owner's seat day by that seat's agent id, which only the chart says.
+	AgentIDs func(handle string) (string, bool)
 	// Now is the decide's clock — a record's authored instant; nil takes the
 	// wall clock in UTC.
 	Now func() time.Time
@@ -214,6 +219,7 @@ type ChecksWriter struct {
 	seatRules func() (SeatRules, bool)
 	current   func() bool
 	events    EventPublisher
+	agentIDs  func(handle string) (string, bool)
 	now       func() time.Time
 	metrics   *metrics.Recorder
 	log       *slog.Logger
@@ -251,10 +257,14 @@ func NewChecksWriter(o ChecksWriterOptions) (*ChecksWriter, error) {
 	case o.SeatRules == nil:
 		return nil, errors.New("code: a checks writer needs the epoch's chart (SeatRules) — a seat's rerun is " +
 			"judged by its grant on the repository, never by a default")
+	case o.Events != nil && o.AgentIDs == nil:
+		return nil, errors.New("code: a checks writer that announces on an event stream needs AgentIDs — an " +
+			"ending that fails a change's head is counted on its owner's seat day by the owner's agent id, which " +
+			"only the chart says")
 	}
 	w := &ChecksWriter{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, retention: o.Retention, seatRules: o.SeatRules,
-		current: o.Current, events: o.Events, now: o.Now,
+		current: o.Current, events: o.Events, agentIDs: o.AgentIDs, now: o.Now,
 		metrics: o.Metrics, log: o.Logger, clock: time.Now,
 		flights: newFlights("repository", ChecksWritesPerRepo, "code.ChecksWritesPerRepo", ChecksWritesPerNode,
 			"code.ChecksWritesPerNode"),
@@ -939,6 +949,7 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		row       CheckRow
 		held      bool
 		repoName  string
+		owner     Party
 		readError error
 	)
 	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
@@ -952,7 +963,17 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		case err != nil:
 			return err
 		}
-		return nil
+		// THE OWNER OF THE CHANGE WHOSE HEAD THE ENDING FAILS, whose day
+		// counts it (types.CodeCheckFinished.Owner): one seek of the
+		// changes' key, for that ending alone.
+		if row.Purpose != PurposeHead || row.ChangeID == "" || !row.failsItsHead() {
+			return nil
+		}
+		change, found, err := changeRowIn(ctx, tx, row.ChangeID)
+		if found {
+			owner = Party{Handle: change.owner, Kind: change.ownerKind}
+		}
+		return err
 	}); err != nil {
 		readError = fmt.Errorf("code: the record of operation %s applied at %s and its attempt's row could not "+
 			"be read: %w", r.OpID, at, err)
@@ -996,7 +1017,9 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		own.ending = &types.CodeCheckFinished{RepoID: key.RepoID, RepoName: repoName, OID: key.OID,
 			Name: key.Name, Attempt: key.Attempt, Purpose: string(row.Purpose), State: string(row.State),
 			Reason: string(row.Reason), Placement: string(placement), ChangeID: row.ChangeID,
-			Target: row.Target, Required: row.Required, DurationMs: row.DurationMs, Replaces: string(replacing)}
+			Target: row.Target, Required: row.Required, DurationMs: row.DurationMs, Replaces: string(replacing),
+			Owner: owner.Handle, OwnerKind: string(owner.Kind)}
+		own.ending.OwnerAgent = agentOf(w.agentIDs, owner.Handle, owner.Kind)
 	}
 	return out, nil, own
 }

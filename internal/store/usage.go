@@ -179,11 +179,14 @@ type UsageSeat struct {
 }
 
 // UsageCode is what a seat did on the code host in the window, on this node:
-// the changes it opened and the reviews it gave, and the findings the reviews
-// of its own changes raised — each counted off the event its landing announced
-// ([types.ChangeOpened], [types.ReviewSubmitted]), on the node that landed it.
+// the changes it opened and the reviews it gave, the findings the reviews of
+// its own changes raised, the checks that failed its changes' heads and the
+// ejections of its changes from their targets' queues — each counted off the
+// event its landing announced ([types.ChangeOpened], [types.ReviewSubmitted],
+// [types.CodeCheckFinished], [types.CodeQueueEjected]), on the node that
+// landed it.
 type UsageCode struct {
-	ChangesOpened, ReviewsGiven, FindingsReceived int64
+	ChangesOpened, ReviewsGiven, FindingsReceived, ChecksFailed, Ejections int64
 }
 
 // UsageTokens is one (phase, worker, model, provider key) cell of a seat's
@@ -275,12 +278,13 @@ type UsageMark struct {
 	Fires, LastFire   int64
 }
 
-// usageEventTypes are the eight records a day is derived from, taken from their
+// usageEventTypes are the ten records a day is derived from, taken from their
 // payload types for the reason [phaseCompleted] is: the phase completions and
 // the auxiliary records the spend is summed from, the completions a turn's
 // figures are read off, the turn's SUMMARY record (`agent_turn_completed`),
-// the knowledge reads, the reads of unit repositories, and the changes opened
-// and reviews given on the code host ([DB.usageCode]). The auxiliary
+// the knowledge reads, the reads of unit repositories, and the changes opened,
+// reviews given, checks failed and ejections on the code host
+// ([DB.usageCode]). The auxiliary
 // record is one of them so the fingerprint moves when it lands: a flush writes
 // it up to one ledger interval after its last call, stamped with that call's
 // instant, and a day whose only change was that row would otherwise never be
@@ -299,6 +303,8 @@ func usageEventTypes() []any {
 		types.CodeFetched{}.EventType(),
 		types.ChangeOpened{}.EventType(),
 		types.ReviewSubmitted{}.EventType(),
+		types.CodeCheckFinished{}.EventType(),
+		types.CodeQueueEjected{}.EventType(),
 	}
 }
 
@@ -1099,18 +1105,27 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 		[]any{types.KnowledgeRead{}.EventType(), EncodeTime(w.Start), EncodeTime(w.End)}
 }
 
-// usageCode counts the window's changes opened and reviews given per seat, and
-// the findings the reviews of each seat's own changes raised — off the events
-// their landings announced ([types.ChangeOpened], [types.ReviewSubmitted]),
-// which name every seat they count on by its agent id, resolved when they were
-// published: an opening on its owner, a review on its reviewer, and its
-// findings on the change's owner. A person is named by no agent id, and no
-// seat's day counts what a person did.
+// usageCode counts the window's changes opened and reviews given per seat, the
+// findings the reviews of each seat's own changes raised, the checks that
+// failed its changes' heads and its changes' ejections from their queues —
+// off the events their landings announced ([types.ChangeOpened],
+// [types.ReviewSubmitted], [types.CodeCheckFinished],
+// [types.CodeQueueEjected]), which name every seat they count on by its agent
+// id, resolved when they were published: an opening on its owner, a review on
+// its reviewer, and its findings, a failed head check and an ejection on the
+// change's owner — never on whoever pushed the head or queued the change. A
+// person is named by no agent id, and no seat's day counts what a person did.
 //
-// EACH OPENING AND EACH REVIEW ONCE, by its change's or its review's id: its
+// EACH OPENING AND EACH REVIEW ONCE, by its change's or its review's id, each
+// failed check once by its attempt and each ejection once by its entry: its
 // landing is announced once (internal/code's announce.go), and counting the
 // thing rather than its rows is what keeps a second announcement of it — none
-// is published, but nothing here has to trust that — from counting twice.
+// is published, but nothing here has to trust that — from counting twice. A
+// correction of an attempt's ending (types.CodeCheckFinished.Replaces) is the
+// same attempt, so a failure corrected to another failure counts once — and
+// one corrected to a pass stays counted, since a day's figures only grow
+// (usage.CodeDay joins its publications by max), and a count a correction
+// lowered would stand only where the node had not yet published the day.
 //
 // READ OUT OF THE PAYLOAD, never promoted columns: a seat opens and reviews at
 // most a change a turn, so a day holds a few of these records against the tens
@@ -1119,7 +1134,7 @@ func (d *DB) usageCode(ctx context.Context, w UsageWindow, seat func(string) *Us
 	query, args := usageCodeSQL(w)
 	rows, err := d.sql.QueryContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("store: read the usage day's changes and reviews: %w", err)
+		return fmt.Errorf("store: read the usage day's code counts: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
@@ -1127,8 +1142,9 @@ func (d *DB) usageCode(ctx context.Context, w UsageWindow, seat func(string) *Us
 			agent, handle string
 			c             UsageCode
 		)
-		if err := rows.Scan(&agent, &handle, &c.ChangesOpened, &c.ReviewsGiven, &c.FindingsReceived); err != nil {
-			return fmt.Errorf("store: scan the usage day's changes and reviews: %w", err)
+		if err := rows.Scan(&agent, &handle, &c.ChangesOpened, &c.ReviewsGiven, &c.FindingsReceived,
+			&c.ChecksFailed, &c.Ejections); err != nil {
+			return fmt.Errorf("store: scan the usage day's code counts: %w", err)
 		}
 		s := seat(agent)
 		if s.Handle == "" {
@@ -1144,21 +1160,22 @@ func (d *DB) usageCode(ctx context.Context, w UsageWindow, seat func(string) *Us
 // folded by the seat and the thing counted, then by the seat, in seat order.
 func usageCodeSQL(w UsageWindow) (string, []any) {
 	opened, reviewed := types.ChangeOpened{}.EventType(), types.ReviewSubmitted{}.EventType()
+	checked, ejected := types.CodeCheckFinished{}.EventType(), types.CodeQueueEjected{}.EventType()
 	start, end := EncodeTime(w.Start), EncodeTime(w.End)
 	return `
-		SELECT agent, MAX(handle), SUM(opened), SUM(reviewed), SUM(findings) FROM (
+		SELECT agent, MAX(handle), SUM(opened), SUM(reviewed), SUM(findings), SUM(failed), SUM(ejected) FROM (
 			SELECT agent, MAX(handle) AS handle, MAX(opened) AS opened, MAX(reviewed) AS reviewed,
-			       MAX(findings) AS findings
+			       MAX(findings) AS findings, MAX(failed) AS failed, MAX(ejected) AS ejected
 			  FROM (
 				SELECT e.agent_id AS agent, COALESCE(json_extract(e.payload, '$.owner'), '') AS handle,
 				       'opened:' || COALESCE(json_extract(e.payload, '$.change_id'), '') AS item,
-				       1 AS opened, 0 AS reviewed, 0 AS findings
+				       1 AS opened, 0 AS reviewed, 0 AS findings, 0 AS failed, 0 AS ejected
 				  FROM crewlet_events AS e
 				 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
 				   AND e.agent_id != '' AND ` + keptRowSQL + `
 				 UNION ALL
 				SELECT e.agent_id, COALESCE(json_extract(e.payload, '$.reviewer'), ''),
-				       'review:' || COALESCE(json_extract(e.payload, '$.review_id'), ''), 0, 1, 0
+				       'review:' || COALESCE(json_extract(e.payload, '$.review_id'), ''), 0, 1, 0, 0, 0
 				  FROM crewlet_events AS e
 				 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
 				   AND e.agent_id != '' AND ` + keptRowSQL + `
@@ -1166,16 +1183,36 @@ func usageCodeSQL(w UsageWindow) (string, []any) {
 				SELECT json_extract(e.payload, '$.owner_agent_id'),
 				       COALESCE(json_extract(e.payload, '$.owner'), ''),
 				       'findings:' || COALESCE(json_extract(e.payload, '$.review_id'), ''), 0, 0,
-				       json_extract(e.payload, '$.findings')
+				       json_extract(e.payload, '$.findings'), 0, 0
 				  FROM crewlet_events AS e
 				 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
 				   AND COALESCE(json_extract(e.payload, '$.owner_agent_id'), '') != ''
 				   AND COALESCE(json_extract(e.payload, '$.findings'), 0) > 0
+				   AND ` + keptRowSQL + `
+				 UNION ALL
+				SELECT json_extract(e.payload, '$.owner_agent_id'),
+				       COALESCE(json_extract(e.payload, '$.owner'), ''),
+				       'check:' || json_array(json_extract(e.payload, '$.repo_id'),
+				           json_extract(e.payload, '$.oid'), json_extract(e.payload, '$.target'),
+				           json_extract(e.payload, '$.name'), json_extract(e.payload, '$.attempt')),
+				       0, 0, 0, 1, 0
+				  FROM crewlet_events AS e
+				 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+				   AND COALESCE(json_extract(e.payload, '$.owner_agent_id'), '') != ''
+				   AND ` + keptRowSQL + `
+				 UNION ALL
+				SELECT json_extract(e.payload, '$.owner_agent_id'),
+				       COALESCE(json_extract(e.payload, '$.owner'), ''),
+				       'eject:' || COALESCE(json_extract(e.payload, '$.entry_id'), ''), 0, 0, 0, 0, 1
+				  FROM crewlet_events AS e
+				 WHERE e.event_type = ? AND e.event_time >= ? AND e.event_time < ?
+				   AND COALESCE(json_extract(e.payload, '$.owner_agent_id'), '') != ''
 				   AND ` + keptRowSQL + `)
 			 GROUP BY agent, item)
 		 GROUP BY agent
 		 ORDER BY agent`,
-		[]any{opened, start, end, reviewed, start, end, reviewed, start, end}
+		[]any{opened, start, end, reviewed, start, end, reviewed, start, end, checked, start, end, ejected,
+			start, end}
 }
 
 // usageRepoReads folds the window's records of reads of `visibility: unit`

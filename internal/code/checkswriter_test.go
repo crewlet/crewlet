@@ -91,7 +91,7 @@ func checksWriterOn(t testing.TB, n *node) (*code.ChecksWriter, *appendCounter, 
 		Publisher: counter, DB: n.db.Reader(), NodeID: n.id,
 		Retention: func() time.Duration { return code.DefaultDeletedRetention },
 		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart(), Zone: time.UTC}, true },
-		Events:    stream, Now: func() time.Time { return harnessAt }, Metrics: rec,
+		Events:    stream, AgentIDs: agentIDs, Now: func() time.Time { return harnessAt }, Metrics: rec,
 	})
 	if err != nil {
 		t.Fatalf("NewChecksWriter: %v", err)

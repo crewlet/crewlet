@@ -35,15 +35,17 @@ import (
 // A record above it is RETAINED at its position rather than skipped, so a
 // newer peer's shape survives a rolling upgrade in both directions. A seat's,
 // a schedule's and a person's day are the base format, version 1; a unit
-// repository's readers ([KindRepoRead]) are version 2; and a seat's day that
-// carries its changes and reviews ([Record.Code]) is version 3.
+// repository's readers ([KindRepoRead]) are version 2; a seat's day that
+// carries its changes and reviews ([Record.Code]) is version 3; and one that
+// counts its failed checks or its ejections ([CodeDay.ChecksFailed],
+// [CodeDay.Ejections]) is version 4.
 //
 // IT IS THE CEILING THIS BUILD READS, NOT WHAT IT WRITES: a record is stamped
 // with the lowest version that reads what it carries ([Record.Encode], over
 // [versionedFields]), so a field a later build adds holds back only the records
 // that carry it. It moves only with the table, and exactly to the table's
 // highest version.
-const RecordVersion = 3
+const RecordVersion = 4
 
 // baseRecordVersion is version 1, the base format: what a record carrying no
 // versioned field is stamped at.
@@ -86,6 +88,8 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Record.RepoReads", Since: 2, Path: []string{"repo_reads"}},
 	{Name: "Record.RepoReadersElided", Since: 2, Path: []string{"repo_readers_elided"}},
 	{Name: "Record.Code", Since: 3, Path: []string{"code"}},
+	{Name: "Record.Code.ChecksFailed", Since: 4, Path: []string{"code", "checks_failed"}},
+	{Name: "Record.Code.Ejections", Since: 4, Path: []string{"code", "ejections"}},
 }
 
 // VersionedFields is the table, for the conformance suite.
@@ -432,13 +436,21 @@ type Record struct {
 
 // CodeDay is what a seat did on the code host on its day, on its node: the
 // changes it opened, the reviews it gave, and the findings the reviews of its
-// own changes raised — counted on the OWNER, since a finding is work its
-// change received (store.UsageCode, counted off the events the landings
-// announced). Every figure only grows within a day, so it joins by max.
+// own changes raised, the checks that failed its changes' heads and its
+// changes' ejections from their queues — the last three counted on the
+// OWNER, since each is something its change received (store.UsageCode,
+// counted off the events the landings announced). Every figure only grows
+// within a day, so it joins by max.
+//
+// ChecksFailed and Ejections are version 4 ([versionedFields]): a day that
+// counts either is held back from a build that would apply it with them
+// dropped, and one that counts neither stays version 3.
 type CodeDay struct {
 	ChangesOpened    int64 `json:"changes_opened,omitempty"`
 	ReviewsGiven     int64 `json:"reviews_given,omitempty"`
 	FindingsReceived int64 `json:"findings_received,omitempty"`
+	ChecksFailed     int64 `json:"checks_failed,omitempty"`
+	Ejections        int64 `json:"ejections,omitempty"`
 }
 
 // codeDayOf is c as a record carries it: nil for a day with none.
@@ -695,7 +707,8 @@ func (r Record) validateCode() error {
 	case r.Subject.Kind != KindSeat:
 		return fmt.Errorf("usage: the %s record on %s carries a seat's changes and reviews", r.Subject.Kind,
 			r.Subject)
-	case c.ChangesOpened < 0 || c.ReviewsGiven < 0 || c.FindingsReceived < 0:
+	case c.ChangesOpened < 0 || c.ReviewsGiven < 0 || c.FindingsReceived < 0 || c.ChecksFailed < 0 ||
+		c.Ejections < 0:
 		return fmt.Errorf("usage: the seat record on %s counts %+v of its changes and reviews — no figure of "+
 			"a day is below zero", r.Subject, c)
 	case c == CodeDay{}:

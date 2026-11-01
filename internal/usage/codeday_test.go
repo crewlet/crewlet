@@ -8,18 +8,21 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// A SEAT'S CODE DAY IS VERSION 3, AND ONLY WHERE IT COUNTS SOMETHING: a seat's
-// day carrying its changes and reviews is stamped 3, so a build at 1 or 2
-// retains it rather than applying it with them dropped — which would replace
-// the day every upgraded node holds with one counting none — while a seat's
-// day with none of them stays the base format every build applies. A code day
-// rides a seat's record alone, never with a figure below zero, and never all
-// zeros, which would hold older builds back from a day that counts nothing.
+// A SEAT'S CODE DAY IS STAMPED BY WHAT IT COUNTS, AND ONLY WHERE IT COUNTS
+// SOMETHING: a seat's day carrying its changes and reviews is stamped 3, so a
+// build at 1 or 2 retains it rather than applying it with them dropped — which
+// would replace the day every upgraded node holds with one counting none — and
+// one counting its failed checks or its ejections is stamped 4, held back the
+// same way from a build at 3; a seat's day with none of them stays the base
+// format every build applies. A code day rides a seat's record alone, never
+// with a figure below zero, and never all zeros, which would hold older builds
+// back from a day that counts nothing.
 //
 // Mutation: drop the Record.Code row from versionedFields — the code day is
-// stamped 1, red; publish a zero code day (Code: &CodeDay{}) — the empty day
-// is stamped 3, red.
-func TestASeatsCodeDayIsVersionThree(t *testing.T) {
+// stamped 1, red; drop the Record.Code.ChecksFailed row — the day counting
+// failed checks is stamped 3, red; publish a zero code day (Code:
+// &CodeDay{}) — the empty day is stamped 3, red.
+func TestASeatsCodeDayIsStampedByWhatItCounts(t *testing.T) {
 	t.Parallel()
 	stamp := func(r usage.Record) (int, error) {
 		t.Helper()
@@ -41,8 +44,16 @@ func TestASeatsCodeDayIsVersionThree(t *testing.T) {
 	if v, err := stamp(seatRecord("node-a", "2026-09-23", "seat-1", "m")); err != nil || v != 1 {
 		t.Errorf("a seat's day with no change or review is stamped %d (%v), want the base format's 1", v, err)
 	}
-	if usage.RecordVersion != 3 {
-		t.Errorf("this build reads version %d, want 3", usage.RecordVersion)
+	for name, c := range map[string]usage.CodeDay{"its failed checks": {ChangesOpened: 1, ChecksFailed: 2},
+		"its ejections": {Ejections: 1}} {
+		counted := seatRecord("node-a", "2026-09-23", "seat-1", "m")
+		counted.Code = &c
+		if v, err := stamp(counted); err != nil || v != 4 {
+			t.Errorf("a seat's day counting %s is stamped %d (%v), want 4", name, v, err)
+		}
+	}
+	if usage.RecordVersion != 4 {
+		t.Errorf("this build reads version %d, want 4", usage.RecordVersion)
 	}
 
 	person := usage.Record{RecordEnvelope: usage.RecordEnvelope{Writer: "node-a",

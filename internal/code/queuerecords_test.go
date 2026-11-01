@@ -644,9 +644,10 @@ func TestAnEjectedEntryLeavesItsQueueAndItsTrain(t *testing.T) {
 	if !ok || ev.Type != "code_queue_ejected" || payload.ChangeID != change || payload.Number != 1 ||
 		payload.EntryID != entryID || payload.Reason != string(code.EjectCheckFailed) ||
 		!slices.Equal(payload.Checks, []string{"unit"}) || payload.EnqueuedBy != "founder" ||
-		payload.RepoName != "web" || ev.Source != n.id {
-		t.Fatalf("the ejection was announced as %s from %q %+v, want web!1 ejected for unit, from %s", ev.Type,
-			ev.Source, ev.Data, n.id)
+		payload.RepoName != "web" || ev.Source != n.id || payload.Owner != "dev" || payload.OwnerKind != "agent" ||
+		payload.OwnerAgent != "agent-dev" {
+		t.Fatalf("the ejection was announced as %s from %q %+v, want web!1 ejected for unit, owned by dev — "+
+			"its day counting it — from %s", ev.Type, ev.Source, ev.Data, n.id)
 	}
 	before := n.end()
 	res, err = c.ProposeQueue(t.Context(), queueRecord(func(p *code.QueueProposal) {

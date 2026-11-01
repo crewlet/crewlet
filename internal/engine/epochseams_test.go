@@ -226,7 +226,9 @@ var classified = map[string]struct {
 		"may write the repository, and whoever its turn works for"},
 	"code.ChecksWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
 		"a seat's rerun behind it is handed to the repository's next committing node, decided nowhere here"},
-	"code.ChecksWriterOptions.Events":  {seamNone, "the node's event stream an applied ending is announced on"},
+	"code.ChecksWriterOptions.Events": {seamNone, "the node's event stream an applied ending is announced on"},
+	"code.ChecksWriterOptions.AgentIDs": {seamNone, "the agent id an ending that fails a change's head names " +
+		"the change's owner by in its announcement, read once its answer is handed back — no decide reads it"},
 	"code.ChecksWriterOptions.Now":     {seamNone, "the decide's clock"},
 	"code.ChecksWriterOptions.Metrics": {seamNone, "the node's instruments"},
 	"code.ChecksWriterOptions.Logger":  {seamNone, "where a failed write is reported"},

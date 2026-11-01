@@ -206,11 +206,16 @@ func (e CodeFetched) SummaryFor(actor string) string {
 // runner_lost — and an earlier ending replaces a later one of its kind, which
 // two writers of one repository across a failover can each record. The
 // replacing ending is announced too, naming in Replaces the ending it
-// replaced, so a day FILES IT AS A CORRECTION — the attempt moves from
-// Replaces to State — and counts each attempt once, under the ending its row
-// keeps. Replaces is the ending the replacing record's writer read on the row
-// when it decided; a failover's two writers recording the attempt's first
-// ending at once each read none, which is the one replacement announced
+// replaced, so a reader FILES IT AS A CORRECTION — the attempt moves from
+// Replaces to State — and a day counts each attempt once, by its key. A
+// failure the day counted (Owner, below) STAYS COUNTED when a correction
+// follows, even one to a pass: a day's figures only grow, joined by max
+// across its publications (internal/usage's CodeDay), so a figure a
+// correction lowered would survive only on a node that had not published it
+// yet — one day's figure would turn on when its node last published, not on
+// what happened. Replaces is the ending the replacing record's writer read on
+// the row when it decided; a failover's two writers recording the attempt's
+// first ending at once each read none, which is the one replacement announced
 // without it.
 //
 // # Why an event, beside the row
@@ -264,6 +269,24 @@ type CodeCheckFinished struct {
 	// ending: an event naming one is a correction, never a second ending
 	// (see the type's doc).
 	Replaces string `json:"replaces,omitempty"`
+
+	// Owner is the owner of the change whose head the attempt measured, on
+	// an ending that FAILS that head — failed, or errored past the home's own
+	// requeue (internal/code's checks_failed wake) — and empty on every
+	// other: a seat by its handle, or a person by the human seat they hold,
+	// OwnerKind which (internal/code's PartyKind: agent, person). OwnerAgent
+	// is the owner's agent id, the key a seat's day is filed under — "" for a
+	// person or a seat the running company no longer has — and the day it
+	// names counts the failure once by its attempt (`checks_failed`,
+	// internal/store's usageCode), whatever the change and the attempt did
+	// since: a failure of a head the change moved past is still what its
+	// owner's code did, and one a correction replaced stays counted (the
+	// type's doc).
+	// Never `agent_id`, which the event store promotes and would file the
+	// ending under the seat as its actor.
+	Owner      string `json:"owner,omitempty"`
+	OwnerKind  string `json:"owner_kind,omitempty"`
+	OwnerAgent string `json:"owner_agent_id,omitempty"`
 }
 
 // EventType is the "code_check_finished" wire type.
@@ -547,6 +570,17 @@ type CodeQueueEjected struct {
 	// PartyKind: agent, person).
 	EnqueuedBy     string `json:"enqueued_by"`
 	EnqueuedByKind string `json:"enqueued_by_kind"`
+
+	// Owner is the change's owner — a seat by its handle, or a person by the
+	// human seat they hold — and OwnerKind which; OwnerAgent is the owner's
+	// agent id, "" for a person or a seat the running company no longer has:
+	// the seat whose day counts the ejection once by its entry (`ejections`,
+	// internal/store's usageCode) — the change's, never the enqueuer's, who
+	// may be anybody that may merge it. Never `agent_id`, which the event
+	// store promotes.
+	Owner      string `json:"owner"`
+	OwnerKind  string `json:"owner_kind"`
+	OwnerAgent string `json:"owner_agent_id,omitempty"`
 }
 
 // EventType is the "code_queue_ejected" wire type.

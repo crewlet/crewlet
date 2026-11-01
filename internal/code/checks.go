@@ -762,12 +762,20 @@ type CheckFinished struct {
 // acts: a measurement that failed, or an error the home queues no next attempt
 // for — one its infrastructure did not cause ([CheckReason.Requeued]), or the
 // attempt the home's own requeue stops at ([AutoRequeueAttempts]).
-func (f CheckFinished) failsItsHead() bool {
-	switch f.State {
+func (f CheckFinished) failsItsHead() bool { return failsAHead(f.State, f.Reason, f.Attempt) }
+
+// failsItsHead is [CheckFinished.failsItsHead] of the ending r keeps: whose
+// day an applied ending is counted on (checkswriter.go's announcement).
+func (r CheckRow) failsItsHead() bool { return failsAHead(r.State, r.Reason, r.Attempt) }
+
+// failsAHead reports an ending in state for reason, of attempt, that leaves a
+// check failing until somebody acts ([CheckFinished.failsItsHead]).
+func failsAHead(state CheckState, reason CheckReason, attempt int) bool {
+	switch state {
 	case CheckStateFailed:
 		return true
 	case CheckStateErrored:
-		return !f.Reason.Requeued() || f.Attempt >= AutoRequeueAttempts
+		return !reason.Requeued() || attempt >= AutoRequeueAttempts
 	}
 	return false
 }
