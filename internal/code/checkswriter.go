@@ -975,7 +975,7 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 			Reason: string(row.Reason), Placement: string(placement), ChangeID: row.ChangeID,
 			Target: row.Target, Required: row.Required, DurationMs: row.DurationMs, Replaces: string(replacing),
 			Owner: owner.Handle, OwnerKind: string(owner.Kind)}
-		own.ending.OwnerAgent = agentOf(w.agentIDs, owner.Handle, owner.Kind)
+		own.ending.Agent = agentOf(w.agentIDs, owner.Handle, owner.Kind)
 	}
 	return out, nil, own
 }

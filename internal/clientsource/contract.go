@@ -267,6 +267,11 @@ var contract = []Entry{
 	{"CHECK_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"CHECK_PURPOSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"QUEUE_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfAQueue"},
+	{"CodeSearchAnswer", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchHit", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchCoverage", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchRepoSet", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
+	{"CodeSearchNodeGap", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},

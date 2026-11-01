@@ -2987,6 +2987,13 @@ var ACT_ERRORS = {
 * `min_position` per listed domain this tab has written (`protocol/session.ts`),
 * which the engine holds each half of the answer to. Listed under one, the
 * half on the other log would be drawn from before the tab's own write there.
+*
+* `code_search` IS DELIBERATELY ABSENT: it answers at the tip it names — each
+* repository searched at the commit its git node holds, named in the answer's
+* `tips`, and a hit's file read at that commit — so it takes no floor, and the
+* engine refuses `read_level=session` and `min_position` on it
+* (`internal/api/queries.TestCodeSearchIsNotASessionQuery`). Listed here, a
+* code write would scatter a search to every git node only to be refused.
 */
 var SESSION_QUERIES = {
 	tracker: [

@@ -857,6 +857,14 @@ or ask after the node named. At most 500 lines come back, in the order of
 repository, path and line, and `truncated` says more matched. See
 [Code search](../concepts/code-host.md#code-search).
 
+**Searching from a script.** The same search is the question `code_search`,
+on [`GET /code/search`](../reference/api-endpoints.md#get-codesearch):
+`?q=` is the search as written above, with `mode`, `ignore_case` and one
+`repo`, `path` and `ref` beside it where a script would rather not write them
+into the text. Its answer names the commit each repository was searched at,
+so read a hit's file at that commit, not at the branch, which may have moved
+since.
+
 ## Seats and code
 
 Nothing to set up: once the company hosts code, your seats work in its

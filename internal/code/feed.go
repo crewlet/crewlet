@@ -84,8 +84,11 @@ func (t *Translator) Source() changefeed.Source {
 // # The ways a record wakes nobody, each an ACK
 //
 // A record on a subject no change is about — a name, an eviction, a
-// generation, the company's activation, a check, a person's marks, the barrier
-// and the trimmed record — is machinery or bookkeeping. A record this build
+// generation, the company's activation, a person's marks, the barrier and the
+// trimmed record — is machinery or bookkeeping, and so is every record of a
+// repository's checks but an attempt's ending: its queue, its start, a
+// dispatch and a sweep carry no routing, and are acknowledged off the
+// envelope, never decoded ([wakesAnybody]). A record this build
 // cannot decode past its envelope is a newer build's, whose routing rules it
 // does not have. A record about a repository or a change that carries no
 // routing is one that concerns nobody: every record from before changes
@@ -100,7 +103,7 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 	if err != nil {
 		return changefeed.Delivery{}, false, fmt.Errorf("code: read the envelope on %s: %w", rec.Key, err)
 	}
-	if !wakesAnybody(envelope.Subject.Kind) {
+	if !wakesAnybody(envelope.Subject.Kind, envelope.Op) {
 		return changefeed.Delivery{}, false, nil
 	}
 	record, err := Decode(rec.Payload)
@@ -133,15 +136,29 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 	return changefeed.Delivery{Body: body, ID: RecordID(record.OpID, at), Actor: routedActor(payload)}, true, nil
 }
 
-// wakesAnybody reports a kind whose records can carry a routing: a
+// wakesAnybody reports a record, by its envelope, that can carry a routing: a
 // repository's (its changes' lifecycle, the pushes that merge or open one, and
 // its queues' merges, ejections, landings and broken landings), a change's
-// (its conversation and its home's facts) and a repository's checks (a failed
-// check of a change's head). Every other kind is named by its absence,
-// because a new kind routes nobody until its records carry a routing and this
-// list names it.
-func wakesAnybody(kind ObjectKind) bool {
-	return kind == KindRepo || kind == KindChange || kind == KindChecks
+// (its conversation and its home's facts), and of a repository's checks an
+// attempt's ending alone (a failed check of a change's head:
+// CheckFinished.Routing). Every other kind, and every other op of the checks,
+// is named by its absence, because a new one routes nobody until its records
+// carry a routing and this names it.
+//
+// BY THE OP TOO for the checks, the one kind most of whose records route
+// nobody: every attempt is queued, and every one a runner takes is started,
+// and a queued attempt carries its whole definition, so decoding those only
+// to find no routing would parse records the checks subject carries for every
+// attempt for nothing. An ending is decoded, since whether it failed a head is
+// in its payload.
+func wakesAnybody(kind ObjectKind, op OpKind) bool {
+	switch kind {
+	case KindRepo, KindChange:
+		return true
+	case KindChecks:
+		return op == OpCheckFinished
+	}
+	return false
 }
 
 // wakesASeat reports whether concerns tell a seat anything: some handle

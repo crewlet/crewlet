@@ -131,3 +131,22 @@ func answerOf(rec *httptest.ResponseRecorder) string {
 	return fmt.Sprintf("%d [%s] [%s] [%s] %q", rec.Code, rec.Header().Get("Content-Type"),
 		rec.Header().Get("WWW-Authenticate"), rec.Header().Get("Retry-After"), rec.Body.String())
 }
+
+// A RUNNING ENGINE THAT HOSTS NO CODE HANDS OVER NO SEARCHER, AND SAYS WHY.
+// [EngineCode]'s CodeSearcher is what `code_search` asks on every request, and
+// the route suites drive a fake of it, so this holds the adapter itself over a
+// real engine whose company hosts no code: the engine is not handed over as
+// the searcher — it would answer every search with a fault of its own, which
+// no surface reads as the company's — and the reason is the node's, which the
+// question answers `404 not_found` (`not_hosted`) as every code read does.
+//
+// Mutation: hand the engine over whether or not it serves the code host, red.
+func TestAnEngineHostingNoCodeHandsOverNoSearcher(t *testing.T) {
+	t.Parallel()
+	e, _ := bootNode(t, "")
+	searcher, why := EngineCode(e).CodeSearcher()
+	if searcher != nil || !errors.Is(why, engine.ErrCodeNotHosted) {
+		t.Fatalf("a node whose company hosts no code handed over the searcher %v (%v), want none because %v",
+			searcher, why, engine.ErrCodeNotHosted)
+	}
+}

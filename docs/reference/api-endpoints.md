@@ -4397,6 +4397,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `code_checks` | `{repo, change, oid, since, name, state, limit, cursor, read_level, …}` | `GET /code/checks`. Attempts of checks: a repository's, a change's, a commit's, or every repository's in a window |
 | `code_check` | `{name, oid, check, attempt, target, read_level, …}` | `GET /code/repos/{name}/checks/{oid}/{check}/{attempt}`. One attempt whole |
 | `code_check_log` | `{name, oid, check, attempt, target, object, offset, limit, read_level, …}` | `GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log`. A page of the log a failed run kept |
+| `code_search` | `{q, mode, ignore_case, repo, path, ref, limit, read_level}` | [`GET /code/search`](#get-codesearch). The lines that match a search across the repositories the caller may read, the commit each repository was searched at, and what was not searched. Read at no `session` floor: it answers at the tip it names |
 | `config` | `{}` | `GET /config` *(needs `admin`)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `admin`)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
@@ -7484,6 +7485,57 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "https://crewlet.example.com/code/checks?since=2026-10-01T00:00:00Z&state=failed"
 curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "https://crewlet.example.com/code/repos/web/checks/4b825dc642cb6eb9a060e54bf8d69288fbee4904/unit/1/log?target=refs/heads/main"
+```
+
+### `GET /code/search`
+
+The question `code_search`: the lines that match a search, across every
+`search: indexed` repository the caller may read or the repositories its
+`repo:` filters name — answered by the one scatter over the git nodes ([Code
+search](../concepts/code-host.md#code-search)), and decided per repository as
+the code reads are: a repository the caller may not read is left out of an
+unfiltered search, and a `repo:` naming one is `403 not_permitted`.
+
+| Parameter | What it is |
+|---|---|
+| `q` | **Required.** The search as a person writes it ([Finding code](../guides/code.md#finding-code)): `repo:<name>`, `path:<pattern>` and `ref:<ref>` filters first, then the text, at most 400 bytes |
+| `mode` | How the text is read: `literal` (unset), `regex` (RE2, one line at a time) or `word` (not inside a longer word) |
+| `ignore_case` | `true` folds case; `false`, unset, does not |
+| `repo`, `path`, `ref` | One more filter each, beside those `q` writes: a repository or a path widens the search, and a `ref` beside a different `ref:` is refused, as two `ref:` filters are |
+| `limit` | The most lines answered, 1–500; unset or `0` is 500 |
+| `read_level` | The level the caller's repositories are listed at: `stale` (unset), `linearizable` or `consistent_prefix`, with `max_lag_seconds` and `max_lag_seq` beside `stale` |
+
+The answer is `hits` — each line's `repo`, `path` (`path_b64` beside it for
+bytes that are not UTF-8), `line`, `text` (at most 256 bytes of it) and `blob`,
+the file's object id — in the order of repository, path and line; `tips`, the
+commit each repository with a hit was searched at, by its name; and
+`coverage`, what the search did and did not reach: `searched`, `building`,
+`stale`, `not_answering`, `not_permitted`, `no_ref`, `grep_not_named`,
+`not_indexed`, `skipped_files` and `truncated`, as [Code
+search](../concepts/code-host.md#code-search) tells each. An empty `hits`
+says nothing matched in the repositories counted under `searched`, and no
+more: every set beside it but `not_indexed` names repositories the search did
+not read, and `skipped_files` counts files it passed over.
+
+**It answers at the tip it names, so it takes no floor.** Each repository is
+searched at the commit its answering git node holds for the ref — the one
+`tips` names — and a hit's file is read at that commit by its id
+([`code_blob`](#a-repositorys-content)), the same answer at every position.
+So the copies are searched as they stand, `read_level=session` and
+`min_position` are refused `400 bad_params`, and the question is not one the
+dashboard reads its own writes back through. A repository declared a moment
+ago is listed for an unfiltered search at `read_level=linearizable`.
+
+Its refusals are the code reads' ([above](#the-code-reads)), and beside them
+`400 bad_params` for a `q` that is missing, past 400 bytes, holds no run of
+three characters to look up, or whose expression does not compile; a `mode`
+that is none of the three; a `limit` past 500; and a search naming more than
+eight `search: grep` repositories. A repository a `repo:` names that nobody
+declared is `404 not_found` with `"reason": "not_declared"`, naming it.
+
+```sh
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "https://crewlet.example.com/code/search?q=repo:billing%20path:src/**/*.go%20retryBudget&ignore_case=true"
 ```
 
 ### `GET /code/repos/{name}/readers`

@@ -231,6 +231,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/code/checks", what: "code_checks"},
 	{method: "GET", pattern: "/code/repos/{name}/checks/{oid}/{check}/{attempt}", what: "code_check", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
 	{method: "GET", pattern: "/code/repos/{name}/checks/{oid}/{check}/{attempt}/log", what: "code_check_log", path: map[string]string{"name": "name", "oid": "oid", "check": "check", "attempt": "attempt"}},
+	// AND A SEARCH OF THEIR LINES, across every repository the caller may
+	// read or the ones its repo: filters name, each decided per repository
+	// by the git node that answers it.
+	{method: "GET", pattern: "/code/search", what: "code_search"},
 }
 
 // mountReads registers the named read routes.

@@ -12,6 +12,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -339,9 +342,16 @@ func TestACheckLogIsNamedByTheEndingThatKeepsOne(t *testing.T) {
 // its bytes in the character JSON spells in six — and an ending carrying every
 // field at its bound each validate, and encode with the longest node id and
 // widest generation under MaxRecordBytes, so no check a writer forms is one
-// the committer's log refuses; and one record's apply — its row, its log
-// dropped and written, and its horizon's check rows with theirs — stays inside
-// MaxRecordRows.
+// the committer's log refuses — the ending too once its writer has stamped
+// whom a failed head concerns, its routing at the bounds of the roles it
+// fills, and with the whole of MaxRoutingBytes to spare beside it, the most
+// any routing may take; and one record's apply — its row, its log dropped and
+// written, its horizon's check rows with theirs, and the notice rows its
+// routing writes — stays inside MaxRecordRows.
+//
+// Mutation: keep more room for a routing (MaxRoutingBytes past what the
+// widest ending leaves) — red; charge a routing more notice rows than a
+// record leaves (routingNoticeRows) — red.
 func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 	t.Parallel()
 	const repo = "0190f3c4-0000-7000-8000-00000000b0b0"
@@ -394,15 +404,52 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 		Log:      &code.CheckLog{Object: keyOf("log"), Hash: objstore.HashOf([]byte("log")), Size: code.MaxCheckLogBytes},
 		Reporter: person, URL: "https://ci.example.com/" + wide(code.MaxCheckURLBytes-len("https://ci.example.com/")),
 		FinishedAt: harnessAt}
+	// WHOM A FAILED HEAD CONCERNS, as routeFailedHead stamps it on the ending
+	// its decide validated: the change's authors at MaxRoutedParticipants and
+	// the head's pusher, each a person at a login's whole width, the change's
+	// title in the character JSON spells in six, and a work item — whose
+	// fields no bound of their own holds; the routing's room does.
+	handle := func(i int) string { return fmt.Sprintf("%02d", i) + strings.Repeat("h", iam.MaxLogin-2) }
+	routing := &code.ChangeRouting{ChangeID: queued.ChangeID,
+		ChangeRef: code.ChangeRef(strings.Repeat("r", gitref.MaxRepoNameBytes), 1<<40),
+		RepoName:  strings.Repeat("r", gitref.MaxRepoNameBytes), Title: wide(code.MaxChangeTitleBytes),
+		Actor: handle(code.MaxRoutedParticipants), Owner: handle(0), OwnerKind: code.PartyPerson,
+		WorkItem:     &types.WorkItem{Backend: types.WorkJira, ID: wide(256), Key: wide(256), Project: wide(256)},
+		ChecksFailed: true}
+	for i := range code.MaxRoutedParticipants {
+		routing.Authors = append(routing.Authors, handle(i))
+	}
+	routing.Persons = slices.Sorted(slices.Values(append(slices.Clone(routing.Authors), routing.Actor)))
+	if encoded, err := json.Marshal(routing); err != nil || len(encoded) > code.MaxRoutingBytes {
+		t.Fatalf("the widest failed head's routing is %d bytes (%v), past MaxRoutingBytes (%d): no decide "+
+			"forms it", len(encoded), err, code.MaxRoutingBytes)
+	}
+	heard := 0
+	for _, c := range code.Concerns([]*code.ChangeRouting{routing}) {
+		if c.Hears() {
+			heard++
+		}
+	}
+	if heard > code.RoutingNoticeRows {
+		t.Fatalf("the widest failed head's routing tells %d, past the %d notice rows a routing is charged",
+			heard, code.RoutingNoticeRows)
+	}
+	routed := finished
+	routed.Routing = routing
+
 	nodeID := strings.Repeat("n", 64)
+	widest := map[string]int{}
 	for _, tc := range []struct {
+		what    string
 		op      code.OpKind
 		payload interface{ Validate() error }
-	}{{code.OpCheckQueued, queued}, {code.OpCheckFinished, finished}} {
+		stamped any
+	}{{"queued attempt", code.OpCheckQueued, queued, queued}, {"ending", code.OpCheckFinished, finished, finished},
+		{"failed head's ending", code.OpCheckFinished, finished, routed}} {
 		if err := tc.payload.Validate(); err != nil {
-			t.Fatalf("the widest %s is not one a writer forms: %v", tc.op, err)
+			t.Fatalf("the widest %s is not one a writer forms: %v", tc.what, err)
 		}
-		body, err := json.Marshal(tc.payload)
+		body, err := json.Marshal(tc.stamped)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -417,13 +464,22 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 			t.Fatal(err)
 		}
 		if len(record) > code.MaxRecordBytes {
-			t.Errorf("the widest %s record is %d bytes, past MaxRecordBytes (%d)", tc.op, len(record),
+			t.Errorf("the widest %s record is %d bytes, past MaxRecordBytes (%d)", tc.what, len(record),
 				code.MaxRecordBytes)
 		}
-		t.Logf("the widest %s record is %d bytes of %d", tc.op, len(record), code.MaxRecordBytes)
+		widest[tc.what] = len(record)
+		t.Logf("the widest %s record is %d bytes of %d", tc.what, len(record), code.MaxRecordBytes)
 	}
-	// ITS ROW, ITS LOG'S TWO, AND ITS HORIZON'S ROWS EACH WITH ITS LOG.
-	if rows := 1 + 2 + 2*code.CheckHorizonRows; rows > code.MaxRecordRows {
+	// ANY ROUTING A DECIDE FORMS FITS BESIDE THE WIDEST ENDING: routingFor
+	// refuses one past MaxRoutingBytes, so a role a later op adds to a
+	// routing never takes a failed head's ending past its record.
+	if bytes := widest["ending"] + code.MaxRoutingBytes; bytes > code.MaxRecordBytes {
+		t.Errorf("the widest ending and the most a routing may take are %d bytes, past MaxRecordBytes (%d)",
+			bytes, code.MaxRecordBytes)
+	}
+	// ITS ROW, ITS LOG'S TWO, ITS HORIZON'S ROWS EACH WITH ITS LOG, AND ITS
+	// ROUTING'S NOTICES.
+	if rows := 1 + 2 + 2*code.CheckHorizonRows + code.RoutingNoticeRows; rows > code.MaxRecordRows {
 		t.Errorf("one check record's apply touches up to %d rows, past MaxRecordRows (%d)", rows,
 			code.MaxRecordRows)
 	}

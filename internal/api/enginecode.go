@@ -107,6 +107,22 @@ func (c engineCode) CheckLogs() (queries.CheckLogs, error) {
 var errNoObjectStore = errors.New("api: this node serves the code host with no object store to read a " +
 	"check's log from")
 
+// CodeSearcher is the engine's code search over the fleet's git nodes
+// ([engine.Engine.CodeSearch]) on CodeReads' terms ([engine.OperatorCode]):
+// where this node's running runtime serves no code host, why, asked again
+// after the reason for GitRoutes' reason. The engine itself is the searcher,
+// so a search finds the runtime as it stands when it is asked.
+func (c engineCode) CodeSearcher() (queries.CodeSearcher, error) {
+	if _, ok := engine.OperatorCode(c.e); ok {
+		return c.e, nil
+	}
+	why := c.e.CodeUnserved()
+	if _, ok := engine.OperatorCode(c.e); ok {
+		return c.e, nil
+	}
+	return nil, why
+}
+
 // GitReads is the code domain's reads by object id through this node's estate
 // router — the repository's home git node first — on CodeReads' terms
 // ([engine.OperatorCode]): where this node's running runtime serves no code

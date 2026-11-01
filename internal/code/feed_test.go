@@ -194,6 +194,40 @@ func TestTheCodeFeedDerivesOnlyWakes(t *testing.T) {
 	}
 }
 
+// A CHECK RECORD NO ROUTING RIDES IS ACKNOWLEDGED UNDECODED: of a repository's
+// checks only an attempt's ending can carry a routing, so its queue, its
+// start, a dispatch and a sweep are acknowledged off the envelope alone —
+// shown by records whose payload is no payload at all, which any decode
+// refuses — while an ending is decoded, so the same bytes on an ending are an
+// error the feed returns rather than acknowledges.
+//
+// Mutation: admit every checks record in wakesAnybody (drop the op test) —
+// the queued record is decoded and refused, red.
+func TestACheckRecordNoRoutingRidesIsAcknowledgedUndecoded(t *testing.T) {
+	t.Parallel()
+	record := func(op code.OpKind) changefeed.Record {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{"v": code.RecordVersion, "op_id": "op-" + string(op),
+			"subject": code.ChecksSubject("repo-web"), "op": op, "mutation": "not a payload"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return changefeed.Record{Key: "checks.repo-web", Payload: body, Position: 7,
+			Stream: code.Domain{}.Stream().Name}
+	}
+	for _, op := range []code.OpKind{code.OpCheckQueued, code.OpCheckStarted, code.OpCheckDispatched,
+		code.OpChecksSweep} {
+		if d, relayed, err := code.NewTranslator().Translate(t.Context(), record(op)); relayed || err != nil {
+			t.Errorf("a %s record is relayed as %+v (%v) or refused (%v), want it acknowledged without its "+
+				"payload read", op, d, relayed, err)
+		}
+	}
+	if _, relayed, err := code.NewTranslator().Translate(t.Context(), record(code.OpCheckFinished)); err == nil {
+		t.Errorf("an ending whose payload is no payload was acknowledged (relayed %v): an attempt's ending "+
+			"is the checks record a routing rides, and must be decoded", relayed)
+	}
+}
+
 // A REPLAY OF THE RECORDS FROM BEFORE CHANGES WAKES NOBODY: the code feed's
 // consumer is new, and a new consumer starts from the first record its log
 // still holds — every repository created, every push, every setting from

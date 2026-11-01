@@ -211,10 +211,10 @@ func TestAFailedHeadCheckIsAnnouncedOnItsOwnersSeat(t *testing.T) {
 	for _, ev := range stream.of("code_check_finished") {
 		p := ev.Data.(*types.CodeCheckFinished)
 		fails := p.State == "failed" || p.Attempt == code.AutoRequeueAttempts
-		owned := p.Owner == "dev" && p.OwnerKind == "agent" && p.OwnerAgent == "agent-dev"
-		if owned != fails || (!fails && p.Owner+p.OwnerAgent != "") {
+		owned := p.Owner == "dev" && p.OwnerKind == "agent" && p.Agent == "agent-dev"
+		if owned != fails || (!fails && p.Owner+p.Agent != "") {
 			t.Errorf("%s attempt %d (%s) names owner %q, agent %q: want dev's seat named exactly where the "+
-				"ending fails the head", p.Name, p.Attempt, p.State, p.Owner, p.OwnerAgent)
+				"ending fails the head", p.Name, p.Attempt, p.State, p.Owner, p.Agent)
 		}
 	}
 }

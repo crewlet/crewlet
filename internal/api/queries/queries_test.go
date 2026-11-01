@@ -357,6 +357,10 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"code_checks":    "decided_by:" + string(authz.ActionCodeRead),
 		"code_check":     "decided_by:" + string(authz.ActionCodeRead),
 		"code_check_log": "decided_by:" + string(authz.ActionCodeRead),
+		// AND A SEARCH OF THEIR LINES, decided per repository alike: an
+		// unfiltered search leaves out what the caller does not read, and a
+		// repo: naming one is refused — by every git node that answers it.
+		"code_search": "decided_by:" + string(authz.ActionCodeRead),
 		// AND WHO READ A UNIT'S REPOSITORY, decided by its own verb before
 		// anything is read: an admin's, since the answer names the people
 		// who read it, which no repository's grant gives.

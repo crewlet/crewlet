@@ -272,3 +272,66 @@ export const CODE_ALARM_KINDS = [
 export const CODE_SCRATCH_IDLE_DAYS = 7;
 export const CODE_SCRATCH_MAX_PER_SEAT = 50;
 export const CODE_IDENTITY_DOMAIN = "seats.invalid";
+
+/**
+ * `code_search` (`GET /code/search`): the lines that match a search, the
+ * commit each repository with a hit was searched at, and what was not
+ * searched (`codesearch.Answer`). HELD BOTH WAYS, with the rows it composes,
+ * by `internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers`.
+ *
+ * A search answers at the tip it names, so it is read at no session floor
+ * (`domains.ts`): a hit's file is read at `tips[repo]`, by commit, never at
+ * the branch the search named, which may have moved since.
+ */
+export interface CodeSearchAnswer {
+  /** In the order of repository, path and line. */
+  hits: CodeSearchHit[];
+  /** The commit each repository with a hit was searched at, by its name. */
+  tips?: Record<string, string>;
+  coverage: CodeSearchCoverage;
+}
+
+/** One matching line of one repository (`codesearch.Hit`). */
+interface CodeSearchHit {
+  repo: string;
+  path: string;
+  /** The path's exact bytes, in base64, where they are not UTF-8. */
+  path_b64?: string;
+  line: number;
+  /** The line, at most 256 bytes of it. */
+  text: string;
+  /** The file's object id, whole. */
+  blob: string;
+}
+
+/**
+ * What a search covered (`codesearch.Coverage`): every repository it names is
+ * in exactly one of `searched` and the sets after it, beside the grep
+ * repositories an unfiltered search leaves out and the indexed ones read with
+ * git grep.
+ */
+interface CodeSearchCoverage {
+  searched: number;
+  not_indexed: CodeSearchRepoSet;
+  building: CodeSearchRepoSet;
+  not_answering: CodeSearchNodeGap[] | null;
+  not_permitted: CodeSearchRepoSet;
+  grep_not_named: CodeSearchRepoSet;
+  stale: CodeSearchRepoSet;
+  no_ref: CodeSearchRepoSet;
+  skipped_files: number;
+  truncated: boolean;
+}
+
+/** A set of repositories: how many, and the first hundred names in order. */
+interface CodeSearchRepoSet {
+  count: number;
+  names: string[] | null;
+}
+
+/** A git node that did not answer, why, and what it left unanswered. */
+interface CodeSearchNodeGap {
+  node: string;
+  why: string;
+  repos: CodeSearchRepoSet;
+}

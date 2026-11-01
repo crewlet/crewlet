@@ -367,7 +367,7 @@ var wireTags = map[string][]string{
 	"skill_used":                      {"agent_handle", "agent_id", "role", "skill_id", "skill_name", "source_container", "source_kind", "source_page_id", "turn_id", "work_key"},
 	"knowledge_read":                  {"agent_handle", "agent_id", "backend", "pages", "phase", "query", "role", "turn_id", "via", "work_key"},
 	"code_fetched":                    {"bytes", "kind", "principal", "principal_kind", "reads", "repo_id", "repo_name", "seat", "via"},
-	"code_check_finished":             {"attempt", "change_id", "duration_ms", "name", "oid", "owner", "owner_agent_id", "owner_kind", "placement", "purpose", "reason", "repo_id", "repo_name", "replaces", "required", "state", "target"},
+	"code_check_finished":             {"agent_id", "attempt", "change_id", "duration_ms", "name", "oid", "owner", "owner_kind", "placement", "purpose", "reason", "repo_id", "repo_name", "replaces", "required", "state", "target"},
 	"change_merged":                   {"change_id", "commit", "merged_by", "merged_by_kind", "method", "number", "override", "repo_id", "repo_name", "target"},
 	"change_opened":                   {"agent_id", "by_push", "change_id", "number", "owner", "owner_kind", "repo_id", "repo_name", "target_ref", "title"},
 	"review_submitted":                {"agent_id", "change_id", "findings", "number", "owner", "owner_agent_id", "owner_kind", "repo_id", "repo_name", "review_id", "reviewer", "reviewer_kind", "revision", "verdict"},
