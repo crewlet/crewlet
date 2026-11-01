@@ -1500,13 +1500,21 @@ type ImportCandidate struct {
 // MirrorCandidate is one repository a `mirrors_due` read lists: its pull
 // mirror's source (From) or its push mirror's target (To) — a repository
 // with both is listed once in each arm, each naming its own — and, for a pull
-// mirror, when its last sync landed, zero for never.
+// mirror, when its last sync landed, zero for never, and the version its row
+// was read at: the floor its home syncs its copy at before it fetches, as an
+// import's candidate carries its own, since a copy synced at no floor could
+// still be the one its import left, importing.
+//
+// AN ESTATE ANSWER'S FIELDS, NOT A RECORD'S, so Version takes no
+// versionedFields row; as a stated condition, as [CheckWork]'s: no build that
+// carries the code domain has run without it.
 type MirrorCandidate struct {
-	ID       string        `json:"id"`
-	Name     string        `json:"name"`
-	From     *MirrorSource `json:"from,omitempty"`
-	To       *MirrorTarget `json:"to,omitempty"`
-	SyncedAt time.Time     `json:"synced_at,omitzero"`
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	From     *MirrorSource     `json:"from,omitempty"`
+	To       *MirrorTarget     `json:"to,omitempty"`
+	SyncedAt time.Time         `json:"synced_at,omitzero"`
+	Version  statelog.Position `json:"version,omitzero"`
 }
 
 // ExpungeTipsQuery is an `expunge_tips` read's repository, by id, and the

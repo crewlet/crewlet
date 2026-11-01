@@ -22,6 +22,7 @@ import (
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -204,6 +205,12 @@ type native struct {
 	// compactor, and nil where they are; stopped first in the code host's one
 	// bounded stop, before the compactor.
 	home *codehome.Loop
+
+	// mirrors is the imports and pull mirrors of the repositories this node
+	// is home to (internal/code/mirror), a worker of home built with it, and
+	// nil where it is; stopped after home in the code host's one bounded
+	// stop, so no turn starts an attempt it would not wait for.
+	mirrors *mirror.Mirrors
 
 	// checkRunner claims and runs the company's queued checks in boxes of
 	// this node's sandbox catalogue (internal/code/checkrun), built with
@@ -510,7 +517,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			n.codeHost, n.gitReads, n.gitCache, n.gitCacheSize = parts.host, parts.reads, parts.cache,
 				parts.size
 			n.mergePreviews = parts.previews
-			n.compactor, n.home, n.checkRunner = parts.compactor, parts.home, parts.checks
+			n.compactor, n.home, n.mirrors, n.checkRunner = parts.compactor, parts.home, parts.mirrors, parts.checks
 			n.withdrawCodeStatus, n.withdrawCodeSearch = parts.withdrawStatus, parts.withdrawSearch
 		}
 	}

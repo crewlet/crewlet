@@ -228,10 +228,30 @@ Only a person or this document sets a mirror or an import: a seat asking to
 create a repository with one, or to set or remove either mirror of one, is
 refused `not_permitted` whatever its grant, since a pull mirror and an import
 reach another host for the company and a push mirror sends its code to one.
-A scratch repository takes none of the three. This release records each and
-refuses the writes it names; **nothing fetches from or pushes to another host
-yet**, so a repository created with `mirror_from` or `import` stays
-`importing` until a release that runs the import.
+A scratch repository takes none of the three.
+
+**An import and a pull mirror run on the repository's home** — the first live
+git node of its rendezvous order, the node that runs its change work. The home
+fetches the source's branches and tags (`refs/heads/*` and `refs/tags/*`) over
+smart HTTP, every object checked as a push's objects are, cuts what arrived
+into packs of at most 1 GiB and lands them as records of the repository's
+own: an import's chunks — packs before the refs that need them, at most 1 000
+refs a chunk — then its end; a pull mirror's syncs, every 15 minutes, each
+moving the repository onto its source as the source is, a force-push and a
+deleted branch included. Each lands as a push `via import` or `via mirror` on
+the engine's own account. An import stopped in the middle resumes from what
+landed, on whichever git node is home by then, fetching only what the landed
+refs do not reach. One that cannot finish — a blob past
+`code.limits.max_blob_bytes`, the repository past one of its limits, a source
+that answers only over the dumb HTTP protocol — ends: the repository is active
+with what landed, and its import's error says why. A source that cannot be
+reached, or that refuses the credential, is asked again a minute after the
+first failure, the wait doubling to once every 15 minutes. The credential's
+value is sent as HTTP Basic: a value holding a colon is `user:password` as
+written, and any other a token, sent as the password beside the user
+`x-access-token`, which GitHub, GitLab, Gitea and Forgejo accept; a forge that
+wants a user of its own beside a token (Bitbucket's `x-token-auth`) is given it
+in the variable. A push mirror pushes nothing yet.
 
 At most 10 000 repositories one document — a typo guard two orders of
 magnitude past a large company's, not a limit anybody is expected to meet. It

@@ -42,7 +42,7 @@ var goPackages = map[string]bool{
 	"livestate": true, "llm": true, "logging": true, "maintenance": true,
 	"lint": true, "manifest": true, "mediatype": true,
 	"mattermost": true, "mcp": true, "mcpbridge": true, "memobj": true,
-	"memory": true, "memread": true, "memsync": true, "metrics": true, "migrate": true,
+	"memory": true, "memread": true, "memsync": true, "metrics": true, "migrate": true, "mirror": true,
 	"natsobj": true, "node": true, "notify": true, "objstore": true,
 	"objstoretest": true, "observe": true, "operator": true,
 	"objectives": true, "query": true,

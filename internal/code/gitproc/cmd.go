@@ -521,7 +521,8 @@ var allowedConfig = map[string]string{
 	// against the node's background budget counts it and what the build holds
 	// beside it (internal/code/cache's CompactWindowBytes).
 	"pack.windowmemory": "the cache's serve configuration, and a compaction's pack-objects in its scratch " +
-		"(internal/code/compact's CompactConfig)",
+		"(internal/code/compact's CompactConfig) and an import's or a pull mirror's cut in its own " +
+		"(internal/code/mirror)",
 	"pack.usebitmaps": "the cache's serve configuration",
 	// Read only by a bitmap write (the maintainer's multi-pack-index), so
 	// it rides the serve configuration and changes no other process.
@@ -555,6 +556,12 @@ var allowedConfig = map[string]string{
 	"receive.advertisepushoptions": "the receive configuration",
 	"receive.autogc":               "the receive configuration",
 	"receive.updateserverinfo":     "the receive configuration",
+	// What a fetch from another host is held to, beside the remote's own keys
+	// the pool writes: every object it receives checked as receive-pack
+	// checks a push's, and kept as the pack it arrived in, never exploded
+	// into loose objects, which the cut after it could not name.
+	"transfer.fsckobjects": "an import's and a pull mirror's fetch into its scratch (internal/code/mirror)",
+	"fetch.unpacklimit":    "an import's and a pull mirror's fetch into its scratch (internal/code/mirror)",
 	// The .rev a stored bundle carries is written by the process that wrote
 	// or checked its pack: for content from outside — a push, an engine
 	// write — the index-pack that checked the pack as it indexed it,

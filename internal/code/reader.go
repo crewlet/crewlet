@@ -3225,11 +3225,12 @@ func (r *Reader) mirrorsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
-			c      MirrorCandidate
-			from   string
-			synced int64
+			c       MirrorCandidate
+			from    string
+			synced  int64
+			version int64
 		)
-		if err := rows.Scan(&c.ID, &c.Name, &from, &synced); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &from, &synced, &version); err != nil {
 			return fmt.Errorf("code: list the pull mirrors: %w", err)
 		}
 		if c.From, err = remoteOf[MirrorSource](from); err != nil {
@@ -3239,6 +3240,7 @@ func (r *Reader) mirrorsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 		if synced != 0 {
 			c.SyncedAt = store.DecodeTime(synced)
 		}
+		c.Version = unpacked(version)
 		out.Mirrors = append(out.Mirrors, c)
 		if pg.add(c.encodedBytes()) {
 			out.Next = fmt.Sprintf("f:%d:%s", synced, c.ID)
@@ -4264,7 +4266,7 @@ const (
 	// THE PULL MIRRORS, least recently synced first over
 	// code_repos_mirrored_idx, keyset after (instant, id): the instant seeks
 	// the index, and the id breaks a tie inside one instant.
-	pullMirrorsSQL = `SELECT id, name, mirror_from, mirror_synced_at FROM code_repos
+	pullMirrorsSQL = `SELECT id, name, mirror_from, mirror_synced_at, version FROM code_repos
 		INDEXED BY code_repos_mirrored_idx WHERE mirror_from != '' AND status = 'active'
 			AND mirror_synced_at >= ? AND (mirror_synced_at > ? OR id > ?)
 		ORDER BY mirror_synced_at, id LIMIT ?`

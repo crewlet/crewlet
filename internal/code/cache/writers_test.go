@@ -589,6 +589,19 @@ var cacheWriters = []writerRow{
 			"the copy: the merged tree and every blob a conflict leaves marked written into the scratch alone and " +
 			"removed with it, never a cache; an object the copy already holds is freshened there, as an engine " +
 			"write's build freshens it (home.TestMergeabilityRunsInAScratch)", nil},
+	{"internal/code/mirror/attempt.go", kindGit + " fetch",
+		"an import's or a pull mirror's fetch of its source's branches and tags, in the attempt's own SCRATCH " +
+			"(cache.NewScratch) leaning on the copy, so it negotiates from the copy's refs: what it brings is " +
+			"written into the scratch alone and removed with it, entering the cache only by Adopt, once the rows " +
+			"of a chunk or a sync have applied", nil},
+	{"internal/code/mirror/attempt.go", kindGit + " pack-objects",
+		"an import's or a pull mirror's cut: ONE `pack-objects --stdin-packs` over what the fetch wrote, every " +
+			"live pack of the copy excluded, in the same scratch — its outputs written there alone, entering the " +
+			"cache only by Adopt, once their rows have applied", nil},
+	{"internal/code/mirror/attempt.go", kindGit + " ls-remote",
+		"an import's read of the branch its source's HEAD names — `ls-remote --symref <url> HEAD`, in no " +
+			"repository — whose one argument not spelled as a literal is the source's URL, which the one outbound " +
+			"dial (gitproc.Cmd.Remote) holds to https, where no --upload-pack runs anything", nil},
 	{"internal/code/query/diff.go", kindGit + " diff-tree",
 		"a seat's read of a diff or an interdiff — its stat's raw records, with their counts where the stat " +
 			"admits every file, and the raw record of the one file a patch names — whose only arguments not " +

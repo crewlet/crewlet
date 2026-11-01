@@ -34,6 +34,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/cgi"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -330,6 +332,21 @@ func (c *Client) Env(kv ...string) *Client {
 // PATH is the test's; a case that means a particular git puts that git's
 // directory before it.
 func (c *Client) Environ() []string { return slices.Clone(c.env) }
+
+// HTTPBackend serves every bare repository under root over git's SMART HTTP
+// protocol — git's own `http-backend`, as a forge serves one — run as c's git
+// in c's environment, so the other host a case's import or mirror dials
+// (internal/code/mirror) reads no configuration of the machine either. Every
+// repository is exported; receive-pack is left as http-backend leaves it for
+// a request with no authenticated user, refused. Serve it behind
+// httptest.NewTLSServer: the engine dials https alone.
+//
+// HERE rather than in the case, since it starts git: this package and gitproc
+// are where a process of git may start (gitproc's TestOnlyGitprocExecsGit).
+func (c *Client) HTTPBackend(root string) http.Handler {
+	return &cgi.Handler{Path: c.git, Args: slices.Concat(c.opts, []string{"http-backend"}), Dir: c.home,
+		Env: slices.Concat(c.env, []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"})}
+}
 
 // ModuleCheckout is c trusting the checkout this module's tests were compiled
 // from, and that checkout's top level — for a test whose SUBJECT is this

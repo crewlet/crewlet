@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/config"
@@ -463,6 +464,17 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, fmt.Errorf("engine: build the home's change work: %w", err)
 	}
 
+	// 10b. THE IMPORTS AND PULL MIRRORS (internal/code/mirror), a worker of
+	// the loop just built (codemirrors.go): a repository's home fetching it
+	// from the host its rows name, its chunks and syncs landed through its
+	// committer. Started by the loop's turns, stopped after the loop in the
+	// one bounded stop.
+	mirrors, err := e.buildMirrors(nodeID, boot, c, pool, objects, homeLoop)
+	if err != nil {
+		h.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: build the imports and mirrors: %w", err)
+	}
+
 	// 11. THE CHECKS (internal/code/checkrun): this node's runner of the
 	// company's queued checks, and its home's sweep of the checks whose
 	// runner is gone, a worker of the loop just built (codechecks.go). BUILT
@@ -501,7 +513,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, fmt.Errorf("engine: serve code searches on %s: %w", topics.CodeSearch, err)
 	}
 	return codeHostParts{host: h, reads: reads, previews: previews, cache: c, size: size, compactor: compactor,
-		home: homeLoop, checks: checks, withdrawStatus: withdraw, withdrawSearch: withdrawSearch}, nil
+		home: homeLoop, mirrors: mirrors, checks: checks, withdrawStatus: withdraw, withdrawSearch: withdrawSearch}, nil
 }
 
 // codeNudges is this node's own code log as the home's change work watches it
@@ -601,6 +613,7 @@ type codeHostParts struct {
 	size           codeCacheSize
 	compactor      *codecompact.Compactor
 	home           *codehome.Loop
+	mirrors        *mirror.Mirrors
 	checks         *checkrun.Runner
 	withdrawStatus queue.Unsubscribe
 	withdrawSearch queue.Unsubscribe
@@ -1038,6 +1051,9 @@ func (n *native) stopCodeHost(ctx context.Context) {
 		}
 		if n.home != nil {
 			n.home.Stop(ctx)
+		}
+		if n.mirrors != nil {
+			n.mirrors.Stop(ctx)
 		}
 		if n.compactor != nil {
 			n.compactor.Stop(ctx)

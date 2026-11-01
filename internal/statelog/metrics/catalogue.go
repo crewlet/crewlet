@@ -993,7 +993,10 @@ func Catalogue() []Instrument {
 				"a minute — or a change whose head its target holds landed; " +
 				"`check_runners`: its running checks whose runner left its git " +
 				"order, or ran past its check's timeout and a setup's grace, " +
-				"ended `errored runner_lost`) and " +
+				"ended `errored runner_lost`; `mirrors`: its import or its pull " +
+				"mirror's sync STARTED, on a goroutine of its own, since a fetch " +
+				"from another host outlives a turn — `crewlet.code.import.chunks` " +
+				"and `crewlet.code.mirror.runs` count what each came to) and " +
 				"`outcome`: `worked`, its due " +
 				"work done; `failed`, a read or a record that decided nothing for " +
 				"a reason of the node's or the log's (`code_home_turn_failed` " +
@@ -1696,6 +1699,35 @@ func Catalogue() []Instrument {
 				"search leaves out; `not_indexed`, an indexed repository read " +
 				"with git grep. A steady `not_answering` is a git node to look " +
 				"at; `grep_not_named` alone is a company's choice.",
+		},
+		{
+			Name: CodeImportChunks, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "The chunks this node, as a repository's home, proposed " +
+				"of an import from another host, by `outcome`: `applied`, the " +
+				"chunk's packs and refs landed; `ended`, refused for a limit " +
+				"the source is past (`repo_size`, `repo_refs`, `ref_conflict`, " +
+				"`pack_too_large`), which ends the import with its error; and " +
+				"`failed`, refused for anything else — a busy committer, rows " +
+				"that moved — or not seen applied, the import tried again from " +
+				"its rows a minute later and longer after each failure in a " +
+				"row. `failed` climbing on one node with no `applied` beside it " +
+				"is an import that cannot make progress: its " +
+				"`code_mirror_attempt_failed` lines say why.",
+		},
+		{
+			Name: CodeMirrorRuns, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"dir", "outcome"},
+			Shows: "One attempt to bring a mirror level with the other host, " +
+				"by `dir` (`pull`: a pull mirror's sync from its source, run " +
+				"by its home every 15 minutes) and `outcome`: `synced`, a sync " +
+				"landed what the source moved; `current`, the source moved " +
+				"nothing; `failed`, the source unreachable, its credential " +
+				"refused, or a step refused or not seen applied — the mirror " +
+				"tried again a minute later, and longer after each failure in " +
+				"a row, up to its interval. A mirror whose source went away " +
+				"shows as `failed` four times an hour, every one with its " +
+				"`code_mirror_attempt_failed` line.",
 		},
 		{
 			Name: CodeCacheDroppingBytes, Kind: KindGauge, Unit: UnitBytes,

@@ -471,8 +471,9 @@ var allowedGitExecs = map[string]string{
 	"internal/code/gitproc/run.go": "Pool.Run's exec.Command(p.git, …) — the one exec this " +
 		"gate exists to keep the only one",
 	"internal/code/gitproc/gittest/gittest.go": "the client git every test drives: " +
-		"readVersion's `git version` (the PATH's git and each floor's, once a binary) and " +
-		"Client.Try's exec.CommandContext(ctx, c.git, …), hermetic for the reasons the pool's " +
+		"readVersion's `git version` (the PATH's git and each floor's, once a binary), " +
+		"Client.Try's exec.CommandContext(ctx, c.git, …) and Client.HTTPBackend's " +
+		"cgi.Handler{Path: c.git} (the other host a mirror's case dials), hermetic for the reasons the pool's " +
 		"environment is built",
 }
 

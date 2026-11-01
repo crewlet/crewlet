@@ -21,7 +21,8 @@
 // repository) pair a turn — onto a few goroutines of its own ([Concurrency]),
 // for every [Worker] registered with it: the changes worker
 // ([WorkerChanges]), the checks worker ([WorkerChecks]) and the merge queue
-// ([WorkerQueue]), and M6's mirrors after them, each a listing of the
+// ([WorkerQueue]), and the imports and pull mirrors (internal/code/mirror,
+// which the engine registers), each a listing of the
 // repositories it has work in (Worker.Due) and the work of one
 // (Worker.Work), each read from the rows. A repository is worked by ONE turn
 // of a worker at a time; asked again while it is being worked, it
@@ -164,10 +165,11 @@
 // [MergeabilityRefresh] old.
 //
 // ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host,
-// internal/code/checkrun and this package never import each other
-// (home_test.go holds the five) — the check runner's sweep of the checks whose
-// runner is gone is a [Worker] the engine registers, satisfying this
-// package's interface without importing it:
+// internal/code/checkrun, internal/code/mirror and this package never import
+// each other (home_test.go holds the six) — the check runner's sweep of the
+// checks whose runner is gone and a node's imports and pull mirrors are each a
+// [Worker] the engine registers, satisfying this package's interface without
+// importing it:
 // each reaches the others' work through the estate's router — a facts read
 // through its git walk, a record through its repository's committer — so a
 // home's turn is the same whichever node answers each step of it.

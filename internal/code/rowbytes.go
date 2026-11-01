@@ -453,6 +453,9 @@ func (c MirrorCandidate) encodedBytes() int {
 	if !c.SyncedAt.IsZero() {
 		n += field("synced_at", timeBytes(c.SyncedAt), false)
 	}
+	if !c.Version.IsZero() {
+		n += field("version", positionBytes(c.Version), false)
+	}
 	return n
 }
 

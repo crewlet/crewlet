@@ -86,6 +86,8 @@ const (
 	CodeSearchQueries                = "crewlet.code.search.queries"
 	CodeSearchDuration               = "crewlet.code.search.duration"
 	CodeSearchCoverage               = "crewlet.code.search.coverage"
+	CodeImportChunks                 = "crewlet.code.import.chunks"
+	CodeMirrorRuns                   = "crewlet.code.mirror.runs"
 	CodePublishBytes                 = "crewlet.code.publish.bytes"
 	CodeQueueProposals               = "crewlet.code.queue.proposals"
 	CodeMergeOutcomes                = "crewlet.code.merge.outcomes"

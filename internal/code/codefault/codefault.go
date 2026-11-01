@@ -1,15 +1,17 @@
 // Package codefault is THE NAMED FAULT POINTS of the code host's push, sync,
-// compaction, publication, engine write and expunge paths and of a check's
-// run, and the one seam that reaches them. Production passes a nil [Injector] and every call site is
-// a nil check; the suites pass a [*Script].
+// compaction, publication, engine write and expunge paths, of a check's run
+// and of an import and a pull mirror's sync, and the one seam that reaches
+// them. Production passes a nil [Injector] and every call site is a nil
+// check; the suites pass a [*Script].
 //
 // NAMED rather than ad hoc hooks, because the code host's crash matrices walk
 // EVERY point of a path in pipeline order and kill the node there — the push
 // path's ([PushPath]) the receiving node, the compaction's ([CompactPath]),
 // the publication's ([PublishPath]) and the expunge's ([ExpungePath]) the
 // repository's maintainer running one, and an engine write's ([WritePath])
-// the git node building it, and a check's run's ([CheckPath]) the git node
-// running it: a step with no point is a step nobody ever crashed at. So a new step of the receive pipeline, of a compaction, of a
+// the git node building it, a check's run's ([CheckPath]) the git node
+// running it, and an import's ([ImportPath]) and a pull mirror's sync's
+// ([MirrorPath]) the repository's home: a step with no point is a step nobody ever crashed at. So a new step of the receive pipeline, of a compaction, of a
 // publication, of an engine write or of an expunge, that can leave state
 // behind gets a point here, in order, or the matrix does not cover it. The order is written ONCE, in this package, and a call site
 // adds a hit and never edits the list.
@@ -227,6 +229,27 @@ const (
 	// nothing will end but the repository's home, which sweeps a runner gone
 	// from its git order.
 	CheckAfterClaim Point = "check.after_claim"
+
+	// ImportAfterBuild: an import's attempt has fetched the source into its
+	// scratch and cut what arrived into the packs it stores, and nothing of
+	// them is stored or proposed (internal/code/mirror).
+	ImportAfterBuild Point = "import.after_build"
+	// ImportAfterUpload: a chunk's packs are stored, and no row names them:
+	// the chunk is not proposed.
+	ImportAfterUpload Point = "import.after_upload"
+	// ImportAfterPropose: the repository's committer has answered a chunk,
+	// and its packs are not yet adopted into the importing node's cache.
+	ImportAfterPropose Point = "import.after_propose"
+
+	// MirrorAfterBuild: a pull mirror's sync has fetched its source into its
+	// scratch and cut what arrived, and nothing of it is stored or proposed
+	// (internal/code/mirror).
+	MirrorAfterBuild Point = "mirror.after_build"
+	// MirrorAfterUpload: a sync's packs are stored, and no row names them.
+	MirrorAfterUpload Point = "mirror.after_upload"
+	// MirrorAfterPropose: the repository's committer has answered the sync,
+	// and its packs are not yet adopted.
+	MirrorAfterPropose Point = "mirror.after_propose"
 )
 
 // pushPath is the receive pipeline's points in the order a push reaches them.
@@ -272,6 +295,14 @@ var expungePath = []Point{ExpungeAfterBuild, ExpungeAfterBegin, ExpungeAfterResc
 // checkPath is a check's run's points in the order its runner reaches them:
 // its claim applied, before any box.
 var checkPath = []Point{CheckAfterClaim}
+
+// importPath is an import's points in the order its home reaches them: its
+// build, a chunk stored, the committer's answer to it.
+var importPath = []Point{ImportAfterBuild, ImportAfterUpload, ImportAfterPropose}
+
+// mirrorPath is a pull mirror's sync's points in the order its home reaches
+// them: its build, its packs stored, the committer's answer.
+var mirrorPath = []Point{MirrorAfterBuild, MirrorAfterUpload, MirrorAfterPropose}
 
 // landingPath is the push path's points the LANDING hits (internal/code/host's
 // land), in its order: an engine write lands as a relayed push does, so a write
@@ -325,21 +356,32 @@ func ExpungePath() []Point { return slices.Clone(expungePath) }
 // [PushPath]'s reason.
 func CheckPath() []Point { return slices.Clone(checkPath) }
 
+// ImportPath is an import's points in the order its home reaches them, every
+// one hit by internal/code/mirror. A fresh copy at every call, for
+// [PushPath]'s reason.
+func ImportPath() []Point { return slices.Clone(importPath) }
+
+// MirrorPath is a pull mirror's sync's points in the order its home reaches
+// them, every one hit by internal/code/mirror. A fresh copy at every call, for
+// [PushPath]'s reason.
+func MirrorPath() []Point { return slices.Clone(mirrorPath) }
+
 // Points is the closed set: every point, the push path first in pipeline
 // order, then the sync's, the compaction's and the publication's, then the
 // engine write's own, the merge's and the chain's, then the expunge's, then a
-// check's run's. A fresh copy at every call, so no importer can rewrite what
-// [Point.Valid] accepts.
+// check's run's, then an import's and a pull mirror's sync's. A fresh copy at
+// every call, so no importer can rewrite what [Point.Valid] accepts.
 func Points() []Point {
 	return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath, mergePath, chainPath,
-		expungePath, checkPath)
+		expungePath, checkPath, importPath, mirrorPath)
 }
 
 // Valid reports whether p is one of [Points].
 func (p Point) Valid() bool {
 	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p) ||
 		slices.Contains(publishPath, p) || slices.Contains(writePath, p) || slices.Contains(mergePath, p) ||
-		slices.Contains(chainPath, p) || slices.Contains(expungePath, p) || slices.Contains(checkPath, p)
+		slices.Contains(chainPath, p) || slices.Contains(expungePath, p) || slices.Contains(checkPath, p) ||
+		slices.Contains(importPath, p) || slices.Contains(mirrorPath, p)
 }
 
 // readsOffset reports whether p is hit at an offset ([Action.At]): an upload's

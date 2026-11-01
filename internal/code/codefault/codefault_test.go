@@ -149,12 +149,31 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := codefault.CheckPath(); !slices.Equal(got, []codefault.Point{codefault.CheckAfterClaim}) {
 		t.Fatalf("CheckPath() = %v\nwant the claim applied, before any box", got)
 	}
+	// An import walks ImportPath() and a pull mirror's sync MirrorPath():
+	// each its build, a step's packs stored, the committer's answer to it.
+	importPoints := []codefault.Point{
+		codefault.ImportAfterBuild,   // fetched and cut in its scratch, nothing stored
+		codefault.ImportAfterUpload,  // a chunk's packs stored, no row names them
+		codefault.ImportAfterPropose, // the chunk answered, its packs not adopted
+	}
+	if got := codefault.ImportPath(); !slices.Equal(got, importPoints) {
+		t.Fatalf("ImportPath() = %v\nwant the order an import reaches them: %v", got, importPoints)
+	}
+	mirrorPoints := []codefault.Point{
+		codefault.MirrorAfterBuild,   // fetched and cut in its scratch, nothing stored
+		codefault.MirrorAfterUpload,  // the sync's packs stored, no row names them
+		codefault.MirrorAfterPropose, // the sync answered, its packs not adopted
+	}
+	if got := codefault.MirrorPath(); !slices.Equal(got, mirrorPoints) {
+		t.Fatalf("MirrorPath() = %v\nwant the order a sync reaches them: %v", got, mirrorPoints)
+	}
 	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints, compactPoints, publishPoints,
 		[]codefault.Point{codefault.WriteAfterBuild, codefault.MergeAfterBuild, codefault.ChainAfterBuild},
-		expungePoints, []codefault.Point{codefault.CheckAfterClaim}); !slices.Equal(got, wantAll) {
+		expungePoints, []codefault.Point{codefault.CheckAfterClaim}, importPoints,
+		mirrorPoints); !slices.Equal(got, wantAll) {
 		t.Fatalf("Points() = %v\nwant the push path, then the sync's, the compaction's and the publication's, "+
-			"then the write's own, the merge's and the chain's, then the expunge's, then a check's run's: %v",
-			got, wantAll)
+			"then the write's own, the merge's and the chain's, then the expunge's, then a check's run's, then "+
+			"an import's and a pull mirror's sync's: %v", got, wantAll)
 	}
 
 	seen := map[codefault.Point]bool{}

@@ -1399,6 +1399,15 @@ const (
 	// however many there are, and thirty-two PUTs hold 256 MiB of S3 part
 	// buffers on the home that builds them.
 	MaxImportPacks = MaxExpungeOutputs
+
+	// MirrorInterval is how often a PULL MIRROR is synced from its source by
+	// its home (internal/code/mirror): FIFTEEN MINUTES, the refresh P8's
+	// decisions promise a mirror (M6-D16) — a constant of its own, never the
+	// retention's interval, which answers another question. A source asked
+	// four times an hour keeps a mirror a quarter of an hour behind at the
+	// most, for one negotiation that brings nothing where nothing moved;
+	// `mirrors_due` lists a mirror once its last sync is this old.
+	MirrorInterval = 15 * time.Minute
 )
 
 // expungeBeginRows is the most rows a begin of n inputs into m outputs — its
