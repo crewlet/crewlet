@@ -137,6 +137,109 @@ func TestTheOperatorsProxyIsDialledAsItselfAndAnAddressItIsAskedForIsJudged(t *t
 	}
 }
 
+// A URL NAMING THE PROXY'S OWN ADDRESS, SENT DIRECT, IS JUDGED.
+//
+// The process sends the proxy's own host direct (as a `NO_PROXY` covering it
+// would), and a request through the proxy has already been dialled. A request
+// whose URL names the proxy's address is then dialled through the check and
+// refused, because the proxy is trusted for the request that chose it and
+// never by its address. The requests run side by side, so no order between
+// one request's choice and another's dial can widen the second.
+func TestAURLNamingTheProxysAddressDirectlyIsJudged(t *testing.T) {
+	t.Parallel()
+	var proxied atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.IsAbs() {
+			proxied.Add(1)
+			_, _ = io.WriteString(w, "proxied")
+			return
+		}
+		_, _ = io.WriteString(w, "reached the proxy directly")
+	}))
+	t.Cleanup(proxy.Close)
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct := func(r *http.Request) (*url.URL, error) {
+		if r.URL.Host == proxyURL.Host {
+			return nil, nil
+		}
+		return proxyURL, nil
+	}
+
+	g := newGuard(&net.Dialer{Timeout: 5 * time.Second}, Public)
+	client := guardedClient(t, g, direct)
+
+	const rounds = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, 2*rounds)
+	for range rounds {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			resp, err := client.Get("http://cdn.example.com/a.js")
+			if err != nil {
+				errs <- err
+				return
+			}
+			_ = resp.Body.Close()
+		}()
+		go func() {
+			defer wg.Done()
+			resp, err := client.Get(proxy.URL + "/status")
+			if err == nil {
+				body, _ := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				errs <- errors.New("GET of the proxy's own address answered " + strconv.Quote(string(body)) + ", want a refusal")
+				return
+			}
+			if !errors.Is(err, ErrNotPublic) {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if n := proxied.Load(); n != rounds {
+		t.Fatalf("the proxy carried %d requests, want %d", n, rounds)
+	}
+}
+
+// A GUARDED CLIENT REFUSES EVERYTHING WHERE THE GUARD CANNOT BE INSTALLED.
+//
+// [Customized] answers the shared client when the process's default transport
+// is not an [http.Transport]; a guarded client built there must not reach
+// anything, since nothing would judge where it connects.
+func TestAGuardedClientRefusesEverythingWhereTheGuardCannotBeInstalled(t *testing.T) {
+	t.Parallel()
+	var reached atomic.Bool
+	g := newGuard(&net.Dialer{Timeout: 5 * time.Second}, Public)
+	client := g.wrap(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		reached.Store(true)
+		return nil, errors.New("the uninstallable transport was used")
+	})})
+	resp, err := client.Get("http://cdn.example.com/a.js")
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("a client with no guard installed answered a request")
+	}
+	if !errors.Is(err, ErrUnguarded) {
+		t.Fatalf("the request failed with %v, want ErrUnguarded", err)
+	}
+	if reached.Load() {
+		t.Fatal("the request reached a transport the guard is not installed on")
+	}
+}
+
+// roundTripFunc is a transport the guard cannot be installed on.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
 // guardedClient is a client on a clone of the shared transport with g
 // installed over proxy, opening a connection per request so each one dials.
 func guardedClient(t *testing.T, g *guard, proxy func(*http.Request) (*url.URL, error)) *http.Client {
@@ -150,7 +253,7 @@ func guardedClient(t *testing.T, g *guard, proxy func(*http.Request) (*url.URL, 
 	tr.DisableKeepAlives = true
 	g.install(tr)
 	t.Cleanup(tr.CloseIdleConnections)
-	return &http.Client{Transport: tr, Timeout: 10 * time.Second}
+	return g.wrap(&http.Client{Transport: tr, Timeout: 10 * time.Second})
 }
 
 // fakeDNS serves answer over UDP on loopback until the test ends, and answers

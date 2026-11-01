@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -61,6 +61,20 @@ const (
 // guess a rebinding answer defeats. An operator whose proxy reaches internal
 // addresses holds the proxy to this rule; [ErrNotPublic] cannot be its wall.
 //
+// THE PROXY IS TRUSTED FOR THE REQUEST THAT CHOSE IT, never by its address.
+// Each request is marked on its way into the transport, and only a dial for a
+// request the transport sent through a proxy, to that proxy's address, skips
+// the check. A URL that names the proxy's own address on a host the process
+// sends direct (`NO_PROXY`) is dialled through the check like any other, and
+// no request's choice can widen another's.
+//
+// # It fails closed
+//
+// A process whose default transport is not an [http.Transport] (a test harness
+// or an instrumented build) has nothing the guard can be installed on, and
+// [Customized] answers the shared client there. A guarded client never does:
+// it refuses every request with [ErrUnguarded] instead.
+//
 // # What it is not for
 //
 // An address the OPERATOR configured (an MCP server's url, a webhook sink, a
@@ -68,8 +82,13 @@ const (
 // address there is a deployment the operator chose, and refusing it would
 // break the deployments the docs describe.
 func Guarded(timeout time.Duration) *http.Client {
-	return Customized(timeout, newGuard(&net.Dialer{Timeout: guardDialTimeout, KeepAlive: guardKeepAlive}, Public).install)
+	g := newGuard(&net.Dialer{Timeout: guardDialTimeout, KeepAlive: guardKeepAlive}, Public)
+	return g.wrap(Customized(timeout, g.install))
 }
+
+// ErrUnguarded is a guarded client's answer to every request in a process
+// whose default transport the guard cannot be installed on.
+var ErrUnguarded = errors.New("httpx: the public-address guard could not be installed on this process's transport")
 
 // guard is the dialer behind [Guarded].
 type guard struct {
@@ -81,15 +100,12 @@ type guard struct {
 	// this package's own tests, which stand a listener on loopback and need
 	// an admitted address to reach it.
 	admit func(netip.Addr) bool
-
-	mu      sync.Mutex
-	proxies map[string]bool
 }
 
 // newGuard builds the dialer, d's settings shared by both of its halves.
 func newGuard(d *net.Dialer, admit func(netip.Addr) bool) *guard {
 	plain, checked := *d, *d
-	g := &guard{plain: &plain, checked: &checked, admit: admit, proxies: map[string]bool{}}
+	g := &guard{plain: &plain, checked: &checked, admit: admit}
 	checked.Control, checked.ControlContext = nil, g.control
 	return g
 }
@@ -109,10 +125,65 @@ func (g *guard) install(t *http.Transport) {
 		if err := g.judgeTarget(r.URL); err != nil {
 			return nil, err
 		}
-		g.trust(u)
+		if rt, ok := r.Context().Value(routeKey{}).(*route); ok {
+			rt.via(proxyAddr(u))
+		}
 		return u, nil
 	}
 	t.DialContext = g.dial
+}
+
+// wrap finishes a client [Customized] built with [guard.install]: each request
+// is marked so a dial knows the proxy its own request chose, and a client
+// whose transport the guard could not be installed on refuses everything.
+func (g *guard) wrap(c *http.Client) *http.Client {
+	t, ok := c.Transport.(*http.Transport)
+	if !ok {
+		c.Transport = refusing{}
+		return c
+	}
+	c.Transport = marking{t}
+	return c
+}
+
+// routeKey is the context key a request's [route] travels under.
+type routeKey struct{}
+
+// route is one request's way out: the address of the proxy the transport
+// chose for it, empty when it goes direct.
+//
+// The transport asks for the proxy before it dials and dials under the
+// request's own context values, so the dial reads what the same request's
+// choice wrote, and nothing another request chose.
+type route struct{ proxy atomic.Pointer[string] }
+
+func (r *route) via(addr string) { r.proxy.Store(&addr) }
+
+func (r *route) proxied(addr string) bool {
+	p := r.proxy.Load()
+	return p != nil && *p == addr
+}
+
+// marking is the guarded transport: every request enters it with a fresh
+// [route].
+type marking struct{ t *http.Transport }
+
+func (m marking) RoundTrip(r *http.Request) (*http.Response, error) {
+	return m.t.RoundTrip(r.WithContext(context.WithValue(r.Context(), routeKey{}, new(route))))
+}
+
+// CloseIdleConnections lets [http.Client.CloseIdleConnections] reach the pool.
+func (m marking) CloseIdleConnections() { m.t.CloseIdleConnections() }
+
+// refusing is a guarded client's transport where the guard has nothing to be
+// installed on.
+type refusing struct{}
+
+func (refusing) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Body != nil {
+		_ = r.Body.Close()
+	}
+	return nil, ErrUnguarded
 }
 
 // judgeTarget refuses a target a proxy would be asked for when the URL writes
@@ -125,31 +196,28 @@ func (g *guard) judgeTarget(u *url.URL) error {
 	return nil
 }
 
-// trust records a proxy the transport chose, by the address it will dial.
-func (g *guard) trust(u *url.URL) {
-	host := u.Host
-	if u.Port() == "" {
-		port := "80"
-		switch u.Scheme {
-		case "https":
-			port = "443"
-		case "socks5", "socks5h":
-			port = "1080"
-		}
-		host = net.JoinHostPort(u.Hostname(), port)
+// proxyAddr is the address the transport dials for the proxy u, spelled as it
+// spells it: the host and the scheme's port when u names none. A spelling that
+// differs (a host outside ASCII, which the transport converts) only sends the
+// proxy's dial through the check, so it cannot widen anything.
+func proxyAddr(u *url.URL) string {
+	if u.Port() != "" {
+		return u.Host
 	}
-	g.mu.Lock()
-	g.proxies[host] = true
-	g.mu.Unlock()
+	port := "80"
+	switch u.Scheme {
+	case "https":
+		port = "443"
+	case "socks5", "socks5h":
+		port = "1080"
+	}
+	return net.JoinHostPort(u.Hostname(), port)
 }
 
-// dial dials a proxy the transport chose as itself and everything else
-// through the checked dialer.
+// dial dials the proxy a request's transport chose as itself and everything
+// else through the checked dialer.
 func (g *guard) dial(ctx context.Context, network, addr string) (net.Conn, error) {
-	g.mu.Lock()
-	proxied := g.proxies[addr]
-	g.mu.Unlock()
-	if proxied {
+	if rt, ok := ctx.Value(routeKey{}).(*route); ok && rt.proxied(addr) {
 		return g.plain.DialContext(ctx, network, addr)
 	}
 	return g.checked.DialContext(ctx, network, addr)
