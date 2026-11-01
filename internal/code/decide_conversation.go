@@ -820,7 +820,22 @@ func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker st
 		return d.refuse(ConversationRefusalUnknownRevision, fmt.Sprintf("%s is at revision %d, and the review "+
 			"judges revision %d: read the change again", named, row.revision, r.Revision))
 	}
+	// THE REVIEWER'S STANDING FINDINGS FIRST, in one walk, which is every
+	// finding a review may carry: a carried id among them is its own and
+	// standing, and only one that is not is read by its key, to word its
+	// refusal — never MaxStandingFindings point reads every round.
+	all, err := standingFindings(ctx, tx, row.id, asker, kind)
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	own := make(map[string]bool, len(all))
+	for _, f := range all {
+		own[f.id] = true
+	}
 	for _, id := range r.Carries {
+		if own[id] {
+			continue
+		}
 		f, found, err := findingIn(ctx, tx, id)
 		if err != nil {
 			return conversationDecision{}, err
@@ -836,12 +851,11 @@ func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker st
 			return d.refuse(ConversationRefusalFindingGone, fmt.Sprintf("finding %s is %s: it no longer stands, "+
 				"so no review carries it", id, f.state))
 		}
+		return conversationDecision{}, fmt.Errorf("code: finding %s stands, %s's own, on %s, and %s's standing "+
+			"findings left it out: standingStates and FindingState.Stands disagree", id, asker, row.id, asker)
 	}
-	standing, superseded, err := supersededBy(ctx, tx, row.id, asker, kind, r)
-	if err != nil {
-		return conversationDecision{}, err
-	}
-	if after := standing - len(superseded) + len(r.Findings); after > MaxStandingFindings {
+	superseded := supersededAmong(all, r)
+	if after := len(all) - len(superseded) + len(r.Findings); after > MaxStandingFindings {
 		return d.refuse(ConversationRefusalTooManyFindings, fmt.Sprintf("the review would leave %s %d standing "+
 			"findings on %s, past the %d one reviewer keeps (MaxStandingFindings): dismiss some, or review a "+
 			"later revision, which supersedes those it does not carry", grant.who(), after, named,
@@ -874,12 +888,18 @@ func decideFindingResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, 
 	if err != nil {
 		return conversationDecision{}, err
 	}
+	// EVERY FINDING IT NAMES READ IN ONE STATEMENT, driven from their list.
+	ids := make([]string, len(fr.Findings))
+	for i, a := range fr.Findings {
+		ids[i] = a.FindingID
+	}
+	held, err := findingsAmong(ctx, tx, ids)
+	if err != nil {
+		return conversationDecision{}, err
+	}
 	moved := 0
 	for _, a := range fr.Findings {
-		f, found, err := findingIn(ctx, tx, a.FindingID)
-		if err != nil {
-			return conversationDecision{}, err
-		}
+		f, found := held[a.FindingID]
 		switch {
 		case !found || f.changeID != row.id:
 			return d.refuse(ConversationRefusalFindingGone, fmt.Sprintf("%s holds no finding %s", named,
@@ -922,13 +942,19 @@ func decideFindingResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, 
 // it judges that it does not carry — a review of the same revision supersedes
 // nothing, since two reviews of one revision are one reviewer's two passes over
 // it. The decide and the apply read the same rows by the same rule.
-func supersededBy(ctx context.Context, tx *sql.Tx, changeID, raiser string, kind PartyKind, r Review) (int,
+func supersededBy(ctx context.Context, tx queryer, changeID, raiser string, kind PartyKind, r Review) (int,
 	[]standingFinding, error) {
 
 	all, err := standingFindings(ctx, tx, changeID, raiser, kind)
 	if err != nil {
 		return 0, nil, err
 	}
+	return len(all), supersededAmong(all, r), nil
+}
+
+// supersededAmong is which of a raiser's standing findings all review
+// supersedes ([supersededBy]).
+func supersededAmong(all []standingFinding, r Review) []standingFinding {
 	// A SET OF WHAT IT CARRIES: up to MaxStandingFindings against as many
 	// standing, which a scan of the list for each would make a million
 	// comparisons of a decide and an apply.
@@ -942,7 +968,7 @@ func supersededBy(ctx context.Context, tx *sql.Tx, changeID, raiser string, kind
 			out = append(out, f)
 		}
 	}
-	return len(all), out, nil
+	return out
 }
 
 // standingFinding is one finding of a raiser's still standing, as a review's
@@ -958,7 +984,7 @@ type standingFinding struct {
 // seek of code_findings_raiser_idx a standing state: at most
 // [MaxStandingFindings] rows, which every review that would add past it is
 // refused.
-func standingFindings(ctx context.Context, tx *sql.Tx, changeID, raiser string, kind PartyKind) (
+func standingFindings(ctx context.Context, tx queryer, changeID, raiser string, kind PartyKind) (
 	[]standingFinding, error) {
 
 	rows, err := tx.QueryContext(ctx, standingFindingsSQL, changeID, raiser, string(kind), standingStates)
@@ -987,6 +1013,32 @@ type findingRow struct {
 	revision     int64
 	severity     Severity
 	state        FindingState
+}
+
+// findingsAmong reads the findings ids names, by id — one statement driven from
+// their list, a seek of the findings' key an id; an id no finding has is not
+// among them.
+func findingsAmong(ctx context.Context, tx queryer, ids []string) (map[string]findingRow, error) {
+	list, err := jsonList(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, findingsAmongSQL, list)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %d findings: %w", len(ids), err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]findingRow, len(ids))
+	for rows.Next() {
+		var f findingRow
+		var kind, severity, state string
+		if err := rows.Scan(&f.id, &f.changeID, &f.raiser, &kind, &f.revision, &severity, &state); err != nil {
+			return nil, fmt.Errorf("code: read %d findings: %w", len(ids), err)
+		}
+		f.raiserKind, f.severity, f.state = PartyKind(kind), Severity(severity), FindingState(state)
+		out[f.id] = f
+	}
+	return out, rows.Err()
 }
 
 // findingIn reads the finding id names, and false where no finding has it.
@@ -1400,6 +1452,10 @@ const (
 	// dismissed ones of every earlier revision among them.
 	findingSQL = `SELECT id, change_id, raiser, raiser_kind, revision, severity, state
 		FROM code_findings WHERE id = ?`
+	// findingsAmongSQL is the findings a list names, driven from the list,
+	// one seek of the findings' key an id.
+	findingsAmongSQL = `SELECT f.id, f.change_id, f.raiser, f.raiser_kind, f.revision, f.severity, f.state
+		FROM json_each(?) AS j CROSS JOIN code_findings AS f WHERE f.id = CAST(j.value AS TEXT)`
 	standingFindingsSQL = `SELECT f.id, f.revision, f.severity, f.state
 		FROM json_each(?4) AS j CROSS JOIN code_findings AS f
 		WHERE f.change_id = ?1 AND f.raiser = ?2 AND f.state = CAST(j.value AS TEXT) AND f.raiser_kind = ?3`

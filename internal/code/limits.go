@@ -574,7 +574,12 @@ const (
 	// what one review's record rewrites when it supersedes them — 1 024
 	// narrow rows beside its own 64 findings and their texts, a third of
 	// [MaxRecordRows] — so a review is always one record however long a
-	// reviewer has followed a change.
+	// reviewer has followed a change. What that costs the decide and the
+	// apply together at the bound — a reviewer holding all of them, carrying
+	// half, superseding the rest and raising MaxFindingsPerReview more — is
+	// 24 ms (BenchmarkTheWidestReview, -benchtime 20x, one run, two cores of
+	// the test runner): its apply in the domain's one applier on every data
+	// node, its decide once in each compare-and-set round of its publish.
 	MaxStandingFindings = 1 << 10
 
 	// MaxRoutingBytes is the room every record of a change keeps for the

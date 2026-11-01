@@ -643,8 +643,8 @@ func registeredStatements() map[string]statement {
 		// the reviewers a write names, driven from the list of their handles,
 		// one seek of the key a handle; how many reviewers a change asks,
 		// counted over the reviewers' key; the change's repository, which the
-		// apply holds a record to; a withdrawn ask and a resolved thread
-		// written back by their keys.
+		// apply holds a record to; and a resolved thread written back by its
+		// key (an ask withdrawn is moved with the rest, "move asks").
 		"conversation":        {conversationSQL, []any{"repo-1-change-000001"}, []string{conversationKey + " (change_id=?)"}},
 		"comment":             {commentSQL, []any{"comment-1"}, []string{commentKey + " (id=?)"}},
 		"change's repository": {changeRepoSQL, []any{"repo-1-change-000001"}, []string{changeKey + " (id=?)"}},
@@ -654,8 +654,6 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", reviewerKey + " (change_id=? AND reviewer=?)"}},
 		"reviewers asked": {reviewersAskedSQL, []any{"repo-1-change-000001", MaxReviewersPerChange + 1},
 			[]string{reviewerKey + " (change_id=?)"}},
-		"withdraw reviewer": {withdrawReviewerSQL, []any{string(ReviewerWithdrawn), 3000, "repo-1-change-000001",
-			"seat-0"}, []string{reviewerKey + " (change_id=? AND reviewer=?)"}},
 		// A CHANGE'S ASKS MOVED: those in one state, by the reviewers' key's
 		// prefix — a settling's decide; a list of them moved from one state
 		// to another, driven from the list of their handles, one seek of the
@@ -671,12 +669,16 @@ func registeredStatements() map[string]statement {
 		"resolve thread": {resolveThreadSQL, []any{true, "seat-0", "agent", "comment-1", "repo-1-change-000001"},
 			[]string{commentKey + " (id=?)"}},
 		// A CHANGE'S REVIEWS AND FINDINGS: a finding by its key — a decide's
-		// and an answer's; a raiser's standing findings, driven from the list
-		// of the standing states, one seek of the raiser's index a state; a
+		// and an answer's; the findings an answer names, driven from the list
+		// of their ids, one seek of the key an id; a raiser's standing
+		// findings, driven from the list of the standing states, one seek of
+		// the raiser's index a state; a
 		// reviewer's standing verdict, by their participant row's key; and a
 		// review's supersession, driven from the list of the findings' ids,
 		// one seek of the key an id.
 		"finding": {findingSQL, []any{"finding-1"}, []string{findingKey + " (id=?)"}},
+		"findings among": {findingsAmongSQL, []any{`["finding-1","finding-2"]`},
+			[]string{"SCAN json_each AS j", findingKey + " (id=?)"}},
 		"answer finding": {answerFindingSQL, []any{string(FindingResolved), "", "seat-0", "agent", "", 3000,
 			"finding-1"}, []string{findingKey + " (id=?)"}},
 		"standing findings": {standingFindingsSQL, []any{"repo-1-change-000001", "seat-0", "agent", standingStates},
