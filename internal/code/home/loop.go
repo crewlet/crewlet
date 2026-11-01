@@ -419,12 +419,22 @@ func (l *Loop) passes() {
 // ensureWatch begins each filter's watch where none runs, and leaves none
 // where it cannot begin — the backstop passes the work meanwhile, and the
 // next pass asks again.
+//
+// DECIDED BY stopped, UNDER mu, NEVER BY THE LIFE'S END: Stop sets stopped and
+// takes the watches under mu, and ends the life only after it lets mu go, so a
+// watch that began in between would find the life still running, and stored
+// once Stop had read the watches, nothing would ever stop it — a consumer of
+// the code log, and its supervision, calling a stopped loop until the queue's
+// connection closed.
 func (l *Loop) ensureWatch() {
 	for i, filter := range nudgeFilters {
 		l.mu.Lock()
-		running := l.watches[i] != nil
+		running, stopped := l.watches[i] != nil, l.stopped
 		l.mu.Unlock()
-		if running || l.life.Err() != nil {
+		if stopped {
+			return
+		}
+		if running {
 			continue
 		}
 		w, err := l.o.Nudges.Watch(l.life, filter, Nudged{Subject: l.nudged, Gap: l.gapped})
@@ -436,9 +446,9 @@ func (l *Loop) ensureWatch() {
 			continue
 		}
 		l.mu.Lock()
-		if l.life.Err() != nil {
-			// STOPPED WHILE IT BEGAN: Stop read no watch to stop, so this
-			// one is stopped here.
+		if l.stopped {
+			// STOPPED WHILE IT BEGAN: Stop took the watches before this one
+			// was stored, so it is stopped here.
 			l.mu.Unlock()
 			w.Stop()
 			return

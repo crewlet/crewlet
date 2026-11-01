@@ -26,6 +26,18 @@ func SetConcurrency(l *Loop, n int) { l.turnsAtOnce = n }
 // than [MergeabilityPerPass] of them. Before Start.
 func SetMergesPerPass(l *Loop, n int) { l.changes.rechecks.perPass = n }
 
+// BeginStop is the first half of l's Stop and nothing more: stopped set
+// under the loop's mutex and its watches taken, its life NOT yet ended — the
+// window between Stop letting the mutex go and ending the life, which a case
+// cannot otherwise reach, held open so the case proves what a watch that
+// begins inside it does. The case's own Stop ends the rest.
+func BeginStop(l *Loop) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.stopped = true
+	l.watches = make([]Watching, len(nudgeFilters))
+}
+
 // CheckWork is l's check work's turn of repoID, its rows read at floor: what
 // a nudge or a pass schedules for the checks worker, run on the case's own
 // goroutine.

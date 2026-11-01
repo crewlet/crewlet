@@ -662,6 +662,73 @@ func TestALostNudgeIsCaughtByTheBackstop(t *testing.T) {
 	}
 }
 
+// A WATCH THAT BEGINS AS THE LOOP STOPS IS STOPPED: a watch of the code log
+// that returns from its beginning once the loop's Stop has taken the watches
+// — before Stop has ended the loop's life, the window the case holds open
+// (home.BeginStop) — is stopped by the loop at once, before the pass that
+// follows reads its listing, never stored where nothing would stop it; and no
+// further watch is begun.
+//
+// Mutation: decide by the life's end rather than by stopped, and the watch is
+// stored, still running when the pass reads.
+func TestAWatchThatBeginsAsTheLoopStopsIsStopped(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	n := &slowWatch{entered: make(chan struct{}), release: make(chan struct{})}
+	l, _ := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: &placement{}, node: "node-a"},
+		Nudges: n, Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t},
+		NodeID: "node-a"}, time.Hour)
+	select {
+	case <-n.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the loop never began its watch")
+	}
+	home.BeginStop(l)
+	close(n.release)
+	e.waitReads(t, 1)
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if len(n.begun) != 1 || !n.begun[0].stopped {
+		t.Fatalf("the loop began %d watches, the first stopped %t once its pass read; want the one watch "+
+			"that began as the loop stopped, stopped", len(n.begun), len(n.begun) > 0 && n.begun[0].stopped)
+	}
+}
+
+// slowWatch is a code log whose first watch returns only once the case
+// releases it, saying when it is entered; every watch it hands out records
+// whether it was stopped.
+type slowWatch struct {
+	mu      sync.Mutex
+	begun   []*stopWatch
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (n *slowWatch) Watch(context.Context, string, home.Nudged) (home.Watching, error) {
+	n.mu.Lock()
+	first := len(n.begun) == 0
+	w := &stopWatch{n: n}
+	n.begun = append(n.begun, w)
+	n.mu.Unlock()
+	if first {
+		close(n.entered)
+		<-n.release
+	}
+	return w, nil
+}
+
+// stopWatch is one watch of a slowWatch.
+type stopWatch struct {
+	n       *slowWatch
+	stopped bool
+}
+
+func (w *stopWatch) Stop() {
+	w.n.mu.Lock()
+	defer w.n.mu.Unlock()
+	w.stopped = true
+}
+
 // A CHANGE WHOSE HEAD IS IN ITS TARGET IS LANDED: its facts read, finding the
 // head inside the target's tip — the target moved past it — the home asks the
 // committer for the landing, at the change's revision and head and the tip it
