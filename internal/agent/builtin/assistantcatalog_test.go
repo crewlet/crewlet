@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -142,6 +143,40 @@ func TestACuratedChatWriteTakesWhatTheRoomTakes(t *testing.T) {
 		if got := bound(c.tool, c.arg, c.key); got != c.want {
 			t.Errorf("%s holds %s to %s %v, and the room takes %d", c.tool, c.arg, c.key,
 				got, c.want)
+		}
+	}
+}
+
+// THE ASSISTANT SAYS WHO A CHAT MESSAGE WAKES, AND THE CAP IT STATES IS THE
+// ROOM'S.
+//
+// A model left to guess told a person the agents in a room "read room
+// messages on their next turn", which is false: an agent that is not woken
+// never reads the message. So the tool that posts and the tool that reads a
+// room both state the routing, and the number of agents one `@channel` asks
+// is a copy of the domain's cap the catalogue may not import, held to it
+// here. Mutation: drop the paragraph from either tool, or move
+// chatlet.MaxCollectiveRecipients without the catalogue's copy, and this
+// fails.
+func TestTheAssistantSaysWhoAChatMessageWakes(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"post_chat_message", "get_chat_room"} {
+		tool, ok := catalog.Lookup(name)
+		if !ok {
+			t.Fatalf("the catalogue has no %s", name)
+		}
+		for _, said := range []string{
+			"mention (@handle) wakes the agent",
+			"@channel asks every agent in the room to answer, up to " +
+				strconv.Itoa(chatlet.MaxCollectiveRecipients),
+			"wakes nobody else wakes one agent to answer it",
+			"most senior agent member",
+			"woken as news",
+			"never reads the message later",
+		} {
+			if !strings.Contains(tool.Description, said) {
+				t.Errorf("%s does not say %q:\n%s", name, said, tool.Description)
+			}
 		}
 	}
 }
