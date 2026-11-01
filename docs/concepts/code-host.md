@@ -1548,7 +1548,8 @@ answer that holds every record the code log had committed when it was asked.
   whoever asks, a seat included. It reads the changes whose stored readiness
   waits on a person, newest first, and keeps those whose readiness the read
   judges itself still does; a change that came to wait on one since its last
-  record is listed once its home refreshes it, a minute later at the most.
+  record is listed once its home refreshes it, a minute later at the most. A
+  change that closed or merged stores no answer, so it is never read here.
 - A need lists **live** changes alone, and is refused beside a closed or
   merged state.
 - **One change**, by its number on its repository — `web!42` — with its row
@@ -5793,7 +5794,11 @@ nudge names, so its refresh comes at the home's next pass, a minute later at
 the most. A refresh whose readiness is judged at its inputs already, or of a
 change whose head revision its home has not merged yet, is refused
 `superseded`, recorded nowhere. The chart moves no version: a stored answer
-is as of the chart that judged it, until the change's next record.
+is as of the chart that judged it, until the change's next record. A change
+that closes or merges keeps no answer: the record that ends it — a close, a
+landing, a merge, a push that merges it or deletes its source — clears it in
+the same apply, and a mergeability that lands after it stores none, since an
+ended change is ready for nobody and waits on nobody.
 
 ### The merge gate
 

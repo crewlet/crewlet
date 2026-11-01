@@ -479,12 +479,32 @@ func (b *changeBook) alone(e PushEntry) (rows, moved int) {
 
 // rowCount is the rows the book's moves make the record's apply write: every
 // change it moved or opened, every revision and every author it added, the
-// description of every change it opened that carries one, and the live queue
-// entry of every change it moved that holds one. The repository's own row,
-// whose next number an open moves, is the record's already ([recordRows]).
+// description of every change it opened that carries one, the live queue
+// entry of every change it moved that holds one, and the stored readiness of
+// every change it merged or closed — a row at most each, which the apply
+// writes only where the row holds an answer ([clearReadiness]), and which the
+// book counts whether or not, since its rows hold no mergeability. The
+// repository's own row, whose next number an open moves, is the record's
+// already ([recordRows]).
 func (b *changeBook) rowCount() int {
 	w := &b.writes
-	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + b.queuedMoved()
+	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + b.queuedMoved() + len(b.ended())
+}
+
+// ended is the changes the book's moves merged or closed — none of those it
+// opened, which no record has judged the readiness of yet — whose stored
+// readiness the apply clears ([clearReadiness]).
+func (b *changeBook) ended() []string {
+	var ids []string
+	for _, id := range b.writes.touched {
+		if b.writes.opened[id] {
+			continue
+		}
+		if kind := pushWrite(b.rows[id], false); kind == changeMerged || kind == changeStateMoved {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // queuedMoved is how many of the changes the book's moves reached hold a live

@@ -731,3 +731,97 @@ func stringLiterals(f *ast.File) []string {
 	})
 	return out
 }
+
+// AN ENDED CHANGE WAITS ON NOBODY: a change whose stored readiness waits on a
+// person — founder alone is asked — leaves code_mergeability_waits_idx in the
+// same apply as the record that ends it, whichever that is: a close, its home's
+// landing, a push that sets its target to its head, a push that deletes its
+// source; and a mergeability decided while it was live that lands after its
+// close stores no answer either. So the index holds the changes waiting now,
+// and needs=person reads one page and finds nothing, rather than walking every
+// change that ever ended while waiting, each read and dropped.
+//
+// Mutations: leave the close's clear out of applyChangeWrite → the closed and
+// landed cases keep their row; leave it out of the push book → the push cases
+// keep theirs; store the late record's answer as stamped → the late case keeps
+// its row.
+func TestAnEndedChangeWaitsOnNobody(t *testing.T) {
+	t.Parallel()
+	closeIt := func(t *testing.T, n *node, repo, change string) {
+		t.Helper()
+		c, _ := committerOn(t, n, n.pub)
+		res, err := c.ProposeChange(t.Context(), closing(repo, change, dev,
+			int64(n.count(`SELECT version FROM code_changes WHERE id = ?`, change))))
+		requireChanged(t, res, err)
+	}
+	for name, end := range map[string]func(t *testing.T, n *node, repo, change string){
+		"closed": closeIt,
+		"landed by its home": func(t *testing.T, n *node, repo, change string) {
+			t.Helper()
+			n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("M"))))
+			chartless, _ := committerOn(t, n, n.pub, func(o *code.CommitterOptions) {
+				o.SeatRules = func() (code.SeatRules, bool) { return code.SeatRules{}, false }
+			})
+			res, err := chartless.ProposeChange(t.Context(), landing(repo, change, 1, oidOf("B"), mainRef,
+				oidOf("M")))
+			if err != nil || res.Outcome != statelog.OutcomeApplied {
+				t.Fatalf("the landing answered %+v, %v; want applied", res, err)
+			}
+		},
+		"merged by a push setting its target to its head": func(t *testing.T, n *node, repo, _ string) {
+			t.Helper()
+			n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("B"))))
+		},
+		"closed by a push deleting its source": func(t *testing.T, n *node, repo, _ string) {
+			t.Helper()
+			n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(featureRef, oidOf("B"), code.ZeroOID)))
+		},
+		"closed before a mergeability judged while it was live lands": func(t *testing.T, n *node, repo,
+			change string) {
+
+			t.Helper()
+			closeIt(t, n, repo, change)
+			// THE HOME'S RECORD, decided over the live change and appended
+			// after its close: the two are on two subjects, which no
+			// arbitration orders against each other.
+			late := *n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean).Mergeability
+			late.ChangeVersion, late.ReadinessVersion, late.WaitsPerson = 1, 3, true
+			if _, err := n.publish(code.ChangeSubject(change), code.OpMergeability,
+				code.Scope{code.RepoPath(repo), code.ChangePath(change)}, late); err != nil {
+				t.Fatalf("publish the late mergeability: %v", err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			n := newNode(t)
+			n.chart = testChart()
+			repo, change := discussed(t, n, "web")
+			w, _ := writerOn(t, n, n.pub)
+			converse(t, w, asking(repo, change, dev, "founder"))
+			converse(t, w, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
+			converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+			if stored := n.storedReadiness(change); !stored.waitsPerson {
+				t.Fatalf("the merge stored %+v, want waiting on a person: founder alone is asked", stored)
+			}
+
+			end(t, n, repo, change)
+			if state := n.count(`SELECT COUNT(*) FROM code_changes WHERE id = ? AND state IN ('closed', 'merged')`,
+				change); state != 1 {
+				t.Fatal("the change is still live: the case ended nothing")
+			}
+			if stored := n.storedReadiness(change); stored.ready || stored.waitsPerson {
+				t.Fatalf("the ended change stores %+v, want ready for nobody and waiting on nobody", stored)
+			}
+			if waiting := n.count(`SELECT COUNT(*) FROM code_mergeability INDEXED BY code_mergeability_waits_idx
+				WHERE waits_person = 1`); waiting != 0 {
+				t.Fatalf("code_mergeability_waits_idx holds %d changes, want none: the one there has ended",
+					waiting)
+			}
+			if got, pages := listChanges(t, n, code.ReadQuery{Asker: ada, Needs: code.NeedPerson}, 0); len(got) != 0 ||
+				pages != 1 {
+				t.Fatalf("needs=person lists %q over %d pages, want nothing on one page", got, pages)
+			}
+		})
+	}
+}

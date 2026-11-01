@@ -266,6 +266,17 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 		return 0, fmt.Errorf("code: merge the changes the landing at %s lands: %w", at.position, err)
 	}
 	rows := len(merged)
+	// AND THEIR STORED READINESS CLEARED, one statement for them all: a
+	// merged change waits on nobody ([clearReadiness]).
+	ids := make([]string, len(merged))
+	for i, row := range merged {
+		ids[i] = row.id
+	}
+	cleared, err := clearReadiness(ctx, tx, ids)
+	if err != nil {
+		return 0, fmt.Errorf("%w (the landing at %s)", err, at.position)
+	}
+	rows += cleared
 
 	// 2 EVERY ENTRY LANDED, and a train's landed candidates removed.
 	for _, e := range l.Entries {

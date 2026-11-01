@@ -108,7 +108,8 @@ func advanceGreen(ctx context.Context, tx store.Execer, at applyContext, repoID,
 //     change's head) and its close on a deleted source would otherwise take
 //     the change for live, and merge or close it again.
 //  2. Its live queue entry ended, where a person's override merged a queued
-//     change directly: dequeued, as a landing of the change ends its entry.
+//     change directly: dequeued, as a landing of the change ends its entry;
+//     and its stored readiness cleared ([clearReadiness]).
 //  3. The target's landing row, where a rule protects it, and its green row,
 //     where its gate requires no check besides — what the decide stamped
 //     ([Merge.Protected], [Merge.Green]).
@@ -179,12 +180,18 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	}
 	rows := 1
 
-	// 2 ITS LIVE QUEUE ENTRY, where it holds one.
+	// 2 ITS LIVE QUEUE ENTRY, where it holds one, and its stored readiness,
+	// where it holds an answer: a merged change waits on nobody.
 	ended, err := endLiveEntryOf(ctx, tx, at, m.ChangeID, QueueDequeued, EndMerged)
 	if err != nil {
 		return 0, err
 	}
 	rows += ended
+	cleared, err := clearReadiness(ctx, tx, []string{m.ChangeID})
+	if err != nil {
+		return 0, fmt.Errorf("%w (the merge at %s)", err, at.position)
+	}
+	rows += cleared
 
 	// 3 THE LANDING AND THE GREEN ROW, as the decide's snapshot judged the
 	// target.

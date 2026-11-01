@@ -58,9 +58,10 @@ func ejectDecidedRows(n int) int { return n + trainRows + 1 + queueHorizonRows }
 
 // landDecidedRows is the most rows a land of n entries makes its apply touch
 // of its OWN, beside the pushes it lands: each entry's change merged, its
-// entry landed and its landing row; the target's green row; its train's
-// landed candidates; and the queue's horizon.
-func landDecidedRows(n int) int { return 3*n + 1 + MaxQueueDepth + queueHorizonRows }
+// stored readiness cleared ([clearReadiness]), its entry landed and its
+// landing row; the target's green row; its train's landed candidates; and the
+// queue's horizon.
+func landDecidedRows(n int) int { return 4*n + 1 + MaxQueueDepth + queueHorizonRows }
 
 // landPushRows is the most rows a land's n pushes write before the changes
 // they move ([entryRows]): each its push row, the target's move and its

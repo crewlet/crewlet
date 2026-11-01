@@ -148,10 +148,13 @@ func (n *node) greenOf(repo, target string) (string, int64) {
 // the queue (merged_via queue, merged by ada, who queued it — the queue never
 // acts on its own account), main moved to the train's tip, ONE PUSH ROW `via
 // queue` naming ada's credential, the landing row green with main's green row
-// at its tip, the entry landed and the train's landed candidate gone.
+// at its tip, the entry landed and the train's landed candidate gone — and
+// the stored readiness its home's merge stamped ready cleared, since a merged
+// change is ready for nobody.
 //
-// Mutation: skip the re-proof (decide a landing without judging each entry's
-// gate) — the landing applies over the review asking for changes, red.
+// Mutations: skip the re-proof (decide a landing without judging each entry's
+// gate) — the landing applies over the review asking for changes, red; leave
+// the stored readiness out of the landing's apply → it still reads ready, red.
 func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -160,6 +163,10 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 	w, _ := writerOn(t, n, n.pub)
 	repo, change := queueRepo(t, n, c, "web")
 	ready(t, n, w, repo, change)
+	converse(t, w, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	if stored := n.storedReadiness(change); !stored.ready {
+		t.Fatalf("the home's merge stored %+v, want ready: approved, checked and merging cleanly", stored)
+	}
 	enqueue := enqueueing(repo, change, ada, oidOf("B"))
 	res, err := c.ProposeQueue(t.Context(), enqueue)
 	requireQueued(t, res, err, code.QueueWaiting, 1)
@@ -218,6 +225,9 @@ func TestALandingReprovesEveryEntrysGate(t *testing.T) {
 	}
 	if left := n.count(`SELECT COUNT(*) FROM code_candidates WHERE repo_id = ?`, repo); left != 0 {
 		t.Fatalf("%d candidates outlive the train their landing landed whole", left)
+	}
+	if stored := n.storedReadiness(change); stored.ready || stored.waitsPerson {
+		t.Fatalf("the landed change stores %+v, want ready for nobody and waiting on nobody", stored)
 	}
 }
 

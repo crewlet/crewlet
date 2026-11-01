@@ -94,9 +94,10 @@ import (
 //
 // code_mergeability, one row a change (replicated 0077, created again by 0078
 // with the readiness it stores and by 0089 with the checks position it was
-// judged at), written by the applier
-// (apply_mergeability.go) from the records on the change's own subject and
-// removed only with the change by its repository's purge. Its conflicted
+// judged at), written by the applier (apply_mergeability.go) from the records
+// on the change's own subject — its answer cleared by the record on the
+// repository's subject that closes or merges the change ([clearReadiness]) —
+// and removed only with the change by its repository's purge. Its conflicted
 // paths' bytes count in the change's conversation's text_bytes, as its
 // revisions' facts do, so a purge part weighs them by that one narrow row.
 

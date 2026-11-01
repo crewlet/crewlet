@@ -728,8 +728,10 @@ func registeredStatements() map[string]statement {
 			[]string{"code_changes_open_idx (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
 				mergeabilityKey + " (change_id=?)"}},
 		// A CHANGE'S MERGEABILITY: its row by its key, a decide's and an
-		// apply's, and a read's whole; and a refresh's readiness written
-		// back by the same key.
+		// apply's, and a read's whole; a refresh's readiness written back by
+		// the same key; and the readiness of the changes a record ended
+		// cleared, driven from the list of their ids, a seek of the key an
+		// element.
 		"mergeability": {mergeabilitySQL, []any{"repo-1-change-000001"},
 			[]string{mergeabilityKey + " (change_id=?)"}},
 		"mergeability row": {mergeabilityRowSQL, []any{"repo-1-change-000001"},
@@ -738,6 +740,8 @@ func registeredStatements() map[string]statement {
 			2, "refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
 		"keep mergeability": {keptMergeabilitySQL, []any{true, oid("t"), 6000, 7000, true, 5, 4, 5000,
 			"repo-1-change-000001", 2}, []string{mergeabilityKey + " (change_id=?)"}},
+		"clear readiness": {clearReadinessSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", mergeabilityKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		// THE POSITION OF A HEAD'S CHECKS a mergeability's decide stamps: every
 		// attempt at the commit for the change's target, a range of
 		// code_checks' key.

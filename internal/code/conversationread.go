@@ -67,7 +67,8 @@ import (
 // against its own chart, still waits on one, since a stored answer is as of
 // the record that stored it. A change that came to wait on a person since its
 // last record is listed once its home refreshes it — at the home's next pass,
-// a minute later at the most.
+// a minute later at the most. An ended change stores no answer
+// (clearReadiness), so the index holds the changes waiting now.
 //
 // # A part of one change
 //
