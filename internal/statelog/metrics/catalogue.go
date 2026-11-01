@@ -1738,14 +1738,21 @@ func Catalogue() []Instrument {
 			Attributes: []string{"dir", "outcome"},
 			Shows: "One attempt to bring a mirror level with the other host, " +
 				"by `dir` (`pull`: a pull mirror's sync from its source, run " +
-				"by its home every 15 minutes) and `outcome`: `synced`, a sync " +
-				"landed what the source moved; `current`, the source moved " +
-				"nothing; `failed`, the source unreachable, its credential " +
-				"refused, or a step refused or not seen applied — the mirror " +
-				"tried again a minute later, and longer after each failure in " +
-				"a row, up to its interval. A mirror whose source went away " +
-				"shows as `failed` four times an hour, every one with its " +
-				"`code_mirror_attempt_failed` line.",
+				"by its home every 15 minutes; `push`: a push mirror's push to " +
+				"its target, run by its home at most once a minute while the " +
+				"repository moves and every 15 minutes while it is idle) and " +
+				"`outcome`: `synced`, a sync landed what the source moved; " +
+				"`pushed`, a push moved refs at the target; `current`, the " +
+				"source moved nothing, or the target already held every " +
+				"covered ref as it should; `failed`, the other host " +
+				"unreachable, its credential refused, a ref it rejected, a " +
+				"push mirror's seat that no longer reads the repository, or a " +
+				"step refused or not seen applied — the mirror tried again a " +
+				"minute later, and longer after each failure in a row, up to " +
+				"its interval. A mirror whose other host went away shows as " +
+				"`failed` four times an hour, every one with its " +
+				"`code_mirror_attempt_failed` line, and raises " +
+				"`code_mirror_failing` once it has gone half an hour.",
 		},
 		{
 			Name: CodeCacheDroppingBytes, Kind: KindGauge, Unit: UnitBytes,

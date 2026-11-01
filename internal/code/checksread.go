@@ -279,7 +279,7 @@ func (q ReadQuery) validateChecksDue() error {
 		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_due read lists the repositories a home owes check work in, or "+
@@ -323,7 +323,7 @@ func (q ReadQuery) validateCheckBox() error {
 		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a check_box read reads the one attempt its key names, whole, and names "+
@@ -361,7 +361,7 @@ func (q ReadQuery) validateChecksQueued() error {
 		{"owner", q.Owner != ""}, {"work", q.Work != ""}, {"reviewer", q.Reviewer != ""},
 		{"needs", q.Needs != ""}, {"part", q.Part != ""}, {"changes_due", q.ChangesDue != nil},
 		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"expunge_tips", q.ExpungeTips != nil},
 		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},

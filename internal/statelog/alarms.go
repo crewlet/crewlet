@@ -381,6 +381,7 @@ const (
 	KindCodeChecksBacklog      Kind = "code_checks_backlog"
 	KindCodeMergeRateOver      Kind = "code_merge_rate_over_capacity"
 	KindCodeRefsNearLimit      Kind = "code_refs_near_limit"
+	KindCodeMirrorFailing      Kind = "code_mirror_failing"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -828,6 +829,29 @@ type Reading struct {
 	CodeRefsNearLimitRecent int
 	CodeRefsLimit           int
 	CodeRefsWindow          time.Duration
+
+	// CodeMirrorFailing is how many mirrors of repositories this node is
+	// home to — a pull mirror's syncs from its source, a push mirror's
+	// pushes to its target, each the git node that runs them — have not been
+	// brought level for longer than their own refresh promise:
+	// code.MirrorInterval, how often a home brings a mirror level, plus
+	// internal/code/mirror's AttemptDeadline, the grace an attempt in flight
+	// is given beyond it (internal/code/mirror's Mirrors.AlarmReading).
+	// CodeMirrorFailingRepo is the one failing longest, by its repository's
+	// name, and CodeMirrorFailingFor how long since it was last brought
+	// level — or since this node first tried it, where it never has been
+	// here.
+	//
+	// THE MIRROR'S OWN PROMISE IS THE THRESHOLD (ADR-0015): a mirror tried
+	// every interval and failing every time is exactly a mirror more than an
+	// interval and its grace behind, so the alarm fires at any count. Raised
+	// by the home alone, from its own memory of its attempts, so a home that
+	// moved stops counting what it no longer runs. All zero on a node that is
+	// home to no mirror, and on one whose every mirror was brought level
+	// within the promise.
+	CodeMirrorFailing     int
+	CodeMirrorFailingRepo string
+	CodeMirrorFailingFor  time.Duration
 }
 
 // Alarm is one condition currently true on this node.
@@ -1796,6 +1820,39 @@ var table = []rule{
 			"quarter hour; a node that cannot read it logs " +
 			"`code_refs_near_limit_unread`. See docs/concepts/code-host.md, " +
 			"\"The ref lifecycle\".",
+	},
+	{
+		// A mirror that has not been brought level for longer than its own
+		// refresh promise — the interval its home brings it level at, and
+		// the grace an attempt in flight is given — so the other host holds
+		// what the company published that long ago, or the repository what
+		// its source held. This framework imports no code-host package, so
+		// the home judges each mirror at the promise and the rule fires at
+		// any count (ADR-0015). A node's condition, raised by the home that
+		// runs the mirror and by no other node.
+		kind: KindCodeMirrorFailing,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d mirror(s) of repositories this node is home to have not been brought "+
+					"level for longer than their refresh (the longest: %s, %s)",
+					r.CodeMirrorFailing, r.CodeMirrorFailingRepo, spoken(r.CodeMirrorFailingFor)),
+				r.CodeMirrorFailing > 0
+		},
+		remedy: "Read the node's `code_mirror_attempt_failed` lines for the " +
+			"repository: each names the attempt (`sync` from a pull " +
+			"mirror's source, `push` to a push mirror's target) and why it " +
+			"failed. A host that " +
+			"cannot be reached, or whose address is private while Tier A's " +
+			"git.import_allow_private is off, is the network's or the " +
+			"configuration's to mend; a credential the other host refuses is " +
+			"the variable the mirror's `credential` names, set with `crewlet " +
+			"secrets set`; a ref the other host rejects is a protection or a " +
+			"hook there refusing a force-push or a deletion the mirror needs; " +
+			"a seat named by `as` that no longer reads the repository is " +
+			"refused before any push — name another in the repository's " +
+			"mirror_to. A mirror is tried a minute after a failure, longer " +
+			"after each one in a row, and at least once an interval, and the " +
+			"alarm clears once it is brought level. See docs/concepts/code-host.md, " +
+			"\"Mirrors and imports\".",
 	},
 }
 

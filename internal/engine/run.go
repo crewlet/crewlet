@@ -30,6 +30,7 @@ import (
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/code/mirror"
 	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/compact"
@@ -408,6 +409,12 @@ type Engine struct {
 	// hands the committer the code log's write authority as it is
 	// ([Engine.startNative]).
 	committerPublisher func(code.Publisher) code.Publisher
+
+	// mirrorSeams is Options.mirrorSeams, kept for the same reason: nil —
+	// every engine New builds outside this package's tests — builds a git
+	// node's mirrors with the one outbound dial and the wall clock
+	// ([Engine.buildMirrors]).
+	mirrorSeams func(mirror.Options) mirror.Options
 
 	// sandboxSeats are the seats whose sandbox control topic this node has
 	// attached, so a seat is attached exactly once however it came to be
@@ -1147,6 +1154,15 @@ type Options struct {
 	// queue, rather than race a burst against batches a healthy committer
 	// lands in milliseconds.
 	committerPublisher func(code.Publisher) code.Publisher
+
+	// mirrorSeams stands between a git node's mirrors and the options they
+	// are built with ([mirror.Options]), nil for none. UNEXPORTED for
+	// cacheDisk's reason (export_test.go): the knob exists only so a case
+	// whose subject is the mirror alarm a running node raises can show the
+	// mirrors a target that refuses every dial and a clock it moves, rather
+	// than wait the half hour of failed pushes a real mirror takes to
+	// outlast its refresh.
+	mirrorSeams func(mirror.Options) mirror.Options
 }
 
 // New assembles an engine.
@@ -1404,6 +1420,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		compactorEstate:     opts.compactorEstate,
 		homeSeams:           opts.homeSeams,
 		committerPublisher:  opts.committerPublisher,
+		mirrorSeams:         opts.mirrorSeams,
 		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,

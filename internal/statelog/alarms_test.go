@@ -242,6 +242,15 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 				"are deleted (the most: web, 60000 live and 45000 set in the last 14 days); a create at the " +
 				"bound is refused repo_refs",
 		},
+		// ONE mirror fires it: the home judged it at the mirror's own
+		// promise, so the rule fires at any count (ADR-0015).
+		"a mirror not brought level within its refresh": {
+			statelog.KindCodeMirrorFailing,
+			statelog.Reading{CodeMirrorFailing: 1, CodeMirrorFailingRepo: "web",
+				CodeMirrorFailingFor: 40 * time.Minute},
+			"1 mirror(s) of repositories this node is home to have not been brought level for longer than " +
+				"their refresh (the longest: web, 40m)",
+		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,
 			statelog.Reading{ObjectiveBurns: burning(objectives.ArtifactReady, 90, 10)},

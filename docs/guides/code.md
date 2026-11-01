@@ -1264,7 +1264,19 @@ them; its answer says so. What counts as a read, how long it is kept and why
 only an admin may ask are in [Who read
 it](../concepts/code-host.md#who-read-it).
 
-## Import from GitHub or GitLab
+## Moving a repository in
+
+A repository that lives at another forge comes in one of three ways, each a
+person's to start: **imported once** by the repository's home git node, which
+then holds it like any other; imported and then kept in step with its source
+for good as a **pull mirror**, which moves only when its source does; or
+**pushed from your machine** into a repository that exists, for a source only
+your machine can reach. The first two dial the source from the node, over
+HTTPS alone and only at a public address unless Tier A says otherwise
+([Reaching other forges](deployment.md#reaching-other-forges)); what each moves, and how often, is
+[Mirrors and imports](../concepts/code-host.md#mirrors-and-imports).
+
+### Import from GitHub or GitLab
 
 There are two imports. **The node's** creates the repository and has its home
 git node fetch the source: nothing runs on your machine, and with `-mirror` the
@@ -1273,7 +1285,7 @@ repository stays in step with the source for good. **Your machine's**
 exists, for a source only your machine can reach. Either is a person's: run it
 with your own token exported ([Give each person a token](#give-each-person-a-token)).
 
-### The node imports it
+#### The node imports it
 
 ```sh
 crewlet secrets set GITHUB_TOKEN          # the source's token, where it is private
@@ -1298,7 +1310,7 @@ from the source, so every push to it is refused. Your own assistant does the
 same with `code_import_repo`; no seat is offered it. Every flag is in
 [`crewlet code import`](../reference/cli.md#crewlet-code-import).
 
-### Your machine pushes it
+#### Your machine pushes it
 
 Create or declare the repository first — `-local` fills one that exists, and
 creates none — then:
@@ -1374,6 +1386,60 @@ rule for the import and put it back after.
 
 Every step, flag and message is in
 [`crewlet code import -local`](../reference/cli.md#crewlet-code-import--local).
+
+## Mirroring to another forge
+
+A repository the company keeps here can be published to a repository at
+another forge — GitHub, GitLab, a forge on your own network — as a **push
+mirror**: its home git node pushes it there whenever it moves, and every 15
+minutes while it does not. Declare it on the repository:
+
+```yaml
+code:
+  native: true
+  repos:
+    - name: web
+      owner: {unit: eng}
+      mirror_to:
+        url: https://github.com/acme/web.git
+        credential: "${GITHUB_MIRROR_TOKEN}"   # the as seat's own token there
+        as: jane                               # a seat that reads web
+        # refs: [refs/heads/main, refs/heads/release/*, refs/tags/*]
+```
+
+```sh
+crewlet secrets set GITHUB_MIRROR_TOKEN   # a token of jane's own GitHub account, allowed to push
+```
+
+**What reaches the other forge is what passed.** A branch a protection rule
+protects is pushed at its **green** commit — the newest landed on it whose
+required checks passed — so a commit that has not passed its checks here never
+appears there, and a branch with no green commit yet is left as the other
+forge has it. Every other branch it covers, and every tag, is pushed as it is.
+Left unset, `refs` covers the default branch and every tag; the seats' own
+branches (`refs/heads/seats/…`) are never covered. The other forge's copy is
+the repository's: the mirror force-pushes onto it and deletes a covered branch
+the repository no longer has, so make it a repository nobody pushes to there,
+and allow force-pushes on its protected branches. Commits keep their messages
+as they are, a coding box's `Crewlet-Seat`, `Crewlet-Run` and
+`Crewlet-Work-Item` trailers with them.
+
+**It pushes as the seat `as` names, never as a bot**, with that seat's own token
+at the other forge: what appears there is that person's or that agent's push.
+The seat must read the repository, and is asked again before every push, so a
+chart change that takes its read away stops the mirror. The token is never
+written in the company file — `credential` names the variable that holds it,
+resolved from the secret store and then the node's environment when it
+dials. A forge that wants a particular user name with its token is given it in
+the variable itself, as `user:token`.
+
+**When it cannot push**, its home logs `code_mirror_attempt_failed` with the
+reason and tries again a minute later, longer after each failure in a row; a
+mirror that has not been brought level for half an hour raises
+[`code_mirror_failing`](../reference/alarms.md) on its home, which clears with
+its next push. Every push that moved something is in the event log as
+`code_mirror_pushed`, naming what it set, deleted and held back. The rules are
+[Mirrors and imports](../concepts/code-host.md#mirrors-and-imports).
 
 ## Status and verify
 

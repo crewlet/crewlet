@@ -171,7 +171,7 @@ func (q ReadQuery) validateChangesDue() error {
 		{"expunged_before", !q.ExpungedBefore.IsZero()},
 		{"branch_changes", q.BranchChanges != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a changes_due read lists the repositories a home owes change work in, or "+

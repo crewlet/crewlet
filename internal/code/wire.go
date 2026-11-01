@@ -991,6 +991,15 @@ const (
 	// repository's home polls for the mirrors it keeps. The engine's own
 	// read, as `compaction_due` is.
 	ReadMirrorsDue ReadKind = "mirrors_due"
+	// ReadMirrorPush is ONE repository's push mirror as its home pushes it
+	// ([MirrorPushQuery]): the push mirror its row holds now, as the one
+	// candidate of [ReadAnswer.Mirrors] — none where it has none — and
+	// every green row of the repository ([ReadAnswer.Green]), read in ONE
+	// snapshot, so the target a push dials and the green commits it
+	// publishes are one version's. The engine's own read, as
+	// `expunge_tips` is: a push mirror's seat is judged by its home before
+	// each push ([MirrorSeatRefusal]), never as the asker of a read.
+	ReadMirrorPush ReadKind = "mirror_push"
 	// ReadBranchChanges is the LIVE CHANGE each of one repository's branches
 	// heads ([BranchChangesQuery]), in the order the query names the
 	// branches, a branch heading none left out. The engine's own read, as
@@ -1114,7 +1123,7 @@ func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
-		ReadMirrorsDue, ReadBranchChanges, ReadChangesDue, ReadIndexed,
+		ReadMirrorsDue, ReadMirrorPush, ReadBranchChanges, ReadChangesDue, ReadIndexed,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
 		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox}
 }
@@ -1351,6 +1360,13 @@ type ReadQuery struct {
 	// build that predates the kind refuses the read as a kind it does not
 	// know (ErrInvalid) — the scan unread, never answered as no tips.
 	ExpungeTips *ExpungeTipsQuery `json:"expunge_tips,omitempty"`
+	// MirrorPush is a `mirror_push` read's repository: REQUIRED for that
+	// kind, refused on every other. An estate request's field and no
+	// record's, so it takes no versionedFields row: a node of a build that
+	// predates the kind refuses the read as a kind it does not know
+	// (ErrInvalid) — the push waits for another attempt, never answered as
+	// a repository with no green row.
+	MirrorPush *MirrorPushQuery `json:"mirror_push,omitempty"`
 	// ExpungedBefore asks an `expunge_due` read for its WEEKLY ARM beside
 	// its open one: after every repository with an expunge open or a purge
 	// requested, every other active or archived repository — a scratch one
@@ -1585,6 +1601,12 @@ type MirrorCandidate struct {
 	To       *MirrorTarget     `json:"to,omitempty"`
 	SyncedAt time.Time         `json:"synced_at,omitzero"`
 	Version  statelog.Position `json:"version,omitzero"`
+}
+
+// MirrorPushQuery is a `mirror_push` read's repository, by id
+// ([ReadMirrorPush]).
+type MirrorPushQuery struct {
+	RepoID string `json:"repo_id"`
 }
 
 // ExpungeTipsQuery is an `expunge_tips` read's repository, by id, and the

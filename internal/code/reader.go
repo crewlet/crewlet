@@ -1587,6 +1587,14 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// refuses, and the maintainer asks another node.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.ExpungeTips.RepoID)}}, false)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.expungeTips(ctx, tx, q, &out) }
+	case ReadMirrorPush:
+		// A POINT READ OF THE REPOSITORY, as an `expunge_tips` read is: a
+		// record this node deferred on it may move a green row or the push
+		// mirror itself, and an answer past it would publish a commit its
+		// checks never passed, or to a target the repository no longer
+		// names — so such a read refuses, and the home asks another node.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{RepoPath(q.MirrorPush.RepoID)}}, false)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.mirrorPush(ctx, tx, q, &out) }
 	case ReadBranchChanges:
 		// A POINT READ OF THE REPOSITORY, as a `run_pushes` read is: a
 		// record this node deferred on it may open or close a change on one
@@ -1648,6 +1656,8 @@ func (q ReadQuery) validate() error {
 		return q.validateChecksDue()
 	case ReadExpungeTips:
 		return q.validateExpungeTips()
+	case ReadMirrorPush:
+		return q.validateMirrorPush()
 	case ReadBranchChanges:
 		return q.validateBranchChanges()
 	case ReadCheckBox:
@@ -1687,6 +1697,9 @@ func (q ReadQuery) validate() error {
 	case q.ChecksRunning != nil:
 		return fmt.Errorf("%w: checks_running: only a checks_running read names the repository whose running "+
 			"checks it reads", ErrInvalid)
+	case q.MirrorPush != nil:
+		return fmt.Errorf("%w: mirror_push: only a mirror_push read names the repository whose push mirror "+
+			"it reads", ErrInvalid)
 	case q.QueueDue != nil:
 		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
 			"in", ErrInvalid)
@@ -1866,6 +1879,8 @@ func (q ReadQuery) validateIntroduced() error {
 	case q.ChecksRunning != nil:
 		return refused("checks_running", "only a checks_running read names the repository whose running "+
 			"checks it reads")
+	case q.MirrorPush != nil:
+		return refused("mirror_push", "only a mirror_push read names the repository whose push mirror it reads")
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
 	case !q.ExpungedBefore.IsZero():
@@ -1956,7 +1971,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -2006,7 +2021,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -2047,7 +2062,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -2098,7 +2113,7 @@ func (q ReadQuery) validateBareListing(lists string) error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, lists+", a page of MaxSnapshotItems at a time, and names nothing else")
@@ -2156,13 +2171,79 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+
 				"page of MaxSnapshotItems at a time, and names nothing else")
 		}
 	}
+	return nil
+}
+
+// validateMirrorPush is [ReadQuery.validate] for a `mirror_push` read: the
+// engine's own — a repository's home reading the push mirror it pushes and
+// the green rows it publishes — so it names NO asker, for an `expunge_tips`
+// read's reason; it names its repository by id and nothing else: no cursor
+// and no limit, since a repository holds one push mirror and at most one
+// green row a protected branch.
+func (q ReadQuery) validateMirrorPush() error {
+	in := q.MirrorPush
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	switch {
+	case q.Asker != (Principal{}):
+		return refused("asker", "a mirror_push read is the engine's own, which no principal makes")
+	case in == nil:
+		return refused("mirror_push", "a mirror_push read names the repository whose push mirror it reads")
+	case !canonicalUUID(in.RepoID):
+		return refused("mirror_push.repo_id", fmt.Sprintf("%q is not a repository's id in its canonical "+
+			"lowercase spelling", in.RepoID))
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
+		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
+		{"expunge_tips", q.ExpungeTips != nil}, {"cursor", q.Cursor != ""},
+		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
+		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
+		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"branch_changes", q.BranchChanges != nil},
+		{"expunged_before", !q.ExpungedBefore.IsZero()}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
+	} {
+		if f.set {
+			return refused(f.field, "a mirror_push read answers one repository's push mirror and green rows, "+
+				"and names nothing else")
+		}
+	}
+	return nil
+}
+
+// mirrorPush serves a `mirror_push` read ([ReadMirrorPush]): the repository's
+// push mirror as its row holds it — none where it has none, or where the
+// repository is gone — and every green row of it, from one snapshot. Each a
+// seek of a primary key, through statements other reads already run
+// (remotesSQL, repoNameSQL, greensSQL): a home asks it once an attempt.
+func (r *Reader) mirrorPush(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	id := q.MirrorPush.RepoID
+	remotes, err := remotesIn(ctx, tx, id)
+	if err != nil || remotes.to == nil {
+		return err
+	}
+	c := MirrorCandidate{ID: id, To: remotes.mirrorTo()}
+	if err := tx.QueryRowContext(ctx, repoNameSQL, id).Scan(&c.Name); err != nil {
+		return fmt.Errorf("code: read repository %s's name: %w", id, err)
+	}
+	green, err := greenRowsIn(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	out.Mirrors, out.Green = []MirrorCandidate{c}, green
 	return nil
 }
 
@@ -2213,7 +2294,8 @@ func (q ReadQuery) validateBranchChanges() error {
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
-		{"checks_running", q.ChecksRunning != nil}, {"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"mirror_push", q.MirrorPush != nil},
+		{"commit", q.Commit != ""}, {"inbox", q.Inbox != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a branch_changes read answers one repository's branches' live changes in "+

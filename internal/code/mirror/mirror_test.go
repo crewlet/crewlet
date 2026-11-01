@@ -20,6 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/mirror"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -104,6 +106,29 @@ func (r *recording) chunks() (chunks []code.ImportChunk, dones []code.ImportDone
 	return chunks, dones
 }
 
+// announced is a node's event stream as a push announces itself on it, every
+// push's account kept.
+type announced struct {
+	mu     sync.Mutex
+	pushed []types.CodeMirrorPushed
+}
+
+func (a *announced) Publish(_ context.Context, _ string, ev *events.Event) error {
+	if p, ok := ev.Data.(*types.CodeMirrorPushed); ok {
+		a.mu.Lock()
+		a.pushed = append(a.pushed, *p)
+		a.mu.Unlock()
+	}
+	return nil
+}
+
+// all is every push's account so far.
+func (a *announced) all() []types.CodeMirrorPushed {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.pushed)
+}
+
 // harness is one data node and its git node, a source at another host, and
 // the clock its workers read.
 type harness struct {
@@ -113,6 +138,10 @@ type harness struct {
 	est    *recording
 	faults *codefault.Script
 	limits code.Limits
+	events announced
+	// dial is what the workers dial a URL with: nil for the source's own
+	// dial, as Tier A's git.import_allow_private lets a node dial loopback.
+	dial mirror.Dial
 
 	mu  sync.Mutex
 	now time.Time
@@ -145,9 +174,11 @@ func (h *harness) advance(d time.Duration) {
 }
 
 // mirrors is the git node's worker as the engine builds it — the fleet's
-// one git node's cache and pool, the fleet's object store — dialing the
-// source as Tier A's git.import_allow_private lets a node dial loopback.
-// Each call is a fresh worker: what it knows of a repository is the rows'.
+// one git node's cache and pool, the fleet's object store, the fixture chart
+// a push mirror's seat is judged against and the stream its pushes are
+// announced on — dialing the source as Tier A's git.import_allow_private lets
+// a node dial loopback, or as the case's dial does. Each call is a fresh
+// worker: what it knows of a repository is the rows'.
 func (h *harness) mirrors() *mirror.Mirrors {
 	h.t.Helper()
 	n := h.f.Nodes()[0]
@@ -155,11 +186,15 @@ func (h *harness) mirrors() *mirror.Mirrors {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	m, err := mirror.New(mirror.Options{Estate: h.est, Cache: n.Cache(), Git: n.Pool(), Objects: objects,
-		Dial: func(ctx context.Context, url, _ string) (gitproc.Remote, error) {
+	dial := h.dial
+	if dial == nil {
+		dial = func(ctx context.Context, url, _ string) (gitproc.Remote, error) {
 			return gitproc.ResolveRemote(ctx, url, true)
-		},
-		NodeID: n.ID(), Limits: func() code.Limits { return h.limits }, Faults: h.faults, Now: h.clock})
+		}
+	}
+	m, err := mirror.New(mirror.Options{Estate: h.est, Cache: n.Cache(), Git: n.Pool(), Objects: objects,
+		Dial: dial, NodeID: n.ID(), Limits: func() code.Limits { return h.limits },
+		Roster: codetest.FixtureRoster, Events: &h.events, Faults: h.faults, Now: h.clock})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -462,5 +497,100 @@ func TestACutOfWhatTheCopyHoldsStoresNothing(t *testing.T) {
 	}
 	if len(outs) != 0 {
 		t.Fatalf("the cut of what the copy holds wrote %v; want no output", outs)
+	}
+}
+
+// held is every ref the source's served repository holds, and the object
+// each names: what the other host holds, for a push mirror's case.
+func (s *source) held() map[string]string {
+	s.t.Helper()
+	out := map[string]string{}
+	for line := range strings.Lines(s.c.Run(s.t, "", "--git-dir="+s.bare, "for-each-ref",
+		"--format=%(refname) %(objectname)")) {
+		if ref, oid, ok := strings.Cut(strings.TrimSpace(line), " "); ok {
+			out[ref] = oid
+		}
+	}
+	return out
+}
+
+// A PUSH MIRROR WAITS FOR GREEN (M6-D16): a repository whose main a rule
+// protects is pushed to its push mirror — the source here, standing for
+// another forge that takes pushes — with main at its GREEN row's commit and
+// every tag at its tip: while main's gate requires a check none of its
+// commits has passed, main has no green row and the other host is given its
+// tag alone, main held back as waiting; once a push lands under a gate that
+// requires no check, that commit is main's green and the next attempt pushes
+// it; and a later push above the green, under the check again, leaves the
+// other host's main at the green while its new tag goes. Each attempt that
+// moved something is announced (code_mirror_pushed), naming what it held
+// back.
+//
+// Mutation: push a protected branch at its tip rather than its green, and
+// the other host's main is a commit no check passed; leave the waiting
+// branches out of the account, and the first announcement names none.
+func TestAPushMirrorWaitsForGreen(t *testing.T) {
+	h := newHarness(t, code.Limits{})
+	h.src.c.Run(t, "", "--git-dir="+h.src.bare, "config", "http.receivepack", "true")
+	gated := codetest.Settings()
+	gated.Protections[0].Gate = &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
+		Checks: []string{"unit"}, Landing: code.Landing{Depth: 4, Batch: 4}, DeleteSource: code.DeleteNone}
+	gated.MirrorTo = &code.MirrorTarget{URL: h.src.url, Credential: "${MIRROR_TOKEN}", As: codetest.FixturePat}
+	open := gated
+	open.Protections = []code.Protection{{PushRule: gated.Protections[0].PushRule}}
+	h.f.Declare(t, code.Declared{Name: "pushed", Settings: gated})
+	p := codetest.NewPerson(t, h.f, "ceo")
+	url := h.f.Nodes()[0].URL() + "/git/pushed"
+	wt := p.Init()
+	push := func(refspecs ...string) {
+		t.Helper()
+		if got := p.Push(t.Context(), wt, url, refspecs...); got.Err != nil {
+			t.Fatalf("push %v: %s", refspecs, got)
+		}
+	}
+	m := h.mirrors()
+
+	// NO GREEN YET: main waits, its tag goes.
+	a := p.Commit(wt, map[string]string{"a": "a\n"}, "first")
+	push("HEAD:refs/heads/main", "HEAD:refs/tags/v1")
+	h.pass(m)
+	held := h.src.held()
+	if got, ok := held["refs/heads/main"]; ok {
+		t.Errorf("the other host's main is %s while main has no green commit; want it held back", got)
+	}
+	if got := held["refs/tags/v1"]; got != a {
+		t.Errorf("the other host's v1 is %q, want the tag's %s", got, a)
+	}
+	if pushed := h.events.all(); len(pushed) != 1 ||
+		!slices.Equal(pushed[0].Waiting, []string{"refs/heads/main"}) ||
+		!slices.Equal(pushed[0].Updated, []string{"refs/tags/v1 " + a}) || pushed[0].As != codetest.FixturePat {
+		t.Fatalf("the pushes announced %+v; want one, setting v1 at %s and holding main back, as %s", pushed, a,
+			codetest.FixturePat)
+	}
+
+	// A GREEN COMMIT: a push under a gate that requires no check is main's
+	// green as it lands, and the next attempt pushes it.
+	h.f.Declare(t, code.Declared{Name: "pushed", Settings: open})
+	b := p.Commit(wt, map[string]string{"b": "b\n"}, "second")
+	push("HEAD:refs/heads/main")
+	h.advance(code.MirrorInterval + time.Minute)
+	h.pass(m)
+	if got := h.src.held()["refs/heads/main"]; got != b {
+		t.Fatalf("the other host's main is %q once %s is green, want it", got, b)
+	}
+
+	// ABOVE THE GREEN: a push under the check again lands above main's
+	// green, which the other host keeps; the new tag goes at its tip.
+	h.f.Declare(t, code.Declared{Name: "pushed", Settings: gated})
+	c := p.Commit(wt, map[string]string{"c": "c\n"}, "third")
+	push("HEAD:refs/heads/main", "HEAD:refs/tags/v2")
+	h.advance(code.MirrorInterval + time.Minute)
+	h.pass(m)
+	held = h.src.held()
+	if got := held["refs/heads/main"]; got != b {
+		t.Errorf("the other host's main is %s with %s landed above its green %s; want the green", got, c, b)
+	}
+	if got := held["refs/tags/v2"]; got != c {
+		t.Errorf("the other host's v2 is %q, want the tag's %s", got, c)
 	}
 }

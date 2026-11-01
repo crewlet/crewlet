@@ -347,6 +347,11 @@ var categories = map[string]placement{
 	// person's credential asked, at most one ejection an enqueue.
 	"code_queue_ejected": {"system", RateAuthenticated},
 	"code_target_broken": {"system", RateAuthenticated},
+	// A push mirror's push, by the repository's home: PERSISTED, UNFED — the
+	// audit of what the company published to another host, which nobody acts
+	// on. ENGINE-rated: the home pushes on its own schedule, at most one push
+	// a repository at a time.
+	"code_mirror_pushed": {"system", RateEngine},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that
@@ -504,6 +509,12 @@ var excluded = map[string]Exclusion{
 // (internal/eventfan), and each node leaves the class out of its own listing
 // and its own axis by this list.
 var unfed = map[string]string{
+	"code_mirror_pushed": "AN AUDIT, NOT ACTIVITY: what a repository's home " +
+		"published to its push mirror, as often as once a minute for a busy " +
+		"repository, which went where the repository's " +
+		"settings told it to — nobody acts on one. The event log keeps it " +
+		"for whoever asks what the company published and when; a push that " +
+		"failed is code_mirror_failing's, never an event",
 	"auxiliary_spend": "ACCOUNTING, NOT ACTIVITY: a coalesced record of what " +
 		"the auxiliary model cost for one key, several per turn beside the " +
 		"turn's own phases and a burst of them when a compaction runs. In " +

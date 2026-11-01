@@ -221,7 +221,9 @@ value is sent as HTTP Basic: a value holding a colon is `user:password` as
 written, and any other a token, sent as the password beside the user
 `x-access-token`, which GitHub, GitLab, Gitea and Forgejo accept; a forge that
 wants a user of its own beside a token (Bitbucket's `x-token-auth`) is given it
-in the variable. A push mirror pushes nothing yet.
+in the variable. A push mirror pushes the refs it covers, each protected branch
+at its green commit, whenever its repository moves and every 15 minutes while
+it does not ([Mirrors and imports](#mirrors-and-imports)).
 
 At most 10 000 repositories one document — a typo guard two orders of
 magnitude past a large company's, not a limit anybody is expected to meet. It
@@ -684,6 +686,79 @@ next pass asks again.
 
 A pass's line counts `released` old names, `expired` scratch repositories and
 `scratch_held`, the idle ones a live turn kept.
+
+---
+
+## Mirrors and imports
+
+A repository can be filled from another forge, kept in step with one, or
+published to one. All three are run by the repository's
+[home git node](#the-home-git-node), from the repository's rows, and dial the
+other host the same one way.
+
+| | What it moves | Which way | How often |
+|---|---|---|---|
+| **Import** (`import`, `crewlet code import`, `code_import_repo`) | Every branch and tag of the source, once, into a new repository that reads `importing` until they have landed | In | Until it is done; a restart fetches only what the landed refs do not reach |
+| **Pull mirror** (`mirror_from`) | The source's branches and tags as they are — a force-push followed, a deleted branch deleted — by the mirror's own sync records; every push to it and every change is refused `repo_mirrored` | In | Every 15 minutes (`code.MirrorInterval`), and a minute after a failure, doubling up to that |
+| **Push mirror** (`mirror_to`) | The refs it covers — its `refs` patterns, or the default branch and `refs/tags/*` — each protected branch at its **green** commit, every other ref at its tip; a covered ref the repository no longer has is deleted there | Out | At most once a minute while the repository moves, once every 15 minutes while it is idle |
+
+**A push mirror publishes what passed, never what was pushed last.** A branch
+a [protection rule](#protection-rules) protects is pushed at its
+[green commit](#tip-checks-and-code_green) — the newest commit landed on it
+whose required checks passed — and where it has none yet, it is left as the
+other host has it, `waiting`. Every move of a protected branch leaves a landing
+row, which is what makes its green commit the one to follow. A branch no rule
+protects moves with no landing and no green row, so it is pushed at its tip, as
+every tag is: a tag names one commit for good. Each push compares what the
+other host holds of the covered refs (one `git ls-remote`) with what the
+repository says it should, and pushes only the difference, forced
+(`git push --force --porcelain`), from a scratch over the cache's copy, never
+from the copy itself. A ref the other host rejects — a protection or a hook
+there refusing the force-push or the deletion — fails the attempt, naming it.
+
+**It pushes as a seat, never as a bot.** `mirror_to.as` names the seat whose own
+identity at the other host the push carries: the token the mirror's
+`credential` variable holds is that seat's own token there. The seat must read
+the repository (a person's seat reads every one, an agent's what its grant on
+the repository reads), and the home asks again before every push, against the
+chart it holds then, so a revision that takes the seat's read away stops the
+mirror rather than letting it publish what its seat can no longer see.
+
+**Box commit trailers travel as they are.** A commit a coding box made carries
+the `Crewlet-Seat`, `Crewlet-Run` and `Crewlet-Work-Item` trailers its box's
+hook wrote, and a mirror moves commits, never rewrites them: the other host
+receives them with the trailers in their messages. The mirror inherits what
+the hook wrote and decides nothing about it; the trailers stay a convention,
+and the push row on the code log stays the provenance
+([Which push landed a commit](#which-push-landed-a-commit)).
+
+**One outbound dial.** Every one of the three reaches the other host over
+HTTPS alone. The node resolves the host itself and refuses it when any address
+it resolves to is not on the public internet — unless Tier A's
+[`git.import_allow_private`](configuration.md#git) lets it
+reach the node's own network — and hands git exactly the addresses it judged, so
+git never asks DNS again; redirects are not followed. The proxy and the
+certificate authorities are the process's own (`HTTPS_PROXY`, `NO_PROXY`,
+`SSL_CERT_FILE`), as [Deployment](../guides/deployment.md#reaching-other-forges) says.
+A `credential` is always one whole `${VAR}` reference, kept as the reference
+on every data node and in every backup and resolved from the secret store,
+then the node's environment, each time the node dials; it is sent in a header,
+never on git's command line, and redacted from every line the node logs.
+
+**A failure is the home's to know.** A push to another host is no record on
+the code log, so whether a mirror is level is something only its home knows,
+in memory: each failed attempt is logged as `code_mirror_attempt_failed`
+(naming the repository, `sync` or `push`, and why), counted in
+`crewlet.code.mirror.runs` and tried again a minute later, longer after each
+failure in a row. A mirror not brought level for longer than its own refresh —
+its 15-minute interval and 15 minutes of grace for an attempt in flight —
+raises [`code_mirror_failing`](../reference/alarms.md) on its home, naming the
+repository that has waited longest; a node that is no longer a repository's
+home stops counting its mirror, and a node that restarts counts from its first
+attempt. Every push that moved something is recorded in the event log as
+`code_mirror_pushed` — the repository, the other host, the seat it pushed as,
+the refs it set and deleted and the protected branches it held back — the one
+durable account of what the company published, and when.
 
 ---
 

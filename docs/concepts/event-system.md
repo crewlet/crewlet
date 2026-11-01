@@ -496,6 +496,18 @@ code_target_broken         # a protected branch's tip checks found the
                            # a retry its operation ledger collapsed. STORED
                            # AND FED (code-host.md, "Tip checks and
                            # code_green")
+code_mirror_pushed         # a repository's home pushed it to its push
+                           # mirror: repository by id and name, the other
+                           # host's URL (never a credential), the seat whose
+                           # identity there it pushed as, the refs it set
+                           # and onto what, those it deleted, and the
+                           # protected branches it held back with no green
+                           # commit to publish. Published once a push that
+                           # moved something, by the home git node that
+                           # pushed; a failed push is no event (its home
+                           # raises code_mirror_failing). STORED, NOT FED:
+                           # the audit of what the company published
+                           # (code-host.md, "Mirrors and imports")
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its
