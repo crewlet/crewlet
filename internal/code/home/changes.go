@@ -207,7 +207,8 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 
 // facts is a due change's facts read, then the change landed or its facts
 // recorded ([changes.change]): whether it was landed, and whether its facts
-// were recorded.
+// were recorded. Facts the git node left short for time are no facts to keep
+// (code.RevisionFactsAnswer.Final): the turn's failure, the change still due.
 func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, owners []code.PathOwner,
 	at statelog.Position) (bool, bool, error) {
 
@@ -232,6 +233,17 @@ func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, 
 	f := read.RevisionFacts
 	if f.HeadInTarget {
 		return true, false, c.land(ctx, repoID, due, at)
+	}
+	if !f.Final() {
+		// FACTS LEFT SHORT FOR TIME are the git node's moment, never the
+		// commits': recorded, they would hold for good — a revise takes
+		// facts of a revision and a tip once — and an id omitted for a slow
+		// node would carry no approval across the revision. The change stays
+		// due its facts, so the next pass asks again, of whichever git node
+		// the walk reaches then.
+		return false, false, fmt.Errorf("home: the facts of revision %d of change %d of repository %s ran out "+
+			"the git node's budget before their patch id (%q) or their classes (%q) were whole; the next pass "+
+			"asks again", due.Revision, due.Number, repoID, f.PatchIDOmission, f.ClassesOmission)
 	}
 	recorded, err := c.revise(ctx, repoID, due, f, owners, at)
 	return false, recorded, err
@@ -373,8 +385,9 @@ func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue,
 	res, err := c.estate.Converse(ctx, code.ConversationWrite{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
 		Revise: &code.Revise{RepoID: repoID, ChangeID: due.ID, N: due.Revision, HeadOID: due.Head,
 			TargetRef: due.TargetRef, TargetOID: due.Tip, TargetPosition: due.TipPosition, BaseOID: f.MergeBase,
-			BaseTree: f.BaseTree, HeadTree: f.HeadTree, PatchID: f.PatchID, PatchIDOmitted: f.PatchIDOmitted,
-			Touched: f.Touched, TouchesAll: f.TouchesAll, Classes: f.Classes, Node: c.node,
+			BaseTree: f.BaseTree, HeadTree: f.HeadTree, PatchID: f.PatchID,
+			PatchIDOmitted: f.PatchIDOmission == code.OmittedPastBound, Touched: f.Touched,
+			TouchesAll: f.TouchesAll, Classes: f.Classes, Node: c.node,
 			RequestedOwners: matched, OwnersDigest: digest}})
 	switch {
 	case err != nil:

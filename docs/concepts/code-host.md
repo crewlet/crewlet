@@ -5064,7 +5064,8 @@ alike:
 | `touched` | Every file the change touches: each path the diff from the base to the head changes, in git's order, a moved file as its two paths. Past 1 000 paths, past 48 KiB of the list as JSON, or at a path that is not UTF-8 (which JSON cannot carry exactly), the facts say `touches_all` and give no list — read as every path by everything that reads one, where a list cut at its bound would leave the files past the cut out. |
 | `classes` | What each touched Go file's change is — `whitespace_only` or `comment_only` — named by its place in `touched`, and whether every touched path was judged (`complete`): [Change classes](#change-classes). |
 | `patch_id` | `git patch-id --verbatim` of the change's cumulative diff from its base, three lines of context around every change: the same for two revisions whose changes are the same lines among the same neighbours, wherever the base put them — a rebase onto a target that moved nothing near them keeps it — and another for any changed byte. Empty for a revision that changes nothing. |
-| `patch_id_omitted` | No id was taken: the diff is past 256 MiB, or it and its id ran out what was left of the read's ten seconds of git. An omitted id, like an empty one, equals nothing. |
+| `patch_id_omission` | Why no id was taken of a diff that is not empty: `past_bound`, the diff is past 256 MiB; or `out_of_time`, it or its id ran out what was left of the read's ten seconds of git. An omitted id, like an empty one, equals nothing. |
+| `classes_omission` | Why the classes are not `complete`: `past_bound`, past the Go a classification lexes or a revision that touches all; or `out_of_time`, past what the read's budget of git left. |
 
 **Whitespace is a change.** The id is `--verbatim`, never `--stable`, which
 strips every space and tab before it hashes: Python's and YAML's indentation,
@@ -5085,12 +5086,23 @@ the read ends), `git patch-id` reading it back, and one `git cat-file
 --batch` writing the Go files' versions for the lexer — never two at once,
 which would hold two of the lane's slots for one read. A merge base, a walk
 or a lookup that runs out the read's budget of git makes the read too large
-to answer, as any read's git does. A diff past 256 MiB, or a diff or an id
-that ran out what the budget left, is answered with the id omitted instead:
-the safe side, since an omitted id equals nothing, and the base, the paths
-and the trees that everything else reads — an interdiff among them — are
-there. Classes cut short by their bound or by the budget are answered
-incomplete, the same side: a class only relaxes.
+to answer, as any read's git does. A diff past 256 MiB is answered with the
+id omitted instead: the safe side, since an omitted id equals nothing, and the
+base, the paths and the trees that everything else reads — an interdiff among
+them — are there. Classes cut short by their bound are answered incomplete,
+the same side: a class only relaxes. Both are **final**: what the bound
+measures is the two commits, so every node omits alike.
+
+**Out of time is not final.** A diff or an id that ran out what the budget
+left, or classes that did, are answered too — the base, the paths and the
+trees in them are whole — but saying `out_of_time`, never as the bound's
+omission: the budget measures the node at that moment, and a node beside it,
+or the same one less loaded, would have finished. Facts recorded from such an
+answer would hold for good, every approval its id would have carried lost to
+a re-review exactly when the fleet is busiest, so nobody records them: the
+home asks again on its next pass ([Recorded on the change](#recorded-on-the-change)).
+A copy that lacks a blob its own trees name is that node's failure, and the
+read is refused for another git node to answer.
 
 **Measured**, over changes rewriting every fourth line of files of 256 KiB,
 three reads each on two cores: a revision's facts took 18 ms for a 1 MiB
@@ -5110,7 +5122,11 @@ a **revise**, a write of the change's [conversation](#reviews-and-findings):
 the home asks it of the repository's committing data node, whose change writer
 decides it in one snapshot and publishes it on the change's own subject, as it
 does a review — a git node never publishes one — and it names no asker, being
-the engine's own.
+the engine's own. Only **final** facts are recorded: an answer saying
+`out_of_time` is the home's turn failing for that change, which stays due its
+facts and is read again by the next pass, a minute at most, of whichever git
+node answers then — so a recorded `patch_id_omitted` always means the diff
+was past its bound.
 
 | Table | A row for | What it holds |
 |---|---|---|

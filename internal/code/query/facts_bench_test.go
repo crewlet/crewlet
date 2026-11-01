@@ -46,7 +46,7 @@ func BenchmarkRevisionFacts(b *testing.B) {
 				switch {
 				case err != nil:
 					b.Fatal(err)
-				case a.RevisionFacts.PatchIDOmitted || a.RevisionFacts.PatchID == "":
+				case a.RevisionFacts.PatchIDOmission != "" || a.RevisionFacts.PatchID == "":
 					b.Fatalf("the facts of a %s patch carry no id: %+v", arm.name, a.RevisionFacts)
 				}
 			}

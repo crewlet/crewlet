@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -73,9 +74,9 @@ func TestThePatchIDSeesWhitespace(t *testing.T) {
 	}
 	sp, tb := x.facts(s, repo, spaces, base), x.facts(s, repo, tabs, base)
 	switch {
-	case sp.PatchID == "" || tb.PatchID == "" || sp.PatchIDOmitted || tb.PatchIDOmitted:
-		t.Fatalf("the facts carry ids %q and %q (omitted %t, %t), want both", sp.PatchID, tb.PatchID,
-			sp.PatchIDOmitted, tb.PatchIDOmitted)
+	case sp.PatchID == "" || tb.PatchID == "" || sp.PatchIDOmission != "" || tb.PatchIDOmission != "":
+		t.Fatalf("the facts carry ids %q and %q (omitted %q, %q), want both", sp.PatchID, tb.PatchID,
+			sp.PatchIDOmission, tb.PatchIDOmission)
 	case sp.PatchID == tb.PatchID:
 		t.Errorf("a change indented by spaces and one by a tab share the id %s: whitespace is a change", sp.PatchID)
 	}
@@ -190,9 +191,9 @@ func TestTouchedPathsPastTheBoundTouchEverything(t *testing.T) {
 			t.Errorf("%s: the facts touch all and list %v, want no list", tc.name, f.Touched)
 		case !tc.all && !slices.Equal(f.Touched, want):
 			t.Errorf("%s: the facts list %v, want %v", tc.name, f.Touched, want)
-		case f.PatchID == "" || f.PatchIDOmitted:
-			t.Errorf("%s: the facts carry no id (%q, omitted %t): a list's bound is no patch's", tc.name, f.PatchID,
-				f.PatchIDOmitted)
+		case f.PatchID == "" || f.PatchIDOmission != "":
+			t.Errorf("%s: the facts carry no id (%q, omitted %q): a list's bound is no patch's", tc.name, f.PatchID,
+				f.PatchIDOmission)
 		case f.Classes.Complete == tc.all:
 			// A LIST CLASSES EVERY PATH IT NAMES — none here is Go — and one
 			// that touches all names none, so its classes are never whole.
@@ -225,17 +226,21 @@ func (p endsAt) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) 
 		"was killed: %w", c.Args[0], c.Deadline, gitproc.ErrDeadline)
 }
 
-// A PATCH-ID PAST ITS BOUND IS OMITTED, AND ONLY IT. A change whose diff is a
-// byte past the bound on a diff the facts identify has its id omitted — an id
-// that equals nothing, so no approval carries across it — while one at the
-// bound has its id; and a patch or an id that ran out the read's budget of git
-// is omitted too, the rest of the facts answered: a base and a list of paths
-// cost little and a change cannot do without them. Those two fail the read
-// as any read's git does, too large where they ran its whole budget.
+// A PATCH-ID PAST ITS BOUND IS OMITTED, AND ONE OUT OF TIME IS SAID APART. A
+// change whose diff is a byte past the bound on a diff the facts identify has
+// its id omitted past its bound — an id that equals nothing, so no approval
+// carries across it, and final, since every node omits it alike — while one
+// at the bound has its id. A patch or an id that ran out the read's budget of
+// git is omitted OUT OF TIME instead: the rest of the facts answered — a base
+// and a list of paths cost little and a change cannot do without them — but
+// the facts not final, since a node beside it, or this one less loaded, takes
+// the id. The merge base and the walk fail the read as any read's git does,
+// too large where they ran its whole budget.
 //
 // Mutations: take the id past the bound (drop the spool's check) — the
 // byte-past row red; fail the read where the patch ran out its budget — the
-// patch row red.
+// patch row red; answer the budget's omission as the bound's — the patch and
+// id rows final, red.
 func TestAPatchIDPastItsBoundIsOmitted(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
@@ -246,17 +251,18 @@ func TestAPatchIDPastItsBoundIsOmitted(t *testing.T) {
 		head)))
 	want := x.patchID(base, head, "--verbatim")
 	for _, tc := range []struct {
-		name  string
-		bound int64
-		id    string
-	}{{"at the bound", size, want}, {"a byte past", size - 1, ""}} {
+		name    string
+		bound   int64
+		id      string
+		omitted code.FactsOmission
+	}{{"at the bound", size, want, ""}, {"a byte past", size - 1, "", code.OmittedPastBound}} {
 		s := x.server(0, query.Options{})
 		query.SetPatchIDBytes(s, tc.bound)
 		f := x.facts(s, repo, head, base)
-		if f.PatchID != tc.id || f.PatchIDOmitted != (tc.id == "") ||
+		if f.PatchID != tc.id || f.PatchIDOmission != tc.omitted || !f.Final() ||
 			!slices.Equal(f.Touched, []string{"a.txt", "b.txt"}) {
-			t.Errorf("%s: the facts = %+v, want the id %q, omitted where it is none, and both paths", tc.name, f,
-				tc.id)
+			t.Errorf("%s: the facts = %+v, want the id %q, omitted %q, final, and both paths", tc.name, f,
+				tc.id, tc.omitted)
 		}
 	}
 
@@ -275,9 +281,11 @@ func TestAPatchIDPastItsBoundIsOmitted(t *testing.T) {
 		switch {
 		case tc.omitted && err != nil:
 			t.Errorf("%s: the facts = %v, want them answered with the id omitted", tc.name, err)
-		case tc.omitted && (!a.RevisionFacts.PatchIDOmitted || a.RevisionFacts.PatchID != "" ||
-			a.RevisionFacts.MergeBase != base || len(a.RevisionFacts.Touched) != 2):
-			t.Errorf("%s: the facts = %+v, want the base and both paths, the id omitted", tc.name, a.RevisionFacts)
+		case tc.omitted && (a.RevisionFacts.PatchIDOmission != code.OmittedOutOfTime ||
+			a.RevisionFacts.Final() || a.RevisionFacts.PatchID != "" || a.RevisionFacts.MergeBase != base ||
+			len(a.RevisionFacts.Touched) != 2):
+			t.Errorf("%s: the facts = %+v, want the base and both paths, the id omitted out of time, not final",
+				tc.name, a.RevisionFacts)
 		case !tc.omitted && !errors.Is(err, code.ErrSliceTooLarge):
 			t.Errorf("%s: the facts = %v (%+v), want the read too large", tc.name, err, a.RevisionFacts)
 		}
@@ -305,7 +313,7 @@ func TestTheBaseIsWhereTheHistoriesMeet(t *testing.T) {
 	s := x.server(0, query.Options{})
 
 	if f := x.facts(s, repo, first, second); !f.HeadInTarget || f.MergeBase != first || len(f.Touched) != 0 ||
-		f.TouchesAll || f.PatchID != "" || f.PatchIDOmitted {
+		f.TouchesAll || f.PatchID != "" || f.PatchIDOmission != "" {
 		t.Errorf("the facts of %s, which its target %s holds = %+v, want it in its target, changing nothing",
 			first, second, f)
 	}
@@ -516,13 +524,16 @@ func TestAModeChangeIsNeverClassed(t *testing.T) {
 // class unknown, not none — so the classes say they are INCOMPLETE, the first
 // two classed all the same. A version past the bound on one file leaves that
 // file unread with no class, as the lexer gives none past it, and the rest
-// whole. And a classification that runs out what the read's budget of git
-// left is answered incomplete, the facts' base, paths, trees and id with it:
-// a class only relaxes, so classes cut short never fail the facts.
+// whole. Each is final, as every node bounds alike: incomplete PAST THE BOUND
+// where a path was left unread. And a classification that runs out what the
+// read's budget of git left is answered incomplete OUT OF TIME, the facts'
+// base, paths, trees and id with it — a class only relaxes, so classes cut
+// short never fail the facts — but the facts not final.
 //
 // Mutations: class past the bound (drop the total's check) — the byte-short
 // row is complete, red; fail the read where the lexing ran out the budget —
-// the last row red.
+// the last row red; answer the budget's cut as the bound's — the last row
+// final, red.
 func TestABoundCutsClassificationIncomplete(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
@@ -553,10 +564,14 @@ func TestABoundCutsClassificationIncomplete(t *testing.T) {
 		s := x.server(0, query.Options{})
 		query.SetClassedBounds(s, tc.blob, tc.bytes)
 		f := x.facts(s, repo, head, base)
+		omitted := code.OmittedPastBound
+		if tc.complete {
+			omitted = ""
+		}
 		if !slices.Equal(f.Classes.CommentOnly, tc.classed) || len(f.Classes.WhitespaceOnly) != 0 ||
-			f.Classes.Complete != tc.complete {
-			t.Errorf("%s: the classes = %+v, want %v comment only, complete = %t", tc.name, f.Classes,
-				tc.classed, tc.complete)
+			f.Classes.Complete != tc.complete || f.ClassesOmission != omitted || !f.Final() {
+			t.Errorf("%s: the classes = %+v omitted %q, want %v comment only, complete = %t, final", tc.name,
+				f.Classes, f.ClassesOmission, tc.classed, tc.complete)
 		}
 	}
 
@@ -565,11 +580,62 @@ func TestABoundCutsClassificationIncomplete(t *testing.T) {
 	switch {
 	case err != nil:
 		t.Fatalf("the facts of a classification out of the budget = %v, want them answered", err)
-	case !a.RevisionFacts.Classes.IsZero():
-		t.Errorf("a classification out of the budget answered %+v, want no class and incomplete",
-			a.RevisionFacts.Classes)
+	case !a.RevisionFacts.Classes.IsZero() || a.RevisionFacts.ClassesOmission != code.OmittedOutOfTime ||
+		a.RevisionFacts.Final():
+		t.Errorf("a classification out of the budget answered %+v omitted %q, want no class, incomplete out of "+
+			"time and not final", a.RevisionFacts.Classes, a.RevisionFacts.ClassesOmission)
 	case a.RevisionFacts.PatchID == "" || len(a.RevisionFacts.Touched) != 3 || a.RevisionFacts.HeadTree == "":
 		t.Errorf("a classification out of the budget answered the facts %+v, want the rest of them whole",
 			a.RevisionFacts)
 	}
+}
+
+// A BLOB THE COPY LACKS IS THE NODE'S FAILURE, never classes it leaves out. A
+// touched Go file's two blobs are named by the trees of the copy that walked
+// them, so one its check finds none of is the copy's damage: a node holding a
+// whole copy lexes it, and facts this node left it out of would be no
+// function of the two commits. The read is refused unready, node_failed, for
+// the walk to ask another git node — never answered with the classes cut.
+//
+// Mutation: leave the blob unread and the classes incomplete, as before — the
+// facts are answered, red.
+func TestABlobTheCopyLacksIsTheNodesFailure(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	base := x.commit(map[string]string{"a.go": "package p\n\n// a\nfunc a() {}\n"}, "base")
+	head := x.commit(map[string]string{"a.go": "package p\n\n// a, said again\nfunc a() {}\n"}, "head")
+	repo := x.repo(codetest.RepoName)
+	blob := strings.TrimSpace(x.git("rev-parse", base+":a.go"))
+	s := x.server(0, query.Options{Git: lacksBlob{Pool: x.f.Nodes()[0].Pool(), blob: blob}})
+	if a, err := s.Read(t.Context(), factsQ(repo, head, base)); !unready(err, code.UnreadyNodeFailed) {
+		t.Errorf("the facts of a change whose base blob the copy lacks = %v (%+v), want ErrGitUnready"+
+			"{node_failed}", err, a.RevisionFacts)
+	}
+}
+
+// lacksBlob is a query.Pool whose object checks answer blob missing, as a
+// copy that lost it would, and which runs everything else — the patch's own
+// read of the blob among it — on the pool beneath.
+type lacksBlob struct {
+	query.Pool
+	blob string
+}
+
+func (p lacksBlob) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	if !slices.Contains(c.Args, "--batch-check") {
+		return p.Pool.Run(ctx, c)
+	}
+	out := c.Stdout
+	var answer bytes.Buffer
+	c.Stdout = &answer
+	res, err := p.Pool.Run(ctx, c)
+	for _, rec := range bytes.SplitAfter(answer.Bytes(), []byte{0}) {
+		if bytes.HasPrefix(rec, []byte(p.blob+" blob ")) {
+			rec = []byte(p.blob + " missing\x00")
+		}
+		if _, werr := out.Write(rec); werr != nil {
+			return res, werr
+		}
+	}
+	return res, err
 }

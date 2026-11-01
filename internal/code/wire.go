@@ -3945,12 +3945,21 @@ type RevisionFactsAnswer struct {
 	// lines with the same lines around them, wherever the base put them — a
 	// rebase that moved nothing near them keeps it — and another for any
 	// changed byte, whitespace included. Empty for a revision that changes
-	// nothing, and where PatchIDOmitted: an empty id equals nothing.
+	// nothing, and where PatchIDOmission says why none was taken: an empty id
+	// equals nothing.
 	PatchID string `json:"patch_id,omitempty"`
-	// PatchIDOmitted is a change whose diff the git node did not identify:
-	// one past the bound on a diff it identifies, or one whose diff ran out
-	// what was left of the read's budget of git.
-	PatchIDOmitted bool `json:"patch_id_omitted,omitempty"`
+	// PatchIDOmission is why the git node took no id of a diff that is not
+	// empty, "" where it took one or there was none to take: the diff is past
+	// the bound on one it identifies (OmittedPastBound, final), or it or its
+	// id ran out what was left of the read's budget of git
+	// (OmittedOutOfTime, not final — [RevisionFactsAnswer.Final]).
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no versionedFields
+	// row (the record carries [Revise.PatchIDOmitted], the final omission
+	// alone). AS A STATED CONDITION, as [ReadQuery.Push]'s: no build that
+	// carries the code domain has run with the bool this replaced — none of
+	// the domain is on main — so no home reads an answer it cannot.
+	PatchIDOmission FactsOmission `json:"patch_id_omission,omitempty"`
 	// Touched is every file the change touches — every path the diff from
 	// the base to Head changes, in git's order — unless TouchesAll: the
 	// change touches more than a list holds ([MaxTouchedPaths],
@@ -3965,11 +3974,52 @@ type RevisionFactsAnswer struct {
 	// what the read's budget of git left — incomplete past either, and where
 	// the revision touches all.
 	Classes RevisionClasses `json:"classes,omitzero"`
+	// ClassesOmission is why Classes are not complete, "" where they are:
+	// past a bound — MaxClassedBytes, or a revision that touches all, whose
+	// paths no list names (OmittedPastBound, final) — or out of what the
+	// read's budget of git left (OmittedOutOfTime, not final). An estate
+	// answer's field under PatchIDOmission's stated condition.
+	ClassesOmission FactsOmission `json:"classes_omission,omitempty"`
 	// HeadInTarget is Head reachable from Target: the change is in its
 	// target already, merged by whatever moved the target there. Its change
 	// is then nothing: no id, no path, no tree.
 	HeadInTarget bool `json:"head_in_target,omitempty"`
 }
+
+// Final reports facts that are a function of their two commits alone, as
+// every git node answers them: nothing in them left out for want of time. A
+// fact left out past a bound is final, the same on every node at every load;
+// one the read's budget of git ran out before is a measure of the node that
+// read it at that moment, so facts holding one are RECORDED BY NOBODY and
+// asked again — never kept as though the commits were unidentifiable, which
+// would cost every approval carried by the id a re-review exactly when the
+// fleet is busiest.
+func (f *RevisionFactsAnswer) Final() bool {
+	return f.PatchIDOmission != OmittedOutOfTime && f.ClassesOmission != OmittedOutOfTime
+}
+
+// FactsOmission is why a revision's facts left out a part they may leave out
+// — its patch id, or classes of its paths — "" for none. A closed set
+// ([FactsOmissions]).
+type FactsOmission string
+
+const (
+	// OmittedPastBound is a part past a bound of its own: a diff past the
+	// bound on one whose id is taken, Go past the bound a classification
+	// lexes, a revision that touches all. What the bound measures is the two
+	// commits', so every git node omits the part alike: FINAL.
+	OmittedPastBound FactsOmission = "past_bound"
+	// OmittedOutOfTime is a part the read's budget of git ran out before:
+	// what the node could do in its budget at that moment — slower under
+	// load, quicker on a node beside it — so NOT FINAL ([RevisionFactsAnswer.Final]).
+	OmittedOutOfTime FactsOmission = "out_of_time"
+)
+
+// FactsOmissions is the closed set.
+func FactsOmissions() []FactsOmission { return []FactsOmission{OmittedPastBound, OmittedOutOfTime} }
+
+// Valid reports an omission this build knows.
+func (o FactsOmission) Valid() bool { return slices.Contains(FactsOmissions(), o) }
 
 // ReanchorAnswer places every anchor of the query, in its order.
 type ReanchorAnswer struct {

@@ -50,19 +50,21 @@ type estate struct {
 	settles  []code.AskSettle
 	owners   map[string][]code.PathOwner
 	facts    map[string]code.RevisionFactsAnswer
-	at       statelog.Position
-	floors   []statelog.Freshness
-	asked    []code.ChangesDueQuery
-	revises  []code.Revise
-	merges   []code.Mergeability
-	landings []code.ChangeLanded
-	changed  chan struct{}
+	// factsRead is how many times the facts of each head were read.
+	factsRead map[string]int
+	at        statelog.Position
+	floors    []statelog.Freshness
+	asked     []code.ChangesDueQuery
+	revises   []code.Revise
+	merges    []code.Mergeability
+	landings  []code.ChangeLanded
+	changed   chan struct{}
 }
 
 func newEstate() *estate {
 	return &estate{due: map[string][]code.ChangeDue{}, rechecks: map[string][]code.ChangeDue{},
 		unsettle: map[string][]code.AskDue{}, owners: map[string][]code.PathOwner{},
-		facts:   map[string]code.RevisionFactsAnswer{},
+		facts: map[string]code.RevisionFactsAnswer{}, factsRead: map[string]int{},
 		changed: make(chan struct{}, 1), at: statelog.Position{Stream: topics.CodeLogStream, Seq: 40}}
 }
 
@@ -162,6 +164,7 @@ func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, er
 	if err := q.Validate(); err != nil {
 		return code.GitAnswer{}, err
 	}
+	e.factsRead[q.RevisionFacts.Head]++
 	f, ok := e.facts[q.RevisionFacts.Head]
 	if !ok || f.Target != q.RevisionFacts.Target {
 		return code.GitAnswer{}, code.ErrObjectNotFound
@@ -786,6 +789,70 @@ func TestAHomeSettlesTheAsksItsListingNames(t *testing.T) {
 		if g := got[i]; g.RepoID != w.RepoID || g.ChangeID != w.ChangeID || g.State != w.State ||
 			len(g.Reviewers) != 0 {
 			t.Fatalf("the home asked the settlings %+v, want %+v", got, want)
+		}
+	}
+}
+
+// FACTS SHORT FOR TIME ARE RECORDED BY NOBODY. A git node that ran its read's
+// budget of git out before a revision's patch id, or before its classes, says
+// so apart from a bound's omission: the commits did not decide it, the node's
+// moment did, so the home records no such facts — a revise takes a revision's
+// facts against a tip once, and an id omitted for a slow node would carry no
+// approval across the revision for good — and asks again on its next pass,
+// recording them once they are whole. An id omitted past its bound is final,
+// recorded as omitted on the first pass.
+//
+// Mutations: record facts that are not final — changes 1's and 2's are
+// recorded on the first pass, red; record the bound's omission as none —
+// change 3's id is not omitted, red.
+func TestFactsShortForTimeAreRecordedByNobody(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	touched := []string{"a.go"}
+	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), Touched: touched,
+		PatchIDOmission: code.OmittedOutOfTime})
+	e.hold(repoA, 2, oid("b"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), Touched: touched,
+		PatchID: oid("e"), ClassesOmission: code.OmittedOutOfTime})
+	e.hold(repoA, 3, oid("c"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), Touched: touched,
+		PatchIDOmission: code.OmittedPastBound, Classes: code.RevisionClasses{Complete: true}})
+	p := &placement{homes: map[string]string{repoA: "node-a"}}
+	loopOn(t, "node-a", e, p, newNudges(), 20*time.Millisecond)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		e.mu.Lock()
+		again := e.factsRead[oid("a")] >= 2 && e.factsRead[oid("b")] >= 2
+		e.mu.Unlock()
+		if again {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the home never asked again for the facts its git node left short for time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	revises, _ := e.wrote()
+	if len(revises) != 1 || revises[0].ChangeID != changeID(repoA, 3) || !revises[0].PatchIDOmitted {
+		t.Fatalf("the home recorded %+v, want change 3's facts alone, its id omitted past its bound", revises)
+	}
+
+	// WHOLE AT LAST: the next pass records them, as they are.
+	e.mu.Lock()
+	for _, head := range []string{oid("a"), oid("b")} {
+		f := e.facts[head]
+		f.PatchID, f.PatchIDOmission, f.ClassesOmission = oid("e"), "", ""
+		f.Classes = code.RevisionClasses{Complete: true}
+		e.facts[head] = f
+	}
+	e.mu.Unlock()
+	e.waitDone(t, repoA, 10*time.Second)
+	revises, _ = e.wrote()
+	if len(revises) != 3 {
+		t.Fatalf("the home recorded %d revisions' facts, want the three changes': %+v", len(revises), revises)
+	}
+	for _, r := range revises[1:] {
+		if r.PatchIDOmitted || r.PatchID != oid("e") || !r.Classes.Complete {
+			t.Errorf("change %s's facts were recorded as %+v, want its id and its classes whole", r.ChangeID, r)
 		}
 	}
 }

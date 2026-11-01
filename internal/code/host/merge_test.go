@@ -138,8 +138,8 @@ func (c *mergeCase) recordFacts(n int64) code.ChangeDue {
 	res, err := seam.Converse(c.Ctx, code.ConversationWrite{OpID: opNow(), Revise: &code.Revise{RepoID: c.repo,
 		ChangeID: d.ID, N: d.Revision, HeadOID: d.Head, TargetRef: d.TargetRef, TargetOID: d.Tip,
 		TargetPosition: d.TipPosition, BaseOID: f.MergeBase, BaseTree: f.BaseTree, HeadTree: f.HeadTree,
-		PatchID: f.PatchID, PatchIDOmitted: f.PatchIDOmitted, Touched: f.Touched, TouchesAll: f.TouchesAll,
-		Classes: f.Classes, Node: "solo-a", OwnersDigest: digest}})
+		PatchID: f.PatchID, PatchIDOmitted: f.PatchIDOmission == code.OmittedPastBound, Touched: f.Touched,
+		TouchesAll: f.TouchesAll, Classes: f.Classes, Node: "solo-a", OwnersDigest: digest}})
 	if err != nil || res.Refusal != "" {
 		c.T.Fatalf("record revision %d's facts: %+v %v", d.Revision, res, err)
 	}
