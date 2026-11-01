@@ -2,7 +2,7 @@
  * The code host's checks and merge queues, in the engine's words: where an
  * attempt of a check stands, what it was checking, where a queue entry stands
  * and how a gated branch's queue lands a change. The Queue and Checks sections,
- * and a change's and a repository's checks tabs key on these.
+ * a change's and a repository's checks tabs and the Inbox card key on these.
  *
  * Each is a COPY of a closed set `internal/code` owns, HELD BOTH WAYS, in
  * order, by `internal/code`'s dashboard tests: a value the engine grew that a

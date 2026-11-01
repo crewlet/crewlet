@@ -10,7 +10,10 @@ import {
   askContext,
   askQuestion,
   changeCard,
+  changeGate,
+  classesLine,
   earlierOf,
+  measuredLine,
   findingsLine,
   firstSentence,
   inboxQuiet,
@@ -176,6 +179,102 @@ function codeExtra(extra: Partial<CodeInboxNotice> = {}): CodeInboxNotice {
 // THE INTENT-FIRST CARD: what the change is for — the work item it
 // implements, its description — then what stands in its way, the diff one
 // press away, every word of it the notice's own, with no question per card.
+describe("a code notice's gate (M5)", () => {
+  const HEAD = "f".repeat(40);
+  const answer = (
+    preconditions: {
+      kind: string;
+      state: string;
+      detail: string;
+      waits_on?: { handle: string; kind: string }[];
+    }[],
+    classes?: Record<string, unknown>,
+  ) =>
+    ({
+      change: {
+        repo: "web",
+        number: 42,
+        head: HEAD,
+        revision: 2,
+        readiness: { met: 0, total: preconditions.length, first: "", preconditions },
+      },
+      revisions: [
+        {
+          n: 1,
+          head: "e".repeat(40),
+          facts: { touched: ["a.go"], classes: { comment_only: [0], complete: true } },
+        },
+        {
+          n: 2,
+          head: HEAD,
+          facts: { touched: ["a.go", "b.go", "c.go"], ...(classes ? { classes } : {}) },
+        },
+      ],
+    }) as never;
+  const check = (name: string, state: string, extra: Record<string, unknown> = {}) => ({
+    repo_id: "id-web",
+    oid: HEAD,
+    target: "refs/heads/main",
+    name,
+    attempt: 1,
+    state,
+    ...extra,
+  });
+  const CHECKED = [{ kind: "check", state: "unmet", detail: "unit failed" }];
+
+  test("names what the head's required checks measured, in durations", () => {
+    const gate = changeGate(
+      answer(CHECKED),
+      [
+        check("unit", "failed", { required: true, duration_ms: 64_000 }),
+        check("lint", "passed", { duration_ms: 3_000 }),
+        check("e2e", "queued", { required: true }),
+      ] as never,
+      "jane",
+    );
+    expect(gate.measured?.map(measuredLine)).toEqual(["unit failed in 1m 4s", "e2e queued"]);
+  });
+
+  test("says the head revision's classes, never an earlier one's", () => {
+    expect(changeGate(answer(CHECKED), [], "jane").classes).toBe("");
+    expect(
+      changeGate(answer(CHECKED, { whitespace_only: [0, 1], complete: false }), [], "jane").classes,
+    ).toBe("Of the 3 paths it touches, 2 change only whitespace");
+    expect(classesLine({ whitespaceOnly: 0, commentOnly: 0, touched: 2, complete: true })).toBe(
+      "Every path it touches changes code",
+    );
+    expect(classesLine({ whitespaceOnly: 0, commentOnly: 1, touched: null, complete: true })).toBe(
+      "Of the paths it touches, 1 only comments; the rest change code",
+    );
+  });
+
+  test("names the human paths that wait on the reader, and no one else's", () => {
+    const human = {
+      kind: "human_approval",
+      state: "unmet",
+      waits_on: [{ handle: "jane", kind: "person" }],
+      detail:
+        "revision 2 touches .crewlet/**, which refs/heads/main holds to a person's approval: it waits on jane",
+    };
+    expect(changeGate(answer([human]), [], "jane").humanPaths).toBe(human.detail);
+    expect(changeGate(answer([human]), [], "ada").humanPaths).toBe("");
+  });
+
+  test("a change with no gate says nothing of one", () => {
+    const gate = changeGate(
+      answer([{ kind: "mergeable", state: "met", detail: "merges cleanly" }]),
+      [check("unit", "passed", { required: true, duration_ms: 1 })] as never,
+      "jane",
+    );
+    expect(gate).toEqual({ measured: null, classes: "", humanPaths: "" });
+    expect(changeGate(undefined, [], "jane")).toEqual({
+      measured: null,
+      classes: "",
+      humanPaths: "",
+    });
+  });
+});
+
 describe("a code notice's card", () => {
   const change = {
     title: "Retry the upload once",

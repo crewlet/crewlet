@@ -64,8 +64,12 @@ import { renderMarkdown } from "~/lib/markdown.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { Attention } from "~/lib/attention.ts";
 import { detailItem, itemAddress } from "~/lib/work.ts";
+import { changeLive } from "~/lib/code.ts";
+import { useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { ChangeStateTag } from "../code/Changes.tsx";
 import type {
+  CodeChangeState,
   CodeInboxNotice,
   SandboxRun,
   WorkAskRow,
@@ -77,8 +81,10 @@ import {
   askQuestion,
   budgetLine,
   changeCard,
+  changeGate,
   changeWords,
   findingsLine,
+  measuredLine,
   firstSentence,
   moment,
   noticeNote,
@@ -265,6 +271,46 @@ function OpenPane({
 }
 
 /**
+ * What an open change card's merge gate says ([changeGate]): what the head
+ * revision's required checks measured, its change classes, and the human
+ * paths that asked for this reader — each said only where it is so, so a
+ * change into an ungated branch draws nothing here. Two reads, of the change
+ * (its readiness, judged for this reader, and its revisions' facts) and of
+ * its checks, the questions its own page asks.
+ */
+function GateFacts({ repo, number }: { repo: string; number: number }) {
+  const { handle } = useViewer();
+  const change = useCodeQuery("code_change", { name: repo, change: number });
+  const checks = useCodeQuery("code_checks", { repo, change: number });
+  if (!change.data || !checks.data) return null;
+  const gate = changeGate(change.data, checks.data.checks ?? [], handle);
+  if (gate.measured === null && !gate.classes && !gate.humanPaths) return null;
+  return (
+    <ReadingPaneSection label="Its gate">
+      <Stack gap={2}>
+        {gate.humanPaths && <Text>{gate.humanPaths}</Text>}
+        {gate.measured !== null && (
+          <ul aria-label="What its checks measured" className="col gap-1">
+            {gate.measured.length === 0 ? (
+              <li>
+                <Text variant="caption">No required check has run on its head yet</Text>
+              </li>
+            ) : (
+              gate.measured.map((m) => (
+                <li key={m.name}>
+                  <Text variant="caption">{measuredLine(m)}</Text>
+                </li>
+              ))
+            )}
+          </ul>
+        )}
+        {gate.classes && <Text variant="caption">{gate.classes}</Text>}
+      </Stack>
+    </ReadingPaneSection>
+  );
+}
+
+/**
  * A notice the code host routed, drawn as an INTENT-FIRST card ([changeCard]):
  * the change it is about and why it reached this reader, then what the change
  * is FOR — the work item it implements and the description its author wrote —
@@ -273,9 +319,12 @@ function OpenPane({
  * The diff is one press away, on the change's own page, and the reader's own
  * marks close the card (`code_mark_inbox`).
  *
- * ASKS NOTHING: every word is the notice's, read with the inbox page, so the
- * card opens with the row and a list of them costs no read per card.
- * Reviewing the change is the change's own page's.
+ * THE LIST ASKS NOTHING: every word above is the notice's, read with the
+ * inbox page, so a list of cards costs no read per card. What the change's
+ * merge gate says — its checks, its change classes, the human paths that
+ * asked for this reader — is read for the ONE card open, by [GateFacts], and
+ * only for a live change, which still has a gate to meet. Reviewing the
+ * change is the change's own page's.
  */
 function ChangeNoticePane({
   notice,
@@ -335,6 +384,9 @@ function ChangeNoticePane({
             </Text>
           </Stack>
         </ReadingPaneSection>
+      )}
+      {card.named && state && changeLive(state as CodeChangeState) && (
+        <GateFacts repo={card.named.repo} number={card.named.number} />
       )}
       {card.diff && (
         <span>

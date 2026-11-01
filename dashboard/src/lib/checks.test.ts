@@ -1,23 +1,35 @@
 /**
- * The checks and queues model every code screen shares.
+ * The checks and queues model every code screen and the Inbox card share.
  *
  * The invariants: an attempt a check was rerun past is history, never its
  * state; a meter of a commit's checks counts only the ones its branch
  * REQUIRES, by state, the rest its remainder; an entry's elapsed time is read
  * against the slowest required check's timeout; a queue is drawn a band per
  * repository and branch, in queue order, each entry beside the train
- * testing it and each band's ejections beside its live entries.
+ * testing it and each band's ejections beside its live entries; a card names
+ * what the head's required checks measured — durations, never tokens — the
+ * change classes only where a lexer classified something, and the human
+ * paths only where they wait on the reader.
  */
 
 import { expect, test } from "vitest";
 
-import type { CodeCandidateRow, CodeCheckRow, CodeQueueRow } from "~/protocol/index.ts";
+import type {
+  CodeCandidateRow,
+  CodeCheckRow,
+  CodeQueueRow,
+  CodeReadiness,
+} from "~/protocol/index.ts";
 import {
   checkStateTone,
   checkStateWord,
+  classCount,
   ejectReasonWord,
+  gatedByChecks,
+  humanPathsAsking,
   latestAttempts,
   longestTimeout,
+  measuredChecks,
   queueBands,
   requiredMeter,
 } from "./checks.ts";
@@ -160,6 +172,85 @@ test("a queue is a band per repository and branch, in queue order, each entry be
   expect(bands[0]!.places[1]!.candidate).toBeNull();
   expect(bands[2]!.places).toEqual([]);
   expect(bands[2]!.ejected.map((e) => e.number)).toEqual([9]);
+});
+
+test("a card's checks are what the head's required checks measured, durations and never tokens", () => {
+  const measured = measuredChecks(
+    [
+      attempt("unit", 1, "passed", { required: true, duration_ms: 61_000 }),
+      attempt("lint", 1, "failed", { duration_ms: 2_000 }),
+      attempt("e2e", 1, "running", { required: true }),
+      attempt("unit", 1, "failed", { required: true, oid: B, duration_ms: 5 }),
+    ],
+    A,
+  );
+  expect(measured).toEqual([
+    { name: "unit", state: "passed", durationMs: 61_000 },
+    { name: "e2e", state: "running", durationMs: null },
+  ]);
+});
+
+test("change classes are counted only where a lexer classified something", () => {
+  const facts = {
+    target_ref: "refs/heads/main",
+    target_oid: B,
+    touched: ["a.go", "b.go", "c.go"],
+    node: "git-a",
+  };
+  expect(classCount(undefined)).toBeNull();
+  expect(classCount(facts)).toBeNull();
+  expect(classCount({ ...facts, classes: {} })).toBeNull();
+  expect(
+    classCount({ ...facts, classes: { whitespace_only: [0], comment_only: [2], complete: true } }),
+  ).toEqual({
+    whitespaceOnly: 1,
+    commentOnly: 1,
+    touched: 3,
+    complete: true,
+  });
+  expect(
+    classCount({ ...facts, touches_all: true, classes: { comment_only: [0] } })?.touched,
+  ).toBeNull();
+});
+
+const READINESS = (preconditions: CodeReadiness["preconditions"]): CodeReadiness => ({
+  met: 0,
+  total: preconditions.length,
+  first: preconditions[0]?.detail ?? "",
+  preconditions,
+});
+
+test("the human paths are named only where they wait on the reader", () => {
+  const asking = READINESS([
+    {
+      kind: "human_approval",
+      state: "unmet",
+      waits_on: [{ handle: "jane", kind: "person" }],
+      detail:
+        "revision 2 touches .crewlet/**, which refs/heads/main holds to a person's approval: it waits on jane",
+    },
+  ]);
+  expect(humanPathsAsking(asking, "jane")).toMatch(/\.crewlet\/\*\*/);
+  expect(humanPathsAsking(asking, "ada")).toBeNull();
+  expect(
+    humanPathsAsking(
+      READINESS([
+        { kind: "human_approval", state: "met", detail: "touches none of main's human paths" },
+      ]),
+      "jane",
+    ),
+  ).toBeNull();
+  expect(humanPathsAsking(undefined, "jane")).toBeNull();
+});
+
+test("a change is gated by checks only where its readiness judges one", () => {
+  expect(gatedByChecks(READINESS([{ kind: "check", state: "unmet", detail: "unit failed" }]))).toBe(
+    true,
+  );
+  expect(
+    gatedByChecks(READINESS([{ kind: "mergeable", state: "met", detail: "merges cleanly" }])),
+  ).toBe(false);
+  expect(gatedByChecks(undefined)).toBe(false);
 });
 
 test("states and reasons are the engine's words, and an unknown one is drawn as sent", () => {

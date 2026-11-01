@@ -12,7 +12,7 @@
  * promised nothing.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -146,6 +146,90 @@ function composedOf(n: Record<string, unknown>): Record<string, unknown> {
 }
 
 /** A notice the code host routed, as the composed inbox carries it. */
+const CODE_AT = { stream: "CREWLET_CODE_LOG", generation: 1, seq: 40 };
+const HEAD_OID = "f".repeat(40);
+
+/**
+ * web!42's own answers as a gated change: main requires unit and e2e (lint
+ * runs unrequired), and holds `.crewlet/**` to a person's approval, which
+ * waits on `waitsOn`; its head revision touches three paths, one of them
+ * only whitespace and one only comments.
+ */
+function gatedChange({ waitsOn }: { waitsOn: string }) {
+  const check = (name: string, state: string, extra: Record<string, unknown> = {}) => ({
+    repo_id: "id-web",
+    repo: "web",
+    oid: HEAD_OID,
+    target: "refs/heads/main",
+    name,
+    attempt: 1,
+    state,
+    purpose: "head",
+    ...extra,
+  });
+  return {
+    code_change: {
+      change: {
+        id: "change-42",
+        repo_id: "id-web",
+        repo: "web",
+        number: 42,
+        title: "Retry the upload once",
+        state: "open",
+        source_ref: "refs/heads/retry",
+        target_ref: "refs/heads/main",
+        head: HEAD_OID,
+        revision: 2,
+        owner: "cto",
+        owner_kind: "agent",
+        readiness: {
+          met: 1,
+          total: 3,
+          first: "unit failed",
+          preconditions: [
+            {
+              kind: "human_approval",
+              state: "unmet",
+              waits_on: [{ handle: waitsOn, kind: "person" }],
+              detail: `revision 2 touches .crewlet/**, which refs/heads/main holds to a person's approval: it waits on ${waitsOn}`,
+            },
+            { kind: "check", state: "unmet", detail: "unit failed" },
+            { kind: "mergeable", state: "met", detail: "merges cleanly" },
+          ],
+        },
+      },
+      revisions: [
+        {
+          n: 2,
+          head: HEAD_OID,
+          pusher: "cto",
+          pusher_kind: "agent",
+          position: CODE_AT,
+          at: "2026-09-30T11:00:00Z",
+          facts: {
+            target_ref: "refs/heads/main",
+            target_oid: "e".repeat(40),
+            touched: [".crewlet/checks.yaml", "app.go", "util.go"],
+            classes: { whitespace_only: [1], comment_only: [2], complete: true },
+            node: "git-a",
+          },
+        },
+      ],
+      position: CODE_AT,
+      level: "session",
+    },
+    code_checks: {
+      checks: [
+        check("unit", "failed", { required: true, duration_ms: 64_000 }),
+        check("e2e", "running", { required: true }),
+        check("lint", "passed", { duration_ms: 3_000 }),
+      ],
+      position: CODE_AT,
+      level: "session",
+    },
+  };
+}
+
 function codeNotice(id: string, extra: Record<string, unknown> = {}) {
   const n = {
     record_id: id,
@@ -217,6 +301,8 @@ let asked: { kind: string; params: Record<string, unknown> }[];
 let posted: { tool: string; args: Record<string, unknown> }[];
 /** Every address the screen fetched, a REST read's as much as a write's. */
 let fetched: string[];
+/** The code host's REST answers a case serves, by question; any other is 404. */
+let rest: Record<string, unknown>;
 
 /**
  * Midday on the company's clock (the fixture org keeps UTC).
@@ -236,10 +322,20 @@ beforeEach(() => {
   asked = [];
   posted = [];
   fetched = [];
+  rest = {};
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
       fetched.push(String(url));
+      // A CODE QUESTION over REST, answered from the case's `rest`, by name.
+      const query = /\/query\/([a-z_]+)/.exec(String(url))?.[1];
+      if (query) {
+        const answer = rest[query];
+        return new Response(JSON.stringify(answer ?? {}), {
+          status: answer ? 200 : 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
       const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
       posted.push({ tool, args: body.args });
@@ -754,13 +850,12 @@ describe("the pane", () => {
   // THE INTENT-FIRST CARD: the work item the change implements and its
   // description lead, then its open agent findings by weight and the one
   // sentence of where its merge stands, and the diff is one press away —
-  // every word the notice's own, so opening it asks the engine nothing more.
-  // A code question goes over REST (`useCodeQuery`), never the socket, so
-  // what the card must not ask is watched on both: the socket's reads and
-  // every address fetched. Mutations: draw the card without its findings,
-  // its readiness or its diff link — red; read the change to draw it
-  // (`useCodeQuery("code_change", …)`) — a /query/code_ fetch, red.
-  test("a code notice opens as an intent-first card that asks nothing more", async () => {
+  // every word the notice's own. The one card OPEN reads its gate (M5) and
+  // nothing else: the change and its checks, of this change alone, over
+  // REST — never the socket, and never a question per listed card. Mutations:
+  // draw the card without its findings, its readiness or its diff link —
+  // red; read the gate of every listed change, or of another — red.
+  test("a code notice opens as an intent-first card that asks only its own gate", async () => {
     location.hash = "#/inbox?row=change%3Ac-5";
     mount({
       services: { tracker: "native", knowledge: "native", code: "native" },
@@ -792,8 +887,100 @@ describe("the pane", () => {
       "#/code/repos/web/changes/42?tab=files",
     );
     expect(asked.filter((a) => a.kind.startsWith("code_"))).toEqual([]);
-    expect(fetched.filter((url) => url.includes("/query/code_"))).toEqual([]);
+    const code = fetched
+      .filter((url) => url.includes("/query/code_"))
+      .map((url) => new URL(url, "http://x"));
+    expect([...new Set(code.map((u) => u.pathname))].sort()).toEqual([
+      "/query/code_change",
+      "/query/code_checks",
+    ]);
+    for (const u of code) {
+      expect(u.searchParams.get("name") ?? u.searchParams.get("repo")).toBe("web");
+      expect(u.searchParams.get("change")).toBe("42");
+    }
     expect(posted).toEqual([]);
+  });
+
+  // THE GATE ON THE CARD (M5): what the head's required checks measured —
+  // durations, never tokens — the change classes, and the human paths that
+  // asked for THIS reader, each read from the change's own answers. Mutations:
+  // list a check the gate does not require, or the human paths waiting on
+  // another person — red.
+  test("a gated change's card says what its checks measured, its classes and the paths that asked you", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    rest = gatedChange({ waitsOn: "jane" });
+    mount({
+      services: { tracker: "native", knowledge: "native", code: "native" },
+      answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    const measured = await pane.findByRole("list", { name: "What its checks measured" });
+    expect(within(measured).getByText("unit failed in 1m 4s")).toBeTruthy();
+    expect(within(measured).getByText("e2e running")).toBeTruthy();
+    expect(within(measured).queryByText(/lint/)).toBeNull();
+    expect(pane.queryByText(/token/i)).toBeNull();
+    expect(
+      pane.getByText(
+        "Of the 3 paths it touches, 1 change only whitespace, 1 only comments; the rest change code",
+      ),
+    ).toBeTruthy();
+    expect(
+      pane.getByText(
+        /touches \.crewlet\/\*\*, which refs\/heads\/main holds to a person's approval/,
+      ),
+    ).toBeTruthy();
+  });
+
+  // THE HUMAN PATHS NAME ONLY THE READER THEY ASK: a person the precondition
+  // waits on sees it, another does not. Mutation: drop the reader's handle
+  // from the test — red.
+  test("the human paths are said only to the person they wait on", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    rest = gatedChange({ waitsOn: "ada" });
+    mount({
+      services: { tracker: "native", knowledge: "native", code: "native" },
+      answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
+    });
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    await pane.findByRole("list", { name: "What its checks measured" });
+    expect(pane.queryByText(/holds to a person's approval/)).toBeNull();
+  });
+
+  // A CHANGE WITH NO GATE says nothing of a gate: no checks, no classes, no
+  // human paths — never "no check measured". Mutation: draw the measured
+  // list whatever the readiness judges — red.
+  test("a change into an ungated branch draws no gate", async () => {
+    location.hash = "#/inbox?row=change%3Ac-5";
+    rest = {
+      code_change: {
+        change: {
+          ...gatedChange({ waitsOn: "jane" }).code_change.change,
+          readiness: {
+            met: 1,
+            total: 1,
+            first: "ready",
+            preconditions: [{ kind: "mergeable", state: "met", detail: "merges cleanly" }],
+          },
+        },
+        revisions: [],
+        position: CODE_AT,
+        level: "session",
+      },
+      code_checks: { checks: [], position: CODE_AT, level: "session" },
+    };
+    mount({
+      services: { tracker: "native", knowledge: "native", code: "native" },
+      answers: { inbox: inboxes({ unread: [codeNotice("c-5")] }) },
+    });
+    await settle();
+    await waitFor(() => expect(fetched.some((u) => u.includes("/query/code_checks"))).toBe(true));
+    await settle();
+    const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
+    expect(pane.getByText(/asked for your review/)).toBeTruthy();
+    expect(pane.queryByText("Its gate")).toBeNull();
+    expect(pane.queryByRole("list", { name: "What its checks measured" })).toBeNull();
   });
 
   // A CHANGE THAT MERGES NOTHING has no readiness: its card says what became
@@ -815,6 +1002,8 @@ describe("the pane", () => {
     const pane = within(document.querySelector(".inbox-pane") as HTMLElement);
     expect(pane.getByText("Merged")).toBeTruthy();
     expect(pane.getByText("No agent finding stands open")).toBeTruthy();
+    // A MERGED CHANGE HAS NO GATE LEFT TO MEET, so its card asks for none.
+    expect(fetched.filter((url) => url.includes("/query/code_"))).toEqual([]);
   });
 
   // MARK ALL READ SENDS BOTH: one read-through a source, each at its own

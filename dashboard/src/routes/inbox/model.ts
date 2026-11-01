@@ -33,7 +33,14 @@
  * come back as an update.
  */
 
-import { firstLine, fmtDateCompact, toWall, zoneOffset } from "~/lib/format.ts";
+import {
+  firstLine,
+  fmtDateCompact,
+  fmtDuration,
+  plural,
+  toWall,
+  zoneOffset,
+} from "~/lib/format.ts";
 import { dateTimeFormat, type DateShape } from "~/lib/formatters.ts";
 import { zone } from "~/lib/prefs.ts";
 import { companyZone } from "~/lib/range.ts";
@@ -56,7 +63,18 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
 import type { DecisionSubject } from "~/lib/decisions.ts";
+import {
+  checkStateWord,
+  classCount,
+  gatedByChecks,
+  humanPathsAsking,
+  measuredChecks,
+  type ClassCount,
+  type Measured,
+} from "~/lib/checks.ts";
 import type {
+  CodeChangeAnswer,
+  CodeCheckRow,
   CodeInboxNotice,
   InboxAnswer,
   InboxNotice,
@@ -438,6 +456,76 @@ export function changeCard(notice: CodeInboxNotice): ChangeCard {
     readiness: change?.readiness?.first || null,
     diff: named ? changeDiffHref(named.repo, named.number) : null,
   };
+}
+
+/**
+ * What a change's merge gate says on its card (M5), read for the ONE card
+ * the reader has open — never a question per listed row, which keeps a page
+ * of fifty cards one read ([ChangeCard]):
+ *
+ * - `measured`: what the head revision's REQUIRED checks measured, each
+ *   one's state and how long it ran — durations, never tokens: a check runs
+ *   no model. Null where the target holds the change to no check (its
+ *   readiness judges no `check` precondition), so a change into an ungated
+ *   branch says nothing of checks rather than "none measured".
+ * - `classes`: the head revision's change classes in a line — how many of
+ *   its touched paths change only whitespace or only comments — or "" where
+ *   no lexer classed anything.
+ * - `humanPaths`: the engine's sentence of the human paths that asked for
+ *   THIS reader — the gate's human_approval precondition, unmet and waiting
+ *   on them — or "" where none does.
+ *
+ * Every field is read from the change's own answers (`code_change`'s
+ * readiness and revisions, `code_checks` of the change), so the card needs
+ * nothing of the engine the change's page does not already read.
+ */
+export interface ChangeGate {
+  measured: Measured[] | null;
+  classes: string;
+  humanPaths: string;
+}
+
+/** A change's gate as its open card draws it — [ChangeGate]. */
+export function changeGate(
+  answer: CodeChangeAnswer | undefined,
+  checks: readonly CodeCheckRow[],
+  handle: string,
+): ChangeGate {
+  const change = answer?.change;
+  const readiness = change?.readiness;
+  const head = (answer?.revisions ?? []).find((r) => r.n === change?.revision);
+  return {
+    measured: change && gatedByChecks(readiness) ? measuredChecks(checks, change.head) : null,
+    classes: classesLine(classCount(head?.facts)),
+    humanPaths: humanPathsAsking(readiness, handle) ?? "",
+  };
+}
+
+/**
+ * A revision's change classes in a line: "Of the 5 paths it touches, 2
+ * change only whitespace, 1 only comments; the rest change code" — the rest
+ * said only where every path was classified, since a path no lexer reached
+ * is in neither list without being code. "" where nothing was classed.
+ */
+export function classesLine(count: ClassCount | null): string {
+  if (!count) return "";
+  const parts: string[] = [];
+  if (count.whitespaceOnly > 0) parts.push(`${count.whitespaceOnly} change only whitespace`);
+  if (count.commentOnly > 0) parts.push(`${count.commentOnly} only comments`);
+  if (parts.length === 0) return count.complete ? "Every path it touches changes code" : "";
+  const lead =
+    count.touched === null
+      ? "Of the paths it touches"
+      : `Of the ${plural(count.touched, "path")} it touches`;
+  return `${lead}, ${parts.join(", ")}${count.complete ? "; the rest change code" : ""}`;
+}
+
+/** One line of what a check measured: "unit passed in 1m 4s", "e2e running". */
+export function measuredLine(m: Measured): string {
+  const word = checkStateWord(m.state);
+  return m.durationMs === null
+    ? `${m.name} ${word}`
+    : `${m.name} ${word} in ${fmtDuration(m.durationMs)}`;
 }
 
 /**

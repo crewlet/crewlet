@@ -3057,10 +3057,20 @@ findings seats raised that stand open, by weight with the heaviest first
 **Open the diff** is one press to the change's page on its Files tab. The
 byline's note says why it reached the reader in the code host's own words
 ("asked for your review", "asked to look again"), never the tracker's. The
-card ASKS NOTHING: every word of it is the notice's own, read with the inbox
-page in one snapshot (`code.NoticeChange`), the readiness judged for the
-reader at that read, so a page of fifty cards is one read and no card
-contradicts the row beside it.
+LIST ASKS NOTHING per card: every word above is the notice's own, read with
+the inbox page in one snapshot (`code.NoticeChange`), the readiness judged for
+the reader at that read, so a page of fifty cards is one read and no card
+contradicts the row beside it. **Its gate** is read for the ONE card open,
+and only for a live change: `code_change` (its readiness, judged for the
+reader, and its revisions' facts) and `code_checks` of the change — the
+questions its own page asks, so the card needs nothing of the engine besides.
+It says what the head revision's REQUIRED checks measured, each one's state
+and duration — never tokens — and only where the readiness judges a `check`
+precondition; the head revision's change classes (how many touched paths
+change only whitespace or only comments, and that the rest change code where
+every path was classified); and the human paths that asked for THIS reader —
+the `human_approval` precondition's sentence where it is unmet and waits on
+them. A change into an ungated branch draws no gate at all.
 Reviewing is the change's own page's; the card's controls are the reader's
 marks.
 

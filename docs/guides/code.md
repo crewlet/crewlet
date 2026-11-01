@@ -435,6 +435,34 @@ change reached, newest first, each with the one reason they heard under; the
 same answer is `GET /code/repos/{name}/changes/{n}/routing` ([A change's
 questions](../reference/api-endpoints.md#a-changes-questions)).
 
+### The Inbox card
+
+A notice about a change opens in your Inbox as a card that leads with what
+the change is FOR: its title, the work item it implements and the opening of
+its description, then what the record said, then **Where it stands** — the
+engine's sentence of where its merge stands and the agent findings that stand
+open, by weight — and **Open the diff**, one press to its files.
+
+While the change is live and its branch has a merge gate, the card also says
+**Its gate**, read for the one card you have open (the list asks nothing per
+card):
+
+- **What its checks measured**: each check the branch requires, on the
+  change's head, with its state and how long it ran (`unit failed in 1m 4s`,
+  `e2e running`) — durations, never tokens. A branch that requires no check
+  draws no list, rather than "none measured".
+- **Its change classes**: how many of the paths the head revision touches
+  change only whitespace or only comments, and — where every path was
+  classified — that the rest change code
+  ([Change classes](../concepts/code-host.md#change-classes)).
+- **The human paths that asked for you**: where the gate holds a path the
+  change touches to a person's approval and waits on you, the engine's
+  sentence naming the globs and the branch. A person it waits on sees it;
+  nobody else's card says it.
+
+A merged or closed change has no gate left to meet, and its card asks for
+none.
+
 ## Merging a change
 
 A ready change is merged with `code_merge_change`, naming the change and the

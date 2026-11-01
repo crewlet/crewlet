@@ -1,7 +1,7 @@
 /**
  * The code host's checks and merge queues in this dashboard's words, and the
  * arithmetic every screen that draws them shares: Code › Queue and Checks, a
- * change's and a repository's checks tabs.
+ * change's and a repository's checks tabs, and the Inbox card.
  *
  * WORDS FOR THE ENGINE'S CLOSED SETS, never the sets themselves: those are
  * `contract/checks.ts`'s, held both ways by `internal/code`. A value a newer
@@ -21,6 +21,8 @@ import type {
   CodeCheckRow,
   CodeEjectedRow,
   CodeQueueRow,
+  CodeReadiness,
+  CodeRevisionFacts,
 } from "~/protocol/index.ts";
 
 type CheckState = (typeof CHECK_STATES)[number];
@@ -211,4 +213,85 @@ export function queueBands(
   for (const out of ejected) band(out.repo, out.target_ref).ejected.push(out);
   for (const b of bands.values()) b.places.sort((x, y) => x.row.place - y.row.place);
   return [...bands.values()];
+}
+
+/** One required check of a change's head, as the Inbox card says what it measured. */
+export interface Measured {
+  name: string;
+  state: string;
+  /** How long it ran, where it ran to an ending; null before. */
+  durationMs: number | null;
+}
+
+/**
+ * What a change's head revision's REQUIRED checks measured, by their latest
+ * attempts, in the order the engine listed them: each one's state and how
+ * long it ran. Never tokens: a check runs no model.
+ */
+export function measuredChecks(rows: readonly CodeCheckRow[], head: string): Measured[] {
+  return latestAttempts(rows.filter((r) => r.oid === head && r.required)).map((r) => ({
+    name: r.name,
+    state: r.state,
+    durationMs: r.duration_ms ?? null,
+  }));
+}
+
+/** A revision's change classes, counted: how many touched paths change only whitespace, only comments. */
+export interface ClassCount {
+  whitespaceOnly: number;
+  commentOnly: number;
+  /** How many paths the revision touches, or null where it touches everything (no list). */
+  touched: number | null;
+  /** Every touched path was classified: one in neither list changes code. */
+  complete: boolean;
+}
+
+/**
+ * A revision's change classes as counts over its touched paths, or null
+ * where its facts are not recorded yet or carry no class at all — a revision
+ * no lexer classified says nothing, which is not "every path is code".
+ */
+export function classCount(facts: CodeRevisionFacts | undefined): ClassCount | null {
+  const classes = facts?.classes;
+  if (!facts || !classes) return null;
+  const whitespaceOnly = classes.whitespace_only?.length ?? 0;
+  const commentOnly = classes.comment_only?.length ?? 0;
+  if (whitespaceOnly === 0 && commentOnly === 0 && !classes.complete) return null;
+  return {
+    whitespaceOnly,
+    commentOnly,
+    touched: facts.touches_all ? null : facts.touched.length,
+    complete: Boolean(classes.complete),
+  };
+}
+
+/**
+ * The human paths that asked for THIS person: the gate's human_approval
+ * precondition where it is unmet and waits on the reader — its sentence,
+ * which names the globs the revision touches and the branch that holds them
+ * to a person's approval. Null where no human path asks the reader: the gate
+ * holds none, the revision touches none, a person already approved, or it
+ * waits on somebody else.
+ */
+export function humanPathsAsking(
+  readiness: CodeReadiness | undefined,
+  handle: string,
+): string | null {
+  if (!readiness || !handle) return null;
+  const pre = readiness.preconditions.find(
+    (p) =>
+      p.kind === "human_approval" &&
+      p.state === "unmet" &&
+      (p.waits_on ?? []).some((w) => w.handle === handle),
+  );
+  return pre ? pre.detail : null;
+}
+
+/**
+ * Whether a change's target holds it to checks at all: its readiness judges
+ * a `check` precondition. A change into an ungated branch has none, and its
+ * card says nothing of checks rather than "none measured".
+ */
+export function gatedByChecks(readiness: CodeReadiness | undefined): boolean {
+  return Boolean(readiness?.preconditions.some((p) => p.kind === "check"));
 }
