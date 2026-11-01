@@ -9280,7 +9280,7 @@ a takeover, and on the same node re-claiming after its own lease lapsed.
       "config_boot_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
       "config_reported_at": "2026-09-23T08:14:02.118Z",
       "in_flight": 1, "draining": false, "started_at": "2026-09-23T08:01:57Z",
-      "posture": "serve", "appliers_ready": 9, "appliers_total": 9,
+      "posture": "serve", "appliers_ready": 10, "appliers_total": 10,
       "admin": "serve"
     }
   ],
