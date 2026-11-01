@@ -47,6 +47,8 @@ type codeWrites struct {
 	changes    []code.ChangeProposal
 	converses  []code.ConversationWrite
 	marks      []code.MarkWrite
+	checks     []code.ChecksRequest
+	check      func(r code.ChecksRequest) (code.ChecksResult, error)
 	write      func(w code.EngineWrite) (code.EngineWriteResult, error)
 	life       func(r code.LifecycleRequest) (code.LifecycleResult, error)
 	change     func(p code.ChangeProposal) (code.ChangeResult, error)
@@ -117,6 +119,34 @@ func (c *codeWrites) Change(_ context.Context, p code.ChangeProposal) (code.Chan
 	}
 	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 7,
 		Version: p.ExpectedVersion + 1, Position: codeAt(15)}, nil
+}
+
+// Checks answers a write of a repository's checks as applied, the attempt it
+// names queued — or running, or ended, as a report says — unless a case
+// answers otherwise.
+func (c *codeWrites) Checks(_ context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+	c.mu.Lock()
+	c.checks = append(c.checks, r)
+	answer, before := c.check, c.before
+	c.mu.Unlock()
+	if before != nil {
+		before("checks", r.RepoID())
+	}
+	if answer != nil {
+		return answer(r)
+	}
+	row := &code.CheckRow{CheckKey: r.Key(), State: code.CheckStateQueued}
+	if r.Report != nil {
+		row.State = r.Report.State
+	}
+	return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: row}, nil
+}
+
+// checksAsked is every write of a repository's checks the case sent.
+func (c *codeWrites) checksAsked() []code.ChecksRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.checks)
 }
 
 // Mark answers a person's mark as applied.
@@ -319,7 +349,7 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 	for _, tier := range append(code.Tiers(), "", "admin") {
 		withheld := builtin.CodeWritesWithheld(tier)
 		if len(withheld) != 0 && !slices.Equal(withheld, builtin.CodeWrites()) {
-			t.Errorf("tier %q withholds %v, want all eighteen writes or none", tier, withheld)
+			t.Errorf("tier %q withholds %v, want every code write or none", tier, withheld)
 		}
 		for _, repo := range repos {
 			g := code.GrantOf(agent, repo, tierRoster{tier: tier})
@@ -924,9 +954,10 @@ func TestAnUnboundTokenWritesNothing(t *testing.T) {
 	reads, _, _ := host.asked()
 	writes, lifecycles := writer.asked()
 	changes, converses := writer.changesAsked()
-	if len(reads)+len(writes)+len(lifecycles)+len(changes)+len(converses) != 0 {
-		t.Errorf("an unbound token's writes sent %d reads, %d writes, %d requests and %d writes of changes",
-			len(reads), len(writes), len(lifecycles), len(changes)+len(converses))
+	checks := writer.checksAsked()
+	if len(reads)+len(writes)+len(lifecycles)+len(changes)+len(converses)+len(checks) != 0 {
+		t.Errorf("an unbound token's writes sent %d reads, %d writes, %d requests, %d writes of changes and "+
+			"%d of checks", len(reads), len(writes), len(lifecycles), len(changes)+len(converses), len(checks))
 	}
 }
 
@@ -1137,7 +1168,13 @@ func holdingCall(name string) (map[string]any, bool) {
 			"resolution": "dismissed"},
 		builtin.CodeApplySuggestionsTool: {"repo": repo, "change": 7, "findings": []any{suggestedA},
 			"expected_head": revHead(3)},
-		builtin.CodeRebaseChangeTool: {"repo": repo, "change": 7, "expected_head": revHead(3)},
+		builtin.CodeRebaseChangeTool:     {"repo": repo, "change": 7, "expected_head": revHead(3)},
+		builtin.CodeGetCheckFailuresTool: {"repo": repo, "sha": mainOID, "checked_for": "main", "name": "unit"},
+		builtin.CodeRerunChecksTool: {"repo": repo, "sha": mainOID, "checked_for": "main",
+			"checks": []any{map[string]any{"name": "unit", "attempt": 1}}},
+		// A REPORT IS A PERSON'S (TestAReportIsAPersons): no seat's turn
+		// sends one, so it holds nothing, as an operator's call holds nothing.
+		builtin.CodeReportCheckTool: nil,
 	}
 	args, ok := rows[name]
 	return args, ok

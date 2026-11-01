@@ -142,6 +142,10 @@ func (h *codeWriteHost) Mark(context.Context, code.MarkWrite) (code.MarkResult, 
 	return code.MarkResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(24)}, nil
 }
 
+func (h *codeWriteHost) Checks(context.Context, code.ChecksRequest) (code.ChecksResult, error) {
+	return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(25)}, nil
+}
+
 // writesAsked is the engine writes the host was asked, copied under its lock.
 func (h *codeWriteHost) writesAsked() []code.EngineWrite {
 	h.mu.Lock()

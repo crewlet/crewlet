@@ -54,6 +54,7 @@ func TestAChecksWriteBeyondItsBoundsIsAnsweredBusyAtOnce(t *testing.T) {
 	w, err := code.NewChecksWriter(code.ChecksWriterOptions{
 		Publisher: gate, DB: n.db.Reader(), NodeID: n.id,
 		Retention: func() time.Duration { return code.DefaultDeletedRetention },
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart(), Zone: time.UTC}, true },
 		Now:       func() time.Time { return harnessAt },
 	})
 	if err != nil {

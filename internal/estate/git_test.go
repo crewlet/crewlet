@@ -1745,6 +1745,10 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		// A WRITE OF A CHANGE'S CONVERSATION THE CHART JUDGES: a seat's, and an
 		// ask of reviewers by anybody, each reviewer judged by the chart; a
 		// person's comment, review, answer and withdrawal consult none.
+		{opCodeChecks.spec, code.ChecksRequest{Asker: seat, Rerun: &code.CheckRerun{}}, true},
+		{opCodeChecks.spec, code.ChecksRequest{Asker: person, Rerun: &code.CheckRerun{}}, false},
+		{opCodeChecks.spec, code.ChecksRequest{Asker: person, Report: &code.CheckReported{}}, false},
+		{opCodeChecks.spec, code.ChecksRequest{Queued: &code.CheckQueued{}}, false},
 		{opCodeConversation.spec, code.ConversationWrite{Asker: seat, Comment: &code.Comment{}}, true},
 		{opCodeConversation.spec, code.ConversationWrite{Asker: person, Comment: &code.Comment{}}, false},
 		{opCodeConversation.spec, code.ConversationWrite{Asker: seat, Review: &code.Review{}}, true},

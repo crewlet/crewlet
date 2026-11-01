@@ -339,6 +339,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
 		DB:        p.estate.Reader(), NodeID: d.o.ID,
 		Retention: func() time.Duration { return deletedRetention },
+		SeatRules: seatRules, Current: d.o.Current,
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the checks writer: %v", d.o.ID, err)
 	}

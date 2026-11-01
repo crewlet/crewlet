@@ -586,14 +586,63 @@ log. One that ended **errored** measured nothing: its box or its setup failed
 the engine queues it again, up to its third attempt; a file naming a cell or a
 secret the company does not allow is `defs_invalid`, and is not queued again.
 
+A seat reads all four with `code_get_check_failures` — naming the commit by
+`change` (its head) or `sha`, and the check by `name` — its failures a page at
+a time and its log 32 KiB a page, every word of them fenced as text nobody in
+the company wrote ([Text somebody else
+wrote](../concepts/agent-runtime.md#text-somebody-else-wrote)); and
+`code_get_change`'s `checks` part lists a change's head's checks in a line
+each. **Running a check again** is `code_rerun_checks`, naming each check and
+the attempt you read as its latest (or `all_failed`), so two people who read
+the same red check queue one attempt between them, never two. A person reruns
+any ended attempt; a seat only one its infrastructure or a stop ended —
+`errored` or `cancelled` — and only on a repository it may write or a change
+it wrote, because a failure is a measurement of the code, and a seat that
+could rerun one would re-roll a flaky test until it passed. A check runs at
+most ten attempts.
+
+## External CI
+
+A check the engine does not run — your own CI's, on a runner of yours — is
+reported onto the same rows, so a change's readiness, its checks part and the
+dashboard read it beside the engine's own. A report is a **person's**: your CI
+calls `code_report_check` over [your own
+assistant's](../reference/api-endpoints.md#operatormcp--your-own-assistant)
+surface with a token of your own (`crewlet iam token -login`), and the report
+names you. A token bound to no seat only reads, and no seat may report: a
+check result is a measurement, and a seat runs no CI whose result it could
+send.
+
+```json
+{"name": "code_report_check", "arguments": {
+  "repo": "web", "sha": "<the commit's whole id>", "name": "e2e",
+  "status": "running", "url": "https://ci.example.com/runs/812"}}
+```
+
+Report `running` when the run starts, then how it ended — `passed`,
+`failed`, `errored` or `cancelled` — with its `summary`, `tail` and
+`failures` (each a `path`, `line`, `test_id` and `message`, at the bounds an
+engine check keeps) and the run's `url`. Name the commit by `sha` and the
+branch it is checked for by `checked_for` (the repository's default branch
+when left out), or by `change`, which reports for the change's head and
+target. An ending sent again is answered from the row, so a CI that retries a
+lost answer records nothing twice; a run after an ended one is the check's
+next attempt. One check of a commit is one runner's or one CI's, never both:
+a name the engine has queued at that commit for that branch is refused
+`native_check`, so the engine's result is never overwritten, and a name your
+CI reported first is left to it — the engine's dispatch queues nothing of a
+name the commit already holds an attempt of. So name your CI's checks apart
+from the ones `.crewlet/checks.yaml` defines.
+
 ## Seats and code
 
 Nothing to set up: once the company hosts code, your seats work in its
-repositories through the twenty-nine [code
+repositories through thirty-two of the [code
 tools](tools-and-mcp.md#the-companys-code), on the server and in their own
-names. A seat holds no git credential and needs none. Every seat reads with
-eleven of the tools; a seat whose `role.code.access` is `full_access` also
-changes the repositories with the other eighteen; and a seat whose role has a
+names — every one but `code_report_check`, which is a person's. A seat holds
+no git credential and needs none. Every seat reads with twelve of the tools;
+a seat whose `role.code.access` is `full_access` also changes the
+repositories with the other twenty; and a seat whose role has a
 sandbox works in a clone besides. What each may do is its grant, derived from
 the chart ([Who may read and push](../concepts/code-host.md#who-may-read-and-push)).
 

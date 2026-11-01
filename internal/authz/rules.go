@@ -184,6 +184,15 @@ const (
 	// And its commits rebased onto its target: an engine write of its source,
 	// a forced push of it, judged as every engine write is.
 	ActionCodeRebaseChange Action = "code_rebase_change"
+	// A commit's CHECKS: what a check that failed said — its failures, its
+	// summary, its tail and pages of its log — read by the repository's
+	// grant; an attempt run again, decided by the repository's checks writer
+	// from its own chart (a seat reruns only what its infrastructure ended,
+	// on a repository it may write or a change it wrote); and a person's own
+	// CI reporting a check of a commit, a person's alone.
+	ActionCodeGetCheckFailures Action = "code_get_check_failures"
+	ActionCodeRerunChecks      Action = "code_rerun_checks"
+	ActionCodeReportCheck      Action = "code_report_check"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead Action = "get_person"
@@ -828,6 +837,15 @@ var rules = map[Action]rule{
 	ActionCodeApplySuggestions: {class: ClassEverybody, recency: iam.RecencyAny},
 	// AND ITS REBASE, on the same footing.
 	ActionCodeRebaseChange: {class: ClassEverybody, recency: iam.RecencyAny},
+	// AND A COMMIT'S CHECKS: their failures read, and an attempt run again,
+	// each decided per repository in the tool and by the checks writer from
+	// its chart, on the same footing — a seat reads what failed and reruns
+	// what its infrastructure ended. A REPORT is a person's own CI's, and so
+	// human-only: a seat runs no CI of its own, and a report it could send
+	// would be a check result nobody ran (M5-D24).
+	ActionCodeGetCheckFailures: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeRerunChecks:      {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeReportCheck:      {class: ClassEverybody, humanOnly: true, recency: iam.RecencyAny},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the

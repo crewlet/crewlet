@@ -563,10 +563,7 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if err != nil {
 		return err
 	}
-	var (
-		rows   *sql.Rows
-		cursor func(CheckRow) string
-	)
+	var rows *sql.Rows
 	switch {
 	case c.Change != 0:
 		// ONE err FOR EVERY BRANCH, never one declared here: a statement's
@@ -594,24 +591,20 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
 		rows, err = tx.QueryContext(ctx, checksOfTargetSQL, repo.ref.ID, oid, change.target, name, attempt, limit)
-		cursor = func(row CheckRow) string { return nameAttemptCursor(row) }
 	case c.OID != "":
 		target, name, attempt, ok := cutTargetCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
 		rows, err = tx.QueryContext(ctx, checksOfCommitSQL, repo.ref.ID, c.OID, target, name, attempt, limit)
-		cursor = targetCursor
 	case q.Cursor == "":
 		rows, err = tx.QueryContext(ctx, checksOfRepoSQL, repo.ref.ID, limit)
-		cursor = endedCursor
 	default:
 		at, oid, target, name, attempt, ok := cutEndedCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
 		rows, err = tx.QueryContext(ctx, checksOfRepoAfterSQL, repo.ref.ID, at, oid, target, name, attempt, limit)
-		cursor = endedCursor
 	}
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's checks: %w", repo.ref.Name, err)
@@ -621,7 +614,7 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's checks: %w", repo.ref.Name, err)
 	}
-	r.pageChecks(scanned, c.keeps, limit, cursor, out)
+	r.pageChecks(scanned, c.keeps, limit, checksWalk(q), out)
 	return nil
 }
 
@@ -665,7 +658,7 @@ func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c Ch
 		return err
 	}
 	r.pageChecks(scanned, func(row CheckRow) bool { _, ok := listed[row.RepoID]; return ok && c.keeps(row) },
-		limit, windowCursor, out)
+		limit, checksWalk(q), out)
 	return nil
 }
 
@@ -1047,6 +1040,37 @@ func checksBacklogIn(ctx context.Context, tx *sql.Tx, now time.Time) (ChecksBack
 
 // cursorTarget spells a target branch in a cursor.
 var cursorTarget = base64.RawURLEncoding
+
+// checksWalk is how a `checks` listing q spells the cursor that resumes it
+// after a row it served, by the walk its question takes: the window's where it
+// names no repository ([windowCursor]); one change's attempts at its head, by
+// name and attempt ([nameAttemptCursor]); one commit's for every target
+// ([targetCursor]); and a repository's, newest ended first ([endedCursor]).
+// THE ONE CHOICE: the reader pages by it and [ReadQuery.ChecksCursor] answers
+// from it, so a page's own cursor and one a caller asks for after any of its
+// rows are spelled alike.
+func checksWalk(q ReadQuery) func(CheckRow) string {
+	c := CheckQuery{}
+	if q.Checks != nil {
+		c = *q.Checks
+	}
+	switch {
+	case q.Repo == "":
+		return windowCursor
+	case c.Change != 0:
+		return nameAttemptCursor
+	case c.OID != "":
+		return targetCursor
+	}
+	return endedCursor
+}
+
+// ChecksCursor is the cursor that resumes q — a `checks` listing — after row,
+// a row a page of it served: what a caller that keeps fewer of a page's rows
+// than it was served hands back as the next page's cursor. It is spelled by
+// the walk q's question takes ([checksWalk]), as the page's own cursor is, so
+// a caller never learns how a walk spells one.
+func (q ReadQuery) ChecksCursor(row CheckRow) string { return checksWalk(q)(row) }
 
 // nameAttemptCursor is a row's place among one commit's attempts for one
 // target.

@@ -91,6 +91,12 @@ type codeHost struct {
 	// and one change a part at a time (codechanges_test.go) — under the
 	// host's lock, every one recorded with the rest.
 	changes func(q code.ReadQuery) (code.ReadAnswer, error)
+	// checks is every attempt of every check the repository holds, read
+	// whole: a `checks` read answers their rows — a commit's, or every one
+	// for a change's — and a `check` read the one its question names
+	// (codechecks_test.go). newCodeHost holds one: attempt 1 of `unit` at
+	// main, for main, ended errored.
+	checks []code.CheckDetail
 	// before, set, is called with each question's kind before it is
 	// answered, outside the host's lock — so a case can read what the asking
 	// turn held when the question arrived.
@@ -121,6 +127,9 @@ func newCodeHost() *codeHost {
 			"refs/heads/main": codeAt(10), "refs/heads/feature": codeAt(11), "refs/tags/v1": codeAt(8),
 		},
 		floor: codeAt(3), at: codeAt(12),
+		checks: []code.CheckDetail{{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: siteID, OID: mainOID,
+			Target: "refs/heads/main", Name: "unit", Attempt: 1}, State: code.CheckStateErrored,
+			Reason: code.CheckReasonBoxFailed}}},
 	}
 }
 
@@ -199,6 +208,40 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 		if h.changes != nil {
 			return h.changes(q)
 		}
+	case code.ReadChecks, code.ReadCheck:
+		if _, err := h.named(q.Repo); err != nil {
+			return code.ReadAnswer{}, err
+		}
+		c := q.Checks
+		for i := range h.checks {
+			d := h.checks[i]
+			switch {
+			case c.OID != "" && d.OID != c.OID:
+			case q.Kind == code.ReadChecks:
+				out.Checks = append(out.Checks, d.CheckRow)
+			case d.Target == c.Target && d.Name == c.Name && d.Attempt == c.Attempt:
+				out.Check = &d
+				return out, nil
+			}
+		}
+		if q.Kind == code.ReadCheck {
+			return code.ReadAnswer{}, fmt.Errorf("%w: attempt %d of check %s", code.ErrCheckNotFound, c.Attempt,
+				c.Name)
+		}
+		// A PAGE OF THEM, from the cursor its listing's walk names a row by
+		// (code.ReadQuery.ChecksCursor), as the code host pages a listing.
+		if q.Cursor != "" {
+			at := slices.IndexFunc(out.Checks, func(r code.CheckRow) bool { return q.ChecksCursor(r) == q.Cursor })
+			if at < 0 {
+				return code.ReadAnswer{}, fmt.Errorf("%w: %q", code.ErrBadCursor, q.Cursor)
+			}
+			out.Checks = out.Checks[at+1:]
+		}
+		if q.Limit > 0 && len(out.Checks) > q.Limit {
+			out.Checks = out.Checks[:q.Limit]
+			out.Next = q.ChecksCursor(out.Checks[q.Limit-1])
+		}
+		return out, nil
 	}
 	return code.ReadAnswer{}, fmt.Errorf("%w: a code tool read kind %s", code.ErrInvalid, q.Kind)
 }
@@ -412,7 +455,7 @@ func asUnboundToken() context.Context {
 // ---- one list, two surfaces --------------------------------------------- //
 
 // THE CODE TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
-// built over the same deps, hold the same code tools — the eleven reads,
+// built over the same deps, hold the same code tools — the twelve reads,
 // then the writes, every one the authority table names, in the list's own
 // order — with byte-identical descriptions and schemas but for the one
 // argument the operator surface alone offers, the writes' `op_id`, which no
@@ -1710,10 +1753,11 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the thirty code tools'
+// codeCatalogueBudget is the most bytes the thirty-three code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // a seat at full_access carries, the one tier offered the writes
-// (CodeWritesWithheld); every other seat carries the reads alone
+// (CodeWritesWithheld) — but for code_report_check, a person's alone — and
+// what the operator catalogue serves; every other seat carries the reads alone
 // ([codeReadsCatalogueBudget]).
 //
 // 43 200: measured at 40 680 (~10 170 tokens), so ~6% headroom — a sentence can
@@ -1761,10 +1805,17 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // what said once in each description. And 42 000 → 43 200 when
 // code_apply_suggestions joined, deliberately, with its measured cost:
 // 39 603 → 40 680, 1 077 bytes (~269 tokens), what it applies and that the
-// applier becomes an author said once, in its description.
-const codeCatalogueBudget = 43_200
+// applier becomes an author said once, in its description. And 43 200 →
+// 49 400 when the check tools joined, deliberately, with their measured cost:
+// 41 644 → 46 587 (~11 647 tokens), 4 943 bytes (~1 236 tokens) —
+// code_get_check_failures 1 433, code_rerun_checks 1 709 and
+// code_report_check 1 801, which no seat is shown (it is human-only, so a
+// full_access seat carries 44 786) — each argument its name and type but
+// where they do not say it, who may rerun what and that a report is a
+// person's said once, in each description; ~6% headroom again.
+const codeCatalogueBudget = 49_400
 
-// codeReadsCatalogueBudget is the most bytes the eleven code reads'
+// codeReadsCatalogueBudget is the most bytes the twelve code reads'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // every seat of a company hosting code carries on every round, whatever its
 // tier, since a seat below full_access is offered the reads alone
@@ -1777,17 +1828,21 @@ const codeCatalogueBudget = 43_200
 // (~3 013 tokens) between the two budgets' figures then, and a change's three
 // lifecycle writes, four conversation writes and the apply of its suggestions
 // beside them make the eighteen 23 105 (~5 776 tokens), carried by a
-// full_access seat alone.
-const codeReadsCatalogueBudget = 18_600
+// full_access seat alone. And 18 600 → 20 300 when code_get_check_failures
+// joined, deliberately, with its measured cost: 17 649 → 19 082 (~4 771
+// tokens), 1 433 bytes (~358 tokens), the check named as its siblings name a
+// commit and how its log is paged said once, in `cursor`'s description; ~6%
+// headroom again.
+const codeReadsCatalogueBudget = 20_300
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
-// code carries the eleven reads' definitions on every round of every turn, and
-// a seat at full_access the nineteen writes' beside them: a CLI's catalogue
+// code carries the twelve reads' definitions on every round of every turn, and
+// a seat at full_access twenty writes' beside them: a CLI's catalogue
 // rides in the user text (cliagent.RenderPrompt), so nothing caches them, and
 // each byte is paid again every round. Measured as that catalogue renders them
 // — indented, HTML-escaped, added to a catalogue already holding a tool, so
 // each one's separator and indentation count — the reads alone and all
-// thirty, each held to a budget, so a later description edit is a
+// thirty-three, each held to a budget, so a later description edit is a
 // decision rather than drift, as the executor prompt's budgets make a sentence
 // one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1814,8 +1869,9 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		what        string
 		got, budget int
 	}{
-		{"the eleven code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all thirty code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
+		{"the twelve code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
+		{"all thirty-three code tools (a full_access seat's and the operator's)",
+			added(writeDeps(newCodeHost(), &codeWrites{})),
 			codeCatalogueBudget},
 	} {
 		tokens := cliagent.EstimateTokens(strings.Repeat(" ", c.got))

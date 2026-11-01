@@ -318,8 +318,9 @@ is (copy the directory into your assistant's skills folder).
 
 ### The company's code
 
-Twenty-nine more — eleven that read, two of them a repository's changes, and
-eighteen that change a branch, a repository or a change — registered wherever
+Thirty-three more — twelve that read, two of them a repository's changes and
+one a commit's checks, and twenty-one that change a branch, a repository, a
+change or a commit's checks — registered wherever
 the company hosts its git repositories in the engine (`code.native`; see [Code
 Host](../concepts/code-host.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
@@ -328,22 +329,24 @@ terms the node's `/code/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](code.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same twenty-nine, so an operator's own
+and the operator catalogue serves the same thirty-three, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
-person as the human seat they hold. The eleven reads are reads: none counts as
+person as the human seat they hold — and reports their own CI's checks, which
+no seat does. The twelve reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
-them, and the operator catalogue records no call to one. The eighteen writes
-each deliver to the code host, so a turn woken about work on a repository that
+them, and the operator catalogue records no call to one. The twenty-one
+writes each deliver to the code host, so a turn woken about work on a repository that
 answered by moving a branch, opening a change or reviewing one delivered; no
 worker is ever handed one, since it
 would write with its parent's grant; and every call to one on the operator
-catalogue is recorded as any write is. A seat is offered the eighteen only where
+catalogue is recorded as any write is. A seat is offered twenty of them —
+every write but `code_report_check`, a person's alone — only where
 its `role.code.access` is `full_access`: below it, no repository's grant lets
 the seat change anything ([Who may read and
 push](../concepts/code-host.md#who-may-read-and-push)), so a `read_only` or
 `review` seat — `read_only` is what a seat that sets none runs at — is offered
-the eleven reads alone, and its prompt says nothing about changing code,
-rather than carrying eighteen tools it would be refused on every repository on
+the twelve reads alone, and its prompt says nothing about changing code,
+rather than carrying twenty tools it would be refused on every repository on
 every round.
 
 | Tool | Description |
@@ -359,6 +362,7 @@ every round.
 | `code_blame` | Which commit last changed each line of a file (`path`) at a commit (`rev`): every line with its commit, the line it was in that commit and its old path where the file was renamed since, and each commit once with its author, date, subject and the push behind it — at most 500 lines a call (`start_line`, `end_line`), a page at a time (`next` back as `cursor`) ([Who changed a line](../concepts/code-host.md#who-changed-a-line)) |
 | `code_list_changes` | Changes — a branch proposed into another, named like `web!42` — newest first, `limit` a page (1 to 50, 20 by default; `next` back as `cursor`): each with its title, state, branches, head and revision, owner, work item, version and, while it is live, its [merge readiness](../concepts/code-host.md#merge-readiness) in a line. A call names what to list — a `repo`, a `work` item (`<backend>:<id>`), a `state`, a `reviewer`, or `needs`: `review` or `fix` (a reviewer's or an owner's, the caller's own by default), `me` (both of the caller's) or `person` — and narrows it by the rest and an `owner` ([Reading changes](../concepts/code-host.md#reading-changes)). A change of a repository the caller may not read — or, in a turn a colleague seat woke, the colleague may not — is not listed, so a page can hold fewer than `limit`, or none, and still name a `next` |
 | `code_get_change` | One change, named by `change` — its number on `repo`, or its reference, `web!42` — a `part` at a time: `summary` (its row, description, authors, conversation counts and revisions, newest first, a page at a time), `merge_readiness` (each precondition, whom an unmet one waits on, who clears each standing blocker, and its head's recorded merge into its target), `files` and `diff` (a `revision`'s files from the base its facts record — its latest by default — and one `file`'s patch; with `since_revision`, what changed from that revision to it, kept to the files either touches: what to re-review), `findings` (each with `at`, where its lines are in the `revision` asked about — moved, outdated or gone), `reviews` and `comments`, each a page at a time (`next` back as `cursor`) ([A revision's facts](../concepts/code-host.md#a-revisions-facts)) |
+| `code_get_check_failures` | What a check of a commit said, named by `change` (its head, checked for its target) or `sha` (with `checked_for` where it was checked for more than one branch) and by `name`, its latest attempt unless `attempt` names another: its state and why it ended, its summary, the tail of its output and the failures its reports named, a page at a time (`next` back as `cursor`), and — where a failed run kept one — its log's size and `log.cursor`, which reads the log 32 KiB a page ([Reading a failed check](code.md#reading-a-failed-check)) |
 | `code_commit_files` | A small change to a branch's files, built on the code host and landed as one push: `files`, one operation a path — `put` (`content`, or `blob_oid` of a file the repository holds; `mode` 100755 for an executable, 120000 for a link whose target is `content`), `edit` (`old`, which must occur exactly once, and `new`), `delete`, `move` (`to`) or `mode` (100644 or 100755) — onto the head the caller read (`expected_head`), or creating the branch from `base`. At most 1 000 operations, each path at most 64 components deep, and 1 MiB a call of operations and `message` as JSON spells them, where `<`, `>` and `&` take six bytes each; a change to build or test belongs in a coding run |
 | `code_revert` | The revert of one `commit` onto a branch's head (`expected_head`), under git's own message or a `message` of at most 1 MiB as JSON spells it. One that conflicts commits nothing, and answers each conflicted path with its stages' ids — base, ours, theirs, each readable with `code_read` — and the start of the file as git marked it |
 | `code_cherry_pick` | One `commit`'s change onto a branch's head (`expected_head`), its message naming the commit it came from unless a `message` replaces it, held to `code_revert`'s bound; a conflict is answered as `code_revert`'s |
@@ -378,6 +382,8 @@ every round.
 | `code_resolve_finding` | Findings answered (`findings`, at most 64): `resolved`, `wont_fix` or `disputed` — an author's, which leave a blocker standing for its raiser to judge — or `dismissed` — its raiser's, a maintainer's or a person's, which clears it — with a `note` and, for `resolved`, the `commit` that answers them ([Findings](../concepts/code-host.md#findings)) |
 | `code_apply_suggestions` | The suggestions of the `findings` named (at most 64) — each a finding of the change that still stands, suggests lines and is on the new side — put in place of the lines they are anchored to on the change's source branch at the head the caller read (`expected_head`), as ONE commit of the caller's (`message`, a sentence naming the change by default): each where its finding was shown, all of them or none — an outdated one (`stale_version`, naming it) or two that overlap (`invalid`) apply nothing ([A review's suggestions applied](../concepts/code-host.md#a-reviews-suggestions-applied)). Then each finding is answered `resolved` with the commit, in a second write; the applier becomes an author of the change, whose approval no longer counts |
 | `code_rebase_change` | The change rebased onto its target's tip from the head the caller read (`expected_head`): its commits the target does not hold replayed oldest first, each keeping its author and author date, and its branch moved to them by one forced push of the caller's, held to the branch's protections as a force-push is. The first commit that conflicts stops it with nothing changed (`invalid`, naming the commit and each conflicted path); a change of more than 1 000 such commits, or holding a merge commit, is refused (`invalid`) ([A change rebased](../concepts/code-host.md#a-change-rebased)) |
+| `code_rerun_checks` | A commit's checks run again — named by `change` or `sha` as `code_get_check_failures` names them — each named in `checks` with the attempt the caller read as its latest (at most 16 a call), or with `all_failed` every check whose latest attempt ended without passing: each queued at the next attempt, at most ten. A seat reruns only an attempt its infrastructure or a stop ended (`errored`, `cancelled`), on a repository it may write or a change it wrote; a failure is refused it `rerun_genuine`. A check a person's CI reports is refused `native_check`: its CI runs it again |
+| `code_report_check` | A person's own CI's check of a commit, reported onto the commit's checks — `status` `running` when it starts, then `passed`, `failed`, `errored` or `cancelled` with its `summary`, `tail`, `failures` and `url` — by `sha` (for `checked_for`, the default branch when left out) or `change`. A person's alone, never a seat's, and refused `native_check` for a check the engine has queued at that commit ([External CI](code.md#external-ci)) |
 
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a
@@ -441,6 +447,12 @@ writer earns from the reader — a description at `colleague` at the most once
 the change has moved past its open, since an edit may have rewritten it by
 somebody its row does not name. A patch `code_get_change` reads is a
 repository's text, fenced as `code_diff`'s is.
+
+**What a check said is nobody's.** A check's summary, the tail of its output,
+each failure's message and every page of its kept log are what the commit's
+code and its tests printed — or what a person's CI sent — so
+`code_get_check_failures` and `code_get_change`'s `checks` part answer each
+fenced as `check_log` at trust `external`, naming no writer.
 
 **A change is read by its revisions.** A change's rows are read at
 linearizable as a repository's are — once a call: a call that reads the change
@@ -529,7 +541,7 @@ narrower read: a line range, fewer commits, or a file's lines in place of its
 patch.
 
 **And one no seat is given: `code_repo_readers`**, which the operator
-catalogue serves beside the eleven, on their terms — who read a
+catalogue serves beside the twelve reads, on their terms — who read a
 `visibility: unit` repository's contents over a range of company days (`from`
 and `to`, both inclusive, the thirty days ending today where the call names
 neither, at most 181 apart; `next` back as `cursor`): every credential and the

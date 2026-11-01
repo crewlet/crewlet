@@ -303,8 +303,18 @@ var opCodeMark = define("code.mark", opIdempotentWrite, codeDomain, false,
 // holds its answer slot while it waits for its repository's turn on that node
 // — a wait the writer bounds (code.ChecksWritesPerRepo, ChecksWritesPerNode),
 // answering a write past it busy at once, and the lane's width holds
-// ([proposalAnswers]). No actor: every write is the engine's own, and names no
-// principal.
+// ([proposalAnswers]). No actor: the engine's own writes name no principal,
+// and a principal's — a rerun a seat or a person asks for, a person's CI's
+// report — travels inside the request, checked by its Validate on the node
+// that decides, which records it as who asked.
+//
+// A SEAT'S RERUN JUDGES ITS GRANT from the deciding node's chart — whether it
+// may write the repository or wrote the change the check judges, and
+// whoever its turn works for — so it is declared so
+// (code.ChecksRequest.JudgesChart, the writer's own rule), and a node behind
+// the company's configuration answers none of it ([op.judgesGrant]), even
+// asked last; a person's rerun and report, and the engine's own records,
+// consult no chart.
 var opCodeChecks = define("code.checks", opIdempotentWrite, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, r code.ChecksRequest) (code.ChecksResult, error) {
 		if b.Code == nil {
@@ -312,7 +322,8 @@ var opCodeChecks = define("code.checks", opIdempotentWrite, codeDomain, false,
 		}
 		res, err := b.Code.PublishChecks(ctx, r)
 		return res, ranNothing(err)
-	}).keyedBy(code.ChecksRequest.RepoID).answeredOn(laneProposals)
+	}).keyedBy(code.ChecksRequest.RepoID).answeredOn(laneProposals).
+	judgesGrant(code.ChecksRequest.JudgesChart)
 
 // proposalAnswers is how many proposals a data node answers at once, on the
 // lane they have to themselves ([laneProposals]): 2 112, THE MOST ONE

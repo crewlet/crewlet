@@ -113,7 +113,7 @@ const (
 func CodeWrites() []string {
 	return append([]string{CodeCommitFilesTool, CodeRevertTool, CodeCherryPickTool, CodeCreateBranchTool,
 		CodeDeleteBranchTool, CodeCreateRepoTool, CodeUpdateRepoTool, CodeDeleteRepoTool, CodeRestoreRepoTool,
-		CodeProtectBranchTool}, ChangeWrites()...)
+		CodeProtectBranchTool}, append(ChangeWrites(), CheckWrites()...)...)
 }
 
 // CodeWritesWithheld is the code writes a seat whose role.code.access reads
@@ -153,13 +153,16 @@ func CodeWritesWithheld(tier code.Tier) []string {
 // the repository's home git node, a lifecycle request asked of a data node,
 // and a write of a change — its lifecycle asked of the repository's
 // committer, its conversation of the change writer beside it — and a person's
-// marks over their own code notices, asked of any data node.
+// marks over their own code notices, asked of any data node — and a write of
+// a repository's checks, a rerun or a report, asked of its checks writer
+// beside the committer.
 type CodeWriter interface {
 	GitWrite(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
 	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
 	Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
 	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
 	Mark(ctx context.Context, w code.MarkWrite) (code.MarkResult, error)
+	Checks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
 }
 
 // codeWriteTools are the writes over deps, in [CodeWrites]' order.
@@ -175,7 +178,7 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 		&codeRepoWrite{deps: deps, tool: CodeDeleteRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeRestoreRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeProtectBranchTool},
-	}, changeWriteTools(deps)...)
+	}, append(changeWriteTools(deps), checkWriteTools(deps)...)...)
 }
 
 // ---- who writes ------------------------------------------------------------ //

@@ -410,11 +410,15 @@ const (
 	partReviews changePart = "reviews"
 	// partComments is its comments, a thread at a time.
 	partComments changePart = "comments"
+	// partChecks is its head's checks, checked for its target: each
+	// attempt in a line, its summary fenced (codechecks.go).
+	partChecks changePart = "checks"
 )
 
 // changeParts is the closed set, in the order a description names them.
 func changeParts() []changePart {
-	return []changePart{partSummary, partReadiness, partFiles, partDiff, partFindings, partReviews, partComments}
+	return []changePart{partSummary, partReadiness, partFiles, partDiff, partFindings, partReviews, partComments,
+		partChecks}
 }
 
 // Valid reports a part this build answers.
@@ -433,7 +437,8 @@ func (t *codeGetChange) Description() string {
 	return "One change, a `part` at a time: `summary` (its row, description, authors, counts, revisions), " +
 		"`merge_readiness` (each precondition, whom it waits on, who clears each blocker), `files` and `diff` " +
 		"(a revision's files and a file's patch from its base, or with `since_revision` what changed since), " +
-		"`findings` (placed in the revision asked about), `reviews`, `comments`. Its writers' text arrives " +
+		"`findings` (placed in the revision asked about), `reviews`, `comments`, `checks` (its head's). Its " +
+		"writers' text arrives " +
 		"fenced. A change's diff, findings and what changed since your review are read here — history in a " +
 		"sandbox is for building, not for answering questions."
 }
@@ -585,6 +590,8 @@ func (t *codeGetChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return g.reviews(ctx, call.cursor)
 	case partComments:
 		return g.comments(ctx, call.cursor)
+	case partChecks:
+		return g.checks(ctx, call.cursor)
 	}
 	return g.summary(ctx, call.cursor)
 }

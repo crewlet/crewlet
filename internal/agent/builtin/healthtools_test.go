@@ -375,8 +375,10 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 // carries `health_tools` is answered, the seat whose role does not is refused),
 // Admits (which a surface asks before anything is named), and Withheld (what a
 // seat's surfaces leave out: both health tools for the ungranted seat, nothing
-// for the granted one, and never any other builtin). A person is the class's:
-// admin admitted, everybody else refused.
+// of them for the granted one, and no other builtin but those the table holds
+// human-only — code_report_check, a person's own CI's — which it refuses every
+// seat, chart or none). A person is the class's: admin admitted, everybody
+// else refused.
 //
 // Mutation: decide a seat on a granted row by the class instead of its role's
 // grant (ignore the grant), and the granted seat is refused and offered
@@ -431,17 +433,32 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 		}
 	}
 
-	if got := builtin.Withheld(asSeat("sre"), deps.Authorize, snapshot); len(got) != 0 {
-		t.Errorf("the granted seat is withheld %v, want nothing", got)
+	// THE HUMAN-ONLY BUILTINS are withheld from every seat whatever its grant:
+	// the table refuses a seat them before it reads any chart.
+	var humanOnly []string
+	for _, name := range reg.Names() {
+		if human, _ := authz.HumanOnlyOf(authz.Action(name)); human {
+			humanOnly = append(humanOnly, name)
+		}
 	}
-	want := slices.Sorted(slices.Values(health))
+	if !slices.Contains(humanOnly, builtin.CodeReportCheckTool) {
+		t.Fatalf("the registry holds human-only %v, want code_report_check among them", humanOnly)
+	}
+	slices.Sort(humanOnly)
+	if got := builtin.Withheld(asSeat("sre"), deps.Authorize, snapshot); !slices.Equal(got, humanOnly) {
+		t.Errorf("the granted seat is withheld %v, want the human-only %v alone", got, humanOnly)
+	}
+	want := slices.Sorted(slices.Values(append(slices.Clone(health), humanOnly...)))
 	if got := builtin.Withheld(asSeat("dev"), deps.Authorize, snapshot); !slices.Equal(got, want) {
-		t.Errorf("the ungranted seat is withheld %v, want exactly the health tools %v", got, want)
+		t.Errorf("the ungranted seat is withheld %v, want exactly the health tools and the human-only %v",
+			got, want)
 	}
-	// A CHART THAT CANNOT ANSWER WITHHOLDS NOTHING: the call decides it again,
-	// and hiding a tool from a seat that holds it is the wrong silence.
-	if got := builtin.Withheld(asSeat("sre"), builtin.Decide(authz.NoChart{}), snapshot); len(got) != 0 {
-		t.Errorf("a node with no chart withholds %v, want nothing", got)
+	// A CHART THAT CANNOT ANSWER WITHHOLDS NOTHING IT WOULD HAVE TO READ: the
+	// call decides it again, and hiding a tool from a seat that holds it is
+	// the wrong silence — a human-only builtin aside, which no chart decides.
+	if got := builtin.Withheld(asSeat("sre"), builtin.Decide(authz.NoChart{}), snapshot); !slices.Equal(got,
+		humanOnly) {
+		t.Errorf("a node with no chart withholds %v, want the human-only %v alone", got, humanOnly)
 	}
 }
 

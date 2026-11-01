@@ -113,7 +113,7 @@ var refArgs = map[string]bool{
 
 var notRefArgs = map[string]string{
 	"repo":               "a repository, held by HoldRepo",
-	"name":               "a repository's name, held by HoldRepo on its derived id",
+	"name":               "a repository's name, held by HoldRepo on its derived id; or a check's name",
 	"rename_to":          "a repository's new name",
 	"path":               "a path in a tree the call's revision names",
 	"path_b64":           "a path in a tree the call's revision names, its bytes in base64",
@@ -128,7 +128,7 @@ var notRefArgs = map[string]string{
 	"since":              "an instant",
 	"cursor":             "a page's place",
 	"limit":              "a page's size",
-	"status":             "a repository status filter",
+	"status":             "a repository status filter, or the state a check is reported in",
 	"branches_prefix":    "a listing's prefix: it reads every ref under it and depends on none",
 	"branches_cursor":    "a listing's place",
 	"protections_cursor": "a listing's place",
@@ -161,7 +161,7 @@ var notRefArgs = map[string]string{
 	"approvals":          "a merge gate's field",
 	"approvals_unless":   "a merge gate's field",
 	"human_paths":        "a merge gate's field",
-	"checks":             "a merge gate's field",
+	"checks":             "a merge gate's field, or the checks a rerun names by name and attempt",
 	"landing":            "a merge gate's field",
 	"delete_source":      "a merge gate's field",
 	"owners_approve":     "a merge gate's field",
@@ -178,7 +178,7 @@ var notRefArgs = map[string]string{
 	"expected_version":   "a change's version the write is compared with, never a ref",
 	"reopen":             "whether a close reopens; the source it reopens at is the change's, held by the steer",
 	"verdict":            "a review's verdict",
-	"summary":            "a review's summary",
+	"summary":            "a review's or a reported check's summary",
 	"findings":           "findings, raised or named by id: each anchored to a revision the change already holds",
 	"carries":            "earlier findings a review carries, by id",
 	"anchor":             "a comment's place in a revision the change already holds",
@@ -186,6 +186,15 @@ var notRefArgs = map[string]string{
 	"finding":            "a finding's id",
 	"resolve":            "whether a comment resolves its thread",
 	"resolution":         "a finding's resolution",
+	"sha":                "a whole commit id a check is keyed by: nothing resolves it, and nothing is read through it",
+	"checked_for":        "the branch a check's rows are keyed by, which filters them: nothing is read through it",
+	"attempt":            "a check's attempt",
+	"all_failed":         "whether a rerun names every check that did not pass",
+	"tail":               "a reported check's output",
+	"failures":           "a reported check's failures",
+	"failures_omitted":   "how many failures a reported check counted past those it names",
+	"duration_ms":        "a reported check's duration",
+	"url":                "a reported check's page on its CI",
 }
 
 // refCallDrops is the arguments a tool's holdingCall row carries that the call

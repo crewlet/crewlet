@@ -90,6 +90,7 @@ func checksWriterOn(t testing.TB, n *node) (*code.ChecksWriter, *appendCounter, 
 	w, err := code.NewChecksWriter(code.ChecksWriterOptions{
 		Publisher: counter, DB: n.db.Reader(), NodeID: n.id,
 		Retention: func() time.Duration { return code.DefaultDeletedRetention },
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart(), Zone: time.UTC}, true },
 		Events:    stream, Now: func() time.Time { return harnessAt }, Metrics: rec,
 	})
 	if err != nil {
@@ -333,21 +334,22 @@ func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 	}
 }
 
-// A WRITER DECIDES THE ENGINE'S OWN RECORDS: a rerun and a report name a
-// principal, whose grant this writer holds no chart to judge, so each is no
-// request it decides — refused invalid before anything is read — and an
-// ending of an attempt no runner claimed, which no runner forms, likewise.
+// THE ENGINE'S ARMS ARE THE ENGINE'S: a queue naming a principal's rerun and
+// a claim naming a person's CI are a principal's writes, asked only as a
+// rerun and a report (checkasks.go), so through the engine's own arms each is
+// no request the writer decides — refused invalid before anything is read —
+// and an ending of an attempt no runner claimed, which no runner forms,
+// likewise.
 func TestAChecksWriterDecidesOnlyTheEnginesOwnRecords(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	repo := changeRepo(t, n, "web")
 	w, counter, _, _ := checksWriterOn(t, n)
 	key := checkOn(repo, 1)
-	person := code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:ada", Seat: "founder"}
 	rerun := queueing(key, code.QueueRerun)
 	rerun.Queued.By = &dev
-	report := queueing(key, code.QueueReport)
-	report.Queued.By, report.Queued.Def = &person, nil
+	report := code.ChecksRequest{OpID: statelog.NewOpID(time.Now(), "code_check_report"),
+		Started: &code.CheckStarted{CheckKey: key, Placement: code.PlacementExternal, StartedAt: harnessAt}}
 	for name, req := range map[string]code.ChecksRequest{"a rerun": rerun, "a report": report} {
 		if _, err := w.Publish(t.Context(), req); !errors.Is(err, code.ErrInvalidProposal) {
 			t.Errorf("%s answered %v, want code.ErrInvalidProposal", name, err)
@@ -838,22 +840,21 @@ func TestACheckBoxReadIsTheEnginesOwn(t *testing.T) {
 	}
 }
 
-// A REPOSITORY'S CHECKS ARE READ BY EVERY SHAPE: a commit's attempts for
-// every target, a change's — its head's, checked for ITS target — the
-// repository's newest ended first and the window's — each a keyset that
-// resumes where its page ended — and one attempt whole, with the failures its
-// ending named; and a reader the repository's grant shuts out reads none of
-// them.
-//
-// TWO CHANGES SHARE A HEAD, into two branches: web's feature into main, and a
-// backport branch at the same commit into release. Each is checked for its
-// own target — main's lint, unit and vet, release's own unit — as two sets of
-// attempts at one commit, and each change reads its own target's alone.
-//
-// Mutation: read a change's attempts at its head for every target — the
-// backport's change reads main's three beside its own unit — red.
-func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
-	t.Parallel()
+// checksShape is one shape of a `checks` read over [checksOfEveryShape]'s
+// rows — a page of at most its query's limit — and the names of the attempts
+// it lists, in its order.
+type checksShape struct {
+	q    code.ReadQuery
+	want []string
+}
+
+// checksOfEveryShape is a repository web whose head B is checked for two
+// targets — web's feature into main (change 1: main's lint and unit failed a
+// minute apart, its vet running) and a backport branch at the same commit into
+// release (change 2: release's own unit, queued) — with every shape a `checks`
+// read takes of them: the node, the backport's change, and the shapes.
+func checksOfEveryShape(t *testing.T) (*node, code.ChangeResult, map[string]checksShape) {
+	t.Helper()
 	n := newNode(t)
 	repo, change := discussed(t, n, "web")
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/backport", code.ZeroOID, oidOf("B"))))
@@ -887,32 +888,7 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 		requireChecked(t, "the ending of "+name, res, err)
 	}
 	stale := statelog.Freshness{Level: statelog.ReadStale}
-	names := func(rows []code.CheckRow) []string {
-		var out []string
-		for _, r := range rows {
-			out = append(out, r.Name)
-		}
-		return out
-	}
-	page := func(q code.ReadQuery) []string {
-		t.Helper()
-		var all []string
-		for {
-			got, err := n.reader.Read(ctx, q)
-			if err != nil {
-				t.Fatalf("read %+v: %v", q.Checks, err)
-			}
-			all = append(all, names(got.Checks)...)
-			if got.Next == "" {
-				return all
-			}
-			q.Cursor = got.Next
-		}
-	}
-	for name, tc := range map[string]struct {
-		q    code.ReadQuery
-		want []string
-	}{
+	return n, backport, map[string]checksShape{
 		"a commit's, for every target": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 1,
 			Fresh: stale, Checks: &code.CheckQuery{OID: oidOf("B")}}, []string{"lint", "unit", "vet", "unit"}},
 		"a change's": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 2, Fresh: stale,
@@ -927,8 +903,58 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 			Checks: &code.CheckQuery{Since: harnessAt}}, []string{"unit", "lint"}},
 		"the window past the first ending": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Fresh: stale,
 			Checks: &code.CheckQuery{Since: harnessAt.Add(90 * time.Second)}}, []string{"unit"}},
-	} {
-		if got := page(tc.q); !slices.Equal(got, tc.want) {
+	}
+}
+
+// servedChecks is every attempt q lists, a page at a time from q's own cursor.
+func servedChecks(t *testing.T, n *node, q code.ReadQuery) []code.CheckRow {
+	t.Helper()
+	var all []code.CheckRow
+	for pages := 1; pages <= 100; pages++ {
+		got, err := n.reader.Read(t.Context(), q)
+		if err != nil {
+			t.Fatalf("read %+v: %v", q.Checks, err)
+		}
+		all = append(all, got.Checks...)
+		if got.Next == "" {
+			return all
+		}
+		q.Cursor = got.Next
+	}
+	t.Fatalf("the listing %+v did not end in a hundred pages", q.Checks)
+	return nil
+}
+
+// checkNames is the names of rows, in their order.
+func checkNames(rows []code.CheckRow) []string {
+	var out []string
+	for _, r := range rows {
+		out = append(out, r.Name)
+	}
+	return out
+}
+
+// A REPOSITORY'S CHECKS ARE READ BY EVERY SHAPE: a commit's attempts for
+// every target, a change's — its head's, checked for ITS target — the
+// repository's newest ended first and the window's — each a keyset that
+// resumes where its page ended — and one attempt whole, with the failures its
+// ending named; and a reader the repository's grant shuts out reads none of
+// them.
+//
+// TWO CHANGES SHARE A HEAD, into two branches ([checksOfEveryShape]): each is
+// checked for its own target — main's lint, unit and vet, release's own unit
+// — as two sets of attempts at one commit, and each change reads its own
+// target's alone.
+//
+// Mutation: read a change's attempts at its head for every target — the
+// backport's change reads main's three beside its own unit — red.
+func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
+	t.Parallel()
+	n, backport, shapes := checksOfEveryShape(t)
+	ctx := t.Context()
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	for name, tc := range shapes {
+		if got := checkNames(servedChecks(t, n, tc.q)); !slices.Equal(got, tc.want) {
 			t.Errorf("%s checks read %v, want %v", name, got, tc.want)
 		}
 	}
@@ -1059,6 +1085,45 @@ func TestTheChecksListingIsHeldToTheGrant(t *testing.T) {
 	if _, err := list(code.ReadQuery{Asker: ada, Checks: window(code.CheckQuery{State: "green"})}); !errors.Is(err,
 		code.ErrInvalid) {
 		t.Errorf("a window narrowed by a state that is no check's = %v, want code.ErrInvalid", err)
+	}
+}
+
+// A CHECKS PAGE KEPT SHORTER THAN IT WAS SERVED RESUMES AFTER ITS LAST ROW:
+// for every shape a `checks` read takes — a change's attempts, a commit's, a
+// repository's newest ended first and the window's — the cursor a caller asks
+// for after any row it was served (code.ReadQuery.ChecksCursor) reads every
+// attempt after that row once, in order, as code_get_change's `checks` part
+// does when a page of wide summaries is past one tool answer; and a page's own
+// cursor is the one its last row names.
+//
+// Mutation: ChecksCursor spelled by another walk than the reader's (a
+// change's attempts by the commit's walk) → red.
+func TestAChecksPageResumesAfterAnyRowItServed(t *testing.T) {
+	t.Parallel()
+	n, _, shapes := checksOfEveryShape(t)
+	for name, tc := range shapes {
+		served := servedChecks(t, n, tc.q)
+		if len(served) < 2 && name != "the window past the first ending" &&
+			name != "the backport's, at the same head" {
+			t.Fatalf("%s lists %v; the case needs two attempts to resume between", name, checkNames(served))
+		}
+		for i, row := range served {
+			resumed := tc.q
+			resumed.Cursor = tc.q.ChecksCursor(row)
+			if got, want := checkNames(servedChecks(t, n, resumed)), checkNames(served[i+1:]); !slices.Equal(got,
+				want) {
+				t.Errorf("%s resumed after %s/%d (cursor %q) listed %v, want %v", name, row.Name, row.Attempt,
+					resumed.Cursor, got, want)
+			}
+		}
+		first, err := n.reader.Read(t.Context(), tc.q)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if k := len(first.Checks); first.Next != "" && first.Next != tc.q.ChecksCursor(first.Checks[k-1]) {
+			t.Errorf("%s's first page resumes at %q, and its last row names %q", name, first.Next,
+				tc.q.ChecksCursor(first.Checks[k-1]))
+		}
 	}
 }
 

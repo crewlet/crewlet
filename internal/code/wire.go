@@ -1884,6 +1884,15 @@ type ChecksRequest struct {
 	// estate request's field, no record's: the record it asks for takes its
 	// op's versionedFields row, under the subject's stated condition.
 	Dispatched *CheckDispatched `json:"dispatched,omitempty"`
+	// Asker, Rerun and Report are a PRINCIPAL'S write — a rerun a seat or a
+	// person asks for, a person's CI's report — decided into one of the
+	// records above by the asker's standing (checkasks.go): the asker is a
+	// seat, or a person through a credential bound to their human seat, and
+	// is zero on every record the engine asks for itself. Estate request
+	// fields, no record's.
+	Asker  Principal      `json:"asker,omitzero"`
+	Rerun  *CheckRerun    `json:"rerun,omitempty"`
+	Report *CheckReported `json:"report,omitempty"`
 }
 
 // ChecksResult is what became of one write of a repository's checks.

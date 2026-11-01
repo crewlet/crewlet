@@ -127,12 +127,14 @@ const (
 	CodeBlameTool     = string(authz.ActionCodeBlame)
 )
 
-// CodeToolNames are the eleven, in the order a catalogue lists them: the
-// repositories, a ref, then the reads by object id — the history's last — and
-// a repository's changes ([ChangeToolNames]).
+// CodeToolNames are the twelve, in the order a catalogue lists them: the
+// repositories, a ref, then the reads by object id — the history's last — a
+// repository's changes ([ChangeToolNames]) and what a check of a commit said
+// (codechecks.go).
 func CodeToolNames() []string {
 	return append([]string{CodeListReposTool, CodeGetRepoTool, CodeResolveTool, CodeReadTool,
-		CodeDiffTool, CodeCompareTool, CodeLandedInTool, CodeLogTool, CodeBlameTool}, ChangeToolNames()...)
+		CodeDiffTool, CodeCompareTool, CodeLandedInTool, CodeLogTool, CodeBlameTool},
+		append(ChangeToolNames(), CodeGetCheckFailuresTool)...)
 }
 
 // The listing pages. A repository row carries a description of up to a
@@ -214,6 +216,13 @@ type CodeDeps struct {
 	// operator's call has no turn, and holds nothing either way.
 	Holder CodeHolder
 
+	// Logs is the fleet's object store as a check's kept log is read from
+	// ([CheckLogReader]): code_get_check_failures reads a failed run's log
+	// a page at a time through it. Nil reads no log page — the failures, the
+	// summary and the tail the check's row holds are still answered, and a
+	// call naming a log page is told this node reads none.
+	Logs CheckLogReader
+
 	// Now is the clock a hold's idle threshold is read on, read after the
 	// hold is taken; nil is the wall clock.
 	Now func() time.Time
@@ -242,7 +251,7 @@ func CodeTools(deps CodeDeps) []tools.Callable {
 		&codeListRepos{deps: deps}, &codeGetRepo{deps: deps}, &codeResolve{deps: deps},
 		&codeRead{deps: deps}, &codeDiff{deps: deps}, &codeCompare{deps: deps},
 		&codeLandedIn{deps: deps}, &codeLog{deps: deps}, &codeBlame{deps: deps},
-		&codeListChanges{deps: deps}, &codeGetChange{deps: deps},
+		&codeListChanges{deps: deps}, &codeGetChange{deps: deps}, &codeGetCheckFailures{deps: deps},
 	}
 	if deps.Writer != nil {
 		out = append(out, codeWriteTools(deps)...)

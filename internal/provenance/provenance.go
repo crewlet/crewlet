@@ -99,6 +99,13 @@ const (
 	SourceChangeDescription Source = "change_description"
 	SourceChangeReview      Source = "change_review"
 	SourceChangeComment     Source = "change_comment"
+	// SourceCheckLog is what a check of a commit said — its summary, the
+	// tail of its output, the failures its reports named and pages of its
+	// kept log: text the commit's code and its tests printed, or a person's
+	// CI sent, which names nobody a reader could weigh as a colleague, so it
+	// is read at [TrustExternal] naming no writer, as a repository's own
+	// text is.
+	SourceCheckLog Source = "check_log"
 )
 
 // Sources are every surface.
@@ -106,7 +113,7 @@ var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceArtifactFile, SourceArtifactRow,
 	SourceBrandVoice, SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
-	SourceChangeDescription, SourceChangeReview, SourceChangeComment,
+	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
 }
 
 // Valid reports whether s is one of [Sources].

@@ -83,9 +83,14 @@ import (
 //     archived repository as an attempt queued there is.
 //
 // A rerun and a report — a principal's request, a seat's or a person's — are
-// judged by the asker's grant, which this writer holds no chart to judge: it
-// decides the engine's own records alone, and refuses a principal's as no
-// request it decides ([ErrInvalidProposal]).
+// decided by the asker's standing (checkasks.go): a seat's rerun from the
+// deciding node's chart ([ChecksWriterOptions.SeatRules]), which a node
+// holding none yet, or one confirmed behind the company's configuration
+// ([ChecksWriterOptions.Current]), answers [ErrNotServing] — the router asks
+// the repository's runner-up under the same operation id, as the committer
+// refuses a seat's push there. A principal's request is only ever one of
+// those two arms: a queue, a claim or an ending naming a principal is no
+// request this writer decides ([ErrInvalidProposal]).
 //
 // # The ending it announces
 //
@@ -131,6 +136,18 @@ type ChecksWriterOptions struct {
 	// Now is the decide's clock — a record's authored instant; nil takes the
 	// wall clock in UTC.
 	Now func() time.Time
+	// SeatRules is the deciding node's epoch's chart, which a seat's rerun
+	// is judged by ([ChecksRequest.JudgesChart]) — its grant on the
+	// repository, and whoever its turn works for — read once a write. False
+	// where this node has installed no epoch yet: such a write is then
+	// answered [ErrNotServing]. REQUIRED: a seat's grant is never judged by a
+	// default.
+	SeatRules func() (SeatRules, bool)
+	// Current is whether this node serves the company's configuration,
+	// false exactly while it is CONFIRMED behind it, and nil is current;
+	// while it answers false every write the chart judges is answered
+	// [ErrNotServing], and the engine's own as ever.
+	Current func() bool
 	// Metrics records what the writer queued, ended and claimed; nil records
 	// nothing.
 	Metrics *metrics.Recorder
@@ -194,6 +211,8 @@ type ChecksWriter struct {
 	db        store.ReplicatedReader
 	nodeID    string
 	retention func() time.Duration
+	seatRules func() (SeatRules, bool)
+	current   func() bool
 	events    EventPublisher
 	now       func() time.Time
 	metrics   *metrics.Recorder
@@ -229,9 +248,13 @@ func NewChecksWriter(o ChecksWriterOptions) (*ChecksWriter, error) {
 	case o.Retention == nil:
 		return nil, errors.New("code: a checks writer needs the epoch's code.deleted_retention_days — a write " +
 			"about a deleted repository is told when its purge may begin, which a default would misstate")
+	case o.SeatRules == nil:
+		return nil, errors.New("code: a checks writer needs the epoch's chart (SeatRules) — a seat's rerun is " +
+			"judged by its grant on the repository, never by a default")
 	}
 	w := &ChecksWriter{
-		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, retention: o.Retention, events: o.Events, now: o.Now,
+		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, retention: o.Retention, seatRules: o.SeatRules,
+		current: o.Current, events: o.Events, now: o.Now,
 		metrics: o.Metrics, log: o.Logger, clock: time.Now,
 		flights: newFlights("repository", ChecksWritesPerRepo, "code.ChecksWritesPerRepo", ChecksWritesPerNode,
 			"code.ChecksWritesPerNode"),
@@ -250,20 +273,22 @@ func NewChecksWriter(o ChecksWriterOptions) (*ChecksWriter, error) {
 // naming the field): one setting none or more than one record, an operation
 // id this engine does not accept, a floor on another log, a record its own
 // Validate refuses, a dispatch of any attempt but a commit's first or a
-// requeue of its first — and a principal's record, a rerun or a report, which
-// this writer decides none of (see the file's doc). An attempt past
-// [MaxCheckAttempts] is no invalid request: its asker formed it from the
-// attempts it read, and it is refused attempts_exhausted, from the rows.
+// requeue of its first — and a queue, a claim or an ending naming a
+// principal, whose writes are a rerun and a report alone (checkasks.go). An
+// attempt past [MaxCheckAttempts] is no invalid request: its asker formed it
+// from the attempts it read, and it is refused attempts_exhausted, from the
+// rows.
 func (r ChecksRequest) Validate() error {
 	set := 0
-	for _, isSet := range []bool{r.Queued != nil, r.Started != nil, r.Finished != nil, r.Dispatched != nil} {
+	for _, isSet := range []bool{r.Queued != nil, r.Started != nil, r.Finished != nil, r.Dispatched != nil,
+		r.Rerun != nil, r.Report != nil} {
 		if isSet {
 			set++
 		}
 	}
 	if set != 1 {
 		return fmt.Errorf("%w: a write of a repository's checks is exactly one of an attempt queued, a claim, "+
-			"an ending and a dispatch, and this one sets %d", ErrInvalidProposal, set)
+			"an ending, a dispatch, a rerun and a report, and this one sets %d", ErrInvalidProposal, set)
 	}
 	if err := statelog.CheckCallerOpID(r.OpID); err != nil {
 		return badField("op_id", "%v", err)
@@ -277,14 +302,28 @@ func (r ChecksRequest) Validate() error {
 			return fmt.Errorf("%w: seen: %w", ErrInvalidProposal, r.Seen.Valid())
 		}
 	}
+	switch {
+	case r.Rerun != nil:
+		if err := r.Rerun.validate(r.Asker); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+		}
+		return nil
+	case r.Report != nil:
+		if err := r.Report.validate(r.Asker); err != nil {
+			return fmt.Errorf("%w: %w", ErrInvalidProposal, err)
+		}
+		return nil
+	case r.Asker != (Principal{}):
+		return badField("asker", "the engine's own records name no asker: a principal's write is a rerun or "+
+			"a report")
+	}
 	op, payload := r.record()
 	switch p := payload.(type) {
 	case CheckQueued:
 		switch {
 		case p.Reason != QueueDispatch && p.Reason != QueueRequeue:
-			return badField("queued.reason", "%q: a rerun and a report are a principal's, decided only "+
-				"judged by the asker's grant, and this writer decides the engine's own dispatch and requeue",
-				p.Reason)
+			return badField("queued.reason", "%q: a rerun is a principal's, asked as one (rerun), and this "+
+				"arm is the engine's own dispatch and requeue", p.Reason)
 		case p.Reason == QueueDispatch && p.Attempt < 1:
 			return badField("queued.attempt", "%d: attempts count from 1", p.Attempt)
 		case p.Reason == QueueRequeue && p.Attempt < 2:
@@ -299,12 +338,12 @@ func (r ChecksRequest) Validate() error {
 	case CheckStarted:
 		if p.Placement == PlacementExternal {
 			return badField("started.placement", "a check a person's CI runs is a report, a principal's, "+
-				"decided only judged by the asker's grant, and this writer decides the engine's own claims")
+				"asked as one (report), and this arm is the engine's own claims")
 		}
 	case CheckFinished:
 		if p.Reporter != nil {
-			return badField("finished.reporter", "a reported ending is a principal's, decided only judged "+
-				"by the asker's grant, and this writer decides the engine's own endings")
+			return badField("finished.reporter", "a reported ending is a principal's, asked as a report, "+
+				"and this arm is the engine's own endings")
 		}
 	}
 	if err := payload.(interface{ Validate() error }).Validate(); err != nil {
@@ -313,9 +352,29 @@ func (r ChecksRequest) Validate() error {
 	return nil
 }
 
+// JudgesChart reports whether r's decide reads the chart: a seat's rerun,
+// judged by its grant and by whoever its turn works for. A person's rerun
+// and report, and the engine's own records, consult none — so a node behind
+// the company's configuration decides them as a current one would.
+func (r ChecksRequest) JudgesChart() bool { return r.Rerun != nil && r.Asker.Kind.readsChart() }
+
+// op is the op r's record is: the engine's own record's, or the one a
+// principal's write decides into — a rerun's queue, a report's claim or
+// ending.
+func (r ChecksRequest) op() OpKind {
+	switch {
+	case r.Rerun != nil:
+		return OpCheckQueued
+	case r.Report != nil:
+		op, _ := r.Report.record(r.Asker, time.Time{})
+		return op
+	}
+	op, _ := r.record()
+	return op
+}
+
 // record is the op and the payload r carries — "" and nil for a request that
-// carries none, which [ChecksRequest.Validate] refuses before anything reads
-// this.
+// carries none, or a principal's write, whose payload its decide forms.
 func (r ChecksRequest) record() (OpKind, any) {
 	switch {
 	case r.Queued != nil:
@@ -340,6 +399,10 @@ func (r ChecksRequest) Key() CheckKey {
 		return r.Started.CheckKey
 	case r.Finished != nil:
 		return r.Finished.CheckKey
+	case r.Rerun != nil:
+		return r.Rerun.CheckKey
+	case r.Report != nil:
+		return r.Report.CheckKey
 	}
 	return CheckKey{}
 }
@@ -429,6 +492,24 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest) (ChecksResu
 		<-turn.token
 		w.flights.leave(repoID, turn)
 	}
+	// A WRITE THE CHART JUDGES is decided only by a node that can judge it:
+	// one current to the company's configuration, holding an epoch's chart,
+	// read once a write.
+	var seats SeatRules
+	if r.JudgesChart() {
+		var held bool
+		switch seats, held = w.seatRules(); {
+		case w.current != nil && !w.current():
+			release()
+			return ChecksResult{}, fmt.Errorf("%w: this node is behind the company's configuration, and a "+
+				"seat's rerun is judged by its chart; the repository's next committing node decides it",
+				ErrNotServing), false
+		case !held:
+			release()
+			return ChecksResult{}, fmt.Errorf("%w: this node holds no chart yet to judge the write by; the "+
+				"repository's next committing node decides it", ErrNotServing), false
+		}
+	}
 	if !w.flights.launch() {
 		release()
 		return ChecksResult{}, stoppingChecks, false
@@ -441,7 +522,7 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest) (ChecksResu
 	//nolint:contextcheck // The publish is the writer's, not this caller's: it runs under the writer's own lifetime, so an asker that hangs up mid-publish never leaves the repository's next check write deciding beside a record still in flight.
 	go func() {
 		defer w.flights.landed()
-		res, err, own := w.write(r)
+		res, err, own := w.write(r, seats)
 		// THE TURN IS RELEASED ONCE THE ANSWER IS KNOWN — the record applied
 		// here, or the wait for it gave up — and before the announcement,
 		// which no write of the repository waits on.
@@ -511,10 +592,10 @@ type checksLanded struct {
 // write publishes one write of a repository's checks and answers it — under
 // the writer's own lifetime and one CommitBudget — with what landed of its
 // own record.
-func (w *ChecksWriter) write(r ChecksRequest) (ChecksResult, error, checksLanded) {
+func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, error, checksLanded) {
 	ctx, cancel := context.WithTimeout(w.life, CommitBudget)
 	defer cancel()
-	op, _ := r.record()
+	op := r.op()
 	retention := w.retention()
 	repoID := r.RepoID()
 	subject := ChecksSubject(repoID)
@@ -528,7 +609,8 @@ func (w *ChecksWriter) write(r ChecksRequest) (ChecksResult, error, checksLanded
 		OpID: r.OpID, Pattern: statelog.PatternAdditive, Session: r.Seen,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			last, decided = checksDecision{}, false
-			d, err := decideChecks(ctx, tx, r, retention)
+			now := w.now()
+			d, err := decideChecks(ctx, tx, r, retention, seats, now)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -537,7 +619,7 @@ func (w *ChecksWriter) write(r ChecksRequest) (ChecksResult, error, checksLanded
 				return statelog.Decision{}, nil
 			}
 			return recordFor(stamp, subject, op, scope, r.OpID, Actor{ID: w.nodeID, Kind: ActorSystem},
-				d.payload, w.now())
+				d.payload, now)
 		},
 	})
 	if err != nil {
@@ -554,7 +636,8 @@ func (w *ChecksWriter) write(r ChecksRequest) (ChecksResult, error, checksLanded
 			// to replace — a measurement over an infrastructure ending — is
 			// what the announcement names it a correction of.
 			var replacing CheckState
-			if decided && r.Finished != nil && last.row != nil && !last.row.Finished.IsZero() {
+			if decided && (r.Finished != nil || op == OpCheckFinished) && last.row != nil &&
+				!last.row.Finished.IsZero() && last.row.Attempt == r.Key().Attempt {
 				replacing = last.row.State
 			}
 			return w.applied(ctx, r, res, replacing)
@@ -586,8 +669,8 @@ func (w *ChecksWriter) write(r ChecksRequest) (ChecksResult, error, checksLanded
 
 // decideChecks is one round of a write's decide, in ONE snapshot — see the
 // file's doc.
-func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention time.Duration) (checksDecision,
-	error) {
+func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention time.Duration, seats SeatRules,
+	now time.Time) (checksDecision, error) {
 
 	key, repoID := r.Key(), r.RepoID()
 	repo, found, err := pushRepoIn(ctx, tx, repoID)
@@ -602,7 +685,8 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 			return checksDecision{}, err
 		}
 		return d.refuse(CheckRefusalRepoDeleted, detail), nil
-	case (r.Queued != nil || r.Dispatched != nil) && repo.status == RepoStatusArchived:
+	case (r.Queued != nil || r.Dispatched != nil || r.Rerun != nil || r.Report != nil) &&
+		repo.status == RepoStatusArchived:
 		return d.refuse(CheckRefusalRepoArchived, fmt.Sprintf("repository %s is archived and read-only "+
 			"(code.repos archived: true): nothing moves in it to be checked", repo.name)), nil
 	case r.Dispatched != nil:
@@ -611,6 +695,12 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 	named := func(k CheckKey) string {
 		return fmt.Sprintf("attempt %d of check %s of %s for %s on %s", k.Attempt, k.Name, k.OID, k.Target,
 			repo.name)
+	}
+	switch {
+	case r.Rerun != nil:
+		return decideRerun(ctx, tx, *r.Rerun, r.Asker, repo, seats, d, named, now)
+	case r.Report != nil:
+		return decideReport(ctx, tx, *r.Report, r.Asker, d, named, now)
 	}
 	row, held, err := checkRowIn(ctx, tx, key)
 	if err != nil {
@@ -831,11 +921,11 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 	wrote := held
 	switch {
 	case !held:
-	case r.Queued != nil:
+	case r.op() == OpCheckQueued:
 		wrote = !row.Queued.IsZero()
-	case r.Started != nil:
+	case r.op() == OpCheckStarted:
 		wrote = row.Placement != ""
-	case r.Finished != nil:
+	case r.op() == OpCheckFinished:
 		wrote = !row.Finished.IsZero()
 	}
 	if !wrote {
@@ -854,11 +944,17 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 	// THE ENDING ANNOUNCED IS THE ONE THE ROW KEEPS: an ending the join set
 	// aside is no ending of the attempt's.
 	ours := !row.Finished.IsZero() && row.Finished.Packed() == at.Packed()
-	if (r.Finished != nil && ours) || (r.Queued != nil && (r.Queued.Skipped || r.Queued.Invalid != "") &&
+	if (r.op() == OpCheckFinished && ours) || (r.Queued != nil && (r.Queued.Skipped || r.Queued.Invalid != "") &&
 		row.State.Ended() && ours) {
+		placement := row.Placement
+		if row.Reporter != "" {
+			// A REPORTED ENDING is a person's CI's, whether or not it
+			// reported the run started first.
+			placement = PlacementExternal
+		}
 		own.ending = &types.CodeCheckFinished{RepoID: key.RepoID, RepoName: repoName, OID: key.OID,
 			Name: key.Name, Attempt: key.Attempt, Purpose: string(row.Purpose), State: string(row.State),
-			Reason: string(row.Reason), Placement: string(row.Placement), ChangeID: row.ChangeID,
+			Reason: string(row.Reason), Placement: string(placement), ChangeID: row.ChangeID,
 			Target: row.Target, Required: row.Required, DurationMs: row.DurationMs, Replaces: string(replacing)}
 	}
 	return out, nil, own
@@ -972,8 +1068,13 @@ func (w *ChecksWriter) count(r ChecksRequest, res ChecksResult, err error, own c
 	if r.Queued != nil && !r.Queued.Skipped && r.Queued.Invalid == "" {
 		w.metrics.Add(metrics.CodeChecksQueued, 1, metrics.Attrs{"purpose": string(r.Queued.Purpose)})
 	}
+	if r.Rerun != nil && !res.Unchanged {
+		w.metrics.Add(metrics.CodeChecksQueued, 1, metrics.Attrs{"purpose": string(res.Row.Purpose)})
+	}
 	if own.ending != nil {
-		placement, replaced := string(res.Row.Placement), own.ending.Replaces
+		// THE PLACEMENT ITS ANNOUNCEMENT NAMES: a reported ending is a
+		// person's CI's, external, whether or not it reported its run started.
+		placement, replaced := own.ending.Placement, own.ending.Replaces
 		if placement == "" {
 			placement = "none"
 		}

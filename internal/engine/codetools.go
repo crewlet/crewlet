@@ -57,6 +57,12 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	// nothing whatever is wired here.
 	deps := builtin.CodeDeps{Code: seam, Writer: seam, Holder: seam, CloneURL: e.cloneURL,
 		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e)}
+	// AND THE OBJECT STORE A CHECK'S KEPT LOG IS READ FROM, where this node
+	// has one: the log a failed run kept is one object the fleet shares,
+	// read a page at a time by code_get_check_failures.
+	if objects := e.ObjectStore(); objects != nil {
+		deps.Logs = objects
+	}
 	// AND THE TRACKER'S READ OF ONE TASK, where the company runs the native
 	// tracker: a change write naming a native work item by its key is
 	// resolved to the item's identity through the very read the work tools

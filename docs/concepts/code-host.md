@@ -1774,8 +1774,8 @@ one head share theirs: the same commit, judged by the same file.
 
 | Record | What it says |
 |---|---|
-| `check_queued` | An attempt is queued on a commit: what it is for (a change's head, a merge queue's candidate, a protected branch's tip, a bisection), the branch it is checked for, the checks file it was read from and its definition whole — so it runs under the definition it was queued with, whatever the file says by the time a box starts — whether that branch requires it, and why it was queued: dispatched, run again by a seat or a person, queued again after its runner was lost, or reported by a person's own CI. Or the attempt is recorded `skipped`: its change touched none of its `paths` |
-| `check_started` | A runner claims the attempt — and, once it has made one, names its box |
+| `check_queued` | An attempt is queued on a commit: what it is for (a change's head, a merge queue's candidate, a protected branch's tip, a bisection), the branch it is checked for, the checks file it was read from and its definition whole — so it runs under the definition it was queued with, whatever the file says by the time a box starts — whether that branch requires it, and why it was queued: dispatched, run again by a seat or a person, or queued again after its runner was lost — a person's own CI queues nothing, its report being the claim and the ending below. Or the attempt is recorded `skipped`: its change touched none of its `paths` |
+| `check_started` | A runner claims the attempt — and, once it has made one, names its box — or a person's CI reports its run started, placed `external` |
 | `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
 | `checks_sweep` | The rows that ended before an instant are removed — the `code-retention` duty's, for a repository whose checks stopped ending, swept back to the 30 days once a row of it outlived them by a day ([How long a check is kept](#how-long-a-check-is-kept)) |
 | `check_dispatched` | The home read a target's checks file at its tip — or found none there — and **dispatched** the heads it names under it: their checks queued for that target, the record their dispatch's last; with no heads, a moved target's reading refreshed ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched)) |
@@ -1842,7 +1842,28 @@ there, so:
   or ended any other way is never queued again by the home (`rerun_genuine`);
 - **an ending the row would not keep appends nothing**: an infrastructure
   ending after a measurement — a lost runner reported once its run had already
-  failed — is answered from the row as it stands.
+  failed — is answered from the row as it stands;
+- **a rerun is a person's, or a seat's of what its infrastructure ended**:
+  `code_rerun_checks` names the attempt its caller read as the latest and asks
+  for the one after it, which takes the definition that attempt ran under and
+  names who asked, so two callers who read the same latest queue one attempt
+  and the second is answered from it. A person reruns any ended attempt. A
+  seat is refused `rerun_genuine` for an attempt that measured the commit —
+  passed, or failed, a timed-out run included — since a seat that could rerun
+  a failure would re-roll a flaky test until it passed; and `not_permitted`
+  unless the writer's own chart grants it write on the repository, or it is an
+  author of the change the attempt checks — in a turn somebody woke, held to
+  them too, the seat's own work excepted. A check a CI reports is refused
+  `native_check`: its CI runs it again;
+- **a report is a person's CI's, onto the same rows**: `code_report_check`
+  records `running` as the attempt's claim and how it ended as its ending, the
+  row placed `external` and naming the person whose CI sent it, so a check the
+  engine never runs reads beside the engine's own. A report records no queue —
+  which is how the writer tells a CI's check from the engine's: a name the
+  engine queued at that commit is refused `native_check`, one check being one
+  runner's or one CI's and never both — and an ending sent again is answered
+  from the row. A seat's report, and a token bound to nobody's, is refused
+  before it is asked ([External CI](../guides/code.md#external-ci)).
 
 Where two nodes both believe they decide for a repository — the committing
 node gone quiet, its runner-up asked — each may append, and the
@@ -2003,6 +2024,13 @@ grant on the repository as every other read of it is:
 - **`checks_running`**: the engine's own — a repository's home's sweep of a
   runner that is gone: the repositories holding a running attempt, or one
   repository's running attempts.
+
+A seat and a person's assistant read the first two with their tools:
+`code_get_check_failures` reads one attempt — its failures a page at a time,
+and its kept log 32 KiB a page from the object store — and
+`code_get_change`'s `checks` part a change's head's attempts in a line each,
+every word a check printed fenced as `check_log`, text nobody in the company
+wrote ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
 
 ### Check boxes
 

@@ -179,19 +179,21 @@ func changeCall(t *testing.T, host *codeHost, turn *turnctx.Turn, name string,
 
 // THE CHANGE TOOLS JOIN THE ONE LIST: code_list_changes and code_get_change
 // are code reads like the nine before them — on the one list a seat's registry
-// and the operator catalogue both take, after the reads by object id, described
-// and shaped the same on both; each a proven, idempotent read a worker may be
-// handed, that delivers nowhere; and offered by neither surface of a company
-// that hosts no code.
+// and the operator catalogue both take, right after the reads by object id
+// (code_blame the last of them), described and shaped the same on both; each a
+// proven, idempotent read a worker may be handed, that delivers nowhere; and
+// offered by neither surface of a company that hosts no code.
 //
 // Mutations: CodeTools leaving either change tool out, or listing it before
 // the reads by object id; a change tool annotated as a write → red.
 func TestTheChangeToolsJoinTheOneList(t *testing.T) {
 	t.Parallel()
 	host := newChangeHost(siteChange())
-	if names := builtin.CodeToolNames(); !slices.Equal(names[len(names)-len(builtin.ChangeToolNames()):],
-		builtin.ChangeToolNames()) {
-		t.Fatalf("the code reads are %v, want the change tools %v last", names, builtin.ChangeToolNames())
+	change, names := builtin.ChangeToolNames(), builtin.CodeToolNames()
+	if blame := slices.Index(names, builtin.CodeBlameTool); blame < 0 || len(names) < blame+1+len(change) ||
+		!slices.Equal(names[blame+1:blame+1+len(change)], change) {
+		t.Fatalf("the code reads are %v, want the change tools %v right after the reads by object id", names,
+			change)
 	}
 	var listed []string
 	for _, tool := range builtin.CodeTools(codeDeps(host)) {

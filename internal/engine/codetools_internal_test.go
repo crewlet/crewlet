@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // THE CODE TOOLS ARE OFFERED WHERE THE CODE HOST IS SERVED, through the running
 // wiring: a company whose node's runtime serves its repositories holds the
-// eleven in every seat's registry — equipped at the apply, after the runtime it
+// twelve in every seat's registry — equipped at the apply, after the runtime it
 // starts — and the operator's halves read the same deps; a company that hosts
 // no code is given none, whose tools would answer every call that no
 // repository is served. The terms are [OperatorCode]'s, the code host's REST
@@ -101,16 +102,18 @@ roles:
 type unwrittenCode struct{ builtin.CodeWriter }
 
 // A SEAT'S MODEL IS SHOWN THE CODE WRITES ONLY WHERE ITS TIER WRITES. Every
-// seat's registry holds the nineteen, as it holds every builtin; the runner
-// the epoch builds for a turn leaves them off a seat whose code tier caps it
-// below write — no repository's grant would let one of its calls through — and
-// so does the executor's guidance on changing code, which is gated on holding
-// them. Every seat is shown the reads. Read off what the executor sends its
+// seat's registry holds every code write, as it holds every builtin; the
+// runner the epoch builds for a turn leaves them off a seat whose code tier
+// caps it below write — no repository's grant would let one of its calls
+// through — and so does the executor's guidance on changing code, which is
+// gated on holding them; and a human-only write (code_report_check, a person's
+// own CI's report) is shown to no seat at any tier, since the authority table
+// refuses every seat it. Every seat is shown the reads. Read off what the executor sends its
 // model, because the decision is the epoch's and the leaving out is the
 // runner's, and either half alone could drop it.
 //
 // Mutation: withheldFrom leaving the code writes to the authority table alone
-// → the read_only and review seats are shown all nineteen and told how to
+// → the read_only and review seats are shown every write and told how to
 // commit, red; withholding them at every tier → the full_access seat is shown
 // none, red.
 func TestASeatsModelIsShownTheCodeWritesOnlyWhereItsTierWrites(t *testing.T) {
@@ -146,7 +149,11 @@ func TestASeatsModelIsShownTheCodeWritesOnlyWhereItsTierWrites(t *testing.T) {
 			}
 		}
 		for _, name := range builtin.CodeWrites() {
-			if slices.Contains(shown, name) != seat.writes {
+			want := seat.writes
+			if human, _ := authz.HumanOnlyOf(authz.Action(name)); human {
+				want = false
+			}
+			if slices.Contains(shown, name) != want {
 				t.Errorf("%s (writes %v) was shown %s: %v", seat.handle, seat.writes, name,
 					slices.Contains(shown, name))
 			}
