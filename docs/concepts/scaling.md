@@ -470,6 +470,32 @@ recently in one rename a copy that holds it, whatever it holds — about 0.7 s o
 the janitor's at 10 000 copies, measured — and is due again only once a
 sixteenth more has been kept.
 
+**What code search costs a git node.** A repository searched by index keeps
+a trigram index of its default branch's tip on the first two git nodes of its
+order ([Code search](code-host.md#code-search)), and a search of many
+repositories is one question every git node answers its share of. Measured on
+two E-cores of a Core Ultra 7 265U, over a tip of 120 000 files — 1.96 GiB of
+real source, this repository's own tree in rotated copies:
+
+| | Measured |
+|---|---|
+| Building the index | 78 seconds of one core a gigabyte of source, the first time; a later tip reads only its new blobs |
+| The index on disk | 0.147 bytes a byte of source — 0.29 GiB for those 120 000 files, about 0.45 of a copy that holds its tip and no history (the source deflated as a pack holds it is 0.327 bytes a byte) |
+| A build's memory | 120 MiB at its peak for each segment of 256 MiB of source it writes |
+| A search | 11 ms at the median and 417 ms at the 99th percentile, its lookups and the confirmation of its candidates' lines up to its 500 hits |
+
+So a git node's indexes take at most a third of its cache's budget — what a
+cache full of indexed copies with no history holds of them, 31% — and past
+that they are dropped, least recently used first, before any repository is
+evicted, since a dropped index is built again from the blobs the copy already
+holds. Segments are merged as each is written, each kept more than twice the
+next, so an index keeps a handful of them (three for that tip) and each blob is
+written a logarithmic number of times. A search costs its node a lookup of a
+few lists and a read of the candidates' lines, never a walk of the tree: the
+repositories it names are divided among the git nodes that hold their
+indexes, each searching its own share at once, so adding git nodes divides a
+company-wide search rather than repeating it.
+
 **What every data node holds for the code host.** Every data node holds the
 whole estate, and the code host's rows with it. A seat's push of one commit
 leaves a push row of about 680 bytes where its code tools built it, naming the

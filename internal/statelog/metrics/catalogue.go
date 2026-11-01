@@ -1641,10 +1641,10 @@ func Catalogue() []Instrument {
 			Shows: "What this node's git cache holds of code indexes — the " +
 				"trigram segments and tip maps of the repositories searched by " +
 				"index that it holds — part of `crewlet.code.cache.bytes`. Held " +
-				"to a quarter of the cache's budget before any repository is " +
+				"to a third of the cache's budget before any repository is " +
 				"evicted, by dropping the index of the copy used least recently " +
 				"whole; the indexer builds a dropped one again at its next look, " +
-				"so a gauge pinned at the quarter is a node keeping more " +
+				"so a gauge pinned at the third is a node keeping more " +
 				"indexes than its budget holds.",
 		},
 		{

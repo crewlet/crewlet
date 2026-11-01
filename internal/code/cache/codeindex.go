@@ -61,12 +61,17 @@ const codeIndexDir = engineRoot + "/codeindex"
 const IndexPoll = time.Minute
 
 // CodeIndexShare is the share of the cache's budget the node's code indexes
-// may hold — a quarter, trimmed before any repository is evicted: an index
-// is about a sixth of its repository's working set (P8), and one dropped is
-// built again from the blobs at the next tip, where a repository evicted is
-// fetched again whole. PROVISIONAL, with codeindex.SegmentSourceBytes
-// (BenchmarkCodeIndex).
-const CodeIndexShare = 4
+// may hold — a third, trimmed before any repository is evicted: one dropped
+// is built again from the blobs at the next tip, at 78 seconds of a core a
+// gigabyte of source, where a repository evicted is fetched again whole. A
+// third holds every index a full cache can carry: BenchmarkCodeIndex
+// measured an index at 0.147 bytes a source byte and the source deflated as
+// a pack holds it at 0.327, so an index is at most 0.45 of its copy — of a
+// copy holding its tip and no history — and the indexes of a cache full of
+// such copies 31% of its budget. History only makes the copies larger.
+// Re-derived from the PROVISIONAL 4 (M3-O6), which rested on P8's estimate of
+// a sixth of the working set and trimmed the indexes of young repositories.
+const CodeIndexShare = 3
 
 // codeIndexState is the code index's record, which only its declaration's
 // entry carries (derivedState.CodeIndex), and only with its Step: a set of
@@ -278,11 +283,11 @@ func (c *Cache) CodeIndex(s Synced) (*CodeIndexView, bool) {
 // openedCodeIndex is a record's files MAPPED and opened, kept on the
 // incarnation for the next reader while the record is the incarnation's.
 //
-// MAPPED, NEVER READ INTO THE HEAP: a code index is up to a quarter of the
+// MAPPED, NEVER READ INTO THE HEAP: a code index is up to a third of the
 // cache's budget on disk (CodeIndexShare), and a node's searches touch a few
 // of its pages — the lists a plan names, the tip map's entries of its
 // candidates. Read whole and kept for the next search, every index a node's
-// searches had opened stayed in its heap (a 100 GiB cache's 25 GiB of
+// searches had opened stayed in its heap (a 100 GiB cache's 33 GiB of
 // indexes, in the worst case); mapped, the kernel keeps the pages a search
 // reads in its page cache and gives them back under pressure. Each file is
 // one mapping of the process, counted against the node's bound on mappings

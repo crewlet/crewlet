@@ -110,12 +110,16 @@ var ErrMalformed = errors.New("codeindex: a file this build does not write; drop
 // the segment is written then, so what an index build holds is one segment's
 // postings — a byte or two for each distinct trigram of each blob, in lists
 // grown by doubling, and a table entry and a list header for each distinct
-// trigram of the segment — and the blob being read beside it: ESTIMATED at
-// about 256 MiB at its peak (M6's sizing), never measured yet. 64 MiB is
-// PROVISIONAL: BenchmarkCodeIndex (build seconds a gigabyte, index bytes a
-// source byte, query p50 and p99 at 120k files; code search's measuring
-// commit) re-derives it.
-const SegmentSourceBytes = 64 << 20
+// trigram of the segment — the segment written beside it, and the blob being
+// read: at most 256 MiB at its peak (M6's sizing). BenchmarkCodeIndex
+// measured that peak at 120 MiB for 256 MiB of source (37 MiB for 64 MiB:
+// the table of distinct trigrams grows slower than the source), so 256 MiB
+// is the largest power of two measured within the bound; 512 MiB would be
+// 240 MiB by the rate at 256, with nothing left for the blob and the merge
+// beside it. Re-derived from the PROVISIONAL 64 MiB (M3-O6) by that run: a
+// tip of 120k files, 1.96 GiB of this repository's own tree, on two E-cores
+// of a Core Ultra 7 265U.
+const SegmentSourceBytes = 256 << 20
 
 // MaxSegments is the most segments one repository's index keeps: past it the
 // smaller ones are merged (MergeSegments), keeping only the blobs the tip
@@ -123,8 +127,13 @@ const SegmentSourceBytes = 64 << 20
 // index gives back what its branch no longer holds. Merged GEOMETRICALLY —
 // the newest segments while each is at least half the one before it — so a
 // blob is rewritten a logarithmic number of times over the index's life
-// rather than at every tip. 32 is PROVISIONAL, re-derived with
-// SegmentSourceBytes by BenchmarkCodeIndex.
+// rather than at every tip. Merged so, an index of I bytes keeps at most
+// log2(I / its smallest segment) + 1 — BenchmarkCodeIndex's 120k files index
+// in 0.29 GiB (0.147 bytes a source byte), and a segment of one small blob is
+// about half a kilobyte, so at most 20 — and 32, the next power of two, binds
+// only on an index four thousand times larger, while its lookups cost
+// nothing a search notices (p50 11 ms and p99 417 ms over the whole search,
+// confirmation included). Re-derived, and kept, by that run (M3-O6).
 const MaxSegments = 32
 
 // MergeNewest says whether the two newest segments of an index are to be
