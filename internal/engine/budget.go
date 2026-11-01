@@ -42,7 +42,7 @@ import (
 // into windows reads the instant there: a round's charge and the headroom
 // reader (the meter), an auxiliary pass's record (built from that meter), the
 // park's question and the alarm it arms, the live meter's frame, a collected
-// coding run's charge and a person's answer. Each of them used to call
+// launch's charge and a person's answer. Each of them used to call
 // time.Now for itself, and the park carried a clock of its own beside them, so
 // no two could be held to one window: a case that charged through one and read
 // the windows back through another failed whenever a midnight fell between the
@@ -240,8 +240,8 @@ type meter struct {
 	// recorded is every window whose refusal this meter has handed the
 	// counter, or is handing it now: a refusal is one event, so it is
 	// written once per window however often the meter is asked. Once per
-	// METER, which is once per segment of a turn: a turn resumed from a
-	// coding run is charged through a meter of its own, and its first held
+	// METER, which is once per segment of a turn: a turn resumed from its
+	// executor is charged through a meter of its own, and its first held
 	// call in a window still full is a refusal of its own too. See
 	// [meter.Refused].
 	recorded map[heldWindow]bool
@@ -403,7 +403,7 @@ func (m *meter) Held(ctx context.Context) error { return toolloop.Refusal(ctx, m
 // company's before the seat's, which stamps every window of that scope with no
 // room for a single token, judged against the counter as it stands rather
 // than against what the meter holds. Without it, a window an in-turn auxiliary
-// call, a coding run's post-charge or an admitted round filling it exactly took
+// call, a launch's post-charge or an admitted round filling it exactly took
 // to its ceiling refused every call of the turn while `refused_at` — "refusing
 // since" on every screen, and `crewlet budgets show` — said nothing had ever
 // been refused.
@@ -510,7 +510,7 @@ func (m *meter) record(ctx context.Context, named toolloop.SpendOutcome) {
 //
 // A REFUSAL LIKE A CHARGE'S, and the charge that would have stamped the window
 // is the one the gate exists not to make. Each of those gates used to turn its
-// work away with no stamp at all, so a window a coding run's post-charge, a
+// work away with no stamp at all, so a window a launch's post-charge, a
 // background pass or a person's answers had filled refused every delivery,
 // every question and every pass while `refused_at` — "last refused" on every
 // screen, and `crewlet budgets show` — said nothing had ever been refused.
@@ -613,8 +613,8 @@ func (m *meter) keepFullIn(name string, usage coord.Usage, caps coord.Caps) {
 //
 // FOR A RESUMED TURN, which is the one segment the budget park does not ask
 // first: a fresh delivery is parked before its turn starts when a window is
-// refusing, but a coding run's completion resumes its turn straight from the
-// sandbox coordinator — and the coordinator has just post-charged the run,
+// refusing, but a launch's completion resumes its turn straight from the
+// sandbox coordinator — and the coordinator has just post-charged the launch,
 // which can take a window past its ceiling with no refusal (a post-charge
 // never refuses). The resumed executor's first round was then billed and
 // refused. Read here, it is refused before it is sent.
@@ -733,7 +733,7 @@ type refusal struct {
 // counter's own refusal names its window by: the seat can run nothing until
 // that one turns over, and naming an earlier one would wake it into a
 // refusal. A full window need carry no stamp at all — a month a collected
-// coding run post-charged past its ceiling carries none until the gate turns
+// launch post-charged past its ceiling carries none until the gate turns
 // work away in it — and this read writes none: a caller that refuses on the
 // answer records its refusal with [meter.turnAway].
 //

@@ -478,7 +478,7 @@ func Unready(ctx context.Context, members []llm.Provider) error {
 // for another reason, which no park waits out.
 //
 // THE LIMIT, NOT ONLY ITS INSTANT, because a caller with no call of its own to
-// fail parks on it: a coding run's completion, collected while its review's
+// fail parks on it: an executor's completion, collected while its review's
 // chain sits out the plan its run spent, parks its seat on the same limit a
 // call through that chain would have met, keys, reset and sentence alike,
 // without a process being started to hear it.

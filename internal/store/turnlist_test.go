@@ -945,7 +945,7 @@ func TestTheFailureReasonCombinesAcrossLogs(t *testing.T) {
 }
 
 // A TURN A PERSON STOPPED SAYS SO, AND IS NOT FAILED. A stop ends a turn
-// parked on its coding run as surely as one running a round: the parked
+// parked on its executor as surely as one running a round: the parked
 // segment completed `suspended`, and the stop's completion — the newer — ends
 // the turn, carrying `stopped`. Read off the agent's completion, because that
 // is the record that says how the turn ended for a person, and never as a

@@ -155,7 +155,7 @@ type ExecResult struct {
 //
 // Zero means UNSET for each field, and the runner falls back to the agent's own
 // default. Note what is not here: a run deadline. The engine imposes no
-// wall-clock limit on a coding job — it runs as long as it needs, and
+// wall-clock limit on a launched job — it runs as long as it needs, and
 // completion is detected by tracking the job rather than by a clock. There WAS
 // a TimeoutSec here, read by nobody, contradicting the paragraph above it.
 //
@@ -215,7 +215,7 @@ type Spec struct {
 	// pushed branch instead.
 	PauseTTLSec float64
 
-	// MaxTurns caps the agentic rounds a coding run may take. 0 is
+	// MaxTurns caps the agentic rounds a launch may take. 0 is
 	// uncapped, and is the default.
 	//
 	// Resolved here rather than passed alongside, because it is settled the
@@ -256,7 +256,7 @@ type RunHandle struct {
 	SessionID string
 }
 
-// Result is one coding run's outcome.
+// Result is one launch's outcome.
 type Result struct {
 	Text    string
 	Success bool
@@ -264,7 +264,7 @@ type Result struct {
 	// InputTokens is the run's WHOLE prompt count, its cached share
 	// included, and CacheReadTokens / CacheWriteTokens are the share of it
 	// the provider's prompt cache served and stored — the same convention
-	// every engine provider reports on its completion, so a coding run's
+	// every engine provider reports on its completion, so a launch's
 	// tokens fold into the spend rollup beside the phases the engine ran
 	// itself. A breakdown, never an addition: the total is input + output.
 	InputTokens      int
@@ -658,7 +658,7 @@ type Runner interface {
 	Follow(handle RunHandle) LiveReading
 }
 
-// RunRequest is one coding run's inputs.
+// RunRequest is one launch's inputs.
 //
 // NEVER PERSISTED: a run is started once, by the node that launched it, and
 // everything a later collection or resume needs is on the run's row and in the

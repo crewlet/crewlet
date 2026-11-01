@@ -76,7 +76,7 @@ func (s *Statuses) Rejoin(handle, turnID string) *StatusSession {
 // Release drops ONE turn's hold on its indicator, wherever that hold is.
 //
 // It is what the engine calls when a turn that was kept alive has STOPPED
-// without ending: a detached coding run that parked on a question is waiting
+// without ending: a detached executor that parked on a question is waiting
 // on a person, not working, and an indicator still saying "is thinking…" over
 // that wait is worse than no indicator at all.
 //

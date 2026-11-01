@@ -402,7 +402,7 @@ func (r *coordRig) completion(turnID string) (types.ExecutorFinished, *events.Ev
 // the busy gate
 // ---------------------------------------------------------------------
 
-// A coding job can run for hours, far past any broker ack window, so its
+// An executor can run for hours, far past any broker ack window, so its
 // seat's mail is parked rather than consumed and held.
 func TestALaunchedRunParksTheSeatsMail(t *testing.T) {
 	t.Parallel()
@@ -588,7 +588,7 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 // job's ONLY segment — days later, possibly on another node, with nothing
 // collected. The job's tokens therefore travel on the row with its question,
 // or the turn's work item is charged for the collection and never for the
-// coding run that asked.
+// launch that asked.
 func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -1338,8 +1338,8 @@ func TestARelaunchIntoAnotherCellMovesTheRowWithIt(t *testing.T) {
 	}
 }
 
-// THE LAUNCH WINDOW. A coding job can finish between the launch starting it
-// and the turn writing the conversation a resume re-enters — a few
+// THE LAUNCH WINDOW. An executor's job can finish between the launch starting
+// it and the turn writing the conversation a resume re-enters — a few
 // milliseconds on an idle host, hundreds on a loaded one, and every trivial
 // run is a candidate. Claiming there hands the coordinator a run it cannot
 // resume, and its only honest answer to that is to fail the turn: the agent's
@@ -4467,7 +4467,7 @@ func (w *finishWitness) Finish(ctx context.Context, turnID, ending string) (Pend
 
 // EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK the row was launched for.
 //
-// A coding run is detached: the row is read minutes or days later, possibly
+// An executor runs detached: the row is read minutes or days later, possibly
 // on another node, with no trigger left to re-derive the key from, so the
 // row's WorkKey is the only place it survives. The completion, the question
 // and the failure are the three gestures a resumed turn's identity travels

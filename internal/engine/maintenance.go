@@ -120,7 +120,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// became mandatory, and both jobs vanished behind a warning.
 		//
 		// AND WITH THE ENGINE'S ANSWER TO WHETHER A QUIET CHANNEL IS STILL
-		// OWED, so the ask a coding run is working on — or one waiting in a
+		// OWED, so the ask an executor is working on — or one waiting in a
 		// seat's held inbox — is not closed under it: see [colleagueOwed].
 		if queue := e.backends.Queue; queue != nil {
 			sweeper, err := a2a.NewSweeper(a2a.NewCoordStore(fleet), queue,
@@ -321,7 +321,7 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 	})
 }
 
-// retireSeatRuns ends a retired seat's detached coding runs, for the mailbox
+// retireSeatRuns ends a retired seat's detached executors, for the mailbox
 // retirement that holds the seat's lease under owner and epoch.
 //
 // BY THE SEAT'S ID, which is what the retiring mailbox is filed and named

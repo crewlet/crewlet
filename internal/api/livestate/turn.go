@@ -7,7 +7,7 @@ import "github.com/crewlet/crewlet/internal/events/types"
 // A LIVE CALL IS NOT A TURN. The in-flight call is one phase's model call, and
 // it is cleared the instant that phase completes — so between phases, during
 // the prefetch before the first one, and for the whole of a wait on a detached
-// coding run, a seat that was plainly in the middle of a turn showed nothing at
+// executor, a seat that was plainly in the middle of a turn showed nothing at
 // all. A parked turn was worse than blank: its suspension publishes a turn
 // completion, and the projection read that as the end of the turn and said the
 // seat was idle while its work ran on in a box. The turn is therefore held
@@ -58,7 +58,7 @@ func (s *LiveState) noteTurn(agent *agentLive, env Envelope, payload map[string]
 // alone and every executor is its coding CLI's run in a box, which calls it
 // over the bridge after the turn has parked. Read as one of the turn's own
 // phases, a worker's record un-parked the turn: the seat's strip stopped
-// saying its coding run was working while the run worked on, and the seat's
+// saying its executor was working while it worked on, and the seat's
 // next spawn took the turn off it as one its old instance had died with (the
 // spawn arm of [LiveState.applyTurnEvent] spares a parked turn alone). Such a
 // record still OPENS the turn on a seat that holds none, at the stage it
@@ -225,7 +225,7 @@ func (s *LiveState) applyTurnStarted(agent *agentLive, env Envelope, payload map
 	return !sameTurnOverlay(before, agent.overlay())
 }
 
-// endLostRun is a coding run that was LOST — `executor_failed`. The turn that
+// endLostRun is an executor that was LOST — `executor_failed`. The turn that
 // launched it was parked waiting for it, and the run's loss settles that turn
 // like any other lost turn: nothing resumes it, so a turn left on the seat
 // would read as parked for good.

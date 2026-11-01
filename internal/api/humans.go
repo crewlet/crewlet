@@ -373,7 +373,7 @@ var errNoIdentityEstate = errors.New("api: this node serves the API but has " +
 // this one implementation of every tool rather than two — see
 // [builtin.WorkDeps.Actor].
 //
-// The seat controls — a parked coding run answered by its turn, a seat paused
+// The seat controls — a parked executor answered by its turn, a seat paused
 // or resumed, a note to a running turn — are served on every node whatever the
 // company's backends: each record is the fleet's, and each is carried out by
 // the node holding the seat, which reads it off that seat's inbox or its own

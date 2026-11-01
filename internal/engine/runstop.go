@@ -21,7 +21,7 @@ import (
 //
 // A pause with `stop_running` asks for the seat's work in flight to end. Its
 // running TURN hears it at the next round, through the turn's own fence
-// (seatpause.go). A coding RUN the turn launched has no rounds the engine sees,
+// (seatpause.go). The EXECUTOR the turn launched has no rounds the engine sees,
 // so the node holding the seat ends it through the coordinator
 // ([sandbox.Coordinator.StopSeat]) — at every moment a stop can reach the seat:
 // the pause landing on a watch that holds it ([Engine.applySeatPause]), a

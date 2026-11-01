@@ -1,5 +1,5 @@
 #!/bin/sh
-# Crewlet's commit attribution, written into a coding run's box by the engine
+# Crewlet's commit attribution, written into a run's box by the engine
 # (internal/sandbox/codingagent/attribution.go). Git reaches this script under
 # the name of every hook it runs: the run's environment points core.hooksPath
 # at a directory that links it under each name.

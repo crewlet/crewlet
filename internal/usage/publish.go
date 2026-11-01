@@ -164,7 +164,7 @@ import (
 // starts at the fire, so the floor is exact for them. The rows that can fall
 // outside are the records of a turn whose end states no tally, read off its
 // records — and those reach back to wherever the turn STARTED, which nothing
-// bounds: a park lasts as long as its coding run, which is never stopped on a
+// bounds: a park lasts as long as its executor, which is never stopped on a
 // timer, or as long as a person takes to answer. So a day inside the floor can
 // hold such a turn whose earliest records the sweep has removed, and derived
 // again it reads that turn shorter, with fewer reviews; the join holds every

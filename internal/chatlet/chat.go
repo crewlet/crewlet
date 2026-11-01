@@ -235,7 +235,7 @@ const (
 	// the writer name the seats it left out, to wake them all the same.
 	// ONE CONSTANT, not a second figure, so the two cannot drift apart.
 	//
-	// A WAKE IS ITS SEAT'S CODING RUN IN A BOX (ADR-0066): its first request
+	// A WAKE IS ITS SEAT'S EXECUTOR IN A BOX (ADR-0066): its first request
 	// carries the CLI's own harness (about 15k input tokens for Claude
 	// Code) even where the seat decides the message was not for it, and
 	// its box is a 200 to 400 MB process on the engine host for a `direct`
@@ -265,7 +265,7 @@ const (
 	// NINETY-SIX, the smallest multiple of [MaxCollectiveRecipients] above
 	// the 81 the capped arms can fill: a post that fills every capped arm
 	// at once is never cut by the total, so the total bites only on the
-	// arms nothing else bounds. Every recipient is a wake, a coding run in
+	// arms nothing else bounds. Every recipient is a wake, an executor in
 	// a box, so this is also the most boxes one post starts, and never
 	// more than the seats it reaches would run at once for any other
 	// cause, since each runs one at a time. It is also a line of the

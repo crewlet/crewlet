@@ -880,7 +880,7 @@ type phaseRecord struct {
 	// what every phase but the executor is.
 	Run RunRecord
 
-	// RunSteers is what a collected coding run read of the turn's notes —
+	// RunSteers is what a collected executor read of the turn's notes —
 	// see [phaseResult.RunSteers].
 	RunSteers []types.PhaseSteer
 
@@ -1335,7 +1335,7 @@ func phaseSteers(marks []toolloop.SteerMark) []types.PhaseSteer {
 }
 
 // steered records that the turn read a person's note, where read says: at the
-// opening of a round of the engine's loop, or in a coding run's brief.
+// opening of a round of the engine's loop, or in an executor's brief.
 func (e emitter) steered(ctx context.Context, read steer.Read) {
 	if !e.on() {
 		return

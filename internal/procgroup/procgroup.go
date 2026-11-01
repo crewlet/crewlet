@@ -39,7 +39,7 @@ func Set(cmd *exec.Cmd) { set(cmd) }
 //   - No controlling terminal, so a Ctrl-C in the operator's shell does not
 //     reach into a running job.
 //   - Reparenting to init if the engine dies, which is what lets a detached
-//     coding run survive a restart and be collected by the next engine.
+//     executor survive a restart and be collected by the next engine.
 //
 // A session leader also leads its own process group, so everything [Kill],
 // [Terminate], [Stop] and [Continue] do for a Set child works here too.
@@ -87,7 +87,7 @@ func Kill(pid int) error { return signal(pid, sigKill) }
 // below would address the caller's own group, which is every process in the
 // engine's session. One is the sharper case: kill(-1, sig) is the BROADCAST
 // form, delivered to every process the caller has permission to signal, so a
-// SIGKILL "to the group led by pid 1" takes down the engine, every coding job
+// SIGKILL "to the group led by pid 1" takes down the engine, every executor
 // and, on a workstation, the operator's whole login. No child this package
 // addresses can be pid 1: init holds it for the life of the pid namespace,
 // the engine's own included when it runs as a container's first process.

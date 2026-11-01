@@ -160,7 +160,7 @@ func TestAnswerExecutorDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.
 			"answer's own id", answer)
 	}
 	// THE QUESTION IT ANSWERED, as the run's words: fenced under the seat
-	// whose coding run asked it (ADR-0040).
+	// whose executor asked it (ADR-0040).
 	if got := unfenced(t, answer["question"]); got != "which branch?" {
 		t.Errorf("the answer carries the question %q, want the one it answered", got)
 	}

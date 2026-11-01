@@ -167,7 +167,7 @@ func demoRun(_ context.Context, _ sandbox.RunRequest) sandbox.Result {
 // because nothing else connects them: the last time they disagreed the
 // config's default named a backend with no case here, so a company validated
 // cleanly, reported a configured sandbox on the dashboard, and failed at its
-// first coding run.
+// first launch.
 //
 // ONE LOCAL BACKEND PER LOCAL PLACEMENT, not one shared between them: the two
 // differ in exactly one option, and a single instance would have to be told
@@ -330,7 +330,7 @@ func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
 	return out
 }
 
-// runEnv is one coding run's environment and provisioning, read through this
+// runEnv is one launch's environment and provisioning, read through this
 // node's resolver by the rule every tool server's values are
 // ([resolveServer]): every reference resolved, or why the run lacks it.
 type runEnv struct {
@@ -357,7 +357,7 @@ type runEnv struct {
 	facted []string
 }
 
-// runEnvironment is one coding run's environment and provisioning: the
+// runEnvironment is one launch's environment and provisioning: the
 // provider-wide setup steps, then the seat's own, and the run environment
 // they, the seat's sandbox block and the engine assemble. Nil-safe on the
 // seat's box settings, since a seat's executor runs in a box whether or not
@@ -592,7 +592,7 @@ func secondsPtr(v *float64) *time.Duration {
 	return &d
 }
 
-// sandboxAccountant post-charges a collected coding run against the shared
+// sandboxAccountant post-charges a collected launch against the shared
 // counters.
 //
 // The charge happens AFTER the spend, which is why it cannot refuse: a refusal
@@ -979,7 +979,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	//     retries the resume on its own schedule and each attempt raises its
 	//     own indicator off the recorded trigger. It never falls through to
 	//     an ordinary turn, which answered the person with a turn rather
-	//     than with the coding run they were replying to. See
+	//     than with the executor they were replying to. See
 	//     [sandbox.Coordinator.TryResumeFromAnswer] and
 	//     [sandbox.Coordinator.AnswerByTurn].
 	working := rejoined
@@ -1315,8 +1315,8 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 		// phase with a cap — never runs on a resume.
 		Remaining: e.remainingFor(company, in.Turn.Handle()),
 		// THE SAME FENCE THE DISPATCH PATH GETS, and a parked run needs it
-		// more than a fresh turn does: its turn was parked across a coding
-		// run that may have taken an hour, and the node that picks it up is
+		// more than a fresh turn does: its turn was parked across a launch
+		// that may have taken an hour, and the node that picks it up is
 		// not always the node that parked it. The grant it closes on is the
 		// one THIS node holds now — which is the correct anchor, since that
 		// is what this node is admitted for.
@@ -1919,7 +1919,7 @@ func sandboxMCP(
 	return sandbox.RenderMCP(servers, scoped), withheld
 }
 
-// boxServers is the scoped MCP surface one coding run's box is given
+// boxServers is the scoped MCP surface one executor's box is given
 // ([sandboxMCP]), with every server withheld for its seat credentials judged
 // against the integrations minting them and said, at the level its story
 // earns — the seat's own child's ([Engine.withheldForCredentials]): waiting
@@ -1928,7 +1928,7 @@ func sandboxMCP(
 //
 // WHAT STARTS IT DIFFERS from a seat's own child, and the sentence says so:
 // nothing restarts a box's servers, so a server withheld from this run is
-// offered to the first coding run launched once what it waits for arrives
+// offered to the first launch after what it waits for arrives
 // ([credentialMissing.arrival]): the seal reaching this node, or the agent's
 // GitHub App being installed.
 func (e *Engine) boxServers(
@@ -1983,7 +1983,7 @@ func pauseTTL(settings *org.RoleSandbox) *time.Duration {
 // may carry one display NAME — it is an admission rule, so a revision stored
 // before that rule runs with duplicates and a write merely cannot add one —
 // and a walk matching on it returned whichever came first. A seat with no
-// sandbox block would then be handed its namesake's, which is a coding run on
+// sandbox block would then be handed its namesake's, which is an executor on
 // another seat's setup steps, its credentials and its box.
 //
 // A handle is unique by a RUNNABLE rule instead: a company carrying two is
@@ -2266,7 +2266,7 @@ func (r runCondenser) Condense(ctx context.Context, run sandbox.PendingRun, part
 	}
 	note := compact.Result{Compacted: true, From: len(text)}.Note()
 	// THE TURN'S OWN COST, filed under the run the report belongs to: the
-	// resumed segment reads it as the coding run's answer.
+	// resumed segment reads it as the executor's answer.
 	//
 	// ITS OWN TALLY, handed back with the text: no segment's tally is open
 	// while a run is collected — the condensation happens between two of
@@ -2410,7 +2410,7 @@ func (e *Engine) sandboxSeatRuns(handle string) (held, awaitsAnswer bool) {
 	return rt.coordinator.SeatRuns(handle)
 }
 
-// answerParkedRun offers a delivery to a parked coding run, through the
+// answerParkedRun offers a delivery to a parked executor, through the
 // runtime current when it arrives; with none, nothing is parked here to take
 // it.
 func (e *Engine) answerParkedRun(ctx context.Context, handle string,
@@ -2722,7 +2722,7 @@ func resumeRefusal(err error) (sandbox.Refusal, bool) {
 // has no model, or whose node refuses new work. The seat's budget and its
 // models' limit are the turn gate's, which every attempt passes, the inline
 // one included, and which asks them of the relaunch an answer's turn makes
-// ([Engine.seatCannotRun]). Whether another of the seat's coding runs holds it
+// ([Engine.seatCannotRun]). Whether another of the seat's executors holds it
 // is the coordinator's own count, so the coordinator asks that itself first
 // ([sandbox.SeatCoding]), and whether another of its turns is running is the
 // node's, asked at the same gate ([Engine.admitResume]): an answer by turn
@@ -3072,7 +3072,7 @@ func (e *Engine) markSandboxSeat(handle string, attached bool) {
 // so, the first run it launched under the revision that brought the runtime
 // would publish its completion to a topic nothing on this node consumes, and a
 // run a peer left on it would be polled by nobody here: the seat held the
-// coding job's turn for ever and never resumed it.
+// parked turn for ever and never resumed it.
 //
 // UNDER EACH SEAT'S OWN LOCK, the one its acquisition and release run under, so
 // a seat claimed or handed on while this walks is prepared exactly once or not
@@ -3208,8 +3208,8 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
 	// exists: a seat that went away with no signal leaves its last state
 	// standing, and on a chat surface that state is a live re-assertion
-	// rather than a stale row. A turn that suspended into a detached coding
-	// run deliberately leaves its indicator up, and the resume lands on
+	// rather than a stale row. A turn that suspended into a detached
+	// executor deliberately leaves its indicator up, and the resume lands on
 	// whichever node holds the seat when the box reports — so a node that has
 	// handed the seat on would otherwise go on saying "is thinking…" every
 	// refresh interval, for a turn it is not running, until the process died.
@@ -3276,7 +3276,7 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	}
 }
 
-// SeatHeldBySandbox reports whether a detached coding run HOLDS a seat, so it
+// SeatHeldBySandbox reports whether a detached executor HOLDS a seat, so it
 // starts no new turn until the run settles.
 //
 // Exported for the operator surfaces and for a test: the inbox screening reads
@@ -3434,7 +3434,7 @@ func signsIn(env map[string]string, names []string) bool {
 	return false
 }
 
-// SandboxCredentialError reports a coding run whose box could never
+// SandboxCredentialError reports a launch whose box could never
 // authenticate, refused before the box is minted.
 //
 // A distinct type because the remedies (a token that travels, an api-key
@@ -3679,7 +3679,7 @@ func refusedCredential(msg string) error {
 // The direction is the decision: an operator who named a variable in
 // role.sandbox.env meant that value, and the engine silently replacing it
 // with a resolved subscription token would override a deliberate choice —
-// including the deliberate choice to point one seat's coding runs at a
+// including the deliberate choice to point one seat's executor at a
 // different account.
 func underlay(env, defaults map[string]string) map[string]string {
 	if env == nil {

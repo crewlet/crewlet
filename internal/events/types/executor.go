@@ -54,7 +54,7 @@ type ExecutorLaunched struct {
 	// panel can say which item a box is working on without joining back to
 	// a turn that may have parked days ago.
 	WorkItem *WorkItem `json:"work_item,omitempty"`
-	// Task is a short human-readable summary for the running-sandboxes panel;
+	// Task is a short human-readable summary for the Executors board;
 	// the full brief lives on the pending run, not on the wire.
 	Task string `json:"task"`
 	// LaunchID names THIS JOB — the sandbox.PendingRun row's launch id,
@@ -531,8 +531,8 @@ func (e ExecutorStopped) SummaryFor(actor string) string {
 }
 
 // ExecutorAnswerGiven is the command an answer BY TURN puts on the seat's
-// control topic: a person answering a parked coding run's question by naming
-// the run, rather than by replying on the conversation it was asked in.
+// control topic: a person answering a parked executor's question by naming
+// its turn, rather than by replying on the conversation it was asked in.
 //
 // # Why a second way in
 //
@@ -552,7 +552,7 @@ func (e ExecutorStopped) SummaryFor(actor string) string {
 //
 // The control topic and not the inbox, because the answer is addressed to a
 // run, like the completion that topic was made for. The inbox is the seat's
-// mail: held for as long as any of the seat's coding runs holds the seat, and
+// mail: held for as long as any of the seat's executors holds the seat, and
 // worked oldest first after that. An answer that rode it waited behind every
 // job the seat took on and every message it had not got to, and on a busy
 // seat it never arrived. On the control topic it is recorded on arrival, and
@@ -660,7 +660,7 @@ const (
 // Valid reports whether v is one of the two routes.
 func (v AnswerVia) Valid() bool { return v == AnswerViaChat || v == AnswerViaOperator }
 
-// AnswerOutcome is what an answer that reached a parked coding run became.
+// AnswerOutcome is what an answer that reached a parked executor became.
 type AnswerOutcome string
 
 const (
@@ -699,7 +699,7 @@ func (o AnswerOutcome) Valid() bool {
 	return false
 }
 
-// ExecutorAnswered records what an answer to a parked coding run's question
+// ExecutorAnswered records what an answer to a parked executor's question
 // became, on either route.
 //
 // THE CHAT ROUTE LEFT NO RECORD. A person's reply that resumed a run was an

@@ -46,7 +46,7 @@ import (
 // fails until its entry goes. It replaced a hand list in
 // TestEveryUntrustedReadIsFenced's doc that named the reads somebody had
 // remembered — and the tracker's listings, the inbox, the activity feed, a
-// knowledge answer's sources and a parked coding run's question were the ones
+// knowledge answer's sources and a parked executor's question were the ones
 // nobody had.
 var handsOverWords = map[string]string{
 	builtin.AnswerKnowledgeTool:   "TestEveryUntrustedReadIsFenced/answer_knowledge",
@@ -391,7 +391,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	op.Chat.Cursors, op.Chat.Actor = fakeCursors{}, builtin.PrincipalChatActor
 	op.Pauses.Org = op.Org
 	// THE RUN RECORDS the operator's steer_turn reads first, where a note
-	// waits once the turn has launched its coding run: "turn-1" has none,
+	// waits once the turn has launched its executor: "turn-1" has none,
 	// so the note goes to the fleet's scatter.
 	op.Steer.Runs = &runRecords{}
 	op.Runs.Desk = &deskFake{runs: map[string]sandbox.PendingRun{"turn-1": {TurnID: "turn-1",

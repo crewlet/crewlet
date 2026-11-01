@@ -57,7 +57,7 @@ import (
 // # Every write goes through the one publish pipeline
 //
 // Bytes reach a version only through internal/artifactupload: inline content
-// rides the call (at most [artifacts.MaxInlineBytes] decoded), a coding run's
+// rides the call (at most [artifacts.MaxInlineBytes] decoded), an executor's
 // box and a project's files are streamed into an upload the pipeline reserved
 // first (a sandbox is never handed a presigned URL), and the pipeline holds
 // every turn to its guardrails ([artifacts.TurnPublishes],
@@ -143,20 +143,20 @@ type ArtifactPublisher interface {
 	SourceText(ctx context.Context, e artifacts.Entry, limit int64) ([]byte, bool, error)
 }
 
-// ArtifactBoxes finds the box the turn's coding run works in, for a publish
+// ArtifactBoxes finds the box the turn's executor works in, for a publish
 // that takes its files from it.
 type ArtifactBoxes interface {
-	// Box is the box of the coding run working in this turn, attached for
-	// reading while it works: the run publishes its own build, by calling. It
-	// answers [ErrNoBox] when the turn has none it may read: no run, a run
-	// that is not working in its box (parked on a question, collected, its
-	// pause reaped), or a box already torn down.
+	// Box is the box of the executor working in this turn, attached for
+	// reading while it works: the executor publishes its own build, by
+	// calling. It answers [ErrNoBox] when the turn has none it may read: no
+	// launch, an executor that is not working in its box (parked on a
+	// question, collected, its pause reaped), or a box already torn down.
 	Box(ctx context.Context, turn *turnctx.Turn) (ArtifactBox, error)
 }
 
-// ArtifactBox is one coding run's box as a publish reads it. Every path is
-// relative to the run's workspace (the coding agent's working directory) and
-// slash-separated.
+// ArtifactBox is one executor's box as a publish reads it. Every path is
+// relative to the executor's workspace (the coding agent's working directory)
+// and slash-separated.
 type ArtifactBox interface {
 	// Files lists every regular file under dir, at most max of them. The
 	// listing is the box's and is treated as untrusted: every path is held
@@ -220,7 +220,7 @@ type ArtifactDeps struct {
 	// Nil reads false, the closed end.
 	ManageOthers func() bool
 
-	// Boxes reads a coding run's box. Nil refuses every publish from a
+	// Boxes reads an executor's box. Nil refuses every publish from a
 	// sandbox, which is a node with no sandbox runtime.
 	Boxes ArtifactBoxes
 

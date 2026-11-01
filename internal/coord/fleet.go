@@ -43,7 +43,7 @@ import (
 //   - The scheduled-fire claim is what makes a cron dispatch at-most-once. The
 //     scheduler is a singleton DUTY, so it moves; the new holder read an empty
 //     ledger and its catchup pass re-fired what the old one had claimed.
-//   - A detached coding run outlives its turn, its process and sometimes its
+//   - A detached executor outlives its turn, its process and sometimes its
 //     node, and is recovered by whichever node owns the seat NEXT. That node
 //     read its own database, found nothing, and left a billed sandbox running
 //     with a parked turn nothing could re-enter.
@@ -257,7 +257,7 @@ const (
 	UploadRetention = 30 * time.Hour
 
 	// SandboxRunRetention is absent for the same reason as the channel
-	// bucket's, one step sharper: a detached coding run can sit parked on
+	// bucket's, one step sharper: a detached executor can sit parked on
 	// a person's answer for DAYS (see sandbox.StatusAwaiting), and its
 	// record is the only thing that knows a billed box exists. A bucket
 	// age would reap it and leak the box for ever. The run's own reaper
@@ -1089,7 +1089,7 @@ var ErrCustodyUndecidable = errors.New("coord: the record of this custody batch'
 // the ids are derived from — the work key, or the run where the turn has none.
 // Every later attempt at the same work reads it back and inherits it: a crash
 // re-run of a dispatched turn, a failed resume retried, the next half of a
-// turn a coding run parked. Each of those can run on another node — a crash
+// turn parked on its executor. Each of those can run on another node — a crash
 // re-run lands wherever the seat's delivery is taken next, a resume on the
 // seat's next owner — so the record has to be the fleet's: on the node's own
 // database the successor found nothing, minted anew, and wrote a second copy
@@ -1174,7 +1174,8 @@ type SandboxRunUpdate struct {
 	Found bool
 }
 
-// SandboxRuns is the fleet's record of detached coding runs.
+// SandboxRuns is the fleet's record of detached executors: one row per turn
+// whose executor is launching, running, parked, answered or being collected.
 //
 // THE ONE CONTRACT HERE WHOSE VALUE IS OPAQUE, and the reason is that its
 // record has fields of which coordination understands none: the suspended

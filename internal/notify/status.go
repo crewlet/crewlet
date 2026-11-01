@@ -478,7 +478,7 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 	}
 	// DETACHED FROM THE CALLER'S CONTEXT, because the indicator outlives the
 	// call that raised it in the one case it matters most: a turn that
-	// suspends into a detached coding run ends its own context and keeps the
+	// suspends on a detached executor ends its own context and keeps the
 	// indicator up (see [StatusSession.End]). Its values stay — the trace a
 	// debug line is filed under — and nothing cancels it: the goroutine ends
 	// on [session.stop], and each request on its own deadline.
@@ -496,8 +496,8 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 
 // Rejoin takes back the hold a turn already has on a live indicator.
 //
-// It is what a RESUMED turn calls. A turn that suspended into a detached
-// coding run ended with keepAlive, so its indicator is still up and still
+// It is what a RESUMED turn calls. A turn that suspended on a detached
+// executor ended with keepAlive, so its indicator is still up and still
 // heartbeating; the turn that re-enters that conversation minutes later needs
 // the hold back so it can end it for real — and it CANNOT call Begin, because
 // a resume has no trigger to raise from: the parked run's own row deliberately
@@ -531,7 +531,7 @@ func (d *StatusDriver) Rejoin(handle, turnID string) *StatusSession {
 // ClearFor takes down every indicator this driver holds for one seat.
 //
 // Called when this node stops running the seat. A kept-alive session is the
-// reason it has to exist: a turn that suspended into a detached coding run
+// reason it has to exist: a turn that suspended on a detached executor
 // leaves its indicator up deliberately, and the resume lands on whichever node
 // holds the seat WHEN THE BOX FINISHES. Left alone, a node that has handed the
 // seat on would re-assert "is thinking…" every refresh interval, for a turn it
@@ -591,7 +591,7 @@ func (s *StatusSession) Phase(phase string) {
 //
 // The indicator comes down only when the LAST holder ends. keepAlive holds it
 // up regardless — the suspend case, where this same turn resumes once a
-// detached coding run completes and the person is still waiting. The resumed
+// detached executor completes and the person is still waiting. The resumed
 // half takes this hold back with [StatusDriver.Rejoin], and ends it without
 // keepAlive; a node that never sees that resume takes it down when it stops
 // running the seat ([StatusDriver.ClearFor]).

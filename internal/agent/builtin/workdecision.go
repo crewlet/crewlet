@@ -68,7 +68,7 @@ func decisionSchema() map[string]any {
 // choiceProperties are the schema of a decision's CHOICE (its options, the one
 // recommended and why, what was looked at, and the role the person is asked
 // in), which every tool that asks a person to choose takes alike: a work
-// item's ask under `decision` ([decisionSchema]), and a coding run's ask at the
+// item's ask under `decision` ([decisionSchema]), and an executor's ask at the
 // top of its arguments ([AskAndWait]). One builder, so the shape a model learns
 // on one is the shape it meets on the other. A fresh map on every call: each
 // caller adds the properties of its own.
@@ -313,8 +313,8 @@ var _ worklet.EvidenceLookup = evidenceLookup{}
 func (l evidenceLookup) Task(ctx context.Context, ref string) (worklet.CitedTask, error) {
 	if l.work.Reader == nil {
 		// A COMPANY WITHOUT CREWLET WORKS CANNOT CITE A WORK ITEM by
-		// kind, for the reason [evidenceLookup.PageID] gives a page: a
-		// coding run of a company on another tracker asks with the same
+		// kind, for the reason [evidenceLookup.PageID] gives a page: an
+		// executor of a company on another tracker asks with the same
 		// evidence a work item's decision takes.
 		return worklet.CitedTask{}, fmt.Errorf("%w: this company does not run "+
 			"Crewlet Works, so a `task` cannot be checked; cite it as a `url`",

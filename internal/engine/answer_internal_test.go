@@ -113,14 +113,14 @@ func TestAnAnswerIsRefusedOnlyByASpentCompanyWindow(t *testing.T) {
 
 // A REFUSED ANSWER IS THE GATE'S REFUSAL, AND THE COMPANY'S COUNTER RECORDS IT.
 //
-// The company's day was filled by post-charges — a person's earlier answers, a
-// coding run, a background pass — which refuse nothing and stamp nothing, so
-// no charge was ever refused there. The gate refuses the question before any
-// call is made, and that is the call the window turned away: unrecorded, a
-// company refusing every question asked of it read, on every screen and in
-// `crewlet budgets show`, as one that had refused nothing. Only the company is
-// stamped, since a person has no seat budget; nothing is counted; and a
-// question the company has room for records nothing at all.
+// The company's day was filled by post-charges — a person's earlier answers,
+// an executor launch, a background pass — which refuse nothing and stamp
+// nothing, so no charge was ever refused there. The gate refuses the question
+// before any call is made, and that is the call the window turned away:
+// unrecorded, a company refusing every question asked of it read, on every
+// screen and in `crewlet budgets show`, as one that had refused nothing. Only
+// the company is stamped, since a person has no seat budget; nothing is
+// counted; and a question the company has room for records nothing at all.
 //
 // Mutation: drop the gate's record, and the company's day carries no stamp.
 func TestARefusedAnswerIsRecordedAsTheGatesRefusal(t *testing.T) {

@@ -8,10 +8,10 @@ import "slices"
 // # Status is everybody's, the body is the seat's trail
 //
 // Everybody a node resolves reads the company's overview: which seats exist,
-// what each is doing, what it costs, which coding runs are in flight. What a
+// what each is doing, what it costs, which executors are in flight. What a
 // seat is SAYING — the prompt it was sent, what the model answered, the tools
 // it called and with what, the narration of each round, the message that woke
-// it, and what a coding run was asked and asked back — is that seat's trail,
+// it, and what an executor was asked and asked back — is that seat's trail,
 // and reaches only those internal/authz's `audit.seat.read` admits to the
 // seat: an admin, and whoever leads the seat. A live call is the trail as it
 // is being written, so it is masked exactly as the trail's questions are
@@ -26,13 +26,13 @@ import "slices"
 // served a run or failed it, is the company's configuration: the org
 // projection hands only an admin each seat's chain, and Settings, Models is
 // an admin's screen. Three live fields name entries: a CLI run's
-// `provider_key` ([LiveCall.Invocations]), the entry a coding run was
+// `provider_key` ([LiveCall.Invocations]), the entry an executor was
 // launched on ([ExecutorEntry.ProviderKey]), which a fallback at launch makes
 // other than the chain's head, and a failure's own text ([ErrorInfo.Detail]),
 // which also carries whatever a vendor or a tool wrote. All three reach only
 // a reader with [Reach.Config], whatever their reach to the seat's body: a
 // seat's lead reads its trail and is still not an admin. Everybody else is
-// told a failure by its kind, and a coding run by the model it runs under.
+// told a failure by its kind, and an executor by the model it runs under.
 //
 // # Why one mask, over every shape a call travels in
 //
@@ -73,7 +73,7 @@ type Reach struct {
 	Tracker bool
 
 	// Config is whether the reader may read the company's configuration
-	// (an admin): which entries served a run or launched a coding run, and
+	// (an admin): which entries served a run or launched an executor, and
 	// a failure's own text.
 	// It gates the LIVE BROADCAST only. A seat's history read
 	// (maskHistory in internal/api/queries) is held to `audit.seat.read`,
@@ -81,8 +81,8 @@ type Reach struct {
 	// within the lead's own grant there.
 	Config bool
 
-	// Record is the reader's own record ([iam.RecordOwner]) — the seat a
-	// coding run's parked question may be put to, which is read there by
+	// Record is the reader's own record ([iam.RecordOwner]) — the seat an
+	// executor's parked question may be put to, which is read there by
 	// the person it is put to whatever their reach to the seat that asked.
 	Record string
 }
@@ -320,7 +320,7 @@ func maskTurn(t *LiveTurn, r Reach) *LiveTurn {
 	return &dup
 }
 
-// For is the coding run as reader r receives it.
+// For is the executor as reader r receives it.
 //
 // WHAT THE RUN WAS ASKED (`task`) IS ITS SEAT'S BODY, and so is the question
 // it parked on — except to the people the question is put to, who are asked

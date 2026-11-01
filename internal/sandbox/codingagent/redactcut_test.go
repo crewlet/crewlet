@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
-// The two credential shapes a coding run's environment most often carries,
+// The two credential shapes a run's environment most often carries,
 // each with a body of distinct characters so a surviving fragment is
 // unambiguous.
 const (

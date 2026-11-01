@@ -104,8 +104,8 @@ func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 // gated rule rendered (`a2a_ask`), which is the largest a review prompt gets.
 //
 // The original budget was 300 (identity + a six-line enum), and it grew to
-// 800 as each rule arrived for a turn-ending failure — the rule on reading a
-// coding run's report, the cross-round duplicate rule keyed on target and
+// 800 as each rule arrived for a turn-ending failure — the rule on reading an
+// executor's report, the cross-round duplicate rule keyed on target and
 // content, the settled delivery and incomplete notes, and the blocked rule's
 // three-way split on whether the person has been told.
 //

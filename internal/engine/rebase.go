@@ -24,8 +24,8 @@ import (
 //     published while nothing consumes it, so a seat nobody placed for a
 //     month, or a fleet that was down, is handed a backlog whose work began
 //     before the ledger's horizon;
-//   - a RESUME that comes that long after the work began: a turn parked on a
-//     coding run, or on a person's answer, for a month.
+//   - a RESUME that comes that long after the work began: a turn parked on its
+//     executor, or on a person's answer, for a month.
 //
 // Both are decided by ONE function, [rebaseFor], called from the one frame
 // each path builds the turn its tools read from ([Engine.describeTurn],
@@ -43,8 +43,8 @@ import (
 // A REBASE IS RECORDED BEFORE THE ATTEMPT WRITES ANYTHING, in the fleet's
 // [coord.Rebases] under the ids' seed, and every later attempt at the same
 // work reads it back — the crash re-run of a dispatch, a retried resume, the
-// next half of a turn a coding run parked, on whichever node takes it — so it
-// derives the ids the attempt before it derived, and a repeated write lands
+// next half of a turn parked on its executor, on whichever node takes it — so
+// it derives the ids the attempt before it derived, and a repeated write lands
 // once. The read is made only where the work's own start is past the horizon,
 // which is the only place a rebase can have been recorded: the ordinary turn
 // pays nothing for it.

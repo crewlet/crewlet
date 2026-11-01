@@ -8,7 +8,7 @@ import (
 )
 
 // AnswerDisposition is what the engine must DO with a delivery it offered to a
-// parked coding run — never what happened inside the coordinator.
+// parked executor — never what happened inside the coordinator.
 //
 // The offer's caller is holding somebody's chat message with one question:
 // this arrived, what do I do with it. It was a bool beside an error, and those
@@ -38,7 +38,7 @@ import (
 //     Nak, which puts it behind the person's next message.
 //   - [AnswerNotMine] — fall through to the ordinary route and let it be the
 //     turn it looks like. Wrong here, the answer is SPENT on an unrelated turn
-//     while a coding run is still owed it, which is the defect this type
+//     while an executor is still owed it, which is the defect this type
 //     exists to end.
 //
 // The asymmetry decides every ambiguous case: an answer that arrives twice is
@@ -215,7 +215,7 @@ type AnswerHeadroom struct {
 }
 
 // MayOfferAnswer reports whether a delivery may still be offered to a parked
-// coding run, given what each of its messages has left before the transport
+// executor, given what each of its messages has left before the transport
 // dead-letters it.
 //
 // PER MESSAGE, AND ANY OF THEM IS ENOUGH. A delivery is a partition, and its
@@ -405,7 +405,7 @@ func (c *Coordinator) deferAnswer(ctx context.Context, run PendingRun, trigger *
 // retry seconds later would have matched the run, the person's reply was spent
 // on an ordinary turn instead. The original fail-open reasoning is right too:
 // an unreadable store must not swallow a message that has nothing to do with
-// any coding run, which on a company with no parked runs at all is every
+// any executor, which on a company with no parked runs at all is every
 // message the seat receives. Both hold, and they resolve on a question this
 // node can answer WITHOUT the store that just failed.
 //

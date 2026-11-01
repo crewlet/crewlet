@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 )
 
-// The in-flight coding runs.
+// The in-flight executors.
 //
 // TWO SOURCES, and neither is enough alone. The lifecycle EVENTS are what make
 // the panel live — a run appears the moment it starts and flips the moment it

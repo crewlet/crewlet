@@ -202,7 +202,7 @@ var categories = map[string]placement{
 	// and cannot make more of them than there are syncs.
 	"seat_access_drift_restored": {"lifecycle", RateEngine},
 
-	// Task: work reaching a seat — including a detached sandbox run, which
+	// Task: work reaching a seat — including a detached executor, which
 	// is the execution of one, and a schedule firing, which creates one.
 	//
 	// THERE IS NO TASK LIFECYCLE HERE. The five that were — created,

@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A CODING RUN'S QUESTION, ONCE ANSWERED, IS ONE OF A PERSON'S ANSWERED
+// AN EXECUTOR'S QUESTION, ONCE ANSWERED, IS ONE OF A PERSON'S ANSWERED
 // DECISIONS (ADR-0068).
 //
 // A run asks in the shape a work item's decision is asked, and the person who
@@ -28,7 +28,7 @@ import (
 // ONLY ANSWERS THE RUN TOOK (`resumed`): an answer the run could not use was
 // not the decision, and the question it was given to waited for another.
 
-// AnsweredRunAsk is one coding run's question a person answered, as
+// AnsweredRunAsk is one executor's question a person answered, as
 // `answered_decisions` lists it beside a work item's ([worklet.AnsweredAsk]):
 // the same `at` and `answer`, and the run's ask where a work item's carries
 // its `ask`, so the Inbox draws both with one pane.

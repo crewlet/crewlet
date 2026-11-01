@@ -556,7 +556,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
-		// question, and it was the one nobody filled in: every coding run
+		// question, and it was the one nobody filled in: every launch
 		// went out uncapped while the field looked wired.
 		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
 		Model:      req.Model,

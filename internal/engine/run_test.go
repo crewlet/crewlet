@@ -348,7 +348,7 @@ func TestASeatThisNodeDoesNotOwnIsDeferred(t *testing.T) {
 
 func TestASeatHeldBySandboxDefersRatherThanRunning(t *testing.T) {
 	t.Parallel()
-	// A detached coding run holds its seat for as long as it runs, so the
+	// A detached executor holds its seat for as long as it runs, so the
 	// seat starts no turn: the coordinator holds its inbox, and a delivery
 	// that reaches it anyway is deferred under that hold. Nil answers no — a
 	// build with no sandbox provider has no seat waiting on one — so this is

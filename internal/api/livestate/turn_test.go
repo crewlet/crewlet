@@ -78,7 +78,7 @@ func TestAStartThatLandsAfterItsPhaseDoesNotMoveTheStageBack(t *testing.T) {
 
 func TestAParkedTurnSaysParkedNotIdle(t *testing.T) {
 	t.Parallel()
-	// A turn that launched a detached coding run SUSPENDS: its segment
+	// A turn that launched a detached executor SUSPENDS: its segment
 	// publishes a completion with suspended:true and the same turn
 	// completes again when the run is collected. Read as an end, the seat
 	// said it had finished while its work ran on in a box.
@@ -145,7 +145,7 @@ func parked(t *testing.T) *livestate.LiveState {
 // every worker runs while its turn is parked, and its record — nested under
 // the execute phase — is the only event the turn publishes until the run is
 // collected. Read as one of the turn's own phases it un-parked the turn: the
-// seat stopped saying its coding run was working, and the seat's next spawn,
+// seat stopped saying its executor was working, and the seat's next spawn,
 // which spares a parked turn alone, took the turn off the seat while the run
 // worked on.
 //
@@ -360,7 +360,7 @@ func TestACompletionThatLostARaceToTheNextTurnStillEndsIt(t *testing.T) {
 
 func TestALostRunEndsItsParkedTurn(t *testing.T) {
 	t.Parallel()
-	// Nothing resumes a turn whose coding run was lost: the run is settled
+	// Nothing resumes a turn whose executor was lost: the run is settled
 	// like any other lost turn. Left on the seat, it read as parked for good.
 	s := livestate.New()
 	s.Apply(env("agent_turn_started", turnPayload("tn-1", nil), at("2026-06-14T12:00:00Z")))
@@ -431,7 +431,7 @@ func TestTheStagesAndOutcomesAreClosedSets(t *testing.T) {
 }
 
 // A TURN A PERSON STOPPED ENDS AS STOPPED, never as failed, even after a
-// failure in it and even where it was parked on its coding run: a stop ends a
+// failure in it and even where it was parked on its executor: a stop ends a
 // parked turn with a completion of its own, newer than the park, and the seat's
 // last turn says the person ended it.
 func TestAStoppedTurnEndsAsStoppedAndNotFailed(t *testing.T) {

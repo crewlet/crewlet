@@ -35,7 +35,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
-// A person's note to a turn whose coding run is out, through the real turn: the
+// A person's note to a turn whose executor is out, through the real turn: the
 // launch, the run's bridge, a go-sdk client playing the run's CLI, and the
 // resumed segment that reviews it. What each case holds is where the note goes
 // and what it is recorded as, whichever step reads it.
@@ -97,7 +97,7 @@ func (r *reviewWatch) reviewed() []string {
 	return slices.Clone(r.reviews)
 }
 
-// steerCase is a seat whose turn parks on its coding run, steerable, played by
+// steerCase is a seat whose turn parks on its executor, steerable, played by
 // a CLI that does pull with the run's bridge before its script.
 type steerCase struct {
 	e     *Engine
@@ -1110,7 +1110,7 @@ func (w *watchedFor) everyWatchSaw() bool {
 }
 
 // A NOTE FILED WHILE THE REVIEWER WORKS ENDS ITS RUN, AND THE NEXT RUN OPENS
-// WITH IT. The reviewer of a turn resumed from its coding run is a run of the
+// WITH IT. The reviewer of a turn resumed from its executor is a run of the
 // engine's own loop, which asks its source whether a note waits after every
 // call (Waiting, under the dispatcher's lock): the segment's source is the run's
 // record, so a note a person files on it while the review works ends the run

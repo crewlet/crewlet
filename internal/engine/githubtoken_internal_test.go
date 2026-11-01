@@ -524,7 +524,7 @@ roles:
 
 // A LONG RUN'S TOKEN FILE IS KEPT CURRENT, AND A QUIET POLL WRITES NOTHING.
 //
-// A coding run is never stopped on a clock, so the token it launched with
+// An executor is never stopped on a clock, so the token it launched with
 // expires under it. The poll rewrites the file a credential helper reads when
 // the token behind it is renewed, and leaves it alone otherwise, asking the
 // box rather than remembering, so the fleet waiter's duty can move between

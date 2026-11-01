@@ -373,7 +373,7 @@ func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 	}
 }
 
-// parkedRun is a run desk holding one coding run, t1, parked on a question its
+// parkedRun is a run desk holding turn t1's executor, parked on a question its
 // requester, the founder's seat, is to answer, which takes every answer.
 type parkedRun struct{}
 

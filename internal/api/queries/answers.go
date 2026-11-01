@@ -275,7 +275,7 @@ type Sources struct {
 		Usage(ctx context.Context, windows coord.Windows) ([]coord.Usage, error)
 	}
 
-	// Sandbox is the durable record of detached coding runs, the fleet's
+	// Sandbox is the durable record of detached executors, the fleet's
 	// rather than this node's. Nil leaves the question unregistered.
 	Sandbox PendingRuns
 
@@ -284,7 +284,7 @@ type Sources struct {
 	// does not open here, leaves a row's `answered_by` empty.
 	RunAnswers *sandbox.AnswerSeal
 
-	// ExecutorTail is a running coding run's live output, ANSWERED BY THE
+	// ExecutorTail is a running executor's live output, ANSWERED BY THE
 	// NODE THAT OWNS THE RUN (internal/sandbox/livetail.go): the box is
 	// reachable only through the node driving it, and what it has said so
 	// far is on no record anywhere until the run is collected. Nil leaves
@@ -767,7 +767,7 @@ func Register(r *Registry, s Sources) {
 		r.Register("colleague", Everybody(), s.colleague)
 	}
 	if s.Sandbox != nil {
-		// THE STATUS OF EVERY CODING RUN is everybody's overview; what a
+		// THE STATUS OF EVERY EXECUTOR is everybody's overview; what a
 		// run was asked, what it asked and what it was answered are its
 		// seat's trail, and its answer withholds them from a reader the
 		// seat's trail is not open to.
@@ -775,7 +775,7 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.ExecutorTail != nil {
 		// ASKED ONLY WHILE SOMEBODY WATCHES: a trace polls it while a
-		// running coding run's span is open, and nothing else does. There
+		// running executor's span is open, and nothing else does. There
 		// is no event and no row behind it — see [Sources.ExecutorTail].
 		// DECIDED ON THE RUN'S SEAT, as that seat's trail: what a coding
 		// agent prints is its transcript, as a phase record's prompt and
@@ -869,7 +869,7 @@ func Register(r *Registry, s Sources) {
 	// they merge is wired rather than behind the tracker alone: the feed
 	// merges the tracker's completions, creates and hand-offs with the
 	// pages' and the schedules' where this node keeps them, and what is
-	// waiting on a person is their open asks beside the coding runs parked
+	// waiting on a person is their open asks beside the executors parked
 	// on a question to them, scoped as `work_my_work` is. Each leaves out a
 	// half that is not kept here ([keptHere]) and answers the rest, so a
 	// company on Jira still sees its schedules' runs and the runs waiting on
@@ -1104,7 +1104,7 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // seat's turns, memory and conversations are read under, never a second copy
 // of who that is; the work item it is on where they hold Worklet; the
 // company's configuration (which entries served a run, a failure's own text)
-// where they are an admin; and their own record, to which a coding run's
+// where they are an admin; and their own record, to which an executor's
 // question may be put.
 //
 // AN UNDECIDABLE DECISION IS NO BODY: a chart this node cannot read withholds
@@ -1492,7 +1492,7 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 	// `failed` is and for its reason: absent is every row. It is what a turns
 	// axis counts over — `type=agent_turn_completed&suspended=false` is the
 	// turns that ENDED, one each, where the type alone counts a turn that
-	// parked on a coding run and resumed twice.
+	// parked on its executor and resumed twice.
 	if raw := strings.TrimSpace(p.String("suspended")); raw != "" {
 		switch raw {
 		case "true", "false":

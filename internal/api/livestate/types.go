@@ -357,7 +357,7 @@ type Overlay struct {
 	Budget *BudgetMeter `json:"budget"`
 
 	// Turn is the turn the seat is on — running, or parked on a detached
-	// coding run — and null when it is on none. ALWAYS PRESENT: the
+	// executor — and null when it is on none. ALWAYS PRESENT: the
 	// overlay is merged into a client's row rather than replacing it, so an
 	// omitted key reads as "unchanged" and would leave a finished turn on
 	// the client's row.
@@ -396,7 +396,7 @@ const (
 	// StagePhase — a phase is running: a model is being called or a tool
 	// is running on its behalf.
 	StagePhase Stage = "phase"
-	// StageParked — the turn launched a detached coding run and SUSPENDED:
+	// StageParked — the turn launched a detached executor and SUSPENDED:
 	// nothing runs on the seat's behalf until the run is collected, and
 	// the same turn resumes then — possibly on another node, possibly
 	// after a restart. Not idle, and not an end: the turn has not
@@ -449,11 +449,11 @@ const (
 	OutcomeCompleted TurnOutcome = "completed"
 	// OutcomeFailed — the turn ended and at least one of its events was a
 	// failure: a failed phase, an unavailable provider, a breached guard,
-	// a lost coding run. The same rule the turn list's `failed` applies, so
+	// a lost executor. The same rule the turn list's `failed` applies, so
 	// a turn seeded from the store and one watched live say the same.
 	OutcomeFailed TurnOutcome = "failed"
 	// OutcomeStopped — a PERSON ended the turn: a pause with `stop_running`
-	// reached it at a round, or ended the coding run it was parked on. Not a
+	// reached it at a round, or ended the executor it was parked on. Not a
 	// failure, whatever else went wrong in it — the turn list's `stopped`.
 	OutcomeStopped TurnOutcome = "stopped"
 )
@@ -476,7 +476,7 @@ type LastTurn struct {
 	Outcome TurnOutcome `json:"outcome"`
 }
 
-// ExecutorEntry is one in-flight detached coding run.
+// ExecutorEntry is one in-flight detached executor.
 //
 // AgentID is what pairs a run with its seat's row. Role and AgentHandle are
 // what the seat was called when the run started, for a reader with no roster

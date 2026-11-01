@@ -101,7 +101,7 @@ type Dispatcher struct {
 	// failure, and its redelivery meets the backend's own sit-out.
 	Provider func(ctx context.Context, handle string, limit llmchain.Limit) (reason string, parked bool, err error)
 
-	// Answer offers a delivery to a parked coding run as the reply to the
+	// Answer offers a delivery to a parked executor as the reply to the
 	// question it asked, and reports what to DO with the delivery — see
 	// [sandbox.AnswerDisposition].
 	//
@@ -288,7 +288,7 @@ type Request struct {
 	// The identity, never the inbox partition key beside it: this field is
 	// what reaches the conversation ledger, the turn telemetry that becomes
 	// the event store's conversation_key tag and the episodes column, and
-	// the row a detached coding run reports back through.
+	// the row a detached executor reports back through.
 	//
 	// THE PARTITION KEY IS NOT A FIELD HERE. It is read straight off the
 	// events at each of the four places that want it (see [partitionKeyOf])
@@ -475,7 +475,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	}
 
 	// THE BUDGET, BEFORE THE DELIVERY IS CLAIMED: before the completion
-	// ledger reads it, before a parked coding run is offered it as an
+	// ledger reads it, before a parked executor is offered it as an
 	// answer — resuming one charges tokens exactly as a turn does — and
 	// before any model is asked anything. A seat whose capped window is
 	// refusing cannot run a round, and a turn started anyway is refused on
@@ -521,7 +521,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	//
 	// AFTER THE LEDGER, because the completion ledger has already said
 	// which of these events were worked, and a trigger that produced a turn
-	// must not also be spliced into somebody's coding run.
+	// must not also be spliced into somebody's executor.
 	if screening.OfferAsSandboxAnswer && d.mayOfferAnswer(ctx, handle, surviving) {
 		disposition, cause := d.answered(ctx, handle, surviving)
 		switch disposition {
@@ -1111,7 +1111,7 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // guard protects, and both stop offering at the same reserve.
 //
 // ON THIS NODE'S LOG EITHER WAY, and the two lines are different facts.
-// Refusing means the delivery becomes an ordinary turn while a coding run may
+// Refusing means the delivery becomes an ordinary turn while an executor may
 // still be parked on its question — the answer route giving up its claim on a
 // message, invisible anywhere else. Offering while the PARTITION's own number
 // is inside the reserve means the hand-back this may cause will also spend a
@@ -1150,8 +1150,8 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 	return true
 }
 
-// answered offers a delivery to a coding run of this seat that is waiting for
-// somebody to answer its question, and reports what to do with it.
+// answered offers a delivery to one of this seat's executors that is waiting
+// for somebody to answer its question, and reports what to do with it.
 //
 // FAIL-OPEN WHERE NOTHING WAS MATCHED. A missing seam, a partition with no key
 // at all and a lookup the coordinator could not make all report
@@ -1430,7 +1430,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 //
 // EXPORTED AND SEPARATE because a turn has two ways of ending and both owe
 // the conversation an entry. An ordinary turn ends here, in the dispatcher.
-// A turn that suspended on a detached coding run ends somewhere else
+// A turn that suspended on a detached executor ends somewhere else
 // entirely — in another process, on another node, days later — and that path
 // recorded nothing at all: the thread's history stopped at the moment the run
 // detached, so the seat's next turn on it re-read a conversation in which the
@@ -1459,8 +1459,8 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 	if d.Conversations == nil || conversation == "" || !policy.Records() {
 		return
 	}
-	// A SUSPENDED TURN HAS SAID NOTHING YET. It parked on a detached coding
-	// run, and its Result carries the self_iterate the suspend returns and
+	// A SUSPENDED TURN HAS SAID NOTHING YET. It parked on a detached
+	// executor, and its Result carries the self_iterate the suspend returns and
 	// an empty artifact — so filing it wrote the seat's "reply" to the
 	// thread as a decision it never made and an answer it never gave, and
 	// the next turn on that thread read it back as what this one had done.

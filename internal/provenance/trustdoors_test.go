@@ -106,7 +106,7 @@ var trustDoors = map[string]trustDoor{
 	}},
 	"internal/assistant/catalog/api.go:trustOf": {vendor, []string{
 		// The routes whose answers carry a vendor's chat and what quoted it,
-		// and any answer carrying a coding run's question (Executor); every
+		// and any answer carrying an executor's question (Executor); every
 		// other route's answer is knowledgeTrust's to decide.
 		"internal/assistant/catalog.TestAGenericReadIsFencedAtTheTrustItsRouteEarns",
 		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
@@ -117,13 +117,13 @@ var trustDoors = map[string]trustDoor{
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
 	}},
 	"internal/assistant/catalog/reads.go:outsideWhere": {either, []string{
-		// The engine's own rows, unless one carries a coding run's question,
+		// The engine's own rows, unless one carries an executor's question,
 		// read by the one rule for a coding CLI's words (Executor).
 		"internal/assistant/catalog.TestAnAnswerIsFencedAtTheTrustItsTextEarns",
 		"internal/assistant.TestAProposalAfterOutsideTextIsTainted",
 		"internal/agent/builtin.TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor",
 	}},
-	// A CODING RUN'S ASK, a coding CLI's words, through every door it
+	// AN EXECUTOR'S ASK, a coding CLI's words, through every door it
 	// reaches a model by: answer_executor's receipt, and the answer of the
 	// assistant's write that sends it.
 	"internal/agent/builtin/answerexecutor.go:CallForTurn": {vendor, []string{
@@ -140,7 +140,7 @@ var trustDoors = map[string]trustDoor{
 	}},
 	"internal/assistant/resume.go:answerTrust": {hosted, []string{
 		// The engine's own records, unless the write's catalogue tool says
-		// its answer carries a coding run's words (writes.go:answersRun).
+		// its answer carries an executor's words (writes.go:answersRun).
 		"internal/assistant.TestAnApprovalResumesTheParkedTurn",
 		"internal/assistant.TestARunAnswersReceiptIsReadAtTheRunsTrust",
 	}},

@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY KEY A CODING RUN'S ROW CARRIES IS CLASSIFIED, in both directions, and
+// EVERY KEY AN EXECUTOR'S ROW CARRIES IS CLASSIFIED, in both directions, and
 // what a run was asked, asked back and answered is its seat's BODY (ADR-0033).
 //
 // The row is the board everybody reads, so a key added to [runRow] reaches

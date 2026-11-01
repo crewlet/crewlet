@@ -128,7 +128,7 @@ func UnavailableOf(err error) Unavailable {
 //
 // A FAILURE ITS OWN NODE HAS LOGGED ALREADY ([loggedAtSource]) is written at
 // DEBUG whatever it is: the node that met it wrote it at its level with its
-// text (a coding run's output read on the node that owns the run), so this
+// text (an executor's output read on the node that owns the run), so this
 // line is the trace of the answer, and at WARN it was the same failure twice,
 // on two nodes or on one.
 func LogUnavailable(ctx context.Context, logger *slog.Logger, event string, err error,
@@ -159,7 +159,7 @@ func LogFailed(ctx context.Context, logger *slog.Logger, event string, err error
 
 // loggedAtSource is a failure the node that met it has logged already, with its
 // class and its text, so a surface answering it writes a trace. Declared here,
-// by its reader; a coding run's output read is what marks one today.
+// by its reader; an executor's output read is what marks one today.
 type loggedAtSource interface{ LoggedAtSource() bool }
 
 // atSource reports whether err, or anything it wraps, was logged where it was

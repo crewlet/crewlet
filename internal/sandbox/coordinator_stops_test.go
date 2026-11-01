@@ -413,7 +413,7 @@ func TestEveryStatusHasAPlacement(t *testing.T) {
 	}
 }
 
-// jobFinished queues the result a finished coding job comes back with, so a
+// jobFinished queues the result a launch's finished job comes back with, so a
 // completion has something to collect.
 func jobFinished(_ *testing.T, rig *coordRig) {
 	rig.runner.Finish(Result{Success: true, Text: "done"})

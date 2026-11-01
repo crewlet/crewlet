@@ -984,8 +984,8 @@ func TestTwoRunsOfOneTriggerReflectOnce(t *testing.T) {
 }
 
 // AND A PARKED TURN DOES NOT SPEND THE MARK — and every agent seat's turn
-// parks, since its executor is a detached coding run, so a mark the park spent
-// would have every such seat learn nothing at all.
+// parks, since its executor is a detached run in a box, so a mark the park
+// spent would have every such seat learn nothing at all.
 //
 // A suspended executor publishes `turn_completed` carrying the suspend's own
 // self_iterate. Every worker declines it on [Turn.Settled] — but the mark was

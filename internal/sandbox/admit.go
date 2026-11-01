@@ -60,7 +60,7 @@ type TurnGate func(ctx context.Context, handle string, route ResumeRoute) (conte
 type ResumeRoute string
 
 const (
-	// ResumeCompletion is a coding run's completion: its job collected,
+	// ResumeCompletion is a launch's completion: its job collected,
 	// and its turn re-entered for the engine's delivery check and the
 	// reviewer, whose send-back launches the run again.
 	ResumeCompletion ResumeRoute = "completion"

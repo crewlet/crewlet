@@ -52,7 +52,7 @@ func AskedSomebodyElse(handle string) Refusal {
 		"only they can answer it.", handle)}
 }
 
-// AnsweredAlready is an answer to a coding run's question that another answer
+// AnsweredAlready is an answer to an executor's question that another answer
 // was recorded against first, by handle. No time: the person's screen says
 // when, on their own clock, off the run's record.
 func AnsweredAlready(handle string) Refusal {
@@ -64,7 +64,7 @@ func AnsweredAlready(handle string) Refusal {
 		"so your answer was not used.", handle)}
 }
 
-// QuestionChanged is an answer to a coding run's question given against a
+// QuestionChanged is an answer to an executor's question given against a
 // question the run no longer asks: it moved on to another since the person
 // read it, which is the one they need to see before they answer.
 func QuestionChanged() Refusal {

@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK, ITS CODING RUN INCLUDED.
+// A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK, ITS EXECUTOR INCLUDED.
 //
 // The seat's turn hears a stop at its next round; the run that turn launched is
 // its coding CLI's own process, with no rounds the engine sees, and it used to

@@ -14,7 +14,7 @@ import (
 //
 // [Host.Start] makes its first placement pass synchronously, and a pass runs
 // each claimed seat's acquire hook inline — the hook spawns the seat's MCP
-// children, hydrates its memory and recovers an interrupted sandbox run, which
+// children, hydrates its memory and recovers an interrupted executor, which
 // can outlast a TTL. The seat is in the held set while it does, so that the
 // heartbeat renews its lease throughout ([heldSeat] says why). But the start
 // ran the heartbeat loop only once that pass was over, so on the one pass

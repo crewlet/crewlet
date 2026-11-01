@@ -739,7 +739,7 @@ func namedBy(ctx context.Context, tx *sql.Tx, at applyContext,
 // ([writeFollows]), and a name taken back — by an edit that dropped it, a
 // delete, an erase — takes the subscription with it. Left behind, a colleague
 // named by mistake and corrected away a minute later would be woken by every
-// reply the thread ever had, each its own coding run in a box, with no gesture
+// reply the thread ever had, each its own launch in a box, with no gesture
 // in this build's vocabulary to stop it.
 //
 // IT IS THE THREAD'S QUESTION, NOT THE MESSAGE'S. A follow is keyed on the

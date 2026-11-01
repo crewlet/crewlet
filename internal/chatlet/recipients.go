@@ -158,7 +158,7 @@ func ResolveMentions(r Routing) ([]Candidate, bool) {
 // own set is already deduplicated and capped, so every branch below is a no-op
 // for anything this build wrote — and for a record a newer peer wrote, a wake
 // set is SPENT rather than kept like a row: applying what the fleet accepted
-// is the rule for rows, and starting a coding run in a box for each of two
+// is the rule for rows, and launching an executor in a box for each of two
 // hundred seats a record named is not something an older build has to agree
 // to.
 func Candidates(n *Notify) []Candidate {

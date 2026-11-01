@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// The executors answer: the detached coding runs the engine still holds.
+// The executors answer: every detached executor the engine still holds.
 //
 // THE LIVE PROJECTION IS THE WRONG SOURCE for this question, in two ways. It
 // is in memory, so it starts empty after a restart; and it sweeps an entry
@@ -58,7 +58,7 @@ type PendingRuns interface {
 	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
 }
 
-// ExecutorTails answers a running coding run's live output from the node that
+// ExecutorTails answers a running executor's live output from the node that
 // owns it — the one method this surface calls of [sandbox.TailReader].
 type ExecutorTails interface {
 	Tail(ctx context.Context, q sandbox.TailQuery) (sandbox.TailAnswer, error)
@@ -242,7 +242,7 @@ func (s Sources) executorRows(ctx context.Context, p Params) (any, error) {
 	return map[string]any{"runs": out}, nil
 }
 
-// runReach is what the asking principal may read of each coding run: its
+// runReach is what the asking principal may read of each executor: its
 // seat's body where the authority table's `audit.seat.read` admits them to
 // the run's seat — an admin, or its lead — through [Sources.reach], the one
 // decision a seat's live call, its turns and its memory are read under; its
@@ -314,7 +314,7 @@ func (s Sources) audienceOf(ctx context.Context, asked string) (string, error) {
 	return owner, nil
 }
 
-// runShown is who one key of a coding run's row is shown to.
+// runShown is who one key of an executor's row is shown to.
 type runShown uint8
 
 const (
@@ -338,7 +338,7 @@ const (
 	runConfig
 )
 
-// runKeys is THE SPLIT of a coding run's row, declared once: every key
+// runKeys is THE SPLIT of an executor's row, declared once: every key
 // [runRow] writes, classified. [serialiseRun] withholds by it, and a walk
 // (TestEveryExecutorRowKeyIsClassified) fails the build on a key nobody
 // classified — which is what keeps a field added to the row from reaching
@@ -391,7 +391,7 @@ var runKeys = map[string]runShown{
 	"body_withheld":       runStatus,
 }
 
-// serialiseRun is one coding run's row as reader r receives it: [runRow],
+// serialiseRun is one executor's row as reader r receives it: [runRow],
 // with every key [runKeys] does not show them left out — absent rather than
 // empty, because an empty task is a value a board would draw — and
 // `body_withheld` saying whether the body was.
@@ -428,7 +428,7 @@ func serialiseRun(run sandbox.PendingRun, r livestate.Reach, answeredBy string) 
 	return row
 }
 
-// runRow is every fact a coding run's row carries, whoever reads it — see
+// runRow is every fact an executor's row carries, whoever reads it — see
 // [serialiseRun] for what each reader is shown of it. answeredBy is who gave
 // the run's recorded answer, as its seal opens ([Sources.answeredBy]).
 func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {

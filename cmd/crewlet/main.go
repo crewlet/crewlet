@@ -2407,7 +2407,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// surface waiting for its first report from one that will
 			// never get one.
 			Converges: e.Converges,
-			// The DURABLE record of detached coding runs, whole: the
+			// The DURABLE record of every detached executor, whole: the
 			// board needs the row's own facts (the branch, the pause
 			// TTL, the bridge's call log) that the live panel, which
 			// is reconciled against this same record, does not carry.
@@ -2668,11 +2668,11 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			"hint", "a seat paused before this process started shows as paused "+
 				"from its next pause or resume; the pause itself is in force")
 	}
-	// AND THE RUNNING CODING RUNS, from the durable record every node
-	// opens, before the handover for the seed's reason: a run parked on a
-	// question for days is exactly the one the events of this process's
-	// lifetime will never mention. Then every interval, which is what
-	// corrects a panel whose completion event never arrived.
+	// AND THE EXECUTORS OUT IN THEIR BOXES, from the durable record every
+	// node opens, before the handover for the seed's reason: an executor
+	// parked on a question for days is exactly the one the events of this
+	// process's lifetime will never mention. Then every interval, which is
+	// what corrects a panel whose completion event never arrived.
 	runs := observe.NewSandboxReconciler(sandbox.NewCoordStore(e.Backends().Fleet), app.Stream())
 	if err = runs.Reconcile(seedCtx); err != nil {
 		log.WarnContext(ctx, "sandbox_panel_not_seeded", "error", err,
