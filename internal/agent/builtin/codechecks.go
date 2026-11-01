@@ -270,22 +270,63 @@ func (t *codeGetCheckFailures) Call(ctx context.Context, args map[string]any) (t
 }
 
 // checkCursor is where a call of code_get_check_failures resumes: at a
-// failure (`failures:<i>`) or at a byte of the log (`log:<offset>`).
+// failure (`failures:<attempt>:<i>:<sha>:<branch ref>`) or at a byte of the
+// log (`log:<attempt>:<offset>:<sha>:<branch ref>`) — OF THE ATTEMPT THE FIRST
+// PAGE READ, which the cursor names whole.
+//
+// # Why a cursor names its attempt
+//
+// Because "the latest attempt" and "the change's head" move while somebody
+// reads a failure a page at a time: a rerun or a CI's next attempt that ends
+// between two pages — likely while the failure is being debugged — or a push
+// to the change. A cursor holding an offset alone was resolved against
+// whatever was latest by then, so its next page was another run's log or
+// failures at the first one's offset, and nothing said the reader had crossed
+// into it. A cursor that names the attempt — its commit, the branch it was
+// checked for and its number — is read straight from that attempt's detail,
+// with no listing to find it again. It reveals nothing the call could not name
+// itself: the read is the repository's, under the asker's grant, as a `sha`
+// call's is. A ref name holds no `:` (git refuses one), so the branch is the
+// cursor's last field whole.
 type checkCursor struct {
 	log    bool
 	offset int64
+	// key is the attempt the cursor reads — its OID, Target and Attempt;
+	// zero on a first call, which has no cursor.
+	key code.CheckKey
 }
+
+// String is the cursor as an answer gives it.
+func (c checkCursor) String() string {
+	kind := "failures"
+	if c.log {
+		kind = "log"
+	}
+	return fmt.Sprintf("%s:%d:%d:%s:%s", kind, c.key.Attempt, c.offset, c.key.OID, c.key.Target)
+}
+
+// pinned reports whether the cursor names an attempt: every cursor but a first
+// call's absent one.
+func (c checkCursor) pinned() bool { return c.key.Attempt > 0 }
 
 func parseCheckCursor(s string) (checkCursor, bool) {
 	if s == "" {
 		return checkCursor{}, true
 	}
-	kind, n, ok := strings.Cut(s, ":")
-	offset, err := strconv.ParseInt(n, 10, 64)
-	if !ok || err != nil || offset < 0 || (kind != "log" && kind != "failures") {
+	parts := strings.SplitN(s, ":", 5)
+	if len(parts) != 5 || (parts[0] != "log" && parts[0] != "failures") {
 		return checkCursor{}, false
 	}
-	return checkCursor{log: kind == "log", offset: offset}, true
+	attempt, aerr := strconv.Atoi(parts[1])
+	offset, oerr := strconv.ParseInt(parts[2], 10, 64)
+	oid, target := parts[3], parts[4]
+	if aerr != nil || attempt < 1 || attempt > code.MaxCheckAttempts || oerr != nil || offset < 0 ||
+		!gitref.ValidOID(oid) || oid == code.ZeroOID || !code.ValidRef(target) ||
+		!strings.HasPrefix(target, branchRoot) {
+		return checkCursor{}, false
+	}
+	return checkCursor{log: parts[0] == "log", offset: offset,
+		key: code.CheckKey{OID: oid, Target: target, Attempt: attempt}}, true
 }
 
 // codeCheckAnswer is one attempt of a check as code_get_check_failures
@@ -347,38 +388,53 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	case cursor.log && t.deps.Logs == nil:
 		return refused(tools.RefusalUnavailable, tool+": this node reads no check's log; its failures, summary "+
 			"and tail are answered without a cursor."), nil
+	case cursor.pinned() && attempt != 0 && attempt != cursor.key.Attempt:
+		return failed(fmt.Sprintf("%s: `cursor` reads attempt %d, and `attempt` names %d; send the cursor with "+
+			"the attempt it came from, or leave `attempt` out.", tool, cursor.key.Attempt, attempt)), nil
+	case cursor.pinned() && ((oid != "" && oid != cursor.key.OID) ||
+		(target != "" && target != cursor.key.Target)):
+		return failed(fmt.Sprintf("%s: `cursor` reads commit %s checked for %s, not the `sha` and "+
+			"`checked_for` this call names; send it with the call it came from.", tool, cursor.key.OID,
+			strings.TrimPrefix(cursor.key.Target, branchRoot))), nil
 	}
 	repo, refusal := t.deps.repo(ctx, turn, tool, c, name)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	s := checkScope{repo: repo, change: change, oid: oid, target: target}
-	rows, _, refusal := t.deps.attempts(ctx, turn, tool, c, s, check)
-	if refusal != nil {
-		return *refusal, nil
-	}
-	latest, found, refusal := latestOf(tool, check, rows)
-	switch {
-	case refusal != nil:
-		return *refusal, nil
-	case !found:
-		return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: no attempt of check %s is held "+
-			"for that commit on %s.", tool, clip(check), repo.Name)), nil
-	case attempt == 0:
-		attempt = latest.Attempt
-	case attempt > latest.Attempt:
-		return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: check %s's latest attempt is "+
-			"%d.", tool, clip(check), latest.Attempt)), nil
+	key := cursor.key
+	if !cursor.pinned() {
+		// A FIRST CALL FINDS ITS ATTEMPT: the latest, or the one it names, of
+		// the check on the scope's commit. A page after it reads the attempt
+		// its cursor names, with no listing ([checkCursor]).
+		s := checkScope{repo: repo, change: change, oid: oid, target: target}
+		rows, _, refusal := t.deps.attempts(ctx, turn, tool, c, s, check)
+		if refusal != nil {
+			return *refusal, nil
+		}
+		latest, found, refusal := latestOf(tool, check, rows)
+		switch {
+		case refusal != nil:
+			return *refusal, nil
+		case !found:
+			return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: no attempt of check %s "+
+				"is held for that commit on %s.", tool, clip(check), repo.Name)), nil
+		case attempt == 0:
+			attempt = latest.Attempt
+		case attempt > latest.Attempt:
+			return refusedBy(tools.RefusalNotFound, code.ErrCheckNotFound, fmt.Sprintf("%s: check %s's latest "+
+				"attempt is %d.", tool, clip(check), latest.Attempt)), nil
+		}
+		key = code.CheckKey{OID: latest.OID, Target: latest.Target, Attempt: attempt}
 	}
 	answer, err := t.deps.read(ctx, c, code.ReadQuery{Kind: code.ReadCheck, Repo: repo.Name, Fresh: seatRead,
-		Checks: &code.CheckQuery{OID: latest.OID, Target: latest.Target, Name: check, Attempt: attempt}})
+		Checks: &code.CheckQuery{OID: key.OID, Target: key.Target, Name: check, Attempt: key.Attempt}})
 	if err != nil {
 		return t.deps.failed(ctx, turn, tool, c.asker, repo, err), nil
 	}
 	d := answer.Check
 	if d == nil {
 		return faulted(ctx, tool, fmt.Errorf("builtin: the code host answered check %s of %s with no detail",
-			check, latest.OID), fmt.Sprintf("%s could not read check %s: %s.", tool, clip(check), faultSaid)), nil
+			check, key.OID), fmt.Sprintf("%s could not read check %s: %s.", tool, clip(check), faultSaid)), nil
 	}
 	out := codeCheckAnswer{Repo: repo.Name, SHA: d.OID, CheckedFor: strings.TrimPrefix(d.Target, branchRoot),
 		Name: d.Name, Attempt: d.Attempt, State: d.State, Reason: d.Reason, Required: d.Required,
@@ -392,7 +448,7 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 		return t.logPage(ctx, turn, c, out, d, cursor.offset)
 	}
 	if d.Log != nil {
-		out.Log = &codeCheckLog{Size: d.Log.Size, Cursor: "log:0"}
+		out.Log = &codeCheckLog{Size: d.Log.Size, Cursor: checkCursor{log: true, key: d.CheckKey}.String()}
 	}
 	from := int(min(cursor.offset, int64(len(d.Failures))))
 	failures := d.Failures[from:]
@@ -410,7 +466,7 @@ func (t *codeGetCheckFailures) CallForTurn(ctx context.Context, turn *turnctx.Tu
 				f.Message)
 		}
 		if k < len(failures) {
-			page.Next = "failures:" + strconv.Itoa(from+k)
+			page.Next = checkCursor{offset: int64(from + k), key: d.CheckKey}.String()
 		}
 		return read, page
 	}
@@ -470,7 +526,7 @@ func (t *codeGetCheckFailures) logPage(ctx context.Context, turn *turnctx.Turn, 
 	at := offset
 	out.Log = &codeCheckLog{Size: d.Log.Size, Offset: &at, Text: text}
 	if next := offset + int64(used); next < d.Log.Size {
-		out.Log.Cursor = "log:" + strconv.FormatInt(next, 10)
+		out.Log.Cursor = checkCursor{log: true, offset: next, key: d.CheckKey}.String()
 	}
 	read := newForeignRead(turn, c.asker.Seat)
 	read.fence(fieldPath{}.key("log").key("text"), provenance.SourceCheckLog, nil, false, text)

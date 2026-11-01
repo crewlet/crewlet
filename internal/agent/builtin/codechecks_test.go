@@ -35,6 +35,10 @@ func (l *checkLogs) ReadAt(_ context.Context, o objstore.Object, off, n int64) (
 	return []byte(l.text[off : off+n]), nil
 }
 
+// firstLogPage is the cursor of the first page of [failedCheck]'s log: its
+// attempt, byte 0, its commit and the branch it was checked for.
+var firstLogPage = "log:1:0:" + mainOID + ":refs/heads/main"
+
 // failedCheck is attempt 1 of check `unit` of main, for main, failed with
 // its summary, tail, one failure and its kept log of size bytes.
 func failedCheck(summary, tail, message, path string, size int) code.CheckDetail {
@@ -81,12 +85,12 @@ func TestACheckLogIsFenced(t *testing.T) {
 	}
 	assertEnvelope(t, answer, provenance.TrustExternal, 0)
 	log, _ := answer["log"].(map[string]any)
-	if log["cursor"] != "log:0" {
-		t.Fatalf("the check's answer offers its log as %v, want cursor log:0", answer["log"])
+	if log["cursor"] != firstLogPage {
+		t.Fatalf("the check's answer offers its log as %v, want cursor %s", answer["log"], firstLogPage)
 	}
 
 	got = callIn(t, reg, turn, builtin.CodeGetCheckFailuresTool, map[string]any{"repo": "site", "sha": mainOID,
-		"name": "unit", "cursor": "log:0"})
+		"name": "unit", "cursor": firstLogPage})
 	seen, answer = fencesIn(t, b, got.Output)
 	assertFences(t, seen, []wantFence{{label, "check-log"}})
 	if len(seen) != 1 {
@@ -191,7 +195,7 @@ func TestACheckLogPageEndsOnAWholeCharacter(t *testing.T) {
 	turn.Lookups = turnctx.NewLookups()
 
 	var read strings.Builder
-	cursor := "log:0"
+	cursor := firstLogPage
 	for pages := 0; cursor != ""; pages++ {
 		if pages == 3 {
 			t.Fatalf("the log took more than 3 pages, at %s", cursor)
@@ -549,5 +553,83 @@ func TestANamedRerunReadsTheCommitsChecksOnce(t *testing.T) {
 	}
 	if l := listings()[1:]; len(l) != 1 || l[0].Checks.Name != "lint" {
 		t.Errorf("a rerun of lint listed the commit's checks as %+v, want once, narrowed to lint", l)
+	}
+}
+
+// A CHECK'S PAGES STAY ON THE ATTEMPT THEY BEGAN: a log read a page at a
+// time, whose check's next attempt ends between two pages, reads its second
+// page from the attempt its first was of — straight from that attempt, with
+// no listing of the commit's checks to find it again — and a cursor sent with
+// another `attempt` is refused rather than read as either.
+//
+// Mutation: find a page's attempt from the listing again (the latest), or
+// read a cursor sent with another attempt → red.
+func TestACheckPageStaysOnTheAttemptItBegan(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("a", 32<<10) + strings.Repeat("b", 10)
+	host := newCodeHost()
+	host.checks = []code.CheckDetail{failedCheck("", "", "boom", "lab.go", len(text))}
+	deps := codeDeps(host)
+	deps.Logs = &checkLogs{text: text}
+	reg := codeRegistry(t, deps)
+	turn, b := readerTurn(t)
+	turn.Lookups = turnctx.NewLookups()
+	entry, ok := reg.Lookup(builtin.CodeGetCheckFailuresTool)
+	if !ok {
+		t.Fatalf("%s is not registered", builtin.CodeGetCheckFailuresTool)
+	}
+	page := func(cursor string, attempt int) (tools.Result, map[string]any, string) {
+		args := map[string]any{"repo": "site", "sha": mainOID, "name": "unit", "cursor": cursor}
+		if attempt > 0 {
+			args["attempt"] = attempt
+		}
+		got, err := entry.Tool.(tools.SeatCallable).CallForTurn(everyGrant(), turn, args)
+		if err != nil {
+			t.Fatalf("the page at %s: %v", cursor, err)
+		}
+		if got.Failed {
+			return got, nil, ""
+		}
+		seen, answer := fencesIn(t, b, got.Output)
+		if len(seen) != 1 {
+			t.Fatalf("the page at %s answered %d fences, want its text in one", cursor, len(seen))
+		}
+		return got, answer, strings.TrimSuffix(seen[0].inner, "\n")
+	}
+
+	got, answer, _ := page(firstLogPage, 0)
+	if got.Failed {
+		t.Fatalf("the log's first page answered %q", got.Output)
+	}
+	log, _ := answer["log"].(map[string]any)
+	next, _ := log["cursor"].(string)
+	if next == "" {
+		t.Fatalf("the log's first page offers no next page: %v", answer["log"])
+	}
+
+	// THE CHECK'S NEXT ATTEMPT ENDS between the two pages, failed, keeping a
+	// log of its own.
+	second := failedCheck("", "", "bang", "lab.go", 7)
+	second.Attempt = 2
+	host.mu.Lock()
+	host.checks = append(host.checks, second)
+	host.mu.Unlock()
+	reads, _, _ := host.asked()
+	listed := readsOf(reads, code.ReadChecks)
+
+	got, answer, text2 := page(next, 0)
+	if got.Failed {
+		t.Fatalf("the log's second page, once attempt 2 ended, answered %q", got.Output)
+	}
+	if answer["attempt"] != float64(1) || text2 != strings.Repeat("b", 10) {
+		t.Errorf("the log's second page is attempt %v's, reading %q; want attempt 1's last ten bytes",
+			answer["attempt"], text2)
+	}
+	if reads, _, _ := host.asked(); readsOf(reads, code.ReadChecks) != listed {
+		t.Errorf("the second page listed the commit's checks again, to find the attempt its cursor names")
+	}
+
+	if got, _, _ := page(next, 2); !got.Failed || !strings.Contains(got.Output, "`attempt` names 2") {
+		t.Errorf("a cursor of attempt 1 sent with attempt 2 answered %q, want it refused", got.Output)
 	}
 }

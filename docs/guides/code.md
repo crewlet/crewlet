@@ -806,8 +806,9 @@ secret the company does not allow is `defs_invalid`, and is not queued again.
 
 A seat reads all four with `code_get_check_failures` — naming the commit by
 `change` (its head) or `sha`, and the check by `name` — its failures a page at
-a time and its log 32 KiB a page, every word of them fenced as text nobody in
-the company wrote ([Text somebody else
+a time and its log 32 KiB a page, every page from the attempt the first one
+read even once a rerun ends or the change's head moves, and every word fenced
+as text nobody in the company wrote ([Text somebody else
 wrote](../concepts/agent-runtime.md#text-somebody-else-wrote)); and
 `code_get_change`'s `checks` part lists a change's head's checks in a line
 each. **Running a check again** is `code_rerun_checks`, naming each check and
