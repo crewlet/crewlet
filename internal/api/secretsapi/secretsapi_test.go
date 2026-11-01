@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -462,6 +463,38 @@ func TestAListingCountsTheAssistantsSealedValues(t *testing.T) {
 type fakeAssistant struct{ count assistantdomain.SealedCount }
 
 func (f fakeAssistant) SealedKeys(context.Context) (assistantdomain.SealedCount, error) {
+	return f.count, nil
+}
+
+// THE LISTING COUNTS THE SEATS' EXECUTOR SESSIONS BY KEY, for the assistant's
+// reason: each session is an object sealed under the keyring that leaves only
+// with its row, so a key dropped under a live one leaves that session
+// unreadable and its next turn starting fresh, and a listing that left them
+// out read nothing under the old key while they still were. A node given no
+// executor estate says so with a null. Mutation: drop the count from the
+// listing and the first case fails.
+func TestAListingCountsTheExecutorSessionsSealedValues(t *testing.T) {
+	t.Parallel()
+	opts := secretsapi.Options{Fleet: coordmem.NewFleet(), Cipher: cipherFor(t, "k1"),
+		ActiveKeyID: "k1", Now: func() time.Time { return clock },
+		Executor: fakeExecutor{executordomain.SealedCount{
+			Values: secrets.KeyCounts{"k0": 3, "k1": 5}}}}
+	code, body := call(t, mounted(t, opts, iam.AllGrants...), http.MethodGet, "/secrets", "")
+	if code != http.StatusOK ||
+		!strings.Contains(body, `"executor_values":{"values":{"k0":3,"k1":5}}`) {
+		t.Errorf("the listing = %d %s, want the executor sessions counted by key", code, body)
+	}
+	opts.Executor = nil
+	code, body = call(t, mounted(t, opts, iam.AllGrants...), http.MethodGet, "/secrets", "")
+	if code != http.StatusOK || !strings.Contains(body, `"executor_values":null`) {
+		t.Errorf("a node with no executor estate listed %d %s, want it said", code, body)
+	}
+}
+
+// fakeExecutor is an executor estate holding count.
+type fakeExecutor struct{ count executordomain.SealedCount }
+
+func (f fakeExecutor) SealedKeys(context.Context) (executordomain.SealedCount, error) {
 	return f.count, nil
 }
 

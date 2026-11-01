@@ -459,7 +459,8 @@ type Reading struct {
 	// DeferredJudgesCopy is whether that log is a [Domain.ReadinessInput] —
 	// the tracker's, the knowledge base's and chat's are; the identity
 	// estate's, the vectors', the usage domain's, the artifacts log's, the
-	// artifact datastore's and the Dashboard Assistant's are not — which is
+	// artifact datastore's, the Dashboard Assistant's and the executor log's
+	// are not — which is
 	// whether the grace is ALSO when this node stops serving its copy of the
 	// estate (its seats stay, and read it from the other data nodes). The
 	// alarm fires at the grace either way, because an upgrade is the remedy

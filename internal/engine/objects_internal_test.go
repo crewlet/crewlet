@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
@@ -33,7 +34,8 @@ import (
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
 	n := &native{trackerFiles: &worklet.Reader{}}
-	estates := objectEstatesFor(n, &artifactsdomain.Reader{}, &assistantdomain.Reader{})
+	estates := objectEstatesFor(n, &artifactsdomain.Reader{}, &assistantdomain.Reader{},
+		&executordomain.Reader{})
 	if _, err := collect.Sources(references.All, estates...); err != nil {
 		t.Fatalf("the collector cannot be built from the declared tables: %v", err)
 	}
@@ -47,10 +49,11 @@ func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 // is not running, in [native.objectEstates], and the references build.
 func TestANodeMissingADeclaredTablesEstateBuildsNoReferences(t *testing.T) {
 	t.Parallel()
-	estates := objectEstatesFor(&native{}, &artifactsdomain.Reader{}, &assistantdomain.Reader{})
+	estates := objectEstatesFor(&native{}, &artifactsdomain.Reader{}, &assistantdomain.Reader{},
+		&executordomain.Reader{})
 	if len(estates) == 0 {
-		t.Fatal("the premise: the artifacts' and Ask Crewlet's estates are " +
-			"offered, so the refusal below is about the tracker's alone")
+		t.Fatal("the premise: the artifacts', Ask Crewlet's and the executor log's " +
+			"estates are offered, so the refusal below is about the tracker's alone")
 	}
 	if _, err := collect.Sources(references.All, estates...); err == nil {
 		t.Fatal("references were built with the tracker's estate missing: a " +
@@ -371,7 +374,8 @@ func TestTheCollectorNeverStartsOnceStopped(t *testing.T) {
 
 	refs, err := collect.Sources(references.All, refusedEstate{name: worklet.ObjectEstate{}.Name()},
 		refusedEstate{name: artifactsdomain.ObjectEstate{}.Name()},
-		refusedEstate{name: assistantdomain.ObjectEstate{}.Name()})
+		refusedEstate{name: assistantdomain.ObjectEstate{}.Name()},
+		refusedEstate{name: executordomain.ObjectEstate{}.Name()})
 	if err != nil {
 		t.Fatalf("the references: %v", err)
 	}

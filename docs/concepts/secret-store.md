@@ -139,6 +139,11 @@ secrets:
       material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
+A key's `id` is letters, digits, `.`, `_` and `-`, at most 255 of them: it is
+stamped into every value the key seals, and a sealed stream — the format a
+seat's executor session is kept in — names its key in a one-byte length, so
+`crewlet validate` refuses a longer one rather than the first capture.
+
 ### The engine's own keys share the bucket, and never the namespace
 
 The same bucket holds key material the **engine** keeps for itself: the
@@ -174,10 +179,13 @@ store reached directly, with the engine stopped, holds no identity estate, so
 neither is counted or moved there, and the rekey says so. Through a running
 node it counts Ask Crewlet's sealed conversations per key as well
 (`assistant_values`, each file a conversation keeps counted by the key its
-content is sealed under in the object store), which no rekey moves. A dry run counts whatever it
-reached still under an old key, so an operator is never told "nothing to move"
-while the address index's key, every person's name or somebody's conversation
-is still sealed under the key they are about to retire.
+content is sealed under in the object store), and the seats' executor sessions
+(`executor_values`, each session a turn's row names counted by the key its
+object is sealed under), neither of which a rekey moves. A dry run counts
+whatever it reached still under an old key, so an operator is never told
+"nothing to move" while the address index's key, every person's name,
+somebody's conversation or a seat's session is still sealed under the key they
+are about to retire.
 
 The blind-index key is never minted over one that was deleted — it comes back
 with the coordination store it lived in, from the backup that holds it
@@ -278,7 +286,15 @@ That makes the rotation a runbook with no window in it:
      `assistant.retention_days` or its owner clears it, so the rekey says how
      many are still under an old key. A conversation still in use keeps what
      it sealed before step 3, so this count can stay above zero for as long
-     as somebody keeps using a conversation started before the flip.
+     as somebody keeps using a conversation started before the flip. **The
+     seats' executor sessions** are counted and left the same way: a session
+     leaves with its row, when a later turn of its conversation ends, when its
+     seat's `turn_engine.conversation_session.max_bytes_per_seat` releases it,
+     or once it is untouched for
+     `turn_engine.conversation_session.retention_days`. A key dropped while
+     sessions are still sealed under it costs no data a person wrote: each of
+     those sessions reads as none, and its conversation's next turn starts its
+     harness fresh.
    - **The company document** — `POST /config/reload` to a node that is up
      stores the fleet's document again, sealed under that node's active key,
      and activates it. On a stopped node, [`crewlet config rekey`](../reference/cli.md#crewlet-config-rekey)

@@ -318,6 +318,7 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 		LeaseTTL: e.leaseTTL,
 		Roster:   e.activeSeats,
 		Runs:     e.retireSeatRuns,
+		Sessions: e.retireSeatSessions,
 	})
 }
 

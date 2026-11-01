@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/org"
@@ -86,22 +87,26 @@ func (e *Engine) ArtifactsWriter() *artifactsdomain.Writer {
 }
 
 // objectEstatesFor is every estate the object store's passes read on a node
-// running n: the native half's, the artifacts log's over artifacts and the
-// assistant log's over assistant, every one of which every data node runs,
-// whatever surfaces the company keeps elsewhere. The collector is started with
+// running n: the native half's, the artifacts log's over artifacts, the
+// assistant log's over assistant and the executor log's over executor, every
+// one of which every data node runs, whatever surfaces the company keeps
+// elsewhere. The collector is started with
 // the native half ([Engine.startNativeCollector]), and every declared table
 // must have its estate ([collect.Sources]), so a reader missing here is a
 // collector [collect.Sources] refuses to build rather than one that reads that
 // domain's objects as nobody's — never a collector over the estates that
 // happen to be present.
 func objectEstatesFor(n *native, artifacts *artifactsdomain.Reader,
-	assistant *assistantdomain.Reader) []collect.Estate {
+	assistant *assistantdomain.Reader, executor *executordomain.Reader) []collect.Estate {
 	estates := n.objectEstates()
 	if artifacts != nil {
 		estates = append(estates, artifactsdomain.ObjectEstate{Reader: artifacts})
 	}
 	if assistant != nil {
 		estates = append(estates, assistantdomain.ObjectEstate{Reader: assistant})
+	}
+	if executor != nil {
+		estates = append(estates, executordomain.ObjectEstate{Reader: executor})
 	}
 	return estates
 }

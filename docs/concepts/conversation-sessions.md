@@ -279,6 +279,8 @@ turn_engine:
                              #   at render, by ledger.InjectedMaxChars — see
                              #   Cost above
     retention_days: 30       # matches the event store's own horizon
+    max_bytes_per_seat: 67108864  # object-store bytes one seat's captured
+                             #   executor sessions may hold (33 MiB..64 GiB)
 ```
 
 Nested under `turn_engine` rather than beside it, which is load-bearing: it
@@ -292,6 +294,28 @@ safe to leave on.
 read when the maintenance worker is built, so a change lands at the next
 process start, and it is floored at the sweep interval so a hostile value
 cannot undercut the worker's own invariant.
+
+The same two settings bound each seat's captured **executor sessions**: the
+harness's own transcript of a turn, sealed into the
+[object store](object-store.md) and named by the turn's row of the `executor`
+log
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)),
+so a later turn of the same conversation, in any box on any node, can
+continue it. The trash reaper deletes a session untouched for
+`retention_days`, never one whose turn's run is still live, reading the value
+off the revision the fleet runs at every hourly pass rather than at start; a
+turn that never ended, a day past its last capture with no run of it live, it
+first ends as `lost`, so a lost end holds the seat's budget for a day rather
+than for the whole retention.
+`max_bytes_per_seat` is the most one seat's sessions may hold: past it a
+capture releases the seat's oldest ended sessions first, keeping how each turn
+ended, and a capture the seat's live turns leave no room for is refused, so
+that turn's next launch starts fresh. The default, 64 MiB, holds a live turn's
+session at its 32 MiB bound beside about twenty ordinary ones (a day's work
+compresses to one or two mebibytes); the least it accepts, 33 MiB, is one
+session at that bound once sealed, and every seat's sessions share the object
+store with the company's files, so a company of forty seats or more on the
+default `nats` bucket belongs on S3 (`store.objects.backend`).
 
 ---
 

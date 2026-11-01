@@ -53,7 +53,9 @@
 // The Dashboard Assistant's conversations are sealed under the same keyring
 // and are not moved: each value leaves with its conversation, so the listing
 // counts them too ([Assistant]) and the old key stays on the ring until that
-// count under it reaches zero.
+// count under it reaches zero. So are the seats' executor sessions, each
+// sealed into an object of the object store and leaving with its row
+// ([Executor]).
 //
 // # Two routes return a value, and both are break-glass
 //
@@ -124,6 +126,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -194,6 +197,15 @@ type Assistant interface {
 	SealedKeys(ctx context.Context) (assistantdomain.SealedCount, error)
 }
 
+// Executor is the executor log's half of a keyring rotation: the seats'
+// captured sessions, each sealed into an object under the same keyring, which
+// a rotation waits out rather than moves (executordomain.SealedCount says why).
+type Executor interface {
+	// SealedKeys counts the sessions the rows name, by the keyring key each
+	// is sealed under, fetching none of them.
+	SealedKeys(ctx context.Context) (executordomain.SealedCount, error)
+}
+
 // IdentityResealed is what a rekey moved in the identity estate, COUNTED: how
 // many people's records it published and how many values those carried. Never
 // the ids — a rekey answers the person who ran it, and the count is what they
@@ -210,6 +222,7 @@ type Service struct {
 	config    Reactivator
 	identity  Identity
 	assistant Assistant
+	executor  Executor
 	keyID     string
 	now       func() time.Time
 
@@ -245,6 +258,10 @@ type Options struct {
 	// for the same reason as Identity, and answered `assistant_values: null`
 	// without one.
 	Assistant Assistant
+
+	// Executor is the executor log's half of a rotation, NIL-ABLE for the
+	// same reason, and answered `executor_values: null` without one.
+	Executor Executor
 
 	// Config re-activates the revision that reads a name this surface
 	// wrote (ADR-0070): configapi's Service in `crewlet run`. Required, for
@@ -317,6 +334,7 @@ func New(opts Options) (*Service, error) {
 		config:    opts.Config,
 		identity:  opts.Identity,
 		assistant: opts.Assistant,
+		executor:  opts.Executor,
 		keyID:     opts.ActiveKeyID,
 		now:       now,
 		guard:     guard,
@@ -381,7 +399,8 @@ func (s *Service) Routes(mux authz.Mux) error {
 // estate, which `crewlet run` never does: every node serving the API holds the
 // estate (ingress requires `data`) and runs the identity estate from boot.
 // `assistant_values` is the same count for the Dashboard Assistant's sealed
-// values, which a rotation waits out, null where this surface was given none.
+// values, which a rotation waits out, null where this surface was given none,
+// and `executor_values` the same for the seats' sealed executor sessions.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {
@@ -411,13 +430,22 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		}
 		assistant = &counted
 	}
+	var executor *executordomain.SealedCount
+	if s.executor != nil {
+		counted, err := s.executor.SealedKeys(r.Context())
+		if err != nil {
+			s.fail(w, r, "count the executor sessions' sealed values", err)
+			return
+		}
+		executor = &counted
+	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, render(row))
 	}
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"secrets": out, "engine_keys": engine, "identity_values": identity,
-		"assistant_values": assistant,
+		"assistant_values": assistant, "executor_values": executor,
 	})
 }
 

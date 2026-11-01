@@ -339,10 +339,11 @@ node:
 | `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 Roles decide what a node serves and which duties it holds, and of them only
-`data` decides **which state logs it applies**: a data node applies all nine —
+`data` decides **which state logs it applies**: a data node applies all ten —
 the tracker, the vectors, the knowledge base, the identity directory, the
 usage history, the artifacts, their datastores, Ask Crewlet's
-conversations and chat — whatever its other roles and whether or not a
+conversations, chat and the seats' executor sessions — whatever its other
+roles and whether or not a
 company has been published yet, and a node without `data` applies none. So
 every data node holds a copy of your people, the verifiers of their
 credentials and their sessions, which is what lets the node a browser reaches

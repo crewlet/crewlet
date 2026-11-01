@@ -1,9 +1,11 @@
 // Package secrets seals configuration secrets at rest.
 //
-// ONE MECHANISM: a Cipher, which seals a value into a self-describing
-// envelope, used both for whole-document company-config encryption and for
-// the per-variable secret store. Everything here is about the KEYRING and the
-// envelope; nothing here reads a value.
+// ONE KEYRING, TWO SHAPES OF SEALED VALUE: a Cipher, which seals a value into
+// a self-describing envelope, used both for whole-document company-config
+// encryption and for the per-variable secret store; and a [StreamSealer],
+// which seals a value too large to hold whole while it streams, in
+// authenticated chunks (stream.go says why a second format exists). Everything
+// here is about the KEYRING and the two formats; nothing here reads a value.
 //
 // # Where ${VAR} resolution lives, and why not here
 //

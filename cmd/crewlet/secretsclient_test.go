@@ -456,7 +456,8 @@ func TestAListingCountsWhatNoCommandNames(t *testing.T) {
 	node := newFakeSecretsNode(t)
 	node.body = `{"secrets":[],"engine_keys":{"total":4,"by_key":{"k1":3,"k2":1}},` +
 		`"identity_values":{"people":{"k1":5,"k2":2},"invitations":{"k1":1}},` +
-		`"assistant_values":{"values":{"k1":7,"k2":4}}}`
+		`"assistant_values":{"values":{"k1":7,"k2":4}},` +
+		`"executor_values":{"values":{"k1":6,"k2":1}}}`
 	held, err := node.client(t).EngineKeys(t.Context())
 	if err != nil {
 		t.Fatalf("EngineKeys: %v", err)
@@ -475,18 +476,23 @@ func TestAListingCountsWhatNoCommandNames(t *testing.T) {
 		t.Errorf("the assistant's values read %+v, want 7 under a key other than k2",
 			held.Assistant)
 	}
+	if held.Executor == nil || held.Executor.Outside("k2") != 6 {
+		t.Errorf("the executor sessions read %+v, want 6 under a key other than k2",
+			held.Executor)
+	}
 	var out strings.Builder
 	waitOut(&out, held, "k2")
 	if !strings.Contains(out.String(), "7 values in Ask Crewlet conversations") ||
+		!strings.Contains(out.String(), "6 executor sessions") ||
 		!strings.Contains(out.String(), "1 outstanding invitations") {
-		t.Errorf("the rotation's wait-out said %q, want the conversations and the "+
-			"invitation still under another key", out.String())
+		t.Errorf("the rotation's wait-out said %q, want the conversations, the "+
+			"sessions and the invitation still under another key", out.String())
 	}
 
 	node.body = `{"secrets":[],"engine_keys":{"total":0},"identity_values":null,` +
-		`"assistant_values":null}`
+		`"assistant_values":null,"executor_values":null}`
 	if held, err = node.client(t).EngineKeys(t.Context()); err != nil ||
-		held.Identity != nil || held.Assistant != nil {
+		held.Identity != nil || held.Assistant != nil || held.Executor != nil {
 		t.Errorf("a node with no identity estate read back as %+v (%v)", held, err)
 	}
 }

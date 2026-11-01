@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/search"
@@ -483,7 +484,7 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	t.Parallel()
 	var trackerLog, vectorLog statelog.Domain = worklet.Domain{}, search.Domain{}
 	var pagesLog, iamLog statelog.Domain = doclet.Domain{}, iamdomain.Domain{}
-	var chatLog statelog.Domain = chatlet.Domain{}
+	var chatLog, executorLog statelog.Domain = chatlet.Domain{}, executordomain.Domain{}
 
 	for _, tc := range []struct {
 		name       string
@@ -580,6 +581,25 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			logs: []statelog.Domain{chatLog}, seats: 100,
 			applied: map[statelog.Domain]int{chatLog: 24_500},
 			fires:   true, log: "chat", expected: 12_000,
+		},
+		{
+			name: "the executor log, held to its own per-seat rate",
+			// 60 a seat a day, the executor's own declaration (a head
+			// read at a turn's first launch, a row read at a
+			// relaunch): 6 000 for 100 seats, and 12 000 a day is
+			// still inside twice it.
+			logs: []statelog.Domain{executorLog}, seats: 100,
+			applied: map[statelog.Domain]int{executorLog: 12_000},
+			fires:   false, log: "executor", expected: 6_000,
+		},
+		{
+			name: "the executor log past twice its own census, inside twice the tracker's",
+			// 12 001 a day is under twice the tracker's 12 500 and
+			// over twice the executor's 6 000, so a census that held
+			// this log to the tracker's rate stays quiet here.
+			logs: []statelog.Domain{executorLog}, seats: 100,
+			applied: map[statelog.Domain]int{executorLog: 12_001},
+			fires:   true, log: "executor", expected: 6_000,
 		},
 		{
 			name: "the vector log, which no read appends to",

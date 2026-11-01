@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/notify"
@@ -138,6 +139,11 @@ type core struct {
 	assistantReader *assistantdomain.Reader
 	assistantWriter *assistantdomain.Writer
 
+	// executorReader and executorWriter are the executor log's two sides,
+	// built on every data node for the same reason ([core.openExecutor]).
+	executorReader *executordomain.Reader
+	executorWriter *executordomain.Writer
+
 	// run is the context the directory trigger runs under, and stop is
 	// what ends it.
 	//
@@ -232,6 +238,9 @@ func (e *Engine) startCore(ctx context.Context, boot *config.Bootstrap) error {
 		return err
 	}
 	if err = c.openAssistant(e, sl); err != nil {
+		return err
+	}
+	if err = c.openExecutor(sl); err != nil {
 		return err
 	}
 

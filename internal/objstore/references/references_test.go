@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
@@ -143,8 +144,9 @@ const assumedClockSkew = time.Hour
 // grace has to exceed the bound by more than the two clocks can disagree, or
 // a write could name a key a collection had just read as nobody's. And the
 // bound itself has to outlast the slowest upload the engine accepts (a file
-// of worklet.MaxFileBytes at the objstore.MiBPace floor), or a legal upload
-// would finish only to be refused.
+// of worklet.MaxFileBytes, or a sealed session of executordomain.SealedMaxBytes,
+// at the objstore.MiBPace floor), or a legal upload would finish only to be
+// refused.
 func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	t.Parallel()
 	if objstore.RecordWithin+assumedClockSkew >= collect.PendingGrace {
@@ -156,6 +158,14 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	if slowest >= objstore.RecordWithin {
 		t.Errorf("the largest file at the pacing floor takes %v to upload, and a "+
 			"write may name a key only %v after it was minted", slowest, objstore.RecordWithin)
+	}
+	// AND THE LARGEST SESSION, stated on its SEALED bytes: what a capture
+	// uploads is the archive sealed, and its key is minted before the first
+	// byte, so the whole upload has to land inside the bound too.
+	if session := objstore.PaceFor(executordomain.SealedMaxBytes); session >= objstore.RecordWithin {
+		t.Errorf("the largest sealed session at the pacing floor takes %v to upload, and "+
+			"a capture may name its key only %v after it was minted", session,
+			objstore.RecordWithin)
 	}
 	t.Logf("the slowest legal upload takes %v of the %v a write may name its key in, "+
 		"and the grace leaves %v for the clocks to disagree by",

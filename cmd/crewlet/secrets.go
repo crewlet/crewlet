@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -342,6 +343,10 @@ type engineHeld struct {
 	// Assistant is the Dashboard Assistant's sealed values, which a
 	// rotation waits out rather than moves; nil where the backend holds none.
 	Assistant *assistantdomain.SealedCount
+
+	// Executor is the seats' sealed executor sessions, waited out the same
+	// way; nil where the backend holds none.
+	Executor *executordomain.SealedCount
 }
 
 // secretTarget is the backend plus what to tell the operator about it.
@@ -1082,8 +1087,9 @@ func rekeySecrets(ctx context.Context, sv *secretTarget, active string,
 // waitOut says what is still sealed under another key that no rekey moves,
 // and so keeps the old key on the ring until it is gone: live invitations,
 // because only a re-issue could carry the address again and its own claim
-// refuses one while the invitation is open, and the Dashboard Assistant's
-// conversations, which leave only with their retention.
+// refuses one while the invitation is open, the Dashboard Assistant's
+// conversations, which leave only with their retention, and the seats'
+// executor sessions, which leave with their rows.
 func waitOut(stdout io.Writer, held engineHeld, active string) {
 	if held.Assistant != nil {
 		if n := held.Assistant.Outside(active); n > 0 {
@@ -1091,6 +1097,16 @@ func waitOut(stdout io.Writer, held engineHeld, active string) {
 				"sealed under another key and are not re-sealed: keep that key on the "+
 				"ring until none is left (a conversation leaves once it is untouched "+
 				"for assistant.retention_days, or when its owner clears it)\n", n)
+		}
+	}
+	if held.Executor != nil {
+		if n := held.Executor.Outside(active); n > 0 {
+			fmt.Fprintf(stdout, "%d executor sessions are sealed under another key "+
+				"and are not re-sealed: keep that key on the ring until none is left "+
+				"(a session leaves when a later turn of its conversation ends, when "+
+				"its seat's budget releases it, or once it is untouched for "+
+				"turn_engine.conversation_session.retention_days); dropped sooner, "+
+				"each reads as no session and its next turn starts fresh\n", n)
 		}
 	}
 	if held.Identity == nil {

@@ -31,7 +31,7 @@ Five figures per domain, and no others:
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
-| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, Ask Crewlet's and chat's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
+| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, Ask Crewlet's, chat's and the executor log's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
 | `headroom_fraction` | how much of the ceiling **ordinary writes** are held to is unused: `max_bytes` less `reserve_bytes` |
 | `bytes_per_day` | what the log took in over the trailing day (`PER DAY` in the table) |
 
@@ -182,8 +182,8 @@ A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
 this domain does not **have** — the vector log, the identity estate's, the
-artifacts log's, the artifact datastore's, Ask Crewlet's and the
-usage log's have no wake feed — is `n/a`
+artifacts log's, the artifact datastore's, Ask Crewlet's, the executor log's
+and the usage log's have no wake feed — is `n/a`
 rather than zero, which is a different thing again. And a term that was
 read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
 no snapshots — reads `unbounded` rather than carrying a sequence. Inside the
@@ -272,10 +272,12 @@ Two policies decide which copies count:
   says, so the procedure is one acknowledgement per log. A log never
   acknowledged is never trimmed: the ordered logs, `CREWLET_TRACKER_LOG`,
   `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_ARTIFACTS_LOG`,
-  `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG` and `CREWLET_CHAT_LOG`,
-  each grow until their own ceiling refuses writes — a full identity log
-  refuses every sign-in, a full Ask Crewlet log every question Ask Crewlet is
-  asked, and a full chat log every message — while the two compacted logs,
+  `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG` and
+  `CREWLET_EXECUTOR_LOG`, each grow until their own ceiling refuses writes — a
+  full identity log refuses every sign-in, a full Ask Crewlet log every
+  question Ask Crewlet is asked, a full chat log every message, and a full
+  executor log every session a turn would keep for its conversation's next —
+  while the two compacted logs,
   `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their
   records out on the broker whatever the trim decides; their trim and its
   alarms wait on an acknowledgement just the same.
@@ -659,7 +661,8 @@ See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-opera
 When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) a log
 that claims identity — the tracker's, the knowledge base's, the identity
 estate's, the artifacts log's, the artifact datastore's,
-Ask Crewlet's or chat's — it opens the next generation from its own rows, and
+Ask Crewlet's, chat's or the executor log's — it opens the next generation
+from its own rows, and
 every other node's rows are then a history the log no longer continues from. Nothing on the log can bring them
 level, so each of those nodes adopts a snapshot from a node in the new
 generation, **on its own**:
@@ -787,7 +790,7 @@ next backup afresh.
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on — every log that claims identity: the tracker's, the knowledge
 base's, the identity estate's, the artifacts log's, the artifact datastore's,
-Ask Crewlet's and chat's. (The vector log and the
+Ask Crewlet's, chat's and the executor log's. (The vector log and the
 usage log count nothing and get none: a node behind on the vectors is a
 coverage figure, and an evicted node's usage is still what its seats did.) Every
 node running the state log can make the gesture, whichever backends the
@@ -820,8 +823,8 @@ characters) is refused before anything is judged.
 
 Past the judgement the record goes to every log at once, and each answers on
 its own line — the tracker's log, the pages log, the identity estate's, the
-artifacts log, the artifact datastore's, Ask Crewlet's and chat's —
-with the
+artifacts log, the artifact datastore's, Ask Crewlet's, chat's and the
+executor log — with the
 [three-valued outcome](replication.md#a-write-has-three-outcomes) every write
 has — `applied`, `pending` or `unknown` — or `not written` with the
 reason that stopped that log. A log that answered holds its record whatever
@@ -1045,7 +1048,8 @@ changes it. Every log declares the largest record it publishes — 8 MiB less
 usage log's, which is the largest the embedded broker's 8 MiB messages carry
 once a record is signed, 128 KiB on the identity estate's, 2 MiB on the
 artifacts log's, 1 MiB plus 64 KiB on the artifact datastore's, 2 MiB on
-Ask Crewlet's and 512 KiB on chat's — and a record past it is refused
+Ask Crewlet's, 512 KiB on chat's and 128 KiB on the executor log's — and a
+record past it is refused
 before it is sent; the stream's
 own `max_msg_size` is that declaration plus 4 KiB for what a stored record
 carries beside it, so the broker holds a peer on another build to it too. Two
@@ -1107,8 +1111,8 @@ eviction was refused, run again, and refused again.
 
 So on the logs that carry gate records — every log that claims identity:
 the tracker's, the knowledge base's, the identity estate's, the artifacts log's,
-the artifact datastore's, Ask Crewlet's and chat's — **ordinary
-writes are refused at a soft ceiling** below the
+the artifact datastore's, Ask Crewlet's, chat's and the executor log's —
+**ordinary writes are refused at a soft ceiling** below the
 broker's, and the top of the ceiling — the **gate reserve**, `reserve_bytes`
 in `crewlet retention status` — takes only the records that install or lift a
 gate: an eviction and the readmission that inverts it. A log full for
@@ -1150,6 +1154,7 @@ So the reserve is the larger of two terms:
 | artifact datastore | 1 MiB plus 64 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | Ask Crewlet | 2 MiB | 64 MiB | about 15 MiB (the fleet term) | about 49 MiB |
 | chat | 512 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
+| executor | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
 the reserve holds once every node counts its own.
@@ -1165,8 +1170,8 @@ A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
 `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`,
 `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
-`stream.assistant_log_max_bytes`, `stream.chat_log_max_bytes`) is not a live
-setting: it is the value the log's stream is created with, sized with the
+`stream.assistant_log_max_bytes`, `stream.chat_log_max_bytes`,
+`stream.executor_log_max_bytes`) is not a live setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
 running log's ceiling, raising it or lowering it, is a **fleet-wide
@@ -1182,7 +1187,7 @@ maintenance window**, and the reason is not caution:
   applied. So is a target under the floor Tier A holds that log's field to — a
   gibibyte on the tracker's, the knowledge base's, the vector changelog's, the
   artifacts log's, the artifact datastore's and chat's, 64 MiB on the identity
-  estate's, the usage log's and Ask Crewlet's —
+  estate's, the usage log's, Ask Crewlet's and the executor log's —
   naming the field. Anything else is fair, including a target under the
   current ceiling, which is how a log created larger than its budget gives
   the reservation back.
@@ -1716,7 +1721,8 @@ having nothing to re-anchor.
 
 **It moves one log.** Each domain — the tracker, the knowledge base, the
 identity estate, the vectors, the usage days, the artifacts, their datastore,
-Ask Crewlet's conversations and chat — has its own stream and its
+Ask Crewlet's conversations, chat and the seats' executor sessions — has its
+own stream and its
 own generation, and a reanchor moves only the one you named: that domain's
 checkpoint goes to the next generation, where its case puts it, keyed to the
 live instant. Every other domain keeps its checkpoint, its generation and its
@@ -1756,7 +1762,7 @@ own ([a node a peer re-anchored past](#a-node-a-peer-re-anchored-past)).
 
 For every log that keeps a generation record — the tracker's, the knowledge
 base's, the identity estate's, the artifacts log's, the artifact datastore's,
-Ask Crewlet's and chat's — it refuses while any peer
+Ask Crewlet's, chat's and the executor log's — it refuses while any peer
 has already re-anchored the stream — a peer at a later generation of it — naming the peer:
 that peer's rows are the fleet's history in the new generation, and a second
 reanchor from another node's rows would open the same generation over a
@@ -1828,7 +1834,8 @@ them.
 **Every log can be re-anchored, by its own domain.** What a reanchor writes
 beside the checkpoint is the domain's to say: a log that claims identity
 (Worklet's, Doclet's, the identity estate's, the artifacts log's, the artifact
-datastore's, Ask Crewlet's and Chatlet's) appends its own generation
+datastore's, Ask Crewlet's, Chatlet's and the executor log's) appends its own
+generation
 record, which is the audit row above and the first-writer-wins between two
 operators, while the vectors and the usage days declare that they keep none. A
 domain that cannot say is refused when the node boots, never when an operator
@@ -1979,14 +1986,15 @@ Every data node holds the whole corpus in one SQL database. A task filed three
 years ago is read at the same cost as one filed this morning, is searched by the
 same index, and is replicated exactly as many times. The log in front of it is
 trimmed; the tables are not — bar the usage history, Ask Crewlet's
-conversations and the chat transcript, which keep a horizon of their own, and
-the bookkeeping tables each node sweeps, all below.
+conversations, the chat transcript and the seats' executor sessions, which
+keep a horizon of their own, and the bookkeeping tables each node sweeps, all
+below.
 
 That is what makes the storage forecast a function of how much a company has
 ever done rather than of how much it is doing — and it is why the numbers below
 are worth reading before the fleet is large.
 
-Three replicated table sets keep a horizon of their own. The **usage history**
+Four replicated table sets keep a horizon of their own. The **usage history**
 is one: each data node's company days — spend, turns, page reads, schedule
 fires — are kept **181 days**, which is a ninety-day window, the ninety days it
 is compared with, and the day a moved clock can touch. Nothing sweeps them:
@@ -1999,6 +2007,29 @@ purged by the trash reaper through a record every data node applies (see
 [Running Ask Crewlet](assistant.md#retention-and-erasure)).
 The chat transcript is the third, and its horizon is the company's to set: see
 [the chat transcript's horizon](#the-chat-transcripts-horizon) below.
+The seats' **executor sessions** are the fourth: one row per turn, naming the
+sealed object its harness's session is kept in, and every way a row goes is
+a record every data node applies. A turn's end deletes exactly the ended turns
+of its conversation that its first launch was handed — the session it
+continued, the endings it was told and the sessions it was offered beside it
+— since its own session and account now hold them; a turn its launch was not
+shown (one that ended beside it, or one past the sixteen endings a launch is
+told) stays, and the next turn is shown it. Past a seat's
+`turn_engine.conversation_session.max_bytes_per_seat` (64 MiB by default) a
+capture releases the seat's oldest ended sessions, keeping how each turn ended
+and dropping only its object. The trash reaper deletes a row untouched for the
+company's `turn_engine.conversation_session.retention_days`, 30 days by
+default, ended or not, never while its turn's run is live — and takes the
+row's tombstone with it, since no record decided before the delete can land
+that late. It also ends a turn as `lost` when the turn never ended, a day has
+passed since its last capture, and no run of it is live: the turn's own end was
+lost, and until it is ended its session holds the seat's budget, which only
+ever releases ended turns' sessions. A seat that leaves the company takes its
+rows with it once its [mailbox is retired](../concepts/seat-ownership.md#the-removed-seat),
+by one record every node applies in order, which also refuses a capture or an
+end decided before it and landing after; that record of the removal goes with
+the same retention. A person's removal does not reach the sessions yet, as it
+did not reach the conversation ledger they replace.
 
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each data node applies the log into its own copy, so a fleet
@@ -2240,7 +2271,13 @@ barriers it would have had to hold against a 512 MiB ceiling, and which
 Ask Crewlet's log declares **none** as well: no seat reads it, and a
 person reads their own conversation through the node their own writes waited
 on, so its one barrier is the collector's pin below, counted as the engine's
-own.
+own. The executor log declares **60**: a seat's executor reads it at the
+seat's level once when a turn first launches, for the head of the
+conversation it continues, and once more on each relaunch (a send-back, an
+answered question), at a mean of one relaunch a turn over the census's thirty
+turns a seat a day. So its ceiling, `stream.executor_log_max_bytes`, carries a
+barrier term of 60 × 100 × 365 × 140 B, about 307 MB a year at the reference
+company, beside the about 29 MB a day its captures and endings write.
 
 The [`census_drift`](../reference/alarms.md) alarm holds every log to its own
 census: its domain's rate per agent seat (a company with none is counted as
@@ -2249,8 +2286,9 @@ in the fleet, pins the log of every domain whose rows name a file 25 times a day
 (24 collections and one audit) — and the alarm names every log past twice its census, a log whose
 domain declares none on its first barrier, each with the Tier A field that sets
 that log's own ceiling — `stream.tracker_log_max_bytes` on the mutation log,
-`stream.chat_log_max_bytes` on chat's, `stream.iam_log_max_bytes` on the
-identity estate's: every read past the census
+`stream.chat_log_max_bytes` on chat's, `stream.executor_log_max_bytes` on the
+executor log's, `stream.iam_log_max_bytes` on the identity estate's: every
+read past the census
 is a barrier record on that log, so it is that field's sizing the extra reads
 have outgrown, whatever else the field is sized from.
 The rate is the log's, counted where every data node applies it, and each barrier is
@@ -2263,7 +2301,7 @@ Two excursions are designed for and do not alarm on a volume sized for them:
 1. **A full re-embedding.** A width change republishes every vector, which at
    year five bottoms the vector log's headroom at about 51 % at the 16 GiB a
    64 GiB volume asks for, and at about 88 % at the 64 GiB a volume of about
-   662 GiB or more gets. The alarm threshold is 10 %, clear of each. But the
+   664 GiB or more gets. The alarm threshold is 10 %, clear of each. But the
    one budget scales every log to fit the broker, and a 64 GiB volume creates
    the log at 5.4 GiB, too small to hold that re-embedding at all: below about
    100 GiB free, set `stream.tracker_vectors_max_bytes` to at least 9 GiB. That

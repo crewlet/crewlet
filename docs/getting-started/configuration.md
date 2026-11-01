@@ -114,6 +114,12 @@ turn_engine:                            # optional — executor/reviewer turn co
                                         #   saying how many, once it would exceed 24k
                                         #   characters
     retention_days: 30                  # matches the event store's horizon; applied at next start
+                                        #   (the executor sessions' retention reads it
+                                        #   off the fleet's revision at every pass)
+    max_bytes_per_seat: 67108864        # object-store bytes one seat's captured executor
+                                        #   sessions may hold (33 MiB..64 GiB); past it a
+                                        #   capture releases the seat's oldest ENDED
+                                        #   turns' sessions, keeping how each ended
 
 learning:                               # optional — agent-learning subsystem
                                         #   Every pass here calls the seat's auxiliary
@@ -1179,13 +1185,13 @@ stream:
                                     #   changelog's room for a model change.
                                     #   What is asked is scaled with the others,
                                     #   so a 64 GiB first boot creates it at
-                                    #   about 1.4 GiB. It does NOT follow the
+                                    #   about 1.3 GiB. It does NOT follow the
                                     #   mutation log's ceiling as the knowledge
                                     #   base's does: chat grows faster (~32 MB a
                                     #   day against ~22), so following it would
                                     #   make chat the largest ask in the one
                                     #   budget, and a first boot would need
-                                    #   ~136 GiB free rather than ~100 before the
+                                    #   ~138 GiB free rather than ~100 before the
                                     #   vector changelog holds a fifth-year
                                     #   model change clear of the headroom
                                     #   alarm. So if you size
@@ -1208,6 +1214,25 @@ stream:
                                     #   nodes apply
                                     #   (chat.chatlet.message_retention_days),
                                     #   never by a stream bound
+  # executor_log_max_bytes: 536870912
+                                    #   the executor log, where every seat's
+                                    #   executor sessions are NAMED: a row per
+                                    #   turn naming the sealed object its
+                                    #   harness's session is kept in, in the
+                                    #   object store (64 MiB..64 GiB). UNSET
+                                    #   TAKES 512 MiB, sized by the turns the
+                                    #   seats run rather than by the disk, and
+                                    #   scaled down as far as 64 MiB where the
+                                    #   broker is short: about eighteen days of
+                                    #   a completely blocked trim at the
+                                    #   reference company's ~29 MB a day, and
+                                    #   at 64 MiB about two, short of min_age —
+                                    #   past ~30 seats on a small host, set it.
+                                    #   Crossing it refuses the append, and the
+                                    #   top of it is kept for gate records. How
+                                    #   long a session is kept is the company
+                                    #   document's turn_engine.
+                                    #   conversation_session.retention_days
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,

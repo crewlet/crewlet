@@ -47,8 +47,8 @@ A deployment's durable state lives in six places:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day), the artifacts and their datastores, Ask Crewlet's conversations and the engine's own chat), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
-| **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day), the artifacts and their datastores, Ask Crewlet's conversations, the engine's own chat and the rows naming each seat's executor sessions), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload, and of each seat's sealed executor sessions, one object per capture. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, the executors' records, each human seat's chat read state, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **LLM harness homes** | Each `providers.llm` entry's state directory on the engine host (`state_dir`, or one per key under `CREWLET_LLM_HARNESS_HOME`), each harness's files under `<state_dir>/<harness>` | The harnesses' logins and per-seat homes (a login is portable via `crewlet llm export`) |
@@ -183,7 +183,10 @@ What is worth knowing about it:
   holds at another size or under another digest than its file records, is
   gone whatever the backup does: the backup carries everything else, lists it
   in the manifest's `objects.lost` as `{"object", "named_by"}` — the key and
-  the file, `PROJECT/path` — logs `backup_objects_lost`, and is announced like
+  what names it, its row's owner joined by `/` (`PROJECT/path` for a
+  project's file, `<seat>/<turn>` for a seat's executor session, which no one
+  replaces: its conversation's next turn starts fresh) — logs
+  `backup_objects_lost`, and is announced like
   any other. Refusing it would refuse every later backup too, and with them
   the trim of every log in the fleet, over one lost file. The
   `objects_missing` alarm is what sends somebody to replace the file. An
@@ -319,8 +322,9 @@ tracker's projects, tasks, comments and history, the knowledge base's pages and
 revisions, the vectors search reads, the org chart's units and seats, the
 identity directory's people, credentials and sessions, every data node's
 usage history, the artifacts and their datastores, Ask Crewlet's
-conversations and the company's own chat — its rooms, who is in them, and
-every message — each derived from its own ordered log by an applier that runs
+conversations, the company's own chat — its rooms, who is in them, and
+every message — and the rows naming each seat's executor sessions, each
+derived from its own ordered log by an applier that runs
 identically on every data node. Any healthy data node's copy of it is the
 company's, in the same sense the stream estate is.
 

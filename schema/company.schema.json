@@ -343,6 +343,15 @@
             "null"
           ]
         },
+        "max_bytes_per_seat": {
+          "description": "Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released (default 64 MiB, 33 MiB..64 GiB).",
+          "maximum": 68719476736,
+          "minimum": 34603008,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_entries": {
           "description": "Entries kept per conversation.",
           "minimum": 0,

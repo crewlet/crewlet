@@ -33,12 +33,17 @@ flowchart LR
 ```
 
 Today the store holds [a project's files](../guides/worklet.md#a-projects-files),
-every file of every [artifact](artifacts.md) version and asset, and the files an
+every file of every [artifact](artifacts.md) version and asset, the files an
 [Ask Crewlet](../guides/assistant.md#retention-and-erasure) conversation
 keeps (the images a person attaches and the files a deep-work run delivers,
 each sealed under the fleet keyring before it is stored, so the bucket holds
-none of them in the clear). Every consumer follows the same rule: the estate
-names the object, and the store keeps its bytes.
+none of them in the clear), and each seat's executor sessions: the harness's
+own transcript of a turn, kept so a later turn on the same conversation, in any
+box on any node, continues it, sealed the same way as it streams in and named
+by the turn's row of the `executor` log
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)).
+Every consumer follows the same rule: the estate names the object, and the
+store keeps its bytes.
 
 ---
 
@@ -495,9 +500,9 @@ object is garbage from then on. Instead one data node at a time — the
 judged against the replicated estate the data node holds:
 
 - **Collection, hourly.** It pins the estate (a barrier on each log whose rows
-  name objects, the tracker's, the artifacts' and Ask Crewlet's, so it reads
-  every row committed when it began), lists the store, and deletes
-  every object **stored more than a day ago, whose key was minted more than a
+  name objects, the tracker's, the artifacts', Ask Crewlet's and the executor
+  log's, so it reads every row committed when it began), lists the store, and
+  deletes every object **stored more than a day ago, whose key was minted more than a
   day ago, that no row names**. The day is the grace an upload in flight is
   given between storing its object and writing its row. Only a name under the
   engine's `files/` corner is the collector's: anything else in the bucket, or
