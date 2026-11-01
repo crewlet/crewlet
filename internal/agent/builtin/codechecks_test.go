@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -320,6 +321,102 @@ func TestARerunAsksForTheAttemptAfterTheOneRead(t *testing.T) {
 		!strings.Contains(got.Output, string(code.CheckRefusalRerunGenuine)) {
 		t.Errorf("a refused rerun answered %q as %s, want forbidden naming rerun_genuine", got.Output,
 			tools.RefusalOf(got))
+	}
+}
+
+// failedChecks is attempt 1 of each named check of main, for main, ended
+// failed.
+func failedChecks(names ...string) []code.CheckDetail {
+	out := make([]code.CheckDetail, 0, len(names))
+	for _, name := range names {
+		out = append(out, code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: siteID,
+			OID: mainOID, Target: "refs/heads/main", Name: name, Attempt: 1}, State: code.CheckStateFailed,
+			Reason: code.CheckReasonExit}})
+	}
+	return out
+}
+
+// A RERUN PAST SIXTEEN UNDER ONE OPERATION QUEUES THE REST: a person's
+// all_failed over twenty failed checks reruns the first sixteen and says to
+// make the same call again; made again with the `op_id` the first answered,
+// it queues the other four. Each rerun's step is named by the attempt it
+// queues, so none of the second call's takes an id the first wrote another
+// check's rerun under — which the writer's ledger answers as that write, with
+// nothing queued — and every id, the longest a rerun derives (an operator's
+// brought-back `op_id`) included, is within the bound the writer holds an
+// operation id to.
+//
+// Mutation: name each rerun's step by its place in the call → red.
+func TestARerunPastSixteenUnderOneOperationQueuesTheRest(t *testing.T) {
+	t.Parallel()
+	host, writer := newCodeHost(), &codeWrites{}
+	var names []string
+	for i := range 20 {
+		names = append(names, fmt.Sprintf("check-%02d", i))
+	}
+	host.checks = failedChecks(names...)
+	// THE WRITER'S LEDGER: an id it holds is answered as the write it first
+	// named, nothing queued; one it does not queues the attempt, which the
+	// commit's listing then holds as its latest.
+	held := map[string]code.CheckKey{}
+	var queued, answeredAsAnother []string
+	writer.check = func(r code.ChecksRequest) (code.ChecksResult, error) {
+		key := r.Rerun.CheckKey
+		if err := statelog.CheckCallerOpID(r.OpID); err != nil {
+			t.Errorf("the rerun of %s at attempt %d is written under %q: %v", key.Name, key.Attempt, r.OpID, err)
+		}
+		row := code.CheckRow{CheckKey: key, State: code.CheckStateQueued}
+		if first, ok := held[r.OpID]; ok {
+			if first != key {
+				answeredAsAnother = append(answeredAsAnother, key.Name)
+			}
+			row.CheckKey = first
+			return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: &row}, nil
+		}
+		held[r.OpID] = key
+		queued = append(queued, key.Name)
+		host.mu.Lock()
+		host.checks = append(host.checks, code.CheckDetail{CheckRow: row})
+		host.mu.Unlock()
+		return code.ChecksResult{Outcome: statelog.OutcomeApplied, Position: codeAt(18), Row: &row}, nil
+	}
+	deps := writeDeps(host, writer)
+	deps.Actor = builtin.PrincipalActor
+	tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+		builtin.CodeRerunChecksTool)
+	var answer struct {
+		Reruns []struct {
+			Name string `json:"name"`
+		} `json:"reruns"`
+		OpID string `json:"op_id"`
+		Note string `json:"note"`
+	}
+	args := map[string]any{"repo": "site", "sha": mainOID, "all_failed": true}
+
+	got, err := tool.CallForTurn(asBoundPerson(), nil, args)
+	if err != nil || got.Failed {
+		t.Fatalf("a person's all_failed answered %v %q", err, got.Output)
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Reruns) != 16 || answer.OpID == "" || answer.Note == "" {
+		t.Fatalf("all_failed over twenty answered %d reruns under %q, noting %q; want sixteen, an op_id and the "+
+			"rest said", len(answer.Reruns), answer.OpID, answer.Note)
+	}
+
+	args["op_id"] = answer.OpID
+	got, err = tool.CallForTurn(asBoundPerson(), nil, args)
+	if err != nil || got.Failed {
+		t.Fatalf("the same call again, under its op_id, answered %v %q", err, got.Output)
+	}
+	if len(answeredAsAnother) != 0 {
+		t.Errorf("the same call again reran %v under ids the first call wrote other checks' reruns under, "+
+			"answered from those with nothing queued", answeredAsAnother)
+	}
+	slices.Sort(queued)
+	if !slices.Equal(queued, names) {
+		t.Errorf("the two calls queued %v, want each of the twenty once: %v", queued, names)
 	}
 }
 

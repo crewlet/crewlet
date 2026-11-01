@@ -2,6 +2,8 @@ package builtin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"slices"
@@ -95,13 +97,25 @@ const (
 	// op rule).
 	checksVerb = "code-checks"
 	// maxRerunsPerCall is the most checks one call of code_rerun_checks runs
-	// again: 16, so each rerun's operation is a ONE-BYTE STEP of the call's
-	// (a hex digit, [statelog.StepOpID]) inside the operation id bound every
-	// party holds — and a check file's every check is a few calls at most.
-	// A call naming more is refused naming the bound; all_failed reruns the
-	// first sixteen, and the same call again the rest, the first sixteen
-	// then being queued and no longer failed.
+	// again: 16. Each rerun is a write of its own, published and awaited to
+	// its outcome one after another, so a call's time grows with its count;
+	// sixteen keeps a call to a short run of writes while the most checks a
+	// file defines (code.MaxChecksPerFile, 64) is four calls. A call naming
+	// more is refused naming the bound; all_failed reruns the first sixteen,
+	// and the same call again — with the same `op_id` or none — the rest,
+	// the first sixteen then being queued and no longer failed, and each
+	// rerun's step named by its own attempt ([rerunStep]).
 	maxRerunsPerCall = 16
+	// rerunStepBytes is how long a rerun's step of its call's operation is
+	// ([rerunStep]): 7 bytes, the room the longest operation a rerun derives
+	// from leaves under [statelog.MaxCallerOpIDBytes] (128), which the checks
+	// writer holds every request's id to. That longest is an operator's
+	// brought-back `op_id` — a uuid, a dot and the call's name, 71 bytes for
+	// code_rerun_checks ([callName]) — stepped by `code-checks-` and the
+	// repository's uuid ([opIDFor]): 120 bytes, then a dot and the step. A
+	// turn's derived id is 85 bytes before its step, so it has more room
+	// than it uses.
+	rerunStepBytes = 7
 	// checkListPages is the most pages of a commit's checks one call reads
 	// to find a check's attempts: a change's head is listed by name and
 	// attempt, so four pages hold every attempt of every check a checks
@@ -628,6 +642,36 @@ func rerunAsks(tool string, args map[string]any) ([]rerunAsk, bool, *tools.Resul
 	return asks, false, nil
 }
 
+// rerunStep is the step of its call's operation one rerun is written under
+// ([statelog.StepOpID]): a digest of the attempt it queues — its commit, its
+// target, its check and the attempt — never its place in the call.
+//
+// # Why the attempt, and not the index
+//
+// Because the checks writer's ledger answers an operation id it already holds
+// on the repository's checks subject as that write, before any decide runs.
+// A step named by its index made a second call under the same operation — an
+// operator's brought-back `op_id`, or a request's own key, asking all_failed
+// again for the checks past the first sixteen — reuse the first call's ids for
+// OTHER checks, each answered `applied` from the first call's record while
+// nothing of it was queued. Named by its attempt, a true retry lands on the
+// same records and a call for other checks, or for a later attempt of the same
+// one, on fresh ones.
+//
+// SEVEN BYTES OF UNPADDED BASE64URL, 42 bits ([rerunStepBytes]): every byte the
+// operation's bound leaves. Two steps collide only when one operation reruns
+// both attempts; even one that reran every attempt a commit's target can hold —
+// code.MaxChecksPerFile × code.MaxCheckAttempts, 640 — collides with odds of
+// about one in twenty million (640² / 2 in 2^42).
+func rerunStep(key code.CheckKey) string {
+	h := sha256.New()
+	for _, part := range []string{key.OID, key.Target, key.Name, strconv.Itoa(key.Attempt)} {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))[:rerunStepBytes]
+}
+
 func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
@@ -723,9 +767,9 @@ func (t *codeRerunChecks) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out.Change = code.ChangeRef(repo.Name, change)
 	}
 	by := writer(ctx, turn, c)
-	for i, key := range keys {
+	for _, key := range keys {
 		key.Attempt++
-		r := code.ChecksRequest{OpID: statelog.StepOpID(op, strconv.FormatInt(int64(i), 16)), Seen: seen,
+		r := code.ChecksRequest{OpID: statelog.StepOpID(op, rerunStep(key)), Seen: seen,
 			Asker: by, Rerun: &code.CheckRerun{CheckKey: key, Ceiling: c.write}}
 		res, err := t.deps.Writer.Checks(ctx, r)
 		line := codeRerun{Name: key.Name, Attempt: key.Attempt}
