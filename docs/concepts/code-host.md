@@ -2237,6 +2237,21 @@ Each write is asked under an **operation id** its asker mints once, so a write
 asked again — of the runner-up after the committing node went silent, or after
 an answer was lost — is the same write, collapsed onto the record that landed.
 
+A check's record **names what its decision read**, not only what it writes.
+It writes only the repository's check rows, and its decision reads more: the
+repository's own row on every write (whether it is archived or deleted, and
+the owner and visibility a seat's rerun is judged by), each change a head
+dispatch queues at, and the change a seat's rerun reads its authors from or a
+failed head's ending routes to. So the record's scope names the repository
+and its checks, and each of those changes — the whole code domain for a
+dispatch of more changes than a record's scope holds. A node holding a
+record it cannot decode — a newer build's, mid-upgrade — that covers any of
+them answers the write unavailable (`deferred`) and publishes nothing, and
+the asker asks the next node, whose rows are current: a rerun is never
+admitted there on a grant a newer record revoked, nor a head dispatched that
+a newer record retargeted or closed. A change the decision only finds in its
+rows — a rerun's, a failed head's — it asks about itself before reading it.
+
 An ending that applied and that its attempt's row keeps is announced **once**,
 by the node that wrote it, as a `code_check_finished` event in that node's
 [event log](event-system.md) — never by the applier every data node runs,

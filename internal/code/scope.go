@@ -65,12 +65,20 @@ func ChangePath(id string) string { return pathDomain + "/" + pathChange + "/" +
 
 // ChecksPath is one repository's checks: every row a record on its checks
 // subject may write — its check rows and their logs. BESIDE the repository's
-// path rather than under it, as a change's is: a check's record never writes
-// the repository's rows, and of the repository's own records only its purge
-// writes a check's — whose every step names this path beside the
-// repository's ([Store.PurgeStep]) — so neither makes the other's reads stale;
-// and the deletion gate reads the repository off the subject alone
-// ([gatedRepo]).
+// path rather than under it, as a change's is, because the two APPLIES write
+// apart: a check's record never writes the repository's rows, and of the
+// repository's own records only its purge writes a check's — whose every
+// step names this path beside the repository's ([Store.PurgeStep]). The
+// DECIDES do not read apart, so a record names what its decide reads beside
+// what its apply writes (M5-D33): a check's write, decided by the
+// [ChecksWriter], reads the repository's row on every arm — archived or
+// deleted, and the owner and visibility a seat's rerun is judged by — and the
+// changes a dispatch queues at, a rerun's authors are read from and a failed
+// head's routing names, so its record names [RepoPath] beside this path and
+// [ChangePath] of each of those changes (checkswriter.go's checksScope); and
+// a mergeability, a merge and an enqueue read the checks a gate judges, so
+// theirs name this path. The deletion gate reads the repository off the
+// checks subject alone, never the scope ([gatedRepo]).
 func ChecksPath(repoID string) string { return pathDomain + "/" + pathChecks + "/" + repoID }
 
 // PersonPath is one person's code inbox: the marks a record on their subject
@@ -88,9 +96,11 @@ func ActivationPath() string { return pathDomain + "/" + pathActivation }
 // what an unreadable scope reads as.
 func DomainPath() string { return pathDomain }
 
-// MaxScopePaths caps a record's declared scope. The widest record names two
-// paths (a create, a purge); a writer whose set would be wider names
-// DomainPath() instead, which covers everything.
+// MaxScopePaths caps a record's declared scope. The widest records name a
+// repository, its checks and the path of each change their decide reads (a
+// land's entries, a checks dispatch's heads), fourteen at most beside the
+// two; a writer whose set would be wider names DomainPath() instead, which
+// covers everything.
 const MaxScopePaths = 16
 
 // Scope is a record's scope on the wire.

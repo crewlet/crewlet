@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -84,6 +85,24 @@ import (
 //     queue and the target's reading and every head's dispatch already say
 //     it, at its tip or a later one and naming its file, and refused on an
 //     archived repository as an attempt queued there is.
+//
+// # Its scope names what its decide reads
+//
+// A check's record WRITES only its repository's checks, and its decide READS
+// more: the repository's row — archived, deleted, its owner and visibility,
+// which a seat's rerun is judged by — on every arm; the changes a dispatch
+// queues at; and the change a rerun's authors or a failed head's routing are
+// read from. A node holding a record it cannot decode that rewrote any of
+// those holds them stale, and a write decided from them there — a rerun
+// admitted on a revoked grant, a dispatch queuing a head a deferred retarget
+// moved — must be answered unavailable, so the router asks another node
+// (M5-D33, as the change writer's and the queue's records do). So every
+// record names [RepoPath] beside [ChecksPath], and a queue or a dispatch the
+// [ChangePath] of every change it queues at ([checksScope]); a change the
+// decide FINDS in its snapshot — a rerun's head change, a failed head's —
+// it probes itself and names on its record ([checksDecision.changeRead]),
+// since no request could name it in advance. THE ENVELOPE CARRIES IT: a
+// scope is readable at every version, so no versionedFields row follows.
 //
 // A rerun and a report — a principal's request, a seat's or a person's — are
 // decided by the asker's standing (checkasks.go): a seat's rerun from the
@@ -550,6 +569,91 @@ type checksDecision struct {
 	// dropped is, for a dispatch, why each attempt it carried that the rows
 	// refused was left out of its record (decideDispatched).
 	dropped []string
+	// reads are the paths of the changes the decide found in its snapshot
+	// and read ([checksDecision.changeRead]), which its record names beside
+	// the request's scope.
+	reads []string
+}
+
+// checksScope is the scope a write of r is published under: [RepoPath] and
+// [ChecksPath] of its repository — every arm's decide reads the repository's
+// row — and the [ChangePath] of each change it queues at, a dispatch's and an
+// attempt queued for a change's head, whose head, target and liveness the
+// home read to queue it; past [MaxScopePaths], the whole domain, which covers
+// them all (the queue's land rule, queue.go). See the file's doc.
+func checksScope(r ChecksRequest) []string {
+	repoID := r.RepoID()
+	scope := []string{RepoPath(repoID), ChecksPath(repoID)}
+	var changes []string
+	switch {
+	case r.Queued != nil:
+		changes = append(changes, r.Queued.ChangeID)
+	case r.Dispatched != nil:
+		for _, h := range r.Dispatched.Heads {
+			changes = append(changes, h.ChangeID)
+		}
+		for _, a := range r.Dispatched.Attempts {
+			changes = append(changes, a.ChangeID)
+		}
+	}
+	changes = slices.DeleteFunc(changes, func(id string) bool { return id == "" })
+	slices.Sort(changes)
+	changes = slices.Compact(changes)
+	if len(scope)+len(changes) > MaxScopePaths {
+		return []string{DomainPath()}
+	}
+	for _, id := range changes {
+		scope = append(scope, ChangePath(id))
+	}
+	return scope
+}
+
+// scope is the scope d's record names: the request's, and every change d's
+// decide found and read — the whole domain past [MaxScopePaths].
+func (d checksDecision) scope(requested []string) []string {
+	if len(d.reads) == 0 {
+		return requested
+	}
+	scope := slices.Clone(requested)
+	for _, p := range d.reads {
+		if !slices.Contains(scope, p) {
+			scope = append(scope, p)
+		}
+	}
+	if len(scope) > MaxScopePaths || slices.Contains(requested, DomainPath()) {
+		return []string{DomainPath()}
+	}
+	return scope
+}
+
+// changeRead is the guard a decide passes before it reads change's rows,
+// having FOUND the change in its own snapshot — a rerun's head change, a
+// failed head's — where no request could name it for the framework's probe
+// ([statelog.Snap]): a record this node holds and cannot decode whose scope
+// covers the change refuses the write unavailable, the framework's own
+// `deferred`, so the router asks a node whose rows are current; otherwise the
+// change's path joins d's record's scope. The iam domain's wholeDirectory
+// precedent, over one change.
+func (d *checksDecision) changeRead(ctx context.Context, tx *sql.Tx, change string) error {
+	path := ChangePath(change)
+	deferral, hit, err := statelog.DeferredIn(ctx, tx, Domain{}, statelog.ScopeSet{Paths: []string{path}})
+	if err != nil {
+		return fmt.Errorf("code: ask whether this node holds a record about change %s it cannot decode: %w",
+			change, err)
+	}
+	if hit {
+		return &statelog.Unavailable{
+			Reason:   statelog.ReasonDeferred,
+			Position: deferral.Position,
+			Detail: fmt.Sprintf("this node holds a record at version %d it cannot decode, at %s, whose scope "+
+				"covers change %s — a check's write reads that change's rows, which are stale here, and "+
+				"another node can serve it", deferral.Version, deferral.Position, change),
+		}
+	}
+	if !slices.Contains(d.reads, path) {
+		d.reads = append(d.reads, path)
+	}
+	return nil
 }
 
 // checksLanded is what a write's answer says of its OWN record, which the
@@ -574,7 +678,7 @@ func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, er
 	retention := w.retention()
 	repoID := r.RepoID()
 	subject := ChecksSubject(repoID)
-	scope := []string{ChecksPath(repoID)}
+	scope := checksScope(r)
 	var (
 		last    checksDecision
 		decided bool
@@ -593,7 +697,7 @@ func (w *ChecksWriter) write(r ChecksRequest, seats SeatRules) (ChecksResult, er
 			if d.payload == nil {
 				return statelog.Decision{}, nil
 			}
-			return recordFor(stamp, subject, op, scope, r.OpID, Actor{ID: w.nodeID, Kind: ActorSystem},
+			return recordFor(stamp, subject, op, d.scope(scope), r.OpID, Actor{ID: w.nodeID, Kind: ActorSystem},
 				d.payload, now)
 		},
 	})
@@ -745,7 +849,7 @@ func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksD
 	if !ok || !f.failsItsHead() {
 		return d, nil
 	}
-	change, found, err := headChangeIn(ctx, tx, f.CheckKey, d.row, reporter != nil)
+	change, found, err := headChangeIn(ctx, tx, &d, f.CheckKey, d.row, reporter != nil)
 	if err != nil || !found {
 		return d, err
 	}
@@ -782,8 +886,12 @@ func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksD
 // key.OID; a check of a tip, a candidate or a landing measures no change's
 // head — a fast-forward candidate's commit can BE a change's head, and its
 // failure ejects that change rather than telling its authors their head fails.
-func headChangeIn(ctx context.Context, tx *sql.Tx, key CheckKey, row *CheckRow, reported bool) (changeRow,
-	bool, error) {
+//
+// THE CHANGE IS FOUND IN THE SNAPSHOT, so d's guard probes it before its rows
+// are read ([checksDecision.changeRead]): a record this node cannot decode
+// that closed, retargeted or moved it leaves them stale.
+func headChangeIn(ctx context.Context, tx *sql.Tx, d *checksDecision, key CheckKey, row *CheckRow,
+	reported bool) (changeRow, bool, error) {
 
 	var (
 		change changeRow
@@ -801,8 +909,14 @@ func headChangeIn(ctx context.Context, tx *sql.Tx, key CheckKey, row *CheckRow, 
 			return changeRow{}, false, fmt.Errorf("code: read the live change into %s at %s: %w", key.Target,
 				key.OID, err)
 		}
+		if err := d.changeRead(ctx, tx, change.id); err != nil {
+			return changeRow{}, false, err
+		}
 		found = true
 	case row != nil && row.Purpose == PurposeHead && row.ChangeID != "":
+		if err := d.changeRead(ctx, tx, row.ChangeID); err != nil {
+			return changeRow{}, false, err
+		}
 		if change, found, err = changeRowIn(ctx, tx, row.ChangeID); err != nil {
 			return changeRow{}, false, err
 		}

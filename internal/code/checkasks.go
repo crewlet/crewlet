@@ -232,6 +232,12 @@ func decideRerun(ctx context.Context, tx *sql.Tx, r CheckRerun, asker Principal,
 	ref := repo.grantRef(key.RepoID)
 	author := false
 	if handle, kind := asker.party(); kind == PartyAgent && latest.ChangeID != "" {
+		// THE CHANGE'S AUTHORS are its rows, found through the attempt's: a
+		// record this node holds about it and cannot decode leaves them
+		// stale, and authorship admits the rerun.
+		if err := d.changeRead(ctx, tx, latest.ChangeID); err != nil {
+			return checksDecision{}, err
+		}
 		authors, err := authorsAmong(ctx, tx, latest.ChangeID, []string{handle})
 		if err != nil {
 			return checksDecision{}, err

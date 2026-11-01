@@ -1369,3 +1369,141 @@ func TestTheBacklogCountsEachCheckAtItsOwnTimeout(t *testing.T) {
 		t.Fatalf("thirty seconds on the backlog is (%+v, %v), want none behind", got, err)
 	}
 }
+
+// A CHECK'S WRITE IS DECIDED ONLY FROM ROWS ITS NODE HOLDS CURRENT: a check's
+// record writes only its repository's checks, and its decide reads the
+// repository's row on every arm and the change a head's write is about, so a
+// node holding a record it cannot decode that covers either answers a check
+// queued at a head, a seat's rerun (its grant and the change's authors), a
+// dispatch, and a failing head's ending and a person's CI's failing report of
+// it (each routed to the change's authors) unavailable — the framework's own
+// `deferred`, ErrNotServing to the router,
+// which asks a node whose rows are current — and appends nothing. A record
+// about the repository covers every write of its checks; one about a change
+// alone covers the writes that read that change, a change found only in the
+// decide's snapshot (a rerun's, a failed head's) included, and leaves a check
+// of the repository's tip to be decided. And the records name what their
+// decides read: a head's queue names the change it was asked about, and a
+// failed head's ending the change its decide routed it to.
+//
+// Mutations: scope a check's record by its checks alone ({ChecksPath}) — every
+// write over the repository's record, the queue and the dispatch over the
+// change's, are decided and appended, red; probe no change a decide finds in
+// its snapshot — the seat's rerun, the failing ending and the CI's failing
+// report over the change's record are decided, red; name no such change on
+// the record — the failed
+// head's ending names its repository and checks alone, red.
+func TestAChecksWriteIsUnavailableWhereARecordItReadsIsDeferred(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		subject func(repo, change string) (subject, kind, id string)
+		path    func(repo, change string) string
+		// tipDecided is whether a check of the repository's tip, which
+		// reads no change, is decided beside the deferred record.
+		tipDecided bool
+	}{
+		"a record about the repository": {
+			subject: func(repo, _ string) (string, string, string) {
+				return "crewlet.code.log.repo." + repo, "repo", repo
+			},
+			path: func(repo, _ string) string { return code.RepoPath(repo) },
+		},
+		"a record about one change alone": {
+			subject: func(_, change string) (string, string, string) {
+				return "crewlet.code.log.change." + change, "change", change
+			},
+			path:       func(_, change string) string { return code.ChangePath(change) },
+			tipDecided: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			n := newNode(t)
+			repo, change := discussed(t, n, "web")
+			w, counter, _, _ := checksWriterOn(t, n)
+			head := func(name string) code.CheckKey {
+				return code.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: name, Attempt: 1}
+			}
+			queuedAtHead := func(key code.CheckKey) code.ChecksRequest {
+				req := queueing(key, code.QueueDispatch)
+				req.Queued.Purpose, req.Queued.ChangeID, req.Queued.Revision = code.PurposeHead, change, 1
+				return req
+			}
+			scopeOf := func(what string, at statelog.Position, want ...string) {
+				t.Helper()
+				if got := []string(n.recordAt(at).Scope); !slices.Equal(got, want) {
+					t.Fatalf("%s's record is scoped %v, want %v: what its decide read", what, got, want)
+				}
+			}
+			repoAndChange := []string{code.RepoPath(repo), code.ChecksPath(repo), code.ChangePath(change)}
+
+			// lint, a head check its box failed: a seat's rerun reads the
+			// change's authors.
+			lint := head("lint")
+			res, err := w.Publish(ctx, queuedAtHead(lint))
+			requireChecked(t, "lint queued at the head", res, err)
+			scopeOf("lint's queue at the head", res.Position, repoAndChange...)
+			res, err = w.Publish(ctx, claiming(lint, "git-1", ""))
+			requireChecked(t, "lint claimed", res, err)
+			res, err = w.Publish(ctx, ending(lint, code.CheckStateErrored, code.CheckReasonBoxFailed))
+			requireChecked(t, "lint errored", res, err)
+			// vet failed at the head before anything was deferred: its
+			// ending is routed to the change its decide found.
+			vet := head("vet")
+			res, err = w.Publish(ctx, queuedAtHead(vet))
+			requireChecked(t, "vet queued at the head", res, err)
+			res, err = w.Publish(ctx, claiming(vet, "git-1", ""))
+			requireChecked(t, "vet claimed", res, err)
+			res, err = w.Publish(ctx, ending(vet, code.CheckStateFailed, code.CheckReasonExit))
+			requireChecked(t, "vet failed", res, err)
+			scopeOf("vet's failure at the head", res.Position, repoAndChange...)
+			// e2e runs at the head: its failure is routed to the change.
+			e2e := head("e2e")
+			res, err = w.Publish(ctx, queuedAtHead(e2e))
+			requireChecked(t, "e2e queued at the head", res, err)
+			res, err = w.Publish(ctx, claiming(e2e, "git-1", ""))
+			requireChecked(t, "e2e claimed", res, err)
+
+			subject, kind, id := tc.subject(repo, change)
+			n.exec(`INSERT INTO code_log_deferred (position, subject, subject_kind, subject_id,
+				version, payload, stored_at) VALUES (999999, ?, ?, ?, 9, x'7b7d', 0)`, subject, kind, id)
+			n.exec(`INSERT INTO code_log_deferred_scope (position, path) VALUES (999999, ?)`,
+				tc.path(repo, change))
+
+			tipOID, tipAt := n.tip(repo, mainRef)
+			appended, end := counter.appended.Load(), n.end()
+			for what, req := range map[string]code.ChecksRequest{
+				"a check queued at the change's head":  queuedAtHead(head("docs")),
+				"a seat's rerun of the change's check": rerunning(lint, dev),
+				"a dispatch of the change's head": dispatching(repo, tipOID, tipAt, oidOf("checks-file"),
+					code.DispatchedHead{OID: oidOf("B"), ChangeID: change, Revision: 1}),
+				"a failing ending of the change's check": ending(e2e, code.CheckStateFailed, code.CheckReasonExit),
+				"a person's CI failing the change's head": reporting(head("ci"), code.CheckStateFailed,
+					"https://ci.example.com/1"),
+			} {
+				res, err := w.Publish(ctx, req)
+				var refusal *statelog.Unavailable
+				if !errors.Is(err, code.ErrNotServing) || !errors.As(err, &refusal) ||
+					refusal.Reason != statelog.ReasonDeferred || refusal.Position.IsZero() {
+					t.Errorf("%s beside the deferred record answered (%+v, %v), want ErrNotServing wrapping "+
+						"the log's deferred refusal, naming its position", what, res, err)
+				}
+			}
+			if got, at := counter.appended.Load(), n.end(); got != appended || at != end {
+				t.Fatalf("the refused writes appended %d records and moved the log from %d to %d, want none",
+					got-appended, end, at)
+			}
+
+			res, err = w.Publish(ctx, queueing(checkOn(repo, 1), code.QueueDispatch))
+			switch {
+			case tc.tipDecided:
+				requireChecked(t, "a check of the tip, about no change", res, err)
+				scopeOf("the tip's queue", res.Position, code.RepoPath(repo), code.ChecksPath(repo))
+			case !errors.Is(err, code.ErrNotServing):
+				t.Fatalf("a check of the tip beside a deferred record about its repository answered (%+v, %v), "+
+					"want ErrNotServing", res, err)
+			}
+		})
+	}
+}
