@@ -4612,6 +4612,9 @@ repository the asker may read, or the ones its `repo:` filters name — is
 one question to every git node at once, never a walk a repository, which an
 unfiltered search of a company would make thousands of
 (`internal/codesearch`). A search naming one repository is the read above.
+A person or a script asks it as the question `code_search`
+([`GET /code/search`](../reference/api-endpoints.md#get-codesearch)), which
+takes no `session` floor: it answers at the tip it names.
 
 ```mermaid
 sequenceDiagram

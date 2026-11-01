@@ -29,7 +29,10 @@ import (
 // `code_compare` and `code_commit`, decided per repository alike — the git
 // node that answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
 // (codechecks.go): `code_queue`, `code_checks`, `code_check` and
-// `code_check_log`, decided per repository alike.
+// `code_check_log`, decided per repository alike; AND A SEARCH OF ITS LINES
+// (codesearch.go): `code_search`, decided per repository alike by every git
+// node that answers a part of it, and read back at no session floor, since it
+// answers at the tip it names.
 //
 // AND WHO READ A UNIT'S REPOSITORY, `code_repo_readers`: the operator tool's
 // one answer (builtin.ReadersOf) — the repository read by name as the asker,
@@ -131,6 +134,11 @@ type CodeSource interface {
 	// and in the same vocabulary: a check's log stands with the rows that
 	// name it.
 	CheckLogs() (CheckLogs, error)
+
+	// CodeSearcher is the code search over the fleet's git nodes
+	// (codesearch.go), or why this node serves none, on CodeReads' terms
+	// and in the same vocabulary: a search reads what the code reads do.
+	CodeSearcher() (CodeSearcher, error)
 }
 
 // codeRead is the answer to one kind of code question.
@@ -420,8 +428,9 @@ func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 
 // registerCode registers the code questions over s.Code — see the file's
 // doc, codechange.go's for a change's, codegit.go's for a repository's
-// content and codechecks.go's for its merge queues and its checks, for what
-// each answers and why each is decided by the verb it is.
+// content, codechecks.go's for its merge queues and its checks and
+// codesearch.go's for a search of its lines, for what each answers and why
+// each is decided by the verb it is.
 func registerCode(r *Registry, s Sources) {
 	r.Register("code_repos", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepos, "code_repos"))
 	r.Register("code_repo", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepo, "code_repo"))
@@ -444,4 +453,5 @@ func registerCode(r *Registry, s Sources) {
 	r.Register("code_checks", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadChecks, "code_checks"))
 	r.Register("code_check", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadCheck, "code_check"))
 	r.Register("code_check_log", DecidedBy(authz.ActionCodeRead), s.codeCheckLog)
+	r.Register("code_search", DecidedBy(authz.ActionCodeRead), s.codeSearch)
 }

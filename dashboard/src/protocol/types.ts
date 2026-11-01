@@ -38,6 +38,7 @@ import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type {
   CHANGE_STATES,
+  CodeSearchAnswer,
   COMMAND_OUTCOMES,
   FINDING_CATEGORIES,
   FINDING_SEVERITIES,
@@ -7669,6 +7670,8 @@ export interface CodeQueryMap {
   code_change: CodeChangeAnswer;
   code_change_routing: CodeChangeRoutingAnswer;
   code_reviews: CodeReviewsAnswer;
+  /** Read at no session floor: it answers at the tip it names (`contract/code.ts`). */
+  code_search: CodeSearchAnswer;
 }
 
 /**

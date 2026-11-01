@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -51,9 +52,31 @@ type stubCode struct {
 	// is nil.
 	logs  []byte
 	paged []logPageAsk
-	// sourced counts the asks of the source itself: CodeReads, RepoReaders
-	// and CheckLogs.
+	// search answers a code search, each recorded in searched: an empty
+	// answer where it is nil.
+	search   func(codesearch.Query) (codesearch.Answer, error)
+	searched []codesearch.Query
+	// sourced counts the asks of the source itself: CodeReads, RepoReaders,
+	// CheckLogs and CodeSearcher.
 	sourced int
+}
+
+// CodeSearcher is the stub itself, on CodeReads' terms.
+func (s *stubCode) CodeSearcher() (queries.CodeSearcher, error) {
+	s.sourced++
+	if s.unserved != nil {
+		return nil, s.unserved
+	}
+	return s, nil
+}
+
+// CodeSearch records q and answers what search does.
+func (s *stubCode) CodeSearch(_ context.Context, q codesearch.Query) (codesearch.Answer, error) {
+	s.searched = append(s.searched, q)
+	if s.search != nil {
+		return s.search(q)
+	}
+	return codesearch.Answer{}, nil
 }
 
 // logPageAsk is one page of a log the stub's object store was asked for.

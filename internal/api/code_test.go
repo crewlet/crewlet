@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/codesearch"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -51,6 +52,7 @@ type fixedCode struct {
 	gitReads api.GitReader
 	readers  builtin.ReadersDeps
 	logs     queries.CheckLogs
+	search   queries.CodeSearcher
 	why      error
 	boxes    *host.BoxTokens
 	checks   *host.CheckTokens
@@ -100,6 +102,13 @@ func (f fixedCode) CheckLogs() (queries.CheckLogs, error) {
 	return f.logs, nil
 }
 
+func (f fixedCode) CodeSearcher() (queries.CodeSearcher, error) {
+	if f.search == nil {
+		return nil, f.unserved()
+	}
+	return f.search, nil
+}
+
 func (f fixedCode) RepoReaders() (builtin.ReadersDeps, error) {
 	if f.readers.Readers == nil {
 		return builtin.ReadersDeps{}, f.unserved()
@@ -140,6 +149,13 @@ func (s *switchedCode) CheckLogs() (queries.CheckLogs, error) {
 		return nil, engine.ErrCodeNotHosted
 	}
 	return s.fixedCode.CheckLogs()
+}
+
+func (s *switchedCode) CodeSearcher() (queries.CodeSearcher, error) {
+	if !s.present.Load() {
+		return nil, engine.ErrCodeNotHosted
+	}
+	return s.fixedCode.CodeSearcher()
 }
 
 func (s *switchedCode) GitReads() (api.GitReader, error) {
@@ -437,7 +453,8 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 	t.Parallel()
 	held := func(what string) bool {
-		return slices.ContainsFunc(codeQuestions, func(q codeQuestion) bool { return q.what == what })
+		return what == codeSearchQuestion.what ||
+			slices.ContainsFunc(codeQuestions, func(q codeQuestion) bool { return q.what == what })
 	}
 	named := map[string][]string{}
 	for _, r := range api.NamedRoutes() {
@@ -445,7 +462,7 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 			named[r.What] = append(named[r.What], r.Method+" "+r.Pattern)
 		}
 	}
-	for _, q := range codeQuestions {
+	for _, q := range append(slices.Clone(codeQuestions), codeSearchQuestion) {
 		if got := named[q.what]; !slices.Equal(got, []string{q.route}) {
 			t.Errorf("%s is named by the routes %v, want exactly %s", q.what, got, q.route)
 		}
@@ -491,7 +508,7 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 					t.Errorf("this node answers the code question %q, which no path here holds", what)
 				}
 			}
-			var want, mounted []string
+			want, mounted := []string{codeSearchQuestion.route}, []string(nil)
 			for _, q := range codeQuestions {
 				want = append(want, q.route)
 			}
@@ -582,6 +599,93 @@ var codeQuestions = []codeQuestion{
 	{"code_checks", "GET /code/checks", code.ReadChecks, ""},
 	{"code_check", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}", code.ReadCheck, "web"},
 	{"code_check_log", "GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log", code.ReadCheck, "web"},
+}
+
+// codeSearchQuestion is the code search: a question of its own beside
+// codeQuestions, since it asks the code search rather than the reader
+// ([TestCodeSearchIsAnsweredOnItsPath]).
+var codeSearchQuestion = codeQuestion{what: "code_search", route: "GET /code/search"}
+
+// fakeSearcher is the code search: every query it is asked recorded, each
+// answered with one line of the first repository it names, or of web.
+type fakeSearcher struct {
+	mu    sync.Mutex
+	asked []codesearch.Query
+}
+
+func (f *fakeSearcher) CodeSearch(_ context.Context, q codesearch.Query) (codesearch.Answer, error) {
+	f.mu.Lock()
+	f.asked = append(f.asked, q)
+	f.mu.Unlock()
+	repo := "web"
+	if len(q.Search.Repos) > 0 {
+		repo = q.Search.Repos[0]
+	}
+	return codesearch.Answer{Hits: []codesearch.Hit{{Repo: repo, SearchHit: code.SearchHit{Path: "go.mod",
+		Line: 1, Text: "module " + q.Search.Text, Blob: fakeCommit}}},
+		Tips: map[string]string{repo: fakeCommit}, Coverage: codesearch.Coverage{Searched: 1}}, nil
+}
+
+func (f *fakeSearcher) queries() []codesearch.Query {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.asked)
+}
+
+// A CODE SEARCH IS ANSWERED ON ITS PATH: GET /code/search and the generic
+// form of `code_search` are one question, each asking the code search once,
+// as the caller, with the search its parameters name, and answering its
+// lines, the tip each repository was searched at and the coverage; a node
+// whose company hosts no code answers it `404 not_found` (`not_hosted`) and
+// searches nothing, as every code read does; and the path is guarded, a
+// search with no credential refused before anything is asked.
+//
+// Mutation: drop code_search's named route, and the path answers no_route,
+// red; hand the search the reader's surface in place of the searcher's, and
+// the search is never asked, red.
+func TestCodeSearchIsAnsweredOnItsPath(t *testing.T) {
+	t.Parallel()
+	search := &fakeSearcher{}
+	a := codeApp(t, nil, fixedCode{reads: &fakeCodeReads{}, search: search})
+	for _, at := range []string{"/code/search?q=needle&repo=web", "/query/code_search?q=needle&repo=web"} {
+		before := len(search.queries())
+		rec := ask(t, a, http.MethodGet, at, true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s answered %d %q", at, rec.Code, rec.Body.String())
+		}
+		asked := search.queries()
+		if len(asked) != before+1 {
+			t.Fatalf("GET %s asked the search %d times, want once", at, len(asked)-before)
+		}
+		q := asked[len(asked)-1]
+		if q.Search.Text != "needle" || !slices.Equal(q.Search.Repos, []string{"web"}) ||
+			q.Asker.Kind != code.PrincipalOperator || q.Asker.OperatorID != "token:founder" {
+			t.Errorf("GET %s searched %+v as %+v, want needle in web as token:founder", at, q.Search, q.Asker)
+		}
+		var body codesearch.Answer
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("GET %s answered %q: %v", at, rec.Body.String(), err)
+		}
+		if len(body.Hits) != 1 || body.Hits[0].Repo != "web" || body.Tips["web"] != fakeCommit ||
+			body.Coverage.Searched != 1 {
+			t.Errorf("GET %s answered %+v, want web's one line at its tip, one repository searched", at, body)
+		}
+	}
+
+	unhosted := codeApp(t, nil, fixedCode{})
+	rec := ask(t, unhosted, http.MethodGet, "/code/search?q=needle", true)
+	if code, _ := errorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
+		t.Errorf("a search where the company hosts no code answered %d %s, want 404 not_found", rec.Code, code)
+	}
+
+	guarded := codeApp(t, nil, fixedCode{reads: &fakeCodeReads{}, search: search})
+	before := len(search.queries())
+	if rec := ask(t, guarded, http.MethodGet, "/code/search?q=needle", false); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a search with no credential answered %d, want the guard's 401", rec.Code)
+	}
+	if len(search.queries()) != before {
+		t.Errorf("a search with no credential was searched")
+	}
 }
 
 // fakeLog is the one log fakeLogs holds, under fakeLogKey.

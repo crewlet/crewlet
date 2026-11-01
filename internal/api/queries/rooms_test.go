@@ -398,9 +398,13 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // tabs those of a repository's merge queues and its checks, `code_queue`,
 // `code_checks`, `code_check` and `code_check_log`. And the tracker's own
 // inbox, `work_inbox`, which the Inbox reads composed with the code host's
-// through `inbox` and a script and a seat's tool read alone.
+// through `inbox` and a script and a seat's tool read alone. And a search of
+// the repositories' lines, `code_search`, read by a script on the path
+// api-endpoints.md prints ("GET /code/search") until the Code workspace's
+// Search draws it, whose screen deletes its line.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
+	"code_search":       "a script: GET /code/search, as docs/reference/api-endpoints.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with the code host's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and

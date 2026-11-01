@@ -98,7 +98,7 @@ type Coverage struct {
 	NotPermitted RepoSet `json:"not_permitted"`
 	// GrepNotNamed is the `search: grep` repositories the asker may read
 	// that an unfiltered search leaves out: each is searched only when a
-	// repo: filter names it, at most code.MaxGrepRepos at once.
+	// repo: filter names it, at most MaxGrepRepos at once.
 	GrepNotNamed RepoSet `json:"grep_not_named"`
 	// Stale is the repositories left unanswered because the last git node
 	// asked for them was behind — its copy still syncing to the log, or its
@@ -196,8 +196,9 @@ func New(o Options) (*Searcher, error) {
 // knowledge search's 400 bytes, refused, never cut), its limit, its asker, a
 // repo: naming a repository the asker may not read, and more than
 // MaxGrepRepos grep repositories — each code.ErrInvalid or the read's own
-// refusal. ONE REPOSITORY is a read of it through the keyed walk
-// (code.GitSearch), whose answer or refusal is the search's. More are ONE
+// refusal, a refusal over one repository a [RepoRefusal] naming it. ONE
+// REPOSITORY is a read of it through the keyed walk (code.GitSearch), whose
+// answer or refusal is the search's, as a [RepoRefusal]. More are ONE
 // SCATTER: each repository asked of the first node of its git order, in one
 // signed request on topics.CodeSearch, then once more of its runner-up where
 // that node did not answer it — and the lines merged by (repository, path,
@@ -230,6 +231,25 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 	s.record(via, s.now().Sub(began), out.Coverage)
 	return out, nil
 }
+
+// RepoRefusal is a search refused over ONE repository it names — a repo:
+// filter naming one nobody declared or the asker may not read, or the one
+// repository a search reads refusing it: the repository by name, and the
+// read's own refusal, which errors.Is and errors.As reach.
+//
+// TYPED, because a surface answering the refusal names the repository in it
+// (internal/api/queries' `not_declared` says which name is declared nowhere),
+// and a search naming several cannot otherwise tell which one was refused.
+type RepoRefusal struct {
+	Repo string
+	Err  error
+}
+
+// Error names the repository and the refusal.
+func (e *RepoRefusal) Error() string { return fmt.Sprintf("codesearch: repo:%s: %v", e.Repo, e.Err) }
+
+// Unwrap is the read's own refusal.
+func (e *RepoRefusal) Unwrap() error { return e.Err }
 
 // validate refuses what no node would answer.
 func (q Query) validate() error {
@@ -265,10 +285,10 @@ func (s *Searcher) repos(ctx context.Context, q Query) (searched []code.RepoRef,
 			a, err := s.estate.Read(ctx, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Asker: q.Asker,
 				CeilingSeat: q.CeilingSeat, Fresh: q.Rows})
 			if err != nil {
-				return nil, nil, fmt.Errorf("codesearch: repo:%s: %w", name, err)
+				return nil, nil, &RepoRefusal{Repo: name, Err: err}
 			}
 			if a.Repo == nil {
-				return nil, nil, fmt.Errorf("codesearch: repo:%s: %w", name, code.ErrRepoNotFound)
+				return nil, nil, &RepoRefusal{Repo: name, Err: code.ErrRepoNotFound}
 			}
 			if a.Repo.Search != code.SearchIndexed {
 				grep++
@@ -309,7 +329,7 @@ func (s *Searcher) one(ctx context.Context, q Query, sq code.SearchQuery, repo c
 	got, err := s.estate.GitRead(ctx, code.GitQuery{Kind: code.GitSearch, RepoID: repo.ID, Asker: q.Asker,
 		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Search: &sq})
 	if err != nil {
-		return Answer{}, "", fmt.Errorf("codesearch: repo:%s: %w", repo.Name, err)
+		return Answer{}, "", &RepoRefusal{Repo: repo.Name, Err: err}
 	}
 	if got.Search == nil {
 		return Answer{}, "", fmt.Errorf("codesearch: repo:%s: the git node answered a search with no search",

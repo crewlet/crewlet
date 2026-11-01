@@ -411,3 +411,43 @@ func TestAnUnsignedSearchIsRefused(t *testing.T) {
 		t.Errorf("a replayed request answered %q, %v after reading %v", reply, err, n.asked)
 	}
 }
+
+// refusingWalk is the fake company whose keyed walk refuses every read as
+// not permitted: its listing answers, its git nodes do not.
+type refusingWalk struct{ *estate }
+
+func (refusingWalk) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
+	return code.GitAnswer{}, code.ErrNotPermitted
+}
+
+// A REFUSAL NAMES ITS REPOSITORY: a repo: filter naming a repository nobody
+// declared, beside one that is, is refused as a [codesearch.RepoRefusal]
+// naming the undeclared one and wrapping the read's own refusal; and a search
+// of the one repository whose read refuses it names that repository too —
+// what a surface answering the refusal says the name with.
+//
+// Mutation: wrap the listing's refusal in a plain error, or the walk's, and
+// the name is lost, red.
+func TestARefusalNamesItsRepository(t *testing.T) {
+	t.Parallel()
+	e := &estate{repos: []repo{indexed("alpha", "git-a")}}
+	s := searcher(t, e, newFleet(t, e, map[string]*node{"git-a": {}}))
+	_, err := s.Search(context.Background(), codesearch.Query{Search: codeindex.Query{Text: "needle",
+		Mode: codeindex.ModeLiteral, Repos: []string{"alpha", "nope"}}, Asker: person})
+	var refused *codesearch.RepoRefusal
+	if !errors.As(err, &refused) || refused.Repo != "nope" || !errors.Is(err, code.ErrRepoNotFound) {
+		t.Fatalf("a search naming an undeclared repository = %v, want a RepoRefusal of nope, not found", err)
+	}
+
+	walk, err := codesearch.New(codesearch.Options{Estate: refusingWalk{e}, Placement: e,
+		Ask: newFleet(t, e, map[string]*node{"git-a": {}}).ask, Wire: wire(t, fleetRing)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = walk.Search(context.Background(), codesearch.Query{Search: codeindex.Query{Text: "needle",
+		Mode: codeindex.ModeLiteral, Repos: []string{"alpha"}}, Asker: person})
+	refused = nil
+	if !errors.As(err, &refused) || refused.Repo != "alpha" || !errors.Is(err, code.ErrNotPermitted) {
+		t.Fatalf("a one-repository search its walk refused = %v, want a RepoRefusal of alpha, not permitted", err)
+	}
+}
