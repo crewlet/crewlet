@@ -34,10 +34,15 @@ var ErrPagination = errors.New("mcp: server pagination is broken")
 // toolDef is one tool as the server described it, before any prefixing,
 // exclusion or override is applied.
 type toolDef struct {
-	Name        string
-	Description string
-	InputSchema map[string]any
-	Annotations Annotations
+	Name string
+	// Title is the tool's own display name (the specification's `title`),
+	// "" where it gives none. Not the annotations' title, which travels in
+	// Annotations: a server may set either, and the listing reads both.
+	Title        string
+	Description  string
+	InputSchema  map[string]any
+	OutputSchema map[string]any
+	Annotations  Annotations
 }
 
 // client is one live MCP session, over either transport.
@@ -69,6 +74,10 @@ type client struct {
 	end      chan struct{}
 	endOnce  sync.Once
 	endCause string
+
+	// identity is what the server said of itself in the handshake, set
+	// once by connect before the client is handed to anybody.
+	identity Identity
 }
 
 // connect starts (or reaches) a server and completes the MCP handshake.
@@ -159,8 +168,11 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	serverName := "unknown"
 	// A modern server may decline to identify itself. That is a valid
 	// connection, not a half-open one.
-	if init := session.InitializeResult(); init != nil && init.ServerInfo != nil {
-		serverName = init.ServerInfo.Name
+	if init := session.InitializeResult(); init != nil {
+		c.identity = identityOf(init)
+		if init.ServerInfo != nil {
+			serverName = init.ServerInfo.Name
+		}
 	}
 	log.InfoContext(ctx, "server_initialized", "server", spec.Name, "server_name", serverName)
 	return c, nil
@@ -326,7 +338,12 @@ func (c *client) defOf(t *sdk.Tool) toolDef {
 		c.log.Warn("annotation_probe_missed", "server", c.name, "tool", t.Name)
 		ann = annotationsFromSDK(t.Annotations)
 	}
-	return toolDef{Name: t.Name, Description: description, InputSchema: schema, Annotations: ann}
+	// AN OUTPUT SCHEMA THAT IS NOT AN OBJECT IS NONE: the specification
+	// requires one, and nothing the engine does reads it but the listing,
+	// which shows a schema a person can read or says there is none.
+	output, _ := t.OutputSchema.(map[string]any)
+	return toolDef{Name: t.Name, Title: t.Title, Description: description,
+		InputSchema: schema, OutputSchema: output, Annotations: ann}
 }
 
 // callTool runs one tool and returns its content blocks.

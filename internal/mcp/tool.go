@@ -130,9 +130,12 @@ type Callable interface {
 type Tool struct {
 	name        string // the catalogue name: prefix applied
 	raw         string // the name the server knows it by
+	title       string // the tool's own title, "" where it gives none
 	description string
 	parameters  map[string]any
+	output      map[string]any // the output schema, nil where it gives none
 	annotations Annotations
+	digest      string // the server's definition, hashed ([digestOf])
 	srv         *server
 }
 
@@ -189,11 +192,15 @@ func (s *server) toolsFor(defs []toolDef) ([]*Tool, []RefusedTool) {
 }
 
 // sameAs reports whether two tools would put the same thing in front of a
-// model: name, description, schema and hints.
+// model (name, description, schema and hints) and describe the same
+// definition: its digest, which also covers the title and the output schema a
+// listing shows. A tool kept across a restart whose title moved would leave
+// the fleet's listing naming the old one.
 func (t *Tool) sameAs(other *Tool) bool {
 	return t.name == other.name && t.raw == other.raw &&
 		t.description == other.description &&
 		t.annotations == other.annotations &&
+		t.digest == other.digest &&
 		reflect.DeepEqual(t.parameters, other.parameters)
 }
 
@@ -230,9 +237,12 @@ func newTool(s *server, def toolDef, spec Spec) *Tool {
 	return &Tool{
 		name:        name,
 		raw:         def.Name,
+		title:       def.Title,
 		description: def.Description,
 		parameters:  maps.Clone(def.InputSchema),
+		output:      maps.Clone(def.OutputSchema),
 		annotations: ann,
+		digest:      digestOf(def),
 		srv:         s,
 	}
 }
@@ -252,6 +262,24 @@ func (t *Tool) Parameters() map[string]any { return t.parameters }
 // Annotations are the server's behavioural hints with operator overrides
 // applied. Tri-state: see annotations.go.
 func (t *Tool) Annotations() Annotations { return t.annotations }
+
+// Title is the tool's own display name, else the one its annotations carry,
+// else "". Never shown to a model: a person reads it in the listing.
+func (t *Tool) Title() string {
+	if t.title != "" {
+		return t.title
+	}
+	return t.annotations.Title
+}
+
+// OutputSchema is the JSON Schema of the tool's structured result, as the
+// server published it, or nil where it published none.
+func (t *Tool) OutputSchema() map[string]any { return t.output }
+
+// Digest names the server's definition of the tool (see digest.go): two tools
+// with one digest are one definition, wherever and by whichever instance they
+// were listed.
+func (t *Tool) Digest() string { return t.digest }
 
 // Instance is the full instance name of the server serving this tool —
 // "github::Engineer" for a per-role child. It identifies the PROCESS.

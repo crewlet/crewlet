@@ -140,6 +140,14 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// A job of its own, so its deletions are counted under a name
 		// that says which rows went.
 		"iam_ops_session",
+		// THE FLEET'S MCP LISTINGS, in the positions register, which no
+		// clock may age: a listing no reader counts any more (its node
+		// died, or claimed its presence again under a new epoch) and a
+		// schema no listing has named for two sweeps. Nothing else
+		// removes them, so a node rebuilt under a new id would leave its
+		// listings, and every schema they named, for the life of the
+		// deployment (ADR-0074).
+		"mcp_listings",
 		// EVERY REGISTERED DOMAIN'S OPERATION LEDGER, and they are on
 		// this list for exactly the reason the list exists: each
 		// `<domain>_ops` migration says the table is swept and ships

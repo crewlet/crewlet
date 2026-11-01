@@ -836,9 +836,26 @@ func (h *Host) ResumeClaiming(ctx context.Context) {
 // readiness probe reads, because a node its fleet cannot see is not doing the
 // work it was started for, however healthy it looks from inside.
 func (h *Host) HoldsPresence() bool {
+	_, held := h.PresenceEpoch()
+	return held
+}
+
+// PresenceEpoch is the epoch of the presence lease this node holds now, and
+// false whenever [Host.HoldsPresence] would answer no.
+//
+// THE INCARNATION A PEER COUNTS THIS NODE BY. A lease that lapsed is never
+// renewed, only claimed again at a new epoch, so a record a node files under
+// its presence epoch (an MCP listing, internal/coord's mcplisting.go) is one
+// its peers stop counting the moment the presence it was filed under lapses,
+// and a node that sees its epoch move knows a sweep may have removed what it
+// filed under the old one.
+func (h *Host) PresenceEpoch() (int64, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.nodeLease != nil && !h.draining && elapsed(h.now(), h.presenceRenewedAt) < h.ttl
+	if h.nodeLease == nil || h.draining || elapsed(h.now(), h.presenceRenewedAt) >= h.ttl {
+		return 0, false
+	}
+	return h.nodeLease.Epoch, true
 }
 
 // Draining reports whether this node has stopped claiming.

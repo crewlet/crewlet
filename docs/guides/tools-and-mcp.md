@@ -484,6 +484,53 @@ its state, reach and launch, every node's reason as the node reported it rather
 than clamped to the grid's two lines, and the catalogue narrowed to its tools —
 which, for a server that never started, says it registered none and why.
 
+### What every server lists
+
+A per-agent server (`shared: false`) starts one child per seat, on the node that
+holds the seat, so no single node runs the company's whole catalogue. Every node
+therefore publishes what its own instances list, per server, and every node keeps
+a watched copy of what the others publish. That is what puts a per-agent server's
+tools in the catalogue (`GET /tools` and the dashboard's `tools` push) on every
+node, including one that runs none of its children, and what one server's page
+reads (`GET /mcp-servers/{name}`, `admin`, see the
+[API reference](../reference/api-endpoints.md#get-mcp-serversname)).
+
+- **What a listing holds.** Per server, the union of the node's instances: each
+  tool's name as it is offered and as the server names it, its title and
+  description, its hints with your [overrides](#tool-annotation-overrides)
+  applied, how many instances list it, and a digest of the server's own
+  definition. The server's identity and instructions from its handshake ride
+  beside them. Each tool's input and output schemas are stored once under that
+  digest, however many nodes and seats list the tool.
+- **The digest is the server's definition.** It covers the name the server uses,
+  the title, the description, both schemas and the hints the server declared,
+  and nothing of yours: changing a `tool_prefix` or an override never reads as
+  the server changing a tool.
+- **Risk.** The page shows each tool's risk as the engine reads its hints:
+  `read_only` for a tool that says it changes nothing, `additive` for one that
+  writes and says it is not destructive, and `destructive` for everything else,
+  a tool that declares no hints included. A tool reaches past the company unless
+  it says it does not.
+- **Written when it changes.** A node reads its listing off its servers at every
+  heartbeat and writes it only when it moved, so a quiet company writes nothing.
+- **Live nodes only.** A listing counts while its node holds its presence at the
+  epoch it was written under. A node that drains stops counting the moment it
+  gives up its presence and removes its listings when it shuts down, one that
+  dies stops counting the moment its presence lapses, and the
+  [maintenance sweep](../concepts/coordination.md#what-the-fleet-shares) removes
+  what it left behind, along with a schema no listing has named for two sweeps.
+- **Bounded.** Everything in a listing came from a remote server, so a listing
+  names at most 256 tools (the count travels whole), a description is cut to
+  1,024 bytes, the instructions to 4,096, and a tool's schemas past 64 KiB are
+  listed without being stored. A listing stores at most 1 MiB of schemas in
+  all, kept in tool-name order while they fit; a tool past that is listed
+  without its arguments.
+
+In the catalogue, a listed tool is added under a name nothing on the node
+already holds: one tool per name, as a model is offered, so a name a built-in
+or another server's tool wins shows that tool. A server's page lists every tool
+its server lists, whichever wins the name.
+
 ### Adding a server from the dashboard
 
 **Add an MCP server** on Settings › MCP Tools (`admin`) writes
@@ -635,8 +682,8 @@ reads, how a static credential's value is spelled, the sign-ins its vendor
 offers, what an admin has to do at the vendor first, and the day its facts
 were last read from the vendor (`read_at`). It is a table compiled into the
 engine and reviewed in pull requests, so every node answers it the same, with
-or without egress. `GET /mcp-servers/catalogue` serves it (see the
-[API reference](../reference/api-endpoints.md#get-mcp-serverscatalogue)).
+or without egress. `GET /mcp-catalogue` serves it (see the
+[API reference](../reference/api-endpoints.md#get-mcp-catalogue)).
 
 | Entry | Server | Sign-in |
 |---|---|---|
