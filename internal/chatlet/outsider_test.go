@@ -56,7 +56,7 @@ func TestAPrivateRoomIsNotThereToSomebodyOutsideIt(t *testing.T) {
 			return err
 		},
 		"a membership": func(room, _ string) error {
-			_, err := r.store.SetMembers(t.Context(), bob, room, members("bob", "jane"))
+			_, err := r.store.SetMembers(t.Context(), bob, room, members("bob", "jane"), nil)
 			return err
 		},
 		"a topic": func(room, _ string) error {

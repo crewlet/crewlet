@@ -117,7 +117,7 @@ type ChatWriter interface {
 	PatchChannel(ctx context.Context, actor chatlet.Actor, channelID string,
 		patch chatlet.ChannelPatch, authority chatlet.ChannelAuthority) (chatlet.Written, error)
 	SetMembers(ctx context.Context, actor chatlet.Actor, channelID string,
-		members []chatlet.Member) (chatlet.Written, error)
+		members []chatlet.Member, expected *[]chatlet.Member) (chatlet.Written, error)
 	AddMembers(ctx context.Context, actor chatlet.Actor, channelID string,
 		handles []string) (chatlet.Written, []string, error)
 	Edit(ctx context.Context, actor chatlet.Actor, channelID, messageID string,

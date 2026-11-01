@@ -394,6 +394,65 @@ func TestOnlyTheEmptyListEmptiesARoom(t *testing.T) {
 	}
 }
 
+// THE MEMBERSHIP A CALLER READ REACHES THE STORE AS ITS EXPECTATION.
+//
+// `expected_members` is what makes a whole set stated from a screen safe: the
+// store refuses the write when the room moved since that read
+// (chatlet.Store.SetMembers). So absent is no expectation, a list is handed
+// over exactly as read (following included), the empty list expects an empty
+// room, and a value naming nobody by mistake is refused rather than read as
+// an empty room, which would refuse every change against a room with people
+// in it.
+//
+// Mutation: drop the argument, read it as members, or read a blank string as
+// the empty list, and a case here fails.
+func TestTheMembershipACallerReadIsHandedOverAsItsExpectation(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		expected any
+		want     *[]chatlet.Member
+	}{
+		"absent": {nil, nil},
+		"as read": {[]any{map[string]any{"handle": "bob", "follow_all": true}, "ana"},
+			&[]chatlet.Member{{Handle: "bob", FollowAll: true}, {Handle: "ana"}}},
+		"an empty room": {[]any{}, &[]chatlet.Member{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeChat()
+			tool := operatorChat(t, f, nil, nil)[chatlet.SetChannelMembersTool]
+			args := map[string]any{"channel": chatRoomID, "members": []any{"bob"}}
+			if c.expected != nil {
+				args["expected_members"] = c.expected
+			}
+			if got := invokeOperator(t, tool, args); got.Failed {
+				t.Fatalf("the tool refused %v: %s", c.expected, got.Output)
+			}
+			if len(f.expected) != 1 {
+				t.Fatalf("the store was handed %d expectations, want one", len(f.expected))
+			}
+			switch got := f.expected[0]; {
+			case c.want == nil && got != nil:
+				t.Errorf("no expectation was sent and the store was handed %+v", *got)
+			case c.want != nil && (got == nil || !slices.Equal(*got, *c.want)):
+				t.Errorf("the store was handed %+v, want %+v", got, *c.want)
+			}
+		})
+	}
+
+	f := newFakeChat()
+	tool := operatorChat(t, f, nil, nil)[chatlet.SetChannelMembersTool]
+	got := invokeOperator(t, tool, map[string]any{"channel": chatRoomID,
+		"members": []any{"bob"}, "expected_members": " , "})
+	if tools.RefusalOf(got) != tools.RefusalInvalid || !strings.Contains(got.Output,
+		"`expected_members` names nobody") {
+		t.Errorf("an expectation naming nobody answered %+v, want it refused", got)
+	}
+	if len(f.keys) != 0 {
+		t.Errorf("an expectation naming nobody reached the store: %d writes", len(f.keys))
+	}
+}
+
 // A NULL IS NOTHING SENT, to a gesture as to the check at the surface
 // (ADR-0059), so it changes nothing it names: the check admits it as absent,
 // and read as named it cleared a room's topic, removed every link of a

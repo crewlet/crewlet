@@ -118,6 +118,7 @@ type fakeChat struct {
 	patches     []chatlet.ChannelPatch
 	authorities []chatlet.ChannelAuthority
 	memberSets  [][]chatlet.Member
+	expected    []*[]chatlet.Member
 	added       [][]string
 	edits       []chatlet.EditMessage
 	deleted     []string
@@ -340,13 +341,14 @@ func (f *fakeChat) PatchChannel(_ context.Context, actor chatlet.Actor, _ string
 }
 
 func (f *fakeChat) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
-	members []chatlet.Member) (chatlet.Written, error) {
+	members []chatlet.Member, expected *[]chatlet.Member) (chatlet.Written, error) {
 
 	if f.writeErr != nil {
 		return chatlet.Written{}, f.writeErr
 	}
 	f.keys = append(f.keys, actor.OpKey)
 	f.memberSets = append(f.memberSets, members)
+	f.expected = append(f.expected, expected)
 	f.actors = append(f.actors, actor)
 	return f.wrote(43), nil
 }
