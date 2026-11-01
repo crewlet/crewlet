@@ -7300,8 +7300,10 @@ wakes](../concepts/code-host.md#who-a-change-wakes)).
   through the pager every code listing shares, the newest page held still
   from its press; each page answers the trains of the targets it reaches.
 - **Checks** is the window of `code_checks` naming no repository: the
-  attempts that ended at or after the window's start. The engine has no end,
-  so a window ending before now keeps the rows that ended inside it. A state
+  attempts that ended at or after the window's start and before its end
+  (`since=`, `until=`), which the engine seeks from the end down, so a custom
+  interval in the past reads its own newest attempts first rather than every
+  attempt that ended after it. A state
   or a check's name narrows on the ENGINE (`state=`, `name=`), and the chart
   and the chips count the pages loaded and say so. The listing, the pane and
   its log are one component every checks listing shares (`routes/code/checks`):

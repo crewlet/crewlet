@@ -1,8 +1,9 @@
 /**
  * Code › Checks, and the pane every checks listing opens an attempt in.
  *
- * The invariants: the section asks the engine's window from the window's own
- * start, narrowed by state and by a check's name as the ENGINE narrows them;
+ * The invariants: the section asks the engine's window by the window's own
+ * start and end, narrowed by state and by a check's name as the ENGINE
+ * narrows them;
  * it charts and counts the attempts it holds, and says so; an attempt opens
  * in a pane that reads it whole — each failure a link into the diff it was
  * checked on, the tail of its output, and its log a page at a time by its
@@ -61,6 +62,28 @@ const WHOLE = () =>
     },
     ...page,
   });
+
+// A CUSTOM INTERVAL IS THE ENGINE'S TO BOUND, at both ends: the screen asks
+// `since` and `until` as the interval names them, so the engine's first page
+// is the interval's own newest attempts, and draws every row it is sent.
+// Mutation: ask with no `until` (and trim on the client) → red.
+test("a custom interval asks the engine for its start and its end", async () => {
+  const from = "2026-10-10T00:00:00.000Z";
+  const to = "2026-10-11T00:00:00.000Z";
+  const asked = stubCodeEngine({
+    "/query/code_checks": () =>
+      jsonAnswer({
+        checks: [attempt("unit", "failed", { finished_at: "2026-10-10T12:00:00Z" })],
+        ...page,
+      }),
+  });
+  mountCode(`#/code/checks?window=${from}/${to}`, <Checks />);
+  const grid = await screen.findByRole("table", { name: "Attempts of checks" });
+  expect(within(grid).getByText("unit")).toBeTruthy();
+  const first = asked.find((u) => u.pathname === "/query/code_checks")!;
+  expect(first.searchParams.get("since")).toBe(from);
+  expect(first.searchParams.get("until")).toBe(to);
+});
 
 // THE WINDOW IS THE ENGINE'S `since`, and a narrowing is the engine's: a
 // state chip asks `state=`. The rows are named by repository and commit.

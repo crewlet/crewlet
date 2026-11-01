@@ -2,14 +2,16 @@
  * Code › Checks: every repository's attempts of checks over a window, newest
  * ended first — when they ran, which failed, and why.
  *
- * # The window is the engine's `since`, the end is this screen's
+ * # The window is the engine's `since` and `until`
  *
- * The engine lists the attempts that ENDED at or after `since`, over every
- * repository the reader may read (`code_checks` naming none), and has no end
- * of its own. A window that ends before now — a custom interval — keeps the
- * rows that ended inside it; the pager reads past the newer ones to reach it.
- * A repository's own listing, every attempt it keeps, is its page's Checks
- * tab.
+ * The engine lists the attempts that ENDED at or after `since` and before
+ * `until`, over every repository the reader may read (`code_checks` naming
+ * none), newest ended first — sought from the window's end down. So a window
+ * that ends before now, a custom interval, is read from its own newest
+ * attempt: its first page is the interval's, never the newest of everything
+ * that ended since, which a reader would page through — every row of it
+ * held here — to reach the interval. A repository's own listing, every
+ * attempt it keeps, is its page's Checks tab.
  *
  * # Counted over the rows loaded, and said so
  *
@@ -20,7 +22,7 @@
  * come back are the narrowed ones.
  */
 
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { Card } from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
 import { useParam } from "~/app/router.tsx";
@@ -57,15 +59,11 @@ export function Checks() {
   const params = useMemo(
     () => ({
       since: range.since,
+      until: range.until,
       ...(state ? { state } : {}),
       ...(name ? { name } : {}),
     }),
-    [range.since, state, name],
-  );
-  const until = range.until;
-  const inWindow = useCallback(
-    (r: CodeCheckRow) => !r.finished_at || Date.parse(r.finished_at) < Date.parse(until),
-    [until],
+    [range.since, range.until, state, name],
   );
 
   const header = (rows: readonly CodeCheckRow[], more: boolean) => (
@@ -116,7 +114,6 @@ export function Checks() {
       params={params}
       label="Attempts of checks"
       showRepo
-      narrow={inWindow}
       header={header}
       empty={{
         title: "No check ended in this window",
