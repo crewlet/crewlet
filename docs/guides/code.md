@@ -480,7 +480,8 @@ gate. It answers one of three things:
   person's ask;
 - **`not_ready`** — a change its gate does not allow yet: the answer names
   **every** unmet precondition and who each waits on, nothing is merged or
-  queued, and its owner hears `ready_to_merge` once the last is met. A seat is
+  queued, and its authors who may merge it hear `ready_to_merge` once the
+  last is met (where none may, the lead of the repository's owner). A seat is
   told to end its turn rather than ask again.
 
 `method` is `merge` (a merge commit, the default), `squash` or
@@ -495,6 +496,81 @@ close that fails or is refused leaves the change merged and says why
 (`merged; ENG-42 not closed: …`), and a queued change's landing closes it. `override_reason` is a
 person's reason to merge past the gate, merged directly and recorded on the
 change; a seat cannot override.
+
+### From the change's page
+
+A live change's page (**Code › Changes**, then the change) carries the same
+call as controls above its tabs, each made as you and never ahead of the
+engine's answer:
+
+- **Where its gate stands** — how many of its conditions are met, and the
+  first one that is not, judged with *you* as the merger, so a reader without
+  the authority to merge into the target is told so before pressing anything.
+- **Merge**, or **Add to queue** where the target's gate requires a check, with
+  how it merges (**Merge commit**, **Squash** or **Fast-forward**), **Delete
+  its branch** — left unticked, the rule above decides — and **Close ENG-42
+  once it merges** where the change names a work item. It sends the head the
+  page shows as `expected_head`, so a push that landed since you opened the
+  page is refused rather than merged unseen. While the gate is unmet the
+  button is held with the gate's own sentence.
+- **Override**, a person's alone: a dialog that asks your reason, says what
+  the gate still waits on, and merges directly past it — even into a branch
+  whose merges land through its queue. The reason is kept with the merge
+  (the change's Provenance tab shows it) and the override is audited.
+- **Re-run checks** — every check of the change's head whose latest attempt
+  did not pass, each at its next attempt (`code_rerun_checks` with
+  `all_failed`).
+
+A refusal is said beside the controls in words of its own: a head that moved
+("somebody pushed to it since you loaded it"), a target that moved under every
+rebuild of the merge, a change that does not merge cleanly onto the target's
+tip, a full queue; and in the engine's own words where those say more — every
+unmet precondition and who clears it (`not_ready`), or why you may not.
+
+## Protecting a branch
+
+A branch's protection is a rule over the branches a pattern matches: what a
+push may do to them ([Protection
+rules](../concepts/code-host.md#protection-rules)), and — with a **merge
+gate** — what a change must meet before it merges into one. Unset, a rule's
+`direct_push` lets only a person push to the branch, so a seat's work reaches
+it as a change. A rule is declared with the repository in the company
+document, or set on a repository a tool made with `code_protect_branch`, by a
+seat or your own assistant ([Who may change a
+protection](../concepts/code-host.md#who-may-change-a-protection)):
+
+```yaml
+code:
+  repos:
+    - name: web
+      protect:
+        - branch: main
+          merge_by: maintainers    # writers (unset), maintainers or persons
+          approvals: one
+          human_paths:
+            - glob: "infra/**"     # a person approves anything here
+          checks: [unit, lint]     # each must pass on the change's head
+```
+
+Walk one change through it. A seat pushes `seats/dev/retry` and opens
+`web!42` into `main` ([Open a change from a push](#open-a-change-from-a-push)).
+The head's checks run, from `.crewlet/checks.yaml` as `main` holds it ([Adding
+checks](#adding-checks)); a reviewer approves; a person approves the change's
+`infra/` paths. Its readiness — on its page, and in `code_get_change` — lists
+each of those conditions and whom each waits on, and its authors who may
+merge into `main` hear `ready_to_merge` when the last is met. Because the gate requires checks, a
+merge **adds it to `main`'s queue**, which tests it merged on the branch
+before it lands ([The merge queue](../concepts/code-host.md#the-merge-queue)),
+and `main`'s tip is checked again once it lands, `code_green` advancing on
+green ([From a push to a green branch](../concepts/code-host.md#from-a-push-to-a-green-branch)).
+
+**Settings › Code** lists every protected repository, each rule with what it
+lets a push do and what its gate asks, and says where the repository's rules
+are set — the company document, or the code tools. A repository's own page
+shows the same under its **Settings** tab. A seat may tighten a gate and never
+loosen it ([Who may change a
+protection](../concepts/code-host.md#who-may-change-a-protection)); every
+field of a gate is in [Merge gates](../concepts/code-host.md#merge-gates).
 
 ## Rebasing a change
 

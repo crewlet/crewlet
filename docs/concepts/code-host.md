@@ -357,12 +357,13 @@ A gate is **recorded, answered and judged, and a merge is held to it**:
 every change into a gated branch is judged under it, its readiness listing
 each term the gate holds it to ([The merge gate](#the-merge-gate)), and
 `code_merge_change` merges one only as it allows, a change into a branch
-whose gate requires a check queued rather than merged ([What it does not do
-yet](#what-it-does-not-do-yet)); a read of
+whose gate requires a check queued rather than merged ([The merge
+queue](#the-merge-queue)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
 (`GET /code/repos/{name}`'s `gates`, and `code_get_repo`), and a push is held
-to the rule's `allow_force`, `allow_delete` and `direct_push` alone, as before
-([What it does not do yet](#what-it-does-not-do-yet)). No other read carries
+to the rule's `allow_force`, `allow_delete` and `direct_push` alone ([Protection
+rules](#protection-rules)): a gate judges a change's merge, never a push. No
+other read carries
 a gate: a listing of repositories answers each rule as a push is held to it,
 and so does the row every git request, every git node's sync and every push's
 decision reads — at its bounds a repository's gates are half a mebibyte,
@@ -1713,6 +1714,69 @@ node's change writer was asked to decide, by its write and what became of it
 (the [metrics reference](../reference/metrics.md)).
 
 ---
+
+## From a push to a green branch
+
+The sections below each take one step of a change's way into a protected
+branch. Here is the whole of it once, end to end, for a branch whose rule
+requires checks — say `main`, gated on `unit` and `lint` and an approval:
+
+```mermaid
+flowchart TD
+    PUSH["A push moves seats/dev/retry<br/>and opens or revises web!42"] --> FACTS["Its home records the revision's facts:<br/>base, patch-id, touched paths, classes"]
+    FACTS --> HEAD["Head checks: each check main's<br/>.crewlet/checks.yaml defines, queued by the home<br/>and run in a box on a git node"]
+    HEAD --> GATE{"The merge gate, judged on one snapshot:<br/>approvals, human paths, owners,<br/>blockers, required checks, mergeable,<br/>the merger's authority"}
+    GATE -->|"unmet: readiness names each condition<br/>and whom it waits on"| WAIT["ready_to_merge wakes its authors who may merge it<br/>once the last is met"]
+    WAIT --> GATE
+    GATE -->|"met, and a person or seat asks to merge"| QUEUE["main's queue: candidates built in one scratch,<br/>each tested merged on the branch"]
+    QUEUE -->|"a candidate's checks pass"| LAND["land: main moves, the change merged,<br/>a landing row recorded"]
+    QUEUE -->|"red, or the gate no longer holds"| EJECT["ejected: dequeued wakes its authors<br/>and its enqueuer"]
+    LAND --> TIP["Tip checks on main's new tip"]
+    TIP -->|"green"| GREEN["code_green advances"]
+    TIP -->|"red"| BROKEN["target_broken wakes the landed change's authors<br/>and the owning lead; the landings are bisected"]
+```
+
+1. **A push** moves a branch, and the push's own record opens a change of it
+   or adds a revision to the change already open on it
+   ([A change a push opens](#a-change-a-push-opens), [Revisions](#revisions)).
+2. **The repository's home git node** measures the revision — its base, its
+   patch-id, the paths it touches and their [change classes](#change-classes)
+   — and whether it merges cleanly ([A revision's
+   facts](#a-revisions-facts), [Mergeability](#mergeability)).
+3. **The head's checks** are the ones `.crewlet/checks.yaml` defines **as the
+   target holds it**, never as the change edits it: the home queues them, a
+   git node claims each and runs it in a box, and each attempt's result is a
+   row ([How a head's checks are
+   dispatched](#how-a-heads-checks-are-dispatched), [Who runs a
+   check](#who-runs-a-check)). A failed head check wakes its authors
+   (`checks_failed`).
+4. **The gate** is judged on one snapshot, the same function for a reader's
+   readiness and for the record that merges ([Merge
+   readiness](#merge-readiness), [The merge gate](#the-merge-gate)). Unmet,
+   readiness names every condition and whom it waits on, and when the last
+   one is met its authors who may merge it hear `ready_to_merge` — where none
+   may, the effective lead of the repository's owner.
+5. **A merge** of a branch whose gate requires no check is one record that
+   moves the target and marks the change merged ([How a merge is
+   built](#how-a-merge-is-built)). Where the gate requires one, the merge
+   **joins the target's queue** instead: the home builds candidates — each
+   change merged onto what lands before it — tests them, and lands a green
+   prefix in one record, ejecting a change whose candidate went red or whose
+   gate no longer holds ([The merge queue](#the-merge-queue), [How a candidate
+   is built](#how-a-candidate-is-built)). A person's override merges directly
+   either way, its reason kept with the merge.
+6. **The new tip** is checked again, by the checks file at the last green
+   landing, and **`code_green`** — the newest landing every required check
+   passed on — advances only on green; a red tip wakes the authors of the
+   change that broke it and the effective lead of the repository's owner
+   (`target_broken`), and is bisected over its landings ([Tip checks and
+   code_green](#tip-checks-and-code_green)).
+
+Every step is a row the [state log](#one-subject-per-repository) applies on
+every data node, and every wake is derived from those rows ([Who a change
+wakes](#who-a-change-wakes)). A person drives the same steps from a change's
+page in the dashboard — Merge or Add to queue, Override, Re-run checks — or
+with the tools ([Merging a change](../guides/code.md#merging-a-change)).
 
 ## Checks
 
