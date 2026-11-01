@@ -98,8 +98,12 @@ type Fleet struct {
 	payload json.RawMessage
 }
 
+// windowKey is one window's count: the counter's name, the window's width and
+// its start — the width as the KV backend's key carries it, so one name
+// counted at two widths keeps two counts.
 type windowKey struct {
 	bucket string
+	width  time.Duration
 	start  int64
 }
 
@@ -150,15 +154,22 @@ func (f *Fleet) Allow(_ context.Context, bucket string, limit int, window time.D
 		// reading of it that is not an invitation to divide by zero.
 		return false, nil
 	}
+	if window > coord.MaxCounterWindow {
+		// REFUSED AS THE KV BACKEND REFUSES IT: no bucket there keeps a
+		// window this long, so a twin that counted it would pass a caller
+		// the fleet refuses.
+		return false, fmt.Errorf("coord/memory: a counter window of %v is longer than the %v any backend keeps "+
+			"(coord.MaxCounterWindow)", window, coord.MaxCounterWindow)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	key := windowKey{bucket: bucket, start: now.Truncate(window).UnixNano()}
+	key := windowKey{bucket: bucket, width: window, start: now.Truncate(window).UnixNano()}
 	// Older windows are dropped as they are passed rather than swept: the
 	// twin runs inside one test process, and a sweep would be state the KV
 	// backend does not have — the server expires those keys.
 	for existing := range f.windows {
-		if existing.bucket == bucket && existing.start < key.start {
+		if existing.bucket == bucket && existing.width == window && existing.start < key.start {
 			delete(f.windows, existing)
 		}
 	}

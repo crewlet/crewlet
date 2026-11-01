@@ -103,6 +103,17 @@ const (
 	// — and narrower would trip on an ordinary burst from one push.
 	RateWindow = time.Second
 
+	// MaxCounterWindow is the longest window [Counter.Allow] counts: a DAY,
+	// the window of the remote check cells' box-time cap
+	// (internal/code/checkrun), the longest any caller counts in. A backend
+	// keeps a window's count until the window has closed, and a window up to
+	// a day long is kept beside the valve's seconds in a store whose age
+	// outlasts it — never in theirs, which reaps a second-wide window within
+	// seconds so that a seat's notifications leave one record a second
+	// behind for as long as they last, and never theirs in it. A longer
+	// window is an error: nothing keeps it.
+	MaxCounterWindow = 24 * time.Hour
+
 	// ClaimTTL is how long an inbound delivery stays claimed.
 	//
 	// Sized to cover queue redelivery and an operator's replay, NOT a
@@ -321,15 +332,19 @@ const (
 )
 
 // Counter is the fleet's shared fixed-window counter, behind the notification
-// valve.
+// valve (a second wide) and the remote check cells' box-time cap (a day wide).
 //
 // A FIXED window, not a sliding one: the operator's number reads as "N per
-// seat per second", and the arithmetic a fixed window needs is one increment
-// against one key — which is the only shape that stays correct when four
-// nodes increment it at once.
+// seat per second" or "N box-hours a day", and the arithmetic a fixed window
+// needs is one increment against one key — which is the only shape that stays
+// correct when four nodes increment it at once. A window is now truncated to a
+// multiple of its width from the zero time, which is UTC: a day's window runs
+// from one UTC midnight to the next.
 type Counter interface {
 	// Allow increments the bucket's count for the window containing now
-	// and reports whether it stayed within limit.
+	// and reports whether it stayed within limit. A window longer than
+	// [MaxCounterWindow] is an error, since no backend keeps its count
+	// until it closes.
 	//
 	// THREE ANSWERS: within the limit, over it, and — as an error — the
 	// store could not say, whatever the bool beside it. CONTENTION IS

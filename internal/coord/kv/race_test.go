@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -46,7 +45,7 @@ func TestAValveUnderContentionAlwaysAnswers(t *testing.T) {
 			if ok, err := store.Allow(t.Context(), "seat:hot", tc.limit, time.Second, at); err != nil || !ok {
 				t.Fatalf("seeding the window = (%v, %v)", ok, err)
 			}
-			key := encodeKey("seat:hot|" + windowNanos(at, time.Second))
+			key := counterKey("seat:hot", time.Second, at)
 			peers := &peerIncrements{KeyValue: store.rate, key: key}
 			peers.remaining.Store(20)
 			store.rate = peers
@@ -194,11 +193,6 @@ func openCountedChannel(t *testing.T, store *FleetStore, id string) {
 	if _, _, err := store.CountChannelMessage(t.Context(), id, time.Now()); err != nil {
 		t.Fatalf("CountChannelMessage: %v", err)
 	}
-}
-
-// windowNanos is a rate window's instant as its key spells it.
-func windowNanos(at time.Time, window time.Duration) string {
-	return strconv.FormatInt(at.Truncate(window).UnixNano(), 10)
 }
 
 // rateCount reads one window's count.

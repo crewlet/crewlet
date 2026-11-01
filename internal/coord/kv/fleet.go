@@ -407,7 +407,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why EIGHTEEN buckets and not one
+// # Why NINETEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -416,6 +416,14 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //
 //	rate       one window's width x a small factor — a window nobody writes
 //	           to again must age out, and nothing may outlive its successor
+//	windows    the longest counter window x the same factor, three days: a
+//	           window up to a day long (coord.MaxCounterWindow — the remote
+//	           check cells' box-time cap) is counted here rather than in
+//	           rate, whose seconds-long age would reap a day's count
+//	           between two of its charges and hand the day back its whole
+//	           allowance; and rate's windows stay out of it, because a seat's
+//	           notifications leave one record a second, which three days of
+//	           age would keep by the hundred thousand
 //	claims     the dedupe window, minutes: long enough to cover a
 //	           third-party app's retries and an operator's replay, short
 //	           enough that a deliberate re-send later is not swallowed
@@ -502,6 +510,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 const (
 	rateSuffix         = "_rate"
+	windowsSuffix      = "_counter_windows"
 	claimsSuffix       = "_claims"
 	ledgerSuffix       = "_ledger"
 	statusSuffix       = "_status"
@@ -644,6 +653,7 @@ func (c *FleetConfig) normalize() error {
 // FleetStore is the JetStream KV [coord.Fleet].
 type FleetStore struct {
 	rate         jetstream.KeyValue
+	windows      jetstream.KeyValue
 	claims       jetstream.KeyValue
 	ledger       jetstream.KeyValue
 	status       jetstream.KeyValue
@@ -703,6 +713,7 @@ type FleetStore struct {
 	// (casline.go).
 	tallies  writeLines[coord.Tally]
 	rates    writeLines[rateRecord]
+	windowW  writeLines[rateRecord]
 	channelW writeLines[coord.Channel]
 
 	// The round trips of the buckets whose compare-and-swap loops are not
@@ -727,7 +738,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, eighteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, nineteen buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -781,6 +792,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		decode: decodeRate, encode: encodeRate,
 		reading: "read the rate window", decoding: "decode the rate window",
 	}
+	store.windowW.codec = store.rates.codec
 	store.channelW.codec = codec[coord.Channel]{
 		decode: decodeChannelRecord, encode: encodeChannel,
 		reading: "read the channel", decoding: "decode the channel",
@@ -795,6 +807,9 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.rate, rateSuffix,
 			"Crewlet notification-valve windows; the bucket TTL reaps a closed window",
 			cfg.RateWindow * rateBucketFactor},
+		{&store.windows, windowsSuffix,
+			"Crewlet counter windows up to a day wide; the bucket TTL reaps a closed window",
+			coord.MaxCounterWindow * rateBucketFactor},
 		{&store.claims, claimsSuffix,
 			"Crewlet inbound-delivery claims; each record carries its own deadline, and the " +
 				"bucket age is the longest claim's",
@@ -936,22 +951,29 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 	if limit <= 0 || window <= 0 {
 		return false, nil
 	}
-	if window > f.rateWindow*rateBucketFactor {
-		// The bucket would reap the window before it closed, so the count
-		// would restart mid-window and the valve would pass far more than
-		// the operator asked for. Refused loudly rather than silently.
-		return false, fmt.Errorf(
-			"coord/kv: rate window %v exceeds what the bucket retains (%v) — "+
-				"raise FleetConfig.RateWindow", window, f.rateWindow*rateBucketFactor)
+	// THE BUCKET WHOSE AGE OUTLASTS THE WINDOW, and no longer than it must:
+	// the valve's windows in rate, aged a few of them, and a window up to a
+	// day in windows, aged a few days — see "Why NINETEEN buckets". A window
+	// in a bucket that reaped it before it closed would restart its count
+	// mid-window and pass far more than its caller asked for, so a longer
+	// one is refused loudly rather than counted.
+	kv, lines := f.rate, &f.rates
+	switch {
+	case window <= f.rateWindow:
+	case window <= coord.MaxCounterWindow:
+		kv, lines = f.windows, &f.windowW
+	default:
+		return false, fmt.Errorf("coord/kv: a counter window of %v is longer than the %v the counter "+
+			"windows bucket keeps (coord.MaxCounterWindow)", window, coord.MaxCounterWindow)
 	}
-	key := encodeKey(bucket + "|" + strconv.FormatInt(now.Truncate(window).UnixNano(), 10))
+	key := counterKey(bucket, window, now)
 
 	// A CREATE where the window has no record, so the first caller in a
 	// window is distinguishable from a caller racing it: two nodes that both
 	// wrote "1" would count one. The line creates exactly then, and a lost
 	// create is a lost compare-and-swap like any other.
 	var allowed bool
-	_, err := f.rates.writeWithin(ctx, f.rate, f.js, key, bucket, "increment the rate window", limit+1,
+	_, err := lines.writeWithin(ctx, kv, f.js, key, bucket, "increment the rate window", limit+1,
 		func(stored rateRecord, _ bool) (rateRecord, bool) {
 			allowed = stored.Count < limit
 			if !allowed {
@@ -970,6 +992,15 @@ func (f *FleetStore) Allow(ctx context.Context, bucket string, limit int, window
 		return false, err
 	}
 	return allowed, nil
+}
+
+// counterKey is the record of the window of width window that holds now, in
+// the counter named bucket: the name, the width and the window's start, so
+// one name counted at two widths keeps two counts rather than sharing the
+// record of every instant both windows start at.
+func counterKey(bucket string, window time.Duration, now time.Time) string {
+	return encodeKey(bucket + "|" + strconv.FormatInt(int64(window), 10) + "|" +
+		strconv.FormatInt(now.Truncate(window).UnixNano(), 10))
 }
 
 func encodeRate(r rateRecord) ([]byte, error) {
