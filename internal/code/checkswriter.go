@@ -715,7 +715,48 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 	case r.Started != nil:
 		return decideStarted(*r.Started, d, held, named)
 	}
-	return decideFinished(*r.Finished, d, held, named)
+	d, err = decideFinished(*r.Finished, d, held, named)
+	if err != nil || d.payload == nil {
+		return d, err
+	}
+	return routeFailedHead(ctx, tx, repo.name, d)
+}
+
+// routeFailedHead stamps whom an ending d records concerns: a check of a live
+// change's CURRENT head that failed, or errored past the home's own requeue,
+// tells the change's authors and the head's pusher, its actor — the one
+// reason that is news to its actor too ([Reason.WakesActor]). Every other
+// ending concerns nobody: a passed check is what readiness reads (the home's
+// next mergeability record announces a change ready, never a check record:
+// concerns.go's head), a requeued one is not over, and a check of a head the
+// change has moved past measures code nobody is asked to fix.
+func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksDecision) (checksDecision, error) {
+	f, ok := d.payload.(CheckFinished)
+	if !ok || d.row == nil || d.row.Purpose != PurposeHead || d.row.ChangeID == "" || !f.failsItsHead() {
+		return d, nil
+	}
+	change, found, err := changeRowIn(ctx, tx, d.row.ChangeID)
+	switch {
+	case err != nil:
+		return checksDecision{}, err
+	case !found || change.head != f.OID || (change.state != ChangeStateOpen && change.state != ChangeStateDraft):
+		return d, nil
+	}
+	c := concerning{repoName: repoName, change: change, authors: true, checksFailed: true}
+	var pusher, kind string
+	switch err := tx.QueryRowContext(ctx, headPusherSQL, change.id, change.revision).Scan(&pusher, &kind); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return checksDecision{}, fmt.Errorf("code: read who pushed revision %d of %s: %w", change.revision,
+			change.id, err)
+	default:
+		c.actor, c.actorKind = pusher, PartyKind(kind)
+	}
+	if f.Routing, err = routingFor(ctx, tx, c); err != nil {
+		return checksDecision{}, err
+	}
+	d.payload = f
+	return d, nil
 }
 
 // refuse is d refused with code and its sentence.

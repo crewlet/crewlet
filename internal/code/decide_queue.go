@@ -35,8 +35,9 @@ const (
 	// ([trainRows]), every entry of the new one testing, its candidates'
 	// rows, its pack's row, the repository's and the queue's horizon.
 	candidateDecidedRows = trainRows + MaxCandidateEntries + MaxQueueDepth + 1 + 1 + queueHorizonRows
-	// brokenDecidedRows: the landing's row and the repository's.
-	brokenDecidedRows = 2
+	// brokenDecidedRows: the landing's row and the repository's, and the
+	// notices its routing makes.
+	brokenDecidedRows = 2 + routingNoticeRows
 	// greenDecidedRows: the target's green row, the repository's, and the
 	// landings it marks green ([greenLandingRows]).
 	greenDecidedRows = 2 + greenLandingRows
@@ -142,6 +143,33 @@ func decideEject(ctx context.Context, tx *sql.Tx, e Eject, repo pushRepo, d queu
 			return d.refuse(MergeRefusalNotQueued, fmt.Sprintf("entry %s of %s's queues %s: an eject puts "+
 				"one target's live entries out", x.EntryID, repo.name, why))
 		}
+	}
+	// WHOM IT CONCERNS, a routing an entry's change: its authors and its
+	// enqueuer told it left the queue — its authors that its merge
+	// conflicted, where it did — the home's own record, so nobody's actor.
+	routings := make([]ChangeRouting, 0, len(e.Entries))
+	for _, x := range e.Entries {
+		entry := entries[x.EntryID]
+		row, found, err := changeRowIn(ctx, tx, entry.ChangeID)
+		if err != nil {
+			return queueDecision{}, err
+		}
+		if !found {
+			continue
+		}
+		routed, err := routingFor(ctx, tx, concerning{repoName: repo.name, change: row, authors: true,
+			dequeued: true, conflicted: x.Reason == EjectConflict, enqueuer: entry.EnqueuedBy.reviewer()})
+		if err != nil {
+			return queueDecision{}, err
+		}
+		routings = append(routings, *routed)
+	}
+	room, err := routingRoomBeside(e)
+	if err != nil {
+		return queueDecision{}, err
+	}
+	if e.Routing, err = keptRoutings(routings, room, MaxRecordRows-ejectDecidedRows(len(e.Entries))); err != nil {
+		return queueDecision{}, err
 	}
 	d.payload = e
 	return d, nil
@@ -350,10 +378,31 @@ func decideLand(ctx context.Context, tx *sql.Tx, l Land, repo pushRepo, seats Se
 		book.move(e)
 		own += entryRows(e)
 	}
-	if total := recordRows(own + book.rowCount()); total > MaxRecordRows {
+	total := recordRows(own + book.rowCount())
+	if total > MaxRecordRows {
 		return d.refuse(MergeRefusalRecordFull, fmt.Sprintf("landing %d entries on %s writes up to %d rows with "+
 			"the live changes its pushes move, past MaxRecordRows (%d): land fewer at once", len(pushes),
 			l.TargetRef, total, MaxRecordRows))
+	}
+	// WHOM IT CONCERNS, a routing an entry's change: its authors told it
+	// merged — all but its enqueuer, who merged it as the landing's push
+	// names them — within what the record's rows and bytes leave.
+	routings := make([]ChangeRouting, 0, len(stamped.Entries))
+	for i, e := range stamped.Entries {
+		merger, mergerKind := entries[e.EntryID].enqueuer().party()
+		routed, err := routingFor(ctx, tx, concerning{repoName: repo.name, change: rows[i], actor: merger,
+			actorKind: mergerKind, authors: true, merged: true})
+		if err != nil {
+			return queueDecision{}, err
+		}
+		routings = append(routings, *routed)
+	}
+	room, err := routingRoomBeside(stamped)
+	if err != nil {
+		return queueDecision{}, err
+	}
+	if stamped.Routing, err = keptRoutings(routings, room, MaxRecordRows-total); err != nil {
+		return queueDecision{}, err
 	}
 	d.payload = stamped
 	return d, nil
@@ -418,14 +467,14 @@ func decideGreen(ctx context.Context, tx *sql.Tx, g Green, repo pushRepo, d queu
 // key, at its commit, above its target's green row (no_landing), and every
 // check it names FAILED on the commit by its latest attempt checked for the
 // target — a measurement, never an infrastructure's error (not_red).
-func decideBroken(ctx context.Context, tx *sql.Tx, b Broken, repo pushRepo, d queueDecision) (queueDecision,
-	error) {
+func decideBroken(ctx context.Context, tx *sql.Tx, b Broken, repo pushRepo, seats SeatRules,
+	d queueDecision) (queueDecision, error) {
 
-	commit, found, err := landingAt(ctx, tx, b.RepoID, b.TargetRef, b.Position.Packed(), b.Ordinal)
+	landing, found, err := landingAt(ctx, tx, b.RepoID, b.TargetRef, b.Position.Packed(), b.Ordinal)
 	switch {
 	case err != nil:
 		return queueDecision{}, err
-	case !found || commit != b.OID:
+	case !found || landing.commit != b.OID:
 		return d.refuse(MergeRefusalNoLanding, fmt.Sprintf("%s holds no landing of %s at %s, place %d",
 			b.TargetRef, short(b.OID), b.Position, b.Ordinal))
 	}
@@ -450,6 +499,28 @@ func decideBroken(ctx context.Context, tx *sql.Tx, b Broken, repo pushRepo, d qu
 			}
 			return d.refuse(MergeRefusalNotRed, fmt.Sprintf("%s did not fail on %s (%s): a landing is broken by "+
 				"a check that failed on it", name, short(b.OID), state))
+		}
+	}
+	// WHOM IT CONCERNS: the authors of the change the landing merged, its
+	// enqueuer and the effective lead of the repository's owner — the home's
+	// own record, so nobody's actor; nobody for a landing no change made.
+	if landing.changeID != "" {
+		row, found, err := changeRowIn(ctx, tx, landing.changeID)
+		if err != nil {
+			return queueDecision{}, err
+		}
+		if found {
+			c := concerning{repoName: repo.name, change: row, authors: true, broken: true,
+				ownerLead: ownersLead(repo.grantRef(b.RepoID), seats.Roster)}
+			if landing.enqueuedBy != "" {
+				c.enqueuer = Reviewer{Handle: landing.enqueuedBy, Kind: PartyAgent}
+				if seat, ok := seats.Roster.Seat(landing.enqueuedBy); ok && seat.Human {
+					c.enqueuer.Kind = PartyPerson
+				}
+			}
+			if b.Routing, err = routingFor(ctx, tx, c); err != nil {
+				return queueDecision{}, err
+			}
 		}
 	}
 	d.payload = b
@@ -664,19 +735,28 @@ func landingTipAt(ctx context.Context, tx *sql.Tx, repoID, target string, positi
 	return commit, true, nil
 }
 
-// landingAt is the commit of target's landing at (position, ordinal), and false
-// where there is none.
-func landingAt(ctx context.Context, tx *sql.Tx, repoID, target string, position int64, ordinal int) (string,
+// landingRow is what a broken record reads of the landing it names: its
+// commit, the change it landed ("" for a push that landed none) and who
+// enqueued that change ("" for a change no queue landed).
+type landingRow struct {
+	commit, changeID, enqueuedBy string
+}
+
+// landingAt is target's landing at (position, ordinal), and false where there
+// is none.
+func landingAt(ctx context.Context, tx *sql.Tx, repoID, target string, position int64, ordinal int) (landingRow,
 	bool, error) {
 
-	var commit string
-	switch err := tx.QueryRowContext(ctx, landingSQL, repoID, target, position, ordinal).Scan(&commit); {
+	var l landingRow
+	switch err := tx.QueryRowContext(ctx, landingSQL, repoID, target, position, ordinal).Scan(&l.commit,
+		&l.changeID, &l.enqueuedBy); {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", false, nil
+		return landingRow{}, false, nil
 	case err != nil:
-		return "", false, fmt.Errorf("code: read %s's landing at %d, place %d: %w", target, position, ordinal, err)
+		return landingRow{}, false, fmt.Errorf("code: read %s's landing at %d, place %d: %w", target, position,
+			ordinal, err)
 	}
-	return commit, true, nil
+	return l, true, nil
 }
 
 // pushes is the push each of l's entries lands as, in order — its push id
@@ -926,7 +1006,7 @@ const (
 		WHERE repo_id = ? AND target_ref = ? AND train = ? AND position = ?`
 	landingTipSQL = `SELECT commit_oid FROM code_landings WHERE repo_id = ? AND target_ref = ? AND position = ?
 		ORDER BY ordinal DESC LIMIT 1`
-	landingSQL = `SELECT commit_oid FROM code_landings
+	landingSQL = `SELECT commit_oid, change_id, enqueued_by FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`
 	landingBrokenSQL = `SELECT broken FROM code_landings
 		WHERE repo_id = ? AND target_ref = ? AND position = ? AND ordinal = ?`

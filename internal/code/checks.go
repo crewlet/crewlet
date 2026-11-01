@@ -749,6 +749,27 @@ type CheckFinished struct {
 	// FinishedAt is the instant the attempt ended, by its runner's clock or
 	// its reporter's writer's.
 	FinishedAt time.Time `json:"finished_at"`
+	// Routing is whom the record concerns ([ChangeRouting]): the authors of
+	// the change whose head a failed head check measured, and its actor, the
+	// head's pusher — STAMPED BY THE CHECKS WRITER, nil for any other ending.
+	// Under the condition the checks subject states, it takes {Name:
+	// "CheckFinished.Routing", Since: 2, Op: "check_finished", Path:
+	// []string{"mutation", "routing"}} once a build without it has run.
+	Routing *ChangeRouting `json:"routing,omitempty"`
+}
+
+// failsItsHead reports an ending that leaves its check failing until somebody
+// acts: a measurement that failed, or an error the home queues no next attempt
+// for — one its infrastructure did not cause ([CheckReason.Requeued]), or the
+// attempt the home's own requeue stops at ([AutoRequeueAttempts]).
+func (f CheckFinished) failsItsHead() bool {
+	switch f.State {
+	case CheckStateFailed:
+		return true
+	case CheckStateErrored:
+		return !f.Reason.Requeued() || f.Attempt >= AutoRequeueAttempts
+	}
+	return false
 }
 
 // Validate refuses an ending no writer forms.
@@ -794,6 +815,8 @@ func (f CheckFinished) Validate() error {
 			"seat they hold")
 	case f.FinishedAt.IsZero():
 		return checkField("finished_at", "an ending names the instant it ended")
+	case f.Routing != nil:
+		return stampedRouting("finished", f.Routing)
 	}
 	if f.Reporter != nil {
 		if err := f.Reporter.Validate(); err != nil {

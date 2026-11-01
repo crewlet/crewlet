@@ -47,14 +47,29 @@ import (
 //     already, and the path owners a revision's facts ask.
 //   - changes_requested, review_submitted: the change's authors, by the
 //     review's verdict.
+//   - checks_failed: the authors and the record's actor — the pusher of the
+//     head the check measured — on the ending of a check of the change's
+//     head that failed, or errored past the home's own requeue: the one
+//     reason that is news to its actor too ([Reason.WakesActor]), since a
+//     pusher learns that their commit fails its checks only from this.
+//   - target_broken: the authors, the enqueuer and the effective lead of the
+//     repository's owner, on the broken record naming the landing that
+//     merged the change.
 //   - conflicted: the authors, on the mergeability that TURNED the change's
-//     merge into a conflict — not on every recheck that finds it still one.
+//     merge into a conflict — not on every recheck that finds it still one —
+//     and on a queue's ejection of it for a conflicting merge.
+//   - dequeued: the authors and the enqueuer, on a record that put the
+//     change's entry out of its target's queue — an ejection, or a dequeue
+//     somebody asked.
 //   - finding_replied: the raiser of the finding a comment replies to, and of
 //     every finding an answer answers.
-//   - ready_to_merge: the change's owner, on the mergeability whose stored
+//   - ready_to_merge: the change's authors who may merge it into its target
+//     ([PreconditionMergeAuthority] judged for each), else the effective
+//     lead of the repository's owner, on the mergeability whose stored
 //     answer goes from not ready to ready (below).
 //   - merged: the authors, on the push that set the target to the change's
-//     head and on its home's landing.
+//     head and on its home's landing, on the merge record that merged it and
+//     on the queue's landing of it — each but who merged it.
 //   - re_review: the reviewers whose standing verdict asks for changes on an
 //     earlier revision, on a revision's first facts.
 //   - thread: the participants of the thread a comment is said in.
@@ -85,10 +100,25 @@ import (
 //
 // Every record of this domain names the deciding NODE as its actor
 // ([ActorSystem]): the principal is in its payload. So the routing names who
-// acted ([ChangeRouting.Actor]) — the asker, the pusher of a push's entry,
-// nobody for the home's own records — and no code reason is news to whoever
-// made the change ([routing.Candidate.Hears] with no exception): a reviewer is
-// not told of their own review, a pusher of their own merge.
+// acted ([ChangeRouting.Actor]) — the asker, the pusher of a push's entry, the
+// enqueuer of an entry a queue landed, the pusher of the head a check
+// measured, nobody for the home's own records — and a code reason is news to
+// whoever made the change only where [Reason.WakesActor] says so: a reviewer
+// is not told of their own review, a pusher of their own merge, and a pusher
+// IS told that the head they pushed fails its checks.
+//
+// # Who hears what the gate does
+//
+// The gate's records — a merge, a dequeue, a queue's ejection and landing, a
+// broken landing and a head check's ending — carry a routing as every other
+// record about a change does, each stamped by the record's own writer through
+// [routingFor]: the committer for the repository's, the checks writer for an
+// ending. A record of several changes (an ejection, a landing) carries one a
+// change, KEPT WITHIN THE RECORD'S ROOM ([keptRoutings]) as a push's are: the
+// record must land, and a change past the room is told to nobody. A landing
+// no change made — a person's push onto a protected branch — concerns no
+// change's audience, and its broken record carries no routing: the
+// `code_target_broken` event on the activity feed is what reports it.
 //
 // # The record format
 //
@@ -115,7 +145,10 @@ const (
 	ReasonMention          Reason = "mention"
 	ReasonReviewRequested  Reason = "review_requested"
 	ReasonChangesRequested Reason = "changes_requested"
+	ReasonChecksFailed     Reason = "checks_failed"
+	ReasonTargetBroken     Reason = "target_broken"
 	ReasonConflicted       Reason = "conflicted"
+	ReasonDequeued         Reason = "dequeued"
 	ReasonFindingReplied   Reason = "finding_replied"
 	ReasonReadyToMerge     Reason = "ready_to_merge"
 	ReasonMerged           Reason = "merged"
@@ -126,7 +159,7 @@ const (
 	ReasonLeadFallback     Reason = "lead_fallback"
 )
 
-// Reasons is the twelve, IN PRECEDENCE ORDER: the first reason that names a
+// Reasons is the fifteen, IN PRECEDENCE ORDER: the first reason that names a
 // handle is the one that handle hears under, and [Concerns] OFFERS them in
 // exactly this order — the list is the offer order, so the precedence is
 // written once. WHAT THIS RECORD DID TO YOU OUTRANKS THE ROLE YOU HOLD: being
@@ -134,14 +167,22 @@ const (
 // you, then what you hold (a review you gave, a thread you are in, a change you
 // watch), and the lead's copy last.
 //
-// The gate (merge, checks, a queue) inserts its own where they belong — a
-// failed check after changes_requested, a removal from the queue after
-// conflicted, a target broken by a landing — and moves ready_to_merge to
-// whoever may merge; none is declared before a record produces it.
+// The gate's own sit among them by the same rule: a failed check of your head
+// right after a request for changes — both say your change must change — and a
+// target your landing broke right after it, before a conflict, since a broken
+// branch stops everybody merging into it; a removal from the queue after a
+// conflict, which says why the change left it.
+//
+// BASE FORMAT, AS A STATED CONDITION: a notice row's reason is read back by
+// [Reason.Valid], and checks_failed, target_broken and dequeued are values an
+// older reader of code_notifications does not know. None of the code domain is
+// on main, so no build that carries it has run without them; once one has,
+// each record that produces one takes its routing's versionedFields row
+// (this file's head), which keeps such a build from applying the record.
 func Reasons() []Reason {
-	return []Reason{ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonConflicted,
-		ReasonFindingReplied, ReasonReadyToMerge, ReasonMerged, ReasonReviewSubmitted, ReasonReReview,
-		ReasonThread, ReasonWatcher, ReasonLeadFallback}
+	return []Reason{ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed,
+		ReasonTargetBroken, ReasonConflicted, ReasonDequeued, ReasonFindingReplied, ReasonReadyToMerge,
+		ReasonMerged, ReasonReviewSubmitted, ReasonReReview, ReasonThread, ReasonWatcher, ReasonLeadFallback}
 }
 
 // Valid reports a reason this build knows.
@@ -149,18 +190,26 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 
 // Addressed reports whether a notice under r ASKS its recipient something — a
 // turn that must answer rather than absorb: being named, being asked to
-// review, a request for changes, a conflict, a reply to a finding raised, a
-// change ready to merge, and a request to look again. Everything after them
-// is news to absorb. For which reasons lead a PERSON's inbox, see
+// review, a request for changes, a failed check of your head, a target your
+// landing broke, a conflict, a removal from the queue, a reply to a finding
+// raised, a change ready to merge, and a request to look again. Everything
+// after them is news to absorb. For which reasons lead a PERSON's inbox, see
 // [DefaultPrimaryReasons].
 func (r Reason) Addressed() bool {
 	switch r {
-	case ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonConflicted, ReasonFindingReplied,
-		ReasonReadyToMerge, ReasonReReview:
+	case ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed, ReasonTargetBroken,
+		ReasonConflicted, ReasonDequeued, ReasonFindingReplied, ReasonReadyToMerge, ReasonReReview:
 		return true
 	}
 	return false
 }
+
+// WakesActor reports whether a notice under r reaches the record's own actor
+// too: only checks_failed. A pushed head that fails its checks is news to its
+// pusher above all — nothing else they did tells them — as a failed pipeline
+// is to whoever pushed on GitHub and GitLab (their prompts' WakesActor).
+// Every other reason is about something the actor did and knows.
+func (r Reason) WakesActor() bool { return r == ReasonChecksFailed }
 
 // DefaultPrimaryReasons is the code reasons that lead the inbox of a person who
 // has expressed no preference.
@@ -172,8 +221,9 @@ func (r Reason) Addressed() bool {
 // nobody reads. Deliberately NOT [Reason.Addressed]'s set — the two questions
 // differ, as the tracker's own two lists do.
 var DefaultPrimaryReasons = []Reason{
-	ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonConflicted, ReasonFindingReplied,
-	ReasonReadyToMerge, ReasonMerged, ReasonReviewSubmitted, ReasonReReview,
+	ReasonMention, ReasonReviewRequested, ReasonChangesRequested, ReasonChecksFailed, ReasonTargetBroken,
+	ReasonConflicted, ReasonDequeued, ReasonFindingReplied, ReasonReadyToMerge, ReasonMerged,
+	ReasonReviewSubmitted, ReasonReReview,
 }
 
 // ChangeRouting is whom one record about a change concerns, as the writer's
@@ -215,14 +265,30 @@ type ChangeRouting struct {
 	// were requested or that it was reviewed.
 	Verdict Verdict `json:"verdict,omitempty"`
 	// Conflicted is a mergeability that turned the change's merge into a
-	// conflict; Merged a record that merged the change.
+	// conflict, or a queue's ejection of it for one; Merged a record that
+	// merged the change.
 	Conflicted bool `json:"conflicted,omitempty"`
 	Merged     bool `json:"merged,omitempty"`
+	// ChecksFailed is a check of the change's head that failed, or errored
+	// past the home's own requeue: its authors and its actor hear.
+	ChecksFailed bool `json:"checks_failed,omitempty"`
+	// Broken is a broken record naming the landing that merged the change:
+	// its authors, Enqueuer and Lead hear. Dequeued is a record that put the
+	// change's entry out of its queue: its authors and Enqueuer hear.
+	Broken   bool `json:"broken,omitempty"`
+	Dequeued bool `json:"dequeued,omitempty"`
+	// Enqueuer is who put the change in its target's queue, on the records
+	// about its entry; "" for none.
+	Enqueuer string `json:"enqueuer,omitempty"`
+	// Lead is the effective lead of the repository's owner, on a broken
+	// record; "" for none.
+	Lead string `json:"lead,omitempty"`
 	// Raisers is the raisers of the findings a write replies to or answers,
 	// at most [MaxRoutedParticipants].
 	Raisers []string `json:"raisers,omitempty"`
 	// ReadyFor is who a change that became ready to merge is announced to:
-	// its owner.
+	// its authors who may merge it into its target, else the effective lead
+	// of the repository's owner.
 	ReadyFor []string `json:"ready_for,omitempty"`
 	// ReReview is the reviewers a revision's first facts ask to look again,
 	// at most [MaxReReviewers].
@@ -255,9 +321,21 @@ func (r *ChangeRouting) heard(reason Reason) []string {
 		if r.Verdict == VerdictRequestChanges {
 			return r.Authors
 		}
+	case ReasonChecksFailed:
+		if r.ChecksFailed {
+			return withOnce(r.Authors, r.Actor)
+		}
+	case ReasonTargetBroken:
+		if r.Broken {
+			return withOnce(r.Authors, r.Enqueuer, r.Lead)
+		}
 	case ReasonConflicted:
 		if r.Conflicted {
 			return r.Authors
+		}
+	case ReasonDequeued:
+		if r.Dequeued {
+			return withOnce(r.Authors, r.Enqueuer)
 		}
 	case ReasonFindingReplied:
 		return r.Raisers
@@ -284,6 +362,21 @@ func (r *ChangeRouting) heard(reason Reason) []string {
 	}
 	return nil
 }
+
+// withOnce is list with each of more after it that it does not hold yet, and
+// no "".
+func withOnce(list []string, more ...string) []string {
+	out := slices.Clip(list)
+	for _, h := range more {
+		if h != "" && !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// reviewer is p as the parties a routing names.
+func (p Party) reviewer() Reviewer { return Reviewer{Handle: p.Handle, Kind: p.Kind} }
 
 // Person reports whether handle is a person's, as r names it.
 func (r *ChangeRouting) Person(handle string) bool {
@@ -341,9 +434,9 @@ func Concerns(routings []*ChangeRouting) []Concern {
 	return out
 }
 
-// Hears reports whether c is told: everybody but who made the change, since no
-// code reason is news to its own actor.
-func (c Concern) Hears() bool { return c.Candidate.Hears(c.Change.Actor, nil) }
+// Hears reports whether c is told: everybody but who made the change, except
+// under the one reason that is news to its own actor ([Reason.WakesActor]).
+func (c Concern) Hears() bool { return c.Candidate.Hears(c.Change.Actor, Reason.WakesActor) }
 
 // heardCount is how many handles routings tell — the notice rows their
 // record's apply may write ([Applier.writeNotices]), which every decide
@@ -404,11 +497,33 @@ func RoutingsOf(payload any) []*ChangeRouting {
 		r = p.Routing
 	case Mergeability:
 		r = p.Routing
+	case Merge:
+		r = p.Routing
+	case Dequeue:
+		r = p.Routing
+	case Broken:
+		r = p.Routing
+	case CheckFinished:
+		r = p.Routing
+	case Eject:
+		return pointersTo(p.Routing)
+	case Land:
+		return pointersTo(p.Routing)
 	}
 	if r == nil {
 		return nil
 	}
 	return []*ChangeRouting{r}
+}
+
+// pointersTo is routings as the pointers [Concerns] reads, each into the
+// record's own list.
+func pointersTo(routings []ChangeRouting) []*ChangeRouting {
+	var out []*ChangeRouting
+	for i := range routings {
+		out = append(out, &routings[i])
+	}
+	return out
 }
 
 // pushRoutings is the routings a push record carries, one for each change its
@@ -426,6 +541,41 @@ func pushRoutings(b PushBatch) []*ChangeRouting {
 		}
 	}
 	return out
+}
+
+// routingNoticeRows is the most notice rows ONE routing of the gate's records
+// makes its apply write, which each such record's rows are charged with: the
+// change's authors ([MaxRoutedParticipants]) and the two the gate names beside
+// them — an enqueuer and a lead, or an actor.
+const routingNoticeRows = MaxRoutedParticipants + 2
+
+// routingRoomBeside is the bytes a record whose payload is payload leaves its
+// routings: what [MaxRecordBytes] leaves past the record's own overhead and the
+// payload as it stands.
+func routingRoomBeside(payload any) (int, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return 0, fmt.Errorf("code: measure a record's payload: %w", err)
+	}
+	return MaxRecordBytes - recordOverheadBytes - len(encoded), nil
+}
+
+// keptRoutings is routings, in their order, as many as fit within room bytes
+// of their record and rows notice rows — this file's head: a record of
+// several changes lands whatever it would tell, and a change past the room is
+// told to nobody, as a push's leading entry keeps what fits ([routingRoom]).
+func keptRoutings(routings []ChangeRouting, room, rows int) ([]ChangeRouting, error) {
+	for len(routings) > 0 {
+		size, err := routingBytes(routings)
+		if err != nil {
+			return nil, err
+		}
+		if size <= room && noticeRows(routings) <= rows {
+			return routings, nil
+		}
+		routings = routings[:len(routings)-1]
+	}
+	return nil, nil
 }
 
 // withRouting is payload with r stamped on it — every payload of a change's
@@ -474,6 +624,18 @@ func withRouting(payload any, r *ChangeRouting) any {
 	case Mergeability:
 		p.Routing = r
 		return p
+	case Merge:
+		p.Routing = r
+		return p
+	case Dequeue:
+		p.Routing = r
+		return p
+	case Broken:
+		p.Routing = r
+		return p
+	case CheckFinished:
+		p.Routing = r
+		return p
 	}
 	panic(fmt.Sprintf("code: a %T carries no routing — every record about a change does (RoutingsOf)", payload))
 }
@@ -505,9 +667,14 @@ type concerning struct {
 	// for none.
 	requested, pathOwners, reReview, raisers, readyFor []Reviewer
 	lead                                               Reviewer
-	// verdict is a review's; conflicted and merged the op's facts.
-	verdict            Verdict
-	conflicted, merged bool
+	// verdict is a review's; conflicted, merged, checksFailed, broken and
+	// dequeued the op's facts.
+	verdict                                            Verdict
+	conflicted, merged, checksFailed, broken, dequeued bool
+	// enqueuer is who put the change in its queue, and ownerLead the
+	// effective lead of the repository's owner, each a zero Reviewer for
+	// none.
+	enqueuer, ownerLead Reviewer
 	// authors reads the change's authors, beside addedAuthors — the authors
 	// a push record's earlier entries added, which no row holds yet; watchers
 	// its participants; thread the participants of that thread, "" for none.
@@ -528,7 +695,8 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 	row := c.change
 	r := &ChangeRouting{ChangeID: row.id, ChangeRef: ChangeRef(c.repoName, row.number), RepoName: c.repoName,
 		Title: row.title, Actor: c.actor, Owner: row.owner, OwnerKind: row.ownerKind, Verdict: c.verdict,
-		Conflicted: c.conflicted, Merged: c.merged}
+		Conflicted: c.conflicted, Merged: c.merged, ChecksFailed: c.checksFailed, Broken: c.broken,
+		Dequeued: c.dequeued}
 	if row.work != (types.WorkItem{}) {
 		work := row.work
 		r.WorkItem = &work
@@ -580,6 +748,12 @@ func routingFor(ctx context.Context, tx *sql.Tx, c concerning) (*ChangeRouting, 
 	r.Raisers, r.ReadyFor = parties(c.raisers), parties(c.readyFor)
 	if c.lead.Handle != "" {
 		r.LeadFallback = note(c.lead.Handle, c.lead.Kind)
+	}
+	if c.enqueuer.Handle != "" {
+		r.Enqueuer = note(c.enqueuer.Handle, c.enqueuer.Kind)
+	}
+	if c.ownerLead.Handle != "" {
+		r.Lead = note(c.ownerLead.Handle, c.ownerLead.Kind)
 	}
 	if c.authors {
 		authors, err := partiesOf(ctx, tx, routingAuthorsSQL, row.id)
@@ -727,6 +901,9 @@ const (
 		ORDER BY author LIMIT ?`
 	routingWatchersSQL = `SELECT handle, kind FROM code_participants WHERE change_id = ?
 		ORDER BY handle LIMIT ?`
+	// headPusherSQL is who pushed a change's revision — the actor of a failed
+	// check of its head — one seek of the revisions' key.
+	headPusherSQL         = `SELECT pusher, pusher_kind FROM code_revisions WHERE change_id = ? AND n = ?`
 	threadParticipantsSQL = `SELECT author, author_kind FROM code_comments INDEXED BY code_comments_thread_idx
 		WHERE change_id = ? AND thread_id = ? ORDER BY position DESC LIMIT ?`
 )

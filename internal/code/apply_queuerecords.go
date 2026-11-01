@@ -367,11 +367,11 @@ func (a *Applier) applyGreen(ctx context.Context, tx *sql.Tx, at applyContext, g
 // applyBroken marks the landing the record names broken. Its target's green
 // row stays where it is: it only ever advances on green.
 func (a *Applier) applyBroken(ctx context.Context, tx *sql.Tx, at applyContext, b Broken) (int, error) {
-	commit, found, err := landingAt(ctx, tx, b.RepoID, b.TargetRef, b.Position.Packed(), b.Ordinal)
+	landing, found, err := landingAt(ctx, tx, b.RepoID, b.TargetRef, b.Position.Packed(), b.Ordinal)
 	if err != nil {
 		return 0, err
 	}
-	if !found || commit != b.OID {
+	if !found || landing.commit != b.OID {
 		return queueNotApplied(ctx, at, b.RepoID, "", b.TargetRef+" holds no landing of "+short(b.OID)+" at "+
 			b.Position.String())
 	}

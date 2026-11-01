@@ -1088,6 +1088,35 @@ func (g gateJudge) mergeAuthority() Precondition {
 	return p
 }
 
+// mergingAuthors is the authors of f's change who may merge it into its target
+// under gate r — [PreconditionMergeAuthority] judged for each as the merger,
+// in the order f reads them: whom a change that became ready is announced to
+// (concerns.go). A person always may; a seat as its grant and the gate's
+// merge_by say.
+func mergingAuthors(f GateFacts, r GateRules) []Reviewer {
+	g := gateJudge{readinessJudge: newReadinessJudge(f.Rows, f.Roster), f: f, rules: r}
+	var out []Reviewer
+	for _, a := range f.Rows.Authors {
+		g.f.Merger = a.principal()
+		if g.f.Merger != (Principal{}) && g.mergeAuthority().State == PreconditionMet {
+			out = append(out, a.reviewer())
+		}
+	}
+	return out
+}
+
+// principal is p as the principal its rows name: a seat by its handle, a
+// person by the human seat they hold — the zero Principal for neither.
+func (p Party) principal() Principal {
+	switch p.Kind {
+	case PartyAgent:
+		return Principal{Kind: PrincipalAgent, Seat: p.Handle}
+	case PartyPerson:
+		return Principal{Kind: PrincipalOperator, Seat: p.Handle}
+	}
+	return Principal{}
+}
+
 // seatParties is seats as the parties a readiness names.
 func seatParties(seats []string) []Party {
 	var out []Party

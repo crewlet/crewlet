@@ -235,8 +235,9 @@ func TestAReplayOfPreChangeRecordsWakesNobody(t *testing.T) {
 
 // THE PROMPT IS THE CHANGE'S: a code wake keys its conversation on the
 // change's id, never its name, which a repository's rename moves; it is
-// always a pointer at the change; and it asks for an answer exactly under the
-// reasons that ask something.
+// always a pointer at the change; it asks for an answer exactly under the
+// reasons that ask something; and it wakes the record's actor only for a
+// check's ending (Reason.WakesActor).
 func TestACodeWakeIsAboutItsChange(t *testing.T) {
 	t.Parallel()
 	p := code.Prompt{}
@@ -266,8 +267,14 @@ func TestACodeWakeIsAboutItsChange(t *testing.T) {
 			!strings.Contains(text, "`code_get_change`") {
 			t.Errorf("a wake under %s does not send its seat to the change:\n%s", r, text)
 		}
-		if p.WakesActor(string(r)) {
-			t.Errorf("%s wakes whoever made the change", r)
+	}
+	// ONLY A CHECK'S ENDING WAKES ITS ACTOR: the one code record whose reason
+	// — a failed check of a change's head — is news to who made it.
+	for _, op := range []code.OpKind{code.OpCheckFinished, code.OpMerge, code.OpLand, code.OpEject, code.OpBroken,
+		code.OpDequeue, code.OpPush, code.OpReview, code.OpMergeability} {
+		if p.WakesActor(string(op)) != (op == code.OpCheckFinished) {
+			t.Errorf("a wake of a %s record wakes its actor = %v, want only a check's ending to", op,
+				p.WakesActor(string(op)))
 		}
 	}
 }

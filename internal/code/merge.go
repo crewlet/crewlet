@@ -127,6 +127,12 @@ type Merge struct {
 	// are.
 	Node       string    `json:"node"`
 	ReceivedAt time.Time `json:"received_at"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// COMMITTER: the change's authors, told it merged — all but who merged
+	// it. Under the condition concerns.go states, it takes {Name:
+	// "Merge.Routing", Since: 2, Op: "merge", Path: []string{"mutation",
+	// "routing"}} once a build without it has run.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 	// Principal is who merged it — the proposal's asker, STAMPED by the
 	// committer: the merger its gate judged, and whom its push row and the
 	// change's row name.
@@ -250,17 +256,21 @@ func (p MergeProposal) measure() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: merge: encode it: %w", ErrInvalidProposal, err)
 	}
-	if len(encoded) > EntryRoom {
-		return 0, fmt.Errorf("%w: merge: %d bytes, past the %d one proposal may take of its record",
-			ErrInvalidProposal, len(encoded), EntryRoom)
+	// AND THE ROOM ITS ROUTING KEEPS, which its committer stamps.
+	if bytes := len(encoded) + MaxRoutingBytes; bytes > EntryRoom {
+		return 0, fmt.Errorf("%w: merge: %d bytes with the routing it carries, past the %d one proposal may "+
+			"take of its record", ErrInvalidProposal, bytes, EntryRoom)
 	}
-	return len(encoded), nil
+	return len(encoded) + MaxRoutingBytes, nil
 }
 
 // validFields is every rule of [MergeProposal.Validate] but the record's bytes.
 func (p MergeProposal) validFields() error {
 	if err := statelog.CheckCallerOpID(p.OpID); err != nil {
 		return badField("op_id", "%v", err)
+	}
+	if err := stampedRouting("merge", p.Merge.Routing); err != nil {
+		return err
 	}
 	switch why := p.Asker.invalid(); {
 	case why != "":
@@ -379,7 +389,7 @@ func (p MergeProposal) JudgesChart() bool { return true }
 // mergeDecidedRows is the most rows a merge's OWN writes make its apply touch,
 // beside the push it lands ([Applier.applyMerge]): the change's row, its live
 // queue entry, the target's landing row and its green row.
-const mergeDecidedRows = 4
+const mergeDecidedRows = 4 + routingNoticeRows
 
 // mergeRecordRows is the most rows one merge record makes its apply write
 // before its horizons: its own ([mergeDecidedRows]); its push's row, its two
@@ -607,6 +617,17 @@ func decideMerge(ctx context.Context, tx *sql.Tx, p MergeProposal, seats SeatRul
 	}
 	payload.Protected = gate.Protected()
 	payload.Green = gate.Protected() && len(gate.Checks) == 0
+	// WHOM IT CONCERNS: the change's authors, told it merged — all but who
+	// merged it, its record's actor.
+	row, _, err := changeRowIn(ctx, tx, m.ChangeID)
+	if err != nil {
+		return mergeDecision{}, err
+	}
+	merger, mergerKind := p.Asker.party()
+	if payload.Routing, err = routingFor(ctx, tx, concerning{repoName: repo.name, change: row, actor: merger,
+		actorKind: mergerKind, authors: true, merged: true}); err != nil {
+		return mergeDecision{}, err
+	}
 	d.payload = &payload
 	return d, nil
 }

@@ -540,13 +540,21 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 	// WHOM THE RECORD CONCERNS, by what it turns on the row it replaces: a
 	// merge that becomes a conflict tells the authors, once — not every
 	// recheck that finds it one still — and a stored answer that goes from
-	// not ready to ready tells the owner. THIS RECORD AND NO OTHER announces
-	// the change ready (concerns.go's head): it is the one whose decide holds
-	// the stored answer it replaces.
+	// not ready to ready tells whoever can act on it: the change's authors
+	// who may merge it into its target, else the lead of the repository's
+	// owner, who may merge or say who should. THIS RECORD AND NO OTHER
+	// announces the change ready (concerns.go's head): it is the one whose
+	// decide holds the stored answer it replaces — a check that passed
+	// reaches it through the home's readiness refresh, never on its own.
 	d.concern = concerning{conflicted: m.State == MergeConflict && !(held && prior.state == MergeConflict)}
 	d.concern.authors = d.concern.conflicted
 	if m.Ready && !(held && prior.ready) {
-		d.concern.readyFor = []Reviewer{{Handle: row.owner, Kind: row.ownerKind}}
+		d.concern.readyFor = mergingAuthors(f, gate)
+		if len(d.concern.readyFor) == 0 {
+			if lead := ownersLead(f.Rows.Repo, roster); lead.Handle != "" {
+				d.concern.readyFor = []Reviewer{lead}
+			}
+		}
 	}
 	d.payload = m
 	// THE MERGEABILITY'S ROW, and the conversation's own.

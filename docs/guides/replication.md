@@ -966,18 +966,18 @@ what a company whose seats work through changes writes to it**. At the
 reference company — 3 000 pushes a day, every one a seat's, priced as its
 coding box's, 1 604 bytes alone in its record, and 300
 [changes](../concepts/code-host.md#changes) a day, ten pushes each — the code
-log takes 24.6–87.2 MB a day against the 12.1 MB its tracker writes and its
+log takes 24.7–87.3 MB a day against the 12.1 MB its tracker writes and its
 seats' reads take: about twice to about seven times what its tracker
 writes and its seats' reads take a day. Its pushes are 4.8 MB of that, the
 records that [compact](../concepts/code-host.md#compaction) their packs, publish
 their layers and sweep what each compaction retired 0.6–4.0 MB, its git
-clients' barriers 2.4–5.0 MB, and its changes' records 16.7–73.4 MB: each
+clients' barriers 2.4–5.0 MB, and its changes' records 16.8–73.5 MB: each
 change's open, its ask of a reviewer, a review asking for changes with two
 findings and the answer to them, two comments and a thread resolved, an
 approving review and its merge, and every revision's facts and mergeability
 its home records, at their measured sizes (an open 3 430 bytes, a review
 asking for changes with two findings 5 030, an approving review 2 340, a
-comment 2 280, a merge 1 640, a revision's facts 1 640, its mergeability
+comment 2 280, a merge 1 990, a revision's facts 1 640, its mergeability
 1 340) — the most adding a queue entry a change, a recheck of every change at
 each of its home's ten-minute passes over a working day while its target
 moves, three checks of every revision, each queued, claimed, its box named and
@@ -999,7 +999,7 @@ once the streams exist.
 log takes a day**, the same two `bytes_per_day` side by side, so a code log
 at half the mutation log's ceiling fills no sooner while a trim is blocked.
 That is only ever a company whose seats open no changes: at the reference
-company the changes' records alone, 16.7 MB a day at their least, are more
+company the changes' records alone, 16.8 MB a day at their least, are more
 than the mutation log's whole day.
 
 **The half is of the ceiling the mutation log is created with, never of what

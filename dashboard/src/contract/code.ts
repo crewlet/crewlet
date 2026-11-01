@@ -185,10 +185,25 @@ export const CODE_PHRASES: Readonly<Record<string, { short: string; about: strin
       about: "an author, changes asked",
       why: "a reviewer asked for changes to a change you wrote",
     },
+    checks_failed: {
+      short: "a check of yours failed",
+      about: "an author, a check failed",
+      why: "a check of the head of a change you wrote failed",
+    },
+    target_broken: {
+      short: "it broke its target",
+      about: "told its landing broke the target",
+      why: "a required check fails on the landing of a change you wrote, queued or own the repository of",
+    },
     conflicted: {
       short: "yours conflicts",
       about: "an author, it conflicts",
       why: "a change you wrote no longer merges cleanly into its target",
+    },
+    dequeued: {
+      short: "it left the queue",
+      about: "told it left the queue",
+      why: "a change you wrote or queued left its target's merge queue without landing",
     },
     finding_replied: {
       short: "your finding was answered",
@@ -196,9 +211,9 @@ export const CODE_PHRASES: Readonly<Record<string, { short: string; about: strin
       why: "somebody answered a finding you raised",
     },
     ready_to_merge: {
-      short: "yours is ready",
+      short: "it is ready",
       about: "told it is ready",
-      why: "every precondition of a change you own is met",
+      why: "every precondition of a change you may merge, or whose repository you lead, is met",
     },
     merged: {
       short: "yours merged",

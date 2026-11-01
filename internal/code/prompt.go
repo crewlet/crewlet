@@ -35,9 +35,9 @@ func (Prompt) SubjectIsLabel(notify.Inbound) bool { return false }
 
 // Addressed implements [notify.Prompt]: the reasons that ask something of
 // whoever hears them ([Reason.Addressed]) — a mention, an ask to review or to
-// look again, a request for changes, a conflict, a reply to a finding, a
-// change ready to merge. Everything else is news a seat may absorb in
-// silence.
+// look again, a request for changes, a failed check, a broken target, a
+// conflict, a removal from the queue, a reply to a finding, a change ready to
+// merge. Everything else is news a seat may absorb in silence.
 func (Prompt) Addressed(n notify.Inbound) bool { return Reason(n.Metadata[MetaVia]).Addressed() }
 
 // PartitionKey implements [notify.Prompt]: the change, by its id.
@@ -73,10 +73,12 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 		Key: metadata[MetaWorkKey], Project: metadata[MetaWorkProject]}, true
 }
 
-// WakesActor implements [notify.Prompt]: never. No code reason is news to
+// WakesActor implements [notify.Prompt]: only a check's ending, whose one
+// reason is a failed check of a change's head — news to the head's pusher,
+// its actor, above all ([Reason.WakesActor]). No other code record is news to
 // whoever made the change — a reviewer knows their review, a pusher their
 // merge — which the routing already holds to ([Concern.Hears]).
-func (Prompt) WakesActor(string) bool { return false }
+func (Prompt) WakesActor(eventType string) bool { return eventType == string(OpCheckFinished) }
 
 // DigestBody implements [notify.Prompt]: what somebody SAID keeps its text —
 // a comment, a review's summary, an ask's note, a description, a close's
@@ -123,8 +125,14 @@ func wakeOpener(reason Reason, meta map[string]string) string {
 		return "You were asked to review change " + ref + "."
 	case ReasonChangesRequested:
 		return "A reviewer asked for changes on your change " + ref + "."
+	case ReasonChecksFailed:
+		return "A check of your change " + ref + "'s head failed."
+	case ReasonTargetBroken:
+		return "Change " + ref + " broke the branch it landed on: a check its target requires fails on it."
 	case ReasonConflicted:
 		return "Your change " + ref + " no longer merges cleanly into its target."
+	case ReasonDequeued:
+		return "Change " + ref + " left its target's merge queue without landing."
 	case ReasonFindingReplied:
 		return "Somebody answered a finding you raised on change " + ref + "."
 	case ReasonReadyToMerge:
@@ -162,6 +170,20 @@ func wakeHandling(reason Reason) string {
 		return "Fix it on the change's source branch, which makes its next revision, then answer each " +
 			"finding with `code_resolve_finding` and say what you did with `code_comment_on_change`. " +
 			"Disagree in a comment rather than by pushing past it."
+	case ReasonChecksFailed:
+		return "Read what failed with `code_get_check_failures`, then fix it on the change's source branch, " +
+			"which makes its next revision and runs its checks again. A check its infrastructure ended " +
+			"(errored) runs again with `code_rerun_checks`; one the code failed runs again only once the " +
+			"code changes."
+	case ReasonTargetBroken:
+		return "Get the branch green again, whichever way is faster: read what failed with " +
+			"`code_get_check_failures`, then revert the landing — branch from the target with " +
+			"`code_create_branch`, revert the landing's commit there with `code_revert`, and open a change of " +
+			"it with `code_open_change` — or open a change that fixes it forward. Say which on the change " +
+			"with `code_comment_on_change`, so the others it woke do not do it twice."
+	case ReasonDequeued:
+		return "Read why with `code_get_change`: its `merge_readiness` names what no longer holds. Fix that " +
+			"on the change, and say on it with `code_comment_on_change` when it is ready to queue again."
 	case ReasonMention, ReasonThread, ReasonFindingReplied:
 		return "Answer on the change with `code_comment_on_change`, in the thread you are answering, " +
 			"so the answer sits beside the question."

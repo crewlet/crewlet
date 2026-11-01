@@ -127,7 +127,7 @@ const (
 	codeAnswerBytes          = 1_290
 	codeCommentBytes         = 2_280
 	codeThreadResolveBytes   = 1_160
-	codeMergeBytes           = 1_640
+	codeMergeBytes           = 1_990
 	codeEnqueueBytes         = 980
 	codeCheckQueuedBytes     = 970
 	codeCheckDispatchedBytes = 970
@@ -136,7 +136,7 @@ const (
 	codeCheckFinishedBytes   = 840
 	codeTipCheckQueuedBytes  = 960
 	codeGreenBytes           = 800
-	codeBrokenBytes          = 830
+	codeBrokenBytes          = 1_060
 	codePublicationTailBytes = 3_830
 	codePublicationOneBytes  = 1_110
 )
@@ -348,7 +348,7 @@ var codeLogNegligible = map[code.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 11 % of the day's least of 24.6 MB — a company whose seats work so reads it in " +
+		"MB a day, 11 % of the day's least of 24.7 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"code.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -602,6 +602,14 @@ var routingReasons = map[string]string{
 	"watchers":      "the change's watchers, and the reference change has none",
 	"lead_fallback": "the lead an unreviewed change falls back to, and the reference change asks its reviewer",
 	"persons":       "which handles reached are persons, and the reference company's changes are its seats'",
+	"checks_failed": "who hears that a check of a change's head failed, routed on the failing ending's record, " +
+		"and the reference checks pass",
+	"broken": "who hears that a change's landing broke its target, routed on a red tip's broken record " +
+		"(codeLogNegligible)",
+	"dequeued": "who hears that a change left its target's queue, routed on a dequeue's or an ejection's " +
+		"record, and the reference change lands",
+	"enqueuer": "who queued the change, which only the queue's records about its entry route",
+	"lead":     "the effective lead of the repository's owner, which only a broken record routes",
 }
 
 // routingAbsent is every key of a change's routing under prefix that a term's
@@ -866,9 +874,13 @@ var codeLogFields = map[code.OpKind]struct {
 			"commit_oid", "pack.pack_id", "pack.object", "pack.hash", "pack.size", "pack.index_bytes",
 			"pack.reverse_bytes", "pack.git_checksum", "pack.objects", "delete_source", "source_ref", "node",
 			"received_at", "principal.kind", "principal.seat", "principal.run.turn_id",
-			"principal.run.work_backend", "principal.run.work_key", "principal.run.model", "protected", "green"},
+			"principal.run.work_backend", "principal.run.work_key", "principal.run.model", "protected", "green",
+			"routing.change_id", "routing.change_ref", "routing.repo_name", "routing.title", "routing.actor",
+			"routing.owner", "routing.owner_kind", "routing.work_item", "routing.authors", "routing.merged"},
 		absent: absent(principalAbsent("principal", "kind", "seat", "run.turn_id", "run.work_backend",
 			"run.work_key", "run.model"),
+			routingAbsent("routing", "change_id", "change_ref", "repo_name", "title", "actor", "owner",
+				"owner_kind", "work_item", "authors", "merged"),
 			map[string]string{"override": "an administrator's override of the gate, and the reference " +
 				"merge meets its gate"}),
 	},
@@ -933,6 +945,9 @@ var codeLogFields = map[code.OpKind]struct {
 				"failures_omitted": "likewise",
 				"log":              "the object a runner stored a check's whole log in, where it stored one: a key and a hash",
 				"url":              "a link to a check's run outside the engine, where its reporter gave one",
+				"routing": "whom an ending that fails a change's head concerns (code.CheckFinished.Routing): " +
+					"the change's routing, its authors and the head's pusher — some hundreds of bytes, as " +
+					"a merge's routing is — and the reference checks pass, which concern nobody",
 			}),
 	},
 }

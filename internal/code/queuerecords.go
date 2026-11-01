@@ -240,6 +240,14 @@ type TrainCandidate struct {
 type Eject struct {
 	RepoID  string     `json:"repo_id"`
 	Entries []Ejection `json:"entries"`
+	// Routing is whom the record concerns, a routing an entry's change in
+	// the entries' order — its authors told it left the queue, or that its
+	// merge conflicted, and its enqueuer — STAMPED BY THE COMMITTER and
+	// kept within the record's room ([keptRoutings]). Under the condition
+	// this file's head states, it takes {Name: "Eject.Routing", Since: 2,
+	// Op: "eject", Path: []string{"mutation", "routing"}} once a build
+	// without it has run.
+	Routing []ChangeRouting `json:"routing,omitempty"`
 }
 
 // Ejection is one entry an eject puts out: why ([EjectReasons]), and what of
@@ -289,6 +297,13 @@ type Land struct {
 	// check having passed on its tip, lands green and moves the target's
 	// green row; a post_land one lands ahead of its checks.
 	Green bool `json:"green,omitempty"`
+	// Routing is whom the record concerns, a routing an entry's change in
+	// the entries' order — its authors told it merged, its enqueuer, who
+	// merged it, not — STAMPED BY THE DECIDE and kept within the record's
+	// room ([keptRoutings]). Under the condition this file's head states, it
+	// takes {Name: "Land.Routing", Since: 2, Op: "land", Path:
+	// []string{"mutation", "routing"}} once a build without it has run.
+	Routing []ChangeRouting `json:"routing,omitempty"`
 }
 
 // LandEntry is one entry a landing lands: the entry, its change, and the
@@ -337,6 +352,13 @@ type Broken struct {
 	OID      string            `json:"oid"`
 	// Checks are the required checks that failed on OID.
 	Checks []string `json:"checks"`
+	// Routing is whom the record concerns ([ChangeRouting]) — the authors
+	// of the change the landing merged, its enqueuer and the effective lead
+	// of the repository's owner — STAMPED BY THE COMMITTER; nil for a
+	// landing no change made. Under the condition this file's head states,
+	// it takes {Name: "Broken.Routing", Since: 2, Op: "broken", Path:
+	// []string{"mutation", "routing"}} once a build without it has run.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // QueueSweep removes repository RepoID's ended queue entries and its landings
@@ -426,6 +448,9 @@ func (e Eject) validate() error {
 	if err := validRepoID("eject.repo_id", e.RepoID); err != nil {
 		return err
 	}
+	if len(e.Routing) > 0 {
+		return stampedRouting("eject", &e.Routing[0])
+	}
 	switch n := len(e.Entries); {
 	case n == 0:
 		return badField("eject.entries", "an eject puts at least one entry out")
@@ -486,6 +511,9 @@ func (e Eject) validate() error {
 func (l Land) validate(opID string) error {
 	if err := validRepoID("land.repo_id", l.RepoID); err != nil {
 		return err
+	}
+	if len(l.Routing) > 0 {
+		return stampedRouting("land", &l.Routing[0])
 	}
 	if want := QueueLandID(opID); l.LandID != want {
 		return badField("land.land_id", "%q, and the landing a land under %s is is %s", l.LandID, opID, want)
@@ -583,6 +611,9 @@ func (g Green) validate() error {
 // requires, a name that is no check's.
 func (b Broken) validate() error {
 	if err := validRepoID("broken.repo_id", b.RepoID); err != nil {
+		return err
+	}
+	if err := stampedRouting("broken", b.Routing); err != nil {
 		return err
 	}
 	if why := branchProblem(b.TargetRef); why != "" {

@@ -134,11 +134,15 @@ func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (change
 }
 
 // wakesAnybody reports a kind whose records can carry a routing: a
-// repository's (its changes' lifecycle, and the pushes that merge or open
-// one) and a change's (its conversation and its home's facts). Every other
-// kind is named by its absence, because a new kind routes nobody until its
-// records carry a routing and this list names it.
-func wakesAnybody(kind ObjectKind) bool { return kind == KindRepo || kind == KindChange }
+// repository's (its changes' lifecycle, the pushes that merge or open one, and
+// its queues' merges, ejections, landings and broken landings), a change's
+// (its conversation and its home's facts) and a repository's checks (a failed
+// check of a change's head). Every other kind is named by its absence,
+// because a new kind routes nobody until its records carry a routing and this
+// list names it.
+func wakesAnybody(kind ObjectKind) bool {
+	return kind == KindRepo || kind == KindChange || kind == KindChecks
+}
 
 // wakesASeat reports whether concerns tell a seat anything: some handle
 // hears ([Concern.Hears]) that is not a person's.

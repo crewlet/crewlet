@@ -5757,8 +5757,10 @@ Every record about a change carries **whom it concerns**: who made it, and the
 people and seats each reason it routes under reaches, as the deciding node's
 rows and chart held them when it decided the record. The node that decides
 the record stamps it — the repository's committer for an open, an edit, a
-close, a landing and a push; the change's writer for the conversation and
-the home's facts and merges — through one function, so every writer answers
+close, a landing, a push and the merge gate's records (a merge, a dequeue, a
+queue's ejection and landing, a broken landing); the change's writer for the
+conversation and the home's facts and merges; the repository's checks writer
+for a check's ending — through one function, so every writer answers
 the question alike, and whatever tells somebody about the record afterwards
 reads that snapshot and nothing else. The rows move on — a reviewer is
 withdrawn, an author pushes, a thread grows — and an audience derived from
@@ -5770,10 +5772,13 @@ record.
 | `mention` | Every handle the text names that the chart holds — at most 32 a write | An open, an edit, a review, a comment; a push's options |
 | `review_requested` | A reviewer asked who was not asked already; a path owner a revision's facts ask | An ask for review; a revision's facts |
 | `changes_requested` | The change's authors | A review asking for changes |
-| `conflicted` | The change's authors | The merge that **turns** into a conflict — not every recheck that finds it one still |
+| `checks_failed` | The change's authors, and whoever pushed the head the check measured | The ending of a check of the change's current head that failed, or that errored past the home's own requeue (its third attempt, or an error its infrastructure did not cause) |
+| `target_broken` | The change's authors, whoever put it in its target's queue, and the effective lead of the repository's owner | The broken record that names the landing that merged the change — a check the target requires fails on the landed tip |
+| `conflicted` | The change's authors | The merge that **turns** into a conflict — not every recheck that finds it one still; the queue's ejection of the change for a merge that conflicts |
+| `dequeued` | The change's authors, and whoever put it in the queue | A record that put the change's entry out of its target's queue: an ejection, or a dequeue somebody asked |
 | `finding_replied` | The raiser of the finding a comment replies to, or an answer answers | A reply to a finding; an answer to findings |
-| `ready_to_merge` | The change's owner | The mergeability whose stored answer goes from not ready to ready |
-| `merged` | The change's authors | The push that sets the target to the change's head; the home's landing |
+| `ready_to_merge` | The change's authors who may merge it into its target; where none may, the effective lead of the repository's owner | The mergeability whose stored answer goes from not ready to ready |
+| `merged` | The change's authors | The push that sets the target to the change's head; the home's landing; the merge record that merged it; the queue's landing of it |
 | `review_submitted` | The change's authors | A review that approves or comments |
 | `re_review` | The reviewers whose standing verdict asks for changes on an earlier revision | A revision's first facts |
 | `thread` | Everybody who said something in the thread | A comment |
@@ -5785,11 +5790,25 @@ record.
   it was mentioned — and once a record, however many changes it names: a
   push that merges one change and opens another tells somebody named in both
   once, under the stronger reason. `mention`, `review_requested`,
-  `changes_requested`, `conflicted`, `finding_replied`, `ready_to_merge` and
-  `re_review` **ask** something of whoever hears them; the rest are news to
-  absorb.
-- **Nobody hears of a change they made.** A reviewer is not told of their own
-  review, nor a pusher of the merge their push made — whoever wrote it.
+  `changes_requested`, `checks_failed`, `target_broken`, `conflicted`,
+  `dequeued`, `finding_replied`, `ready_to_merge` and `re_review` **ask**
+  something of whoever hears them; the rest are news to absorb.
+- **Nobody hears of a change they made — but a failed check.** A reviewer is
+  not told of their own review, nor a pusher of the merge their push made —
+  whoever wrote it — nor an enqueuer of the landing their entry made, since
+  the queue lands an entry on its enqueuer's account. A check of a head that
+  fails is the one exception: it is news to whoever pushed that head above
+  all, since nothing else they did tells them, so they hear it as the
+  record's actor.
+- **A record of several changes keeps what fits.** A queue's ejection and a
+  landing name every change they put out or land, each with its own audience,
+  and a record must land whatever it would tell: where the audiences of all
+  of them would take it past what one record may hold, the changes it names
+  last are told nobody, as the trailing changes of a push are.
+- **A landing no change made concerns nobody.** A person's push straight onto
+  a protected branch lands as a landing row like a queue's, and a broken
+  record naming it carries no audience: the `code_target_broken` event on the
+  activity feed is what reports it.
 - **A push that moves no change concerns nobody.** A head move, a close by a
   deleted source branch and a push to a branch no change uses are what a
   change's page shows, never what anybody is told; only a merge and an open
@@ -5800,10 +5819,15 @@ record.
   to blockers on the change's — and two records on the two, landing together,
   are decided from two snapshots that each miss the other: an approval and an
   undraft that complete the readiness between them would each find it
-  incomplete, and neither would tell anybody. So the change's
-  [mergeability](#mergeability) record — its home's merge, or the refresh
-  that follows any readiness input that moved — is the one that announces it,
-  where the answer it stores goes from not ready to ready.
+  incomplete, and neither would tell anybody. A check that passes is on a
+  third subject, the repository's checks, and announces nothing either. So
+  the change's [mergeability](#mergeability) record — its home's merge, or
+  the refresh that follows any readiness input that moved, a finished check
+  of its head among them — is the one that announces it, where the answer it
+  stores goes from not ready to ready. It tells whoever can act on it: the
+  change's authors whom its branch's gate lets merge it, each judged as the
+  merger; where the gate lets none of them, the effective lead of the
+  repository's owner, who may merge it or say who should.
 - **Every recipient is a row**: the record's applier writes one notice a
   handle it tells, on every data node — a person's inbox reads them, a
   change's page says whom its records reached, and each committed batch tells
@@ -5859,8 +5883,9 @@ stops after its record committed loses no wake.
 - **The wake names the change's work item**, and the turn it starts is
   charged to that item from its first record
   ([ADR-0067](../../adr/0067-a-change-implements-one-work-item-and-carries-no-spend.md)):
-  the review a change was asked for, the fix its findings asked for and the
-  answer to its conflict are all work on the item the change implements. A
+  the review a change was asked for, the fix its findings asked for, the
+  answer to its conflict, a failed check, a removal from its queue and a
+  branch its landing broke are all work on the item the change implements. A
   change carries no spend of its own — what a turn spent is on the turn and
   its item, never summed on the change.
 - **Who wrote it bounds what the seat reads**: a review a colleague seat
@@ -5872,11 +5897,17 @@ stops after its record committed loses no wake.
   description — and the tool that answers it: `code_review_change` for a
   review asked, `code_resolve_finding` and `code_comment_on_change` for
   findings and requests for changes, `code_comment_on_change` for a mention or
-  a thread. It always reads the change itself first, with `code_get_change`:
-  the wake says what happened, not what the change is. `mention`,
-  `review_requested`, `changes_requested`, `conflicted`, `finding_replied`,
-  `ready_to_merge` and `re_review` ask for an answer, which the seat delivers
-  through a code write; the rest are news it may absorb in silence.
+  a thread, `code_get_check_failures` for a failed check — and
+  `code_rerun_checks` for an attempt its infrastructure ended — and, for a
+  branch a landing broke, a revert of the landing's commit made with the
+  tools that write a branch (`code_create_branch`, `code_revert`,
+  `code_open_change`), or a fix forward. It always reads the change itself
+  first, with `code_get_change`: the wake says what happened, not what the
+  change is. `mention`, `review_requested`, `changes_requested`,
+  `checks_failed`, `target_broken`, `conflicted`, `dequeued`,
+  `finding_replied`, `ready_to_merge` and `re_review` ask for an answer, which
+  the seat delivers through a code write; the rest are news it may absorb in
+  silence.
 
 The feed holds the code log's trim: a record it has not acknowledged is one
 no seat has been woken for, so the log keeps it

@@ -422,9 +422,11 @@ one snapshot: its head's facts read, no draft, an approval counted where its
 branch's gate asks one, no blocker standing, a clean merge into its target,
 and whatever else the gate adds — its first unmet precondition in one
 sentence naming who can clear it ([Merge
-readiness](../concepts/code-host.md#merge-readiness)). Its owner hears
-`ready_to_merge` once, when it turns ready, and merges it as [Merging a
-change](#merging-a-change) says.
+readiness](../concepts/code-host.md#merge-readiness)). Its authors whom the
+branch's gate lets merge it hear `ready_to_merge` once, when it turns ready —
+or, where the gate lets none of them, the lead of the repository's owner
+([Who a change wakes](../concepts/code-host.md#who-a-change-wakes)) — and
+merge it as [Merging a change](#merging-a-change) says.
 
 **Who heard about it.** The page's **Woke** tab is whom each record about the
 change reached, newest first, each with the one reason they heard under; the

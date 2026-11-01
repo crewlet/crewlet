@@ -662,21 +662,26 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		n, err := a.applyChangeWrite(ctx, tx, at, payload)
 		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case Merge:
-		return a.applyMerge(ctx, tx, at, p)
+		n, err := a.applyMerge(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case Enqueue:
 		return a.applyEnqueue(ctx, tx, at, p)
 	case Dequeue:
-		return a.applyDequeue(ctx, tx, at, p)
+		n, err := a.applyDequeue(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case Candidate:
 		return a.applyCandidate(ctx, tx, at, p)
 	case Eject:
-		return a.applyEject(ctx, tx, at, p)
+		n, err := a.applyEject(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case Land:
-		return a.applyLand(ctx, tx, at, p)
+		n, err := a.applyLand(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case Green:
 		return a.applyGreen(ctx, tx, at, p)
 	case Broken:
-		return a.applyBroken(ctx, tx, at, p)
+		n, err := a.applyBroken(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case QueueSweep:
 		return a.applyQueueSweep(ctx, tx, at, p)
 	}

@@ -125,8 +125,9 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		candidates = append(candidates, c.Candidate)
 	}
 	// NO ACTOR AND NO REASON THAT WAKES ONE: the actor step was each
-	// routing's own above, and no code reason is news to whoever made the
-	// change.
+	// routing's own above (Concern.Hears), which already kept the one reason
+	// that is news to whoever made the record — a failed check of the head
+	// they pushed ([Reason.WakesActor]).
 	routed := routing.Route(candidates, registryHas(reg), "", nil)
 	out := make([]notify.Routed, 0, len(routed))
 	for _, c := range routed {

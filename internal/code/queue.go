@@ -197,6 +197,12 @@ type Dequeue struct {
 	// Principal is who dequeued it — the proposal's asker, STAMPED by the
 	// committer.
 	Principal Principal `json:"principal"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// COMMITTER: the change's authors and its enqueuer, told it left the
+	// queue — all but who asked. Under the condition concerns.go states, it
+	// takes {Name: "Dequeue.Routing", Since: 2, Op: "dequeue", Path:
+	// []string{"mutation", "routing"}} once a build without it has run.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // QueueProposal is one write of a target's queue as its asker hands it to the
@@ -508,11 +514,18 @@ func (p QueueProposal) measure() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
 	}
-	if len(encoded) > EntryRoom {
-		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
-			ErrInvalidProposal, op, len(encoded), EntryRoom)
+	// AND THE ROOM A ROUTING KEEPS on a record of one change, which its
+	// committer stamps; a record of several keeps what fits of what is left
+	// ([keptRoutings]).
+	bytes := len(encoded)
+	if p.Dequeue != nil || p.Broken != nil {
+		bytes += MaxRoutingBytes
 	}
-	return len(encoded), nil
+	if bytes > EntryRoom {
+		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
+			ErrInvalidProposal, op, bytes, EntryRoom)
+	}
+	return bytes, nil
 }
 
 // validFields is every rule of [QueueProposal.Validate] but the record's
@@ -582,6 +595,9 @@ func (p QueueProposal) validFields() error {
 		}
 	}
 	if d := p.Dequeue; d != nil {
+		if err := stampedRouting("dequeue", d.Routing); err != nil {
+			return err
+		}
 		if err := bareUUIDv7("dequeue.entry_id", d.EntryID); err != nil {
 			return err
 		}
@@ -699,13 +715,13 @@ func (p QueueProposal) EntryID() string {
 // grant by, so the two never disagree about which writes a node behind the
 // company's configuration may decide.
 func (p QueueProposal) JudgesChart() bool {
-	return p.Enqueue != nil || p.Land != nil || (p.Dequeue != nil && p.Asker.Kind.readsChart())
+	return p.Enqueue != nil || p.Land != nil || p.Broken != nil || (p.Dequeue != nil && p.Asker.Kind.readsChart())
 }
 
 // queueDecidedRows is the most rows an enqueue or a dequeue makes its apply
 // touch: the entry's row and the repository's — and a dequeue's of an entry
 // a train is testing, the train it abandons ([trainRows]).
-const queueDecidedRows = 2 + trainRows
+const queueDecidedRows = 2 + trainRows + routingNoticeRows
 
 // trainRows is the most rows abandoning one train touches: its candidates
 // removed and its other entries waiting again — [MaxQueueDepth] and
@@ -866,7 +882,7 @@ func decideQueue(ctx context.Context, tx *sql.Tx, p QueueProposal, seats SeatRul
 	case p.Green != nil:
 		return decideGreen(ctx, tx, *p.Green, repo, d)
 	case p.Broken != nil:
-		return decideBroken(ctx, tx, *p.Broken, repo, d)
+		return decideBroken(ctx, tx, *p.Broken, repo, seats, d)
 	}
 	return decideEnqueue(ctx, tx, p, repo, seats, limits, capacity, d)
 }
@@ -1012,7 +1028,22 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 				c.Seat, cg.Access, repo.name))
 		}
 	}
-	_, d.payload = p.stamped()
+	// WHOM IT CONCERNS: the change's authors and its enqueuer, told it left
+	// the queue — all but who asked.
+	_, payload := p.stamped()
+	row, found, err := changeRowIn(ctx, tx, entry.ChangeID)
+	if err != nil {
+		return queueDecision{}, err
+	}
+	if found {
+		out := payload.(Dequeue)
+		if out.Routing, err = routingFor(ctx, tx, concerning{repoName: repo.name, change: row, actor: handle,
+			actorKind: kind, authors: true, dequeued: true, enqueuer: entry.EnqueuedBy.reviewer()}); err != nil {
+			return queueDecision{}, err
+		}
+		payload = out
+	}
+	d.payload = payload
 	return d, nil
 }
 
