@@ -6,7 +6,9 @@ version: "2"
 # team disable the linter.
 
 run:
-  timeout: 5m
+  # claude/crewlet-code-ci only: thirty minutes, so this branch's lint reports every finding over the
+  # lanes' tree and measures how long it takes; the value #298 needs lands on m3-integration.
+  timeout: 30m
 
 linters:
   enable:
