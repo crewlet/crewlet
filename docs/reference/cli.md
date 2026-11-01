@@ -57,7 +57,7 @@ subcommand below is served by it.
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin` through a node |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
 | `crewlet assistant eval -suite DIR` | Run a directory of evaluation cases through Ask Crewlet's orchestrator and catalogue in process: each case's own scripted rounds by default (deterministic, no model called), or a candidate `providers.llm` entry with `-model KEY`, so a model is measured before Ask Crewlet is switched to it. Exits non-zero when any case fails |
-| `crewlet llm list` | Every `providers.llm` entry the company declares, with its CLI, model and how it is signed in |
+| `crewlet llm list` | Every `providers.llm` entry the company declares, with its harness, model and how it is signed in |
 | `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real run calls a tool over the seat's tool route, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion), and, for an entry a seat's executor launches on, whether its CLI has an in-box runner and which tool bridge its box dials. Exits non-zero when any entry has a problem |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI whether it holds a login and as whom: one line read as the engine reads it (`signed in`, `signed out` or `unknown`, with the method and account where the CLI prints them), then the CLI's own words; exits non-zero unless signed in |
@@ -2839,41 +2839,41 @@ crewlet llm import <KEY>          # bundle on stdin
 ```
 
 The operator side of the [LLM backends](../concepts/llm-backends.md): every
-`providers.llm` entry drives a vendor's own coding CLI — on the operator's
+`providers.llm` entry drives a vendor's own harness — on the operator's
 subscription plan, or on an API key under `auth.mode: api-key` — and the login
 that makes a subscription work is established here rather than in the config
 document. `KEY` is the `providers.llm` key; commands that take one and are
 given none act on the only entry when there is exactly one, and `doctor` given
 none examines every entry, in the order the document declares them.
 
-**`list`** is the inventory — provider key, CLI, model and how it is signed
+**`list`** is the inventory — provider key, harness, model and how it is signed
 in. **`doctor`** is the one to run before a company's first turn: it
-checks the CLI is installed, that something signs it in, and — unless you pass
+checks the harness is installed, that something signs it in, and — unless you pass
 `-no-smoke` — that a real run reaches the seat's tools: one tool,
-`crewlet_smoke`, served on a real tool session as a phase's are, which the CLI
+`crewlet_smoke`, served on a real tool session as a phase's are, which the harness
 is told of by its profile's `mcp` block, starts this binary as
 [`mcp-relay`](#crewlet-mcp-relay) to reach, and is asked to call the way a phase
 asks, nothing forcing the call. It passes when the session recorded the call
-and the CLI's record showed the request that made it, and says how the call was
-joined to that record and which tools the CLI
+and the harness's record showed the request that made it, and says how the call was
+joined to that record and which tools the harness
 offered its model — where a confinement that stopped holding shows first. It is
 the only check that catches a plan whose quota is exhausted, or a profile whose
-tool route, record or `text_paths` no longer match what the CLI does. The same run measures two claims the
-profile makes rather than trusting them: that the CLI's own **shell is
+tool route, record or `text_paths` no longer match what the harness does. The same run measures two claims the
+profile makes rather than trusting them: that the harness's own **shell is
 refused** (every phase but a seat's executor runs on the engine host — the
 reviewer, a worker, a side pass — so a denial that stopped working is such a
 phase reading whatever the engine user can read) and that its **web tool
 reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
 clock, read by the tool. Its `system prompt` lines say where a seat's system
-prompt goes and where a side pass's does — added to the CLI's own, in place of
+prompt goes and where a side pass's does — added to the harness's own, in place of
 it, or in the transcript under it ([which channel a call
 takes](../concepts/llm-backends.md#which-channel-a-call-takes)) — and every probe
 is sent as a seat's call, so it runs under the prompt a seat does.
 
 For an entry some agent seat's executor chain holds, `doctor` also prints
-`executor` lines: the seats that launch on it; whether its CLI has an in-box
-runner — only `claude-code` and `opencode` do, and another CLI is skipped at
+`executor` lines: the seats that launch on it; whether its harness has an in-box
+runner — only `claude-code` and `opencode` do, and another harness is skipped at
 launch and serves those seats' phases on this host only, which is a line and
 not a problem; and the tool bridge its box dials — for a `direct` cell this
 node's own listener on loopback where the node binds `api.port`, whatever its
@@ -2882,14 +2882,14 @@ a problem, since
 every launch on that entry would be refused
 ([The executor's run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box)).
 
-Both commands answer "signed in" the same way, from the environment the CLI is
+Both commands answer "signed in" the same way, from the environment the harness is
 actually given rather than from the configuration: credential files a login
 wrote (or, for OpenCode 2, which keeps its login in its own database, the
 document its export printed), a headless token, the key `auth.mode: api-key`
-puts in the CLI's key variable (`auth.api_key`, or that variable itself —
+puts in the harness's key variable (`auth.api_key`, or that variable itself —
 `ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex; Qwen Code's
 `OPENAI_API_KEY`, which other vendors' keys share, only through `auth.api_key`), a
-variable `auth.mode: inherit-env` forwards, or — for a CLI whose profile reads
+variable `auth.mode: inherit-env` forwards, or — for a harness whose profile reads
 its provider's key from its own environment (`hermes`, `pi`, `opencode`) — a
 [credential-named](../concepts/llm-backends.md#6-a-provider-key-in-env-opencode-hermes-pi)
 variable in the entry's `env`. `doctor`'s `sign-in` line names every one it found, and
@@ -2898,7 +2898,7 @@ reads ([how `doctor` judges a
 sign-in](../concepts/llm-backends.md#how-doctor-judges-a-sign-in)): a login or a
 headless token under `subscription`, only the key under `api-key`, and the
 variables it forwards or a login under `inherit-env` — unless
-the smoke test was answered, which proves the CLI authenticates some way the
+the smoke test was answered, which proves the harness authenticates some way the
 engine does not hand it (an endpoint that takes no key, a credential in its
 own configuration). A token `auth.mode: api-key` removes from the child is not
 counted. A token or key variable the entry's `overrides` names outside the
@@ -2952,16 +2952,16 @@ export` as the fix, since the engine would run that entry signed out.
 | Shape | When |
 |---|---|
 | *(no flag)* | Broker the vendor's own interactive login and keep the result — written **whole** over whatever landed while it ran, so a file the sign-in left as it was goes back as it was and a file it never held is removed rather than kept beside the new token |
-| `-from-host` | Adopt a login this machine already has, e.g. from running the CLI by hand — copied for a login kept in files, exported by the CLI itself (`opencode auth export --standalone`) for one kept in its own database. The adopted login replaces the old one **whole**: a file your home does not hold is removed rather than left beside the adopted ones |
+| `-from-host` | Adopt a login this machine already has, e.g. from running the harness by hand — copied for a login kept in files, exported by the harness itself (`opencode auth export --standalone`) for one kept in its own database. The adopted login replaces the old one **whole**: a file your home does not hold is removed rather than left beside the adopted ones |
 | `-capture-token` | Mint a **headless token** into the secret store — the only shape a remote [code sandbox](../concepts/code-sandbox.md) can use, because a token is one scoped revocable variable and a login (credential files, an exported login) never leaves the engine host. Stored through a running engine, it is read by the fleet at its next configuration apply, and the command says so, naming `POST /config/reload`; stored with the engine stopped, it goes into the fleet's store directly, where this node's engine reads it when it starts and a node already running on that store at its next configuration apply. It is read under the profile's token variable by convention, and the command prints the `auth.token` snippet for naming it in the company document instead |
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
-| `-token-stdin` / `-username U -password-stdin` | Store a token you already hold (`-token-stdin`), or sign the CLI in with a username and password (`-password-stdin`), each where the CLI genuinely has that kind of login. A token piped to `-token-stdin` is trimmed of the whitespace around it and held to the [64 KiB every store keeps](../concepts/secret-store.md#the-design): the pipe is read no further than that, so one pointed at the wrong file, or one that never ends, is refused rather than read whole. A password piped to `-password-stdin` is never stored, so it is held to a password's bound instead, 4 KiB without its line ending — the most the engine's own sign-in carries, and an order of magnitude above any passphrase — and a longer one is refused the same way, before the CLI's login runs |
+| `-token-stdin` / `-username U -password-stdin` | Store a token you already hold (`-token-stdin`), or sign the harness in with a username and password (`-password-stdin`), each where the harness genuinely has that kind of login. A token piped to `-token-stdin` is trimmed of the whitespace around it and held to the [64 KiB every store keeps](../concepts/secret-store.md#the-design): the pipe is read no further than that, so one pointed at the wrong file, or one that never ends, is refused rather than read whole. A password piped to `-password-stdin` is never stored, so it is held to a password's bound instead, 4 KiB without its line ending — the most the engine's own sign-in carries, and an order of magnitude above any passphrase — and a longer one is refused the same way, before the harness's login runs |
 
 A headless token is read only under `auth.mode: subscription`, so `-capture-token`
 and `-token-stdin` are **refused before anything is minted, read or stored** for
 an entry whose mode would never read one, naming what that mode reads instead —
-the words `doctor` uses. Under `api-key` the CLI's token variable is removed from
-its environment, so the error names the key: `auth.api_key`, else the CLI's key
+the words `doctor` uses. Under `api-key` the harness's token variable is removed from
+its environment, so the error names the key: `auth.api_key`, else the harness's key
 variable, stored with `crewlet secrets set` or exported. Under `inherit-env` the
 token variable is forwarded from the engine's own environment and the secret
 store is never read, so storing a token is refused while `-capture-token
@@ -2969,26 +2969,26 @@ store is never read, so storing a token is refused while `-capture-token
 environment, which is what the line it ends with says. `-capture-token` and
 `-token-stdin` are also refused before anything is minted, read or stored, in
 every mode and with `-print-token` too, for an entry no token variable hands
-a token to: one whose CLI names none (every built-in profile but
+a token to: one whose harness names none (every built-in profile but
 `claude-code`), and one whose `overrides.token_env` is not an environment
 variable name (`MY-TOKEN`), under which no store, `${VAR}` or export can carry
 a token. The error names `providers.llm.<key>.overrides.token_env` — except
 under `api-key`, where it is that mode's refusal above, naming the key, with the
 field beside it for a name outside the grammar and without `auth.mode:
 subscription`, under which such an entry could read no token either — except
-an entry whose CLI names no key variable, a pairing every write refuses: it is
+an entry whose harness names no key variable, a pairing every write refuses: it is
 told that the mode puts its key in no variable, and to set `auth.mode:
-subscription` and sign the CLI in with a login. Every write of the company
+subscription` and sign the harness in with a login. Every write of the company
 document refuses such an override, but `crewlet llm` loads the document as a
 run does, without the rules only a write applies. `-from-host` recommends
 `-capture-token` after it runs only under `subscription`, and only where the
-CLI has a minting command and a token variable a store can hold.
+harness has a minting command and a token variable a store can hold.
 
-The brokered and `-username` shapes **fail when the CLI left no login** where
+The brokered and `-username` shapes **fail when the harness left no login** where
 the entry reads one — exiting 0 having stored nothing, as backing out of the
 vendor's sign-in does — rather than printing that a login was written. `login`,
-`status` and a vendor's own `logout` run the CLI one at a time per state
-directory and CLI (entries sharing a `state_dir` and driving one CLI share one
+`status` and a vendor's own `logout` run the harness one at a time per state
+directory and harness (entries sharing a `state_dir` and driving one harness share one
 login home): a second started while the first is running is refused, saying
 so. Only the commands
 that make a login create the shared one; `status` and a seat's call write back
@@ -2999,12 +2999,12 @@ after you signed in is kept and written by the next command — unless you repla
 the login since with `-from-host`, `import` or `logout`; a `login` that cannot
 carry such a kept login out replaces it, saying so — see [token refresh across
 seats](../concepts/llm-backends.md#token-refresh-across-seats). A
-`login` likewise replaces a shared login the CLI refuses to import (OpenCode's
+`login` likewise replaces a shared login the harness refuses to import (OpenCode's
 document from another build, say), saying so, where `status` keeps refusing it.
 
 **`export`** packs a login into one portable blob so another host can come up
 already authenticated: the entry's credential files, read whole so a bundle
-never packs a write that stopped part way, and a manifest naming the CLI they
+never packs a write that stopped part way, and a manifest naming the harness they
 were exported from (`crewlet-bundle.json`). `-secret-store` writes it to the
 [secret store](../concepts/secret-store.md) instead of stdout, under
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` — through the running engine, where every
@@ -3039,15 +3039,15 @@ crewlet llm export claude | ssh other-host crewlet llm import claude
 It **refuses to overwrite an existing login**, loudly: a host that has been
 running holds the fresher refresh token, and restoring a boot-time blob over
 it is how a fleet logs itself out. `crewlet llm logout <KEY>` first if you
-mean to replace it. And it refuses a bundle that does not name the entry's CLI
+mean to replace it. And it refuses a bundle that does not name the entry's harness
 as the one it was exported from (below), writing nothing.
 
-**`logout`** removes the login (and revokes it with the vendor where the CLI
+**`logout`** removes the login (and revokes it with the vendor where the harness
 has a logout of its own) in one write of the login less every file of it that
 holds one — so a logout killed part way never leaves one file of the login it
-was removing, and a settings file the CLI keeps beside it, holding none, stays
+was removing, and a settings file the harness keeps beside it, holding none, stays
 — and
-**records the logout** in the CLI's share of the state directory
+**records the logout** in the harness's share of the state directory
 (`<state_dir>/<harness>/logged-out`), so the configured bundle below is not
 restored into the directory it emptied —
 not by the engine's next boot or apply, and not by `list`, `status`, `export`
@@ -3058,10 +3058,10 @@ sign-in also left a login file) signs the entry in without ending the logout,
 where the entry takes one — and `logout` names one only there: under a token
 variable a store can hold, stored under `subscription` or exported in the
 engine's environment under `inherit-env`, never under `api-key`, and
-`-capture-token` only where the CLI mints it. A
+`-capture-token` only where the harness mints it. A
 fresh state directory holds no such record and restores the bundle as before,
 so `logout` names the field or secret that retires it when the entry has one —
-even when the CLI's own logout fails, since the login is removed and the logout
+even when the harness's own logout fails, since the login is removed and the logout
 recorded either way. For the conventional variable that is `crewlet secrets
 unset CREWLET_LLM_CLI_<KEY>_CREDENTIALS`, with the variable removed from the
 engine's environment too ([`crewlet secrets`](#crewlet-secrets)).
@@ -3081,15 +3081,15 @@ container before its first turn rather than after an operator remembers a
 command; `import` is for the hosts that are already up. See [environment
 variables](environment-variables.md).
 
-A bundle **belongs to the CLI it was exported from**, and names it, though it
-is keyed by the entry: one exported before the entry moved to another CLI
-names the old CLI, so a restore into the new CLI's empty directory refuses it
-and writes nothing — even where the two CLIs keep a login file under one name,
+A bundle **belongs to the harness it was exported from**, and names it, though it
+is keyed by the entry: one exported before the entry moved to another harness
+names the old harness, so a restore into the new harness's empty directory refuses it
+and writes nothing — even where the two harnesses keep a login file under one name,
 as six keep an `auth.json` — at boot and apply as
 `harness_bundle_restore_failed`, in `list`, `status`, `export` and `doctor`,
-and in `import`, until the new CLI is signed in and its own bundle exported in
-its place. A bundle that names no CLI is refused the same way: see [an entry
-moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).
+and in `import`, until the new harness is signed in and its own bundle exported in
+its place. A bundle that names no harness is refused the same way: see [an entry
+moved to another harness](../concepts/llm-backends.md#an-entry-moved-to-another-harness).
 
 ---
 
@@ -3099,24 +3099,24 @@ moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli)
 crewlet mcp-relay <absolute path of a socket>
 ```
 
-**You never run this.** It is the one MCP server a seat's coding CLI is told to
-start, by the engine that runs the CLI: the CLI speaks MCP over the relay's
+**You never run this.** It is the one MCP server a seat's harness is told to
+start, by the engine that runs the harness: the harness speaks MCP over the relay's
 stdin and stdout, and the relay copies those bytes to a unix socket the engine
-opened for that one CLI run, and the engine's answers back. Every tool the seat
+opened for that one harness run, and the engine's answers back. Every tool the seat
 calls goes through it to the engine's own dispatch, with the permission model
 and the record a tool call always has. See [LLM Backends](../concepts/llm-backends.md).
 
 - **It reads its one argument and nothing else** — no environment, no config
-  file, no logging setting. A CLI decides what environment its MCP servers start
-  in, and the CLIs disagree, so nothing the relay depended on there could be
+  file, no logging setting. A harness decides what environment its MCP servers start
+  in, and the harnesses disagree, so nothing the relay depended on there could be
   relied on. It logs nothing either: its stdout is the protocol stream.
 - **The socket path is not a credential.** The socket sits in a directory the
   engine created for itself with mode `0700`, so only the engine's own user can
-  connect, and the engine removes it when the CLI run ends.
-- **It ends when the engine closes the socket**, and when the CLI closes its
+  connect, and the engine removes it when the harness run ends.
+- **It ends when the engine closes the socket**, and when the harness closes its
   stdin it half-closes, so the answer to a call already sent still arrives.
 - It cannot reach a socket? It prints one line on stderr naming the path, and
-  exits 1 — which the CLI reports as an MCP server that failed to start.
+  exits 1 — which the harness reports as an MCP server that failed to start.
 
 ## `crewlet mattermost provision` (retired)
 

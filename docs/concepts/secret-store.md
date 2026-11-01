@@ -401,11 +401,11 @@ A model's credentials are `${VAR}` pointers into this store too: a
 `providers.llm` entry's `auth.token`, `auth.api_key` and
 `auth.credential_bundle`, and the keys in its `env`. Settings › **Models &
 keys** (`#/settings/models`) draws each entry off the company document — its
-CLI, model and mode, and how it signs in by the variable its credential names,
-never a value. An entry that names no credential reads its CLI's own variable
+harness, model and mode, and how it signs in by the variable its credential names,
+never a value. An entry that names no credential reads its harness's own variable
 from this store first, then the environment: `CLAUDE_CODE_OAUTH_TOKEN` for a
 Claude Code subscription (which `crewlet llm login <key> -capture-token` writes
-here), and under `auth.mode: api-key` the CLI's key variable —
+here), and under `auth.mode: api-key` the harness's key variable —
 `ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex. A variable other
 vendors' keys are kept under too — Qwen Code's `OPENAI_API_KEY` — is never read
 this way: such an entry names its key. One whose named reference resolves to
@@ -592,7 +592,7 @@ Most `${VAR}` resolution funnels through one function, so the store covers it. A
 
 | Site | Source | Why |
 |---|---|---|
-| A `providers.llm` entry's conventional credentials — its CLI's token variable (`CLAUDE_CODE_OAUTH_TOKEN`), under `auth.mode: api-key` its key variable (`ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex; never a shared one such as Qwen Code's `OPENAI_API_KEY`), its bundle's `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` — and the embeddings key fallback (`OPENAI_API_KEY`) | **Store, then env** | Otherwise `crewlet secrets set ANTHROPIC_API_KEY` would work through a config reference but not through the fallback, and the token `crewlet llm login -capture-token` writes into this store would sign nothing in |
+| A `providers.llm` entry's conventional credentials — its harness's token variable (`CLAUDE_CODE_OAUTH_TOKEN`), under `auth.mode: api-key` its key variable (`ANTHROPIC_API_KEY` for Claude Code, `CODEX_API_KEY` for Codex; never a shared one such as Qwen Code's `OPENAI_API_KEY`), its bundle's `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` — and the embeddings key fallback (`OPENAI_API_KEY`) | **Store, then env** | Otherwise `crewlet secrets set ANTHROPIC_API_KEY` would work through a config reference but not through the fallback, and the token `crewlet llm login -capture-token` writes into this store would sign nothing in |
 | Everything a provisioning command reads out of the company document (`integrations.*.url`, `.workspace`, `.token`, `.signing_secret`), and everything `crewlet llm` reads | **Store, then env** | The same chain the engine resolves through. A command that saw only the environment read an empty string for every value already rotated into the store, and for the GitLab signing secret, empty is the signal to *mint*, so a re-run replaced a working webhook secret at the third-party app. Each command takes `-config` for this, and beside a running engine reads the store through its API: it lists the node's names, then reveals the variables that command reads that the node holds, at most 64 to a request; with the engine stopped it reads the same variables from the fleet's store itself, through the node's own broker or the external one, and no node logs those reads |
 | Sandbox launch credential check | **Store, then env** | A seat whose token lives only in the store must not read as unresolved |
 | Tier A bootstrap (`secrets.keys[].material`, an external broker's `stream.token`) | **Env/file only** | Root of trust — this is what reaches and decrypts the store |

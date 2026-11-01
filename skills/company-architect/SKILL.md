@@ -119,12 +119,12 @@ config — rungs 2 and 3 especially:
   each is whatever zone the host reading it happens to be set to. There
   is ONE company clock, the top-level `timezone`: no block under
   `tracker:` or `scheduling:` takes a zone of its own.
-- **An LLM entry names its CLI's model in that CLI's grammar.** The schema
+- **An LLM entry names its harness's model in that harness's grammar.** The schema
   sees a string; `crewlet validate` refuses an `opencode` model with no
-  `<provider>/` and a credential the entry's CLI would never read (an
-  `auth.api_key` outside `auth.mode: api-key`, an `auth.token` on any CLI but
+  `<provider>/` and a credential the entry's harness would never read (an
+  `auth.api_key` outside `auth.mode: api-key`, an `auth.token` on any harness but
   `claude-code`, an `api-key` entry on `opencode`, `hermes` or `pi`, whose keys
-  go in `env`). Nothing validates the host: whether the CLI is installed and
+  go in `env`). Nothing validates the host: whether the harness is installed and
   signed in is `crewlet llm doctor`'s to say.
 - **Cron expressions are valid.** The schema takes a cron as plain text,
   so it checks neither the field count nor the values — `99 * * * *` and
@@ -179,11 +179,11 @@ live-editable, so the first version does not need to be the last.
    exactly as Worklet files work only in a declared project.
 5. **What model, and what budget?** One `providers.llm` entry is enough
    to start. Every model is reached through the vendor's own **coding
-   CLI**, which the engine drives as a process, so ask *whose* models and
-   *how they pay*, then write the entry for that CLI:
+   harness**, which the engine drives as a process, so ask *whose* models and
+   *how they pay*, then write the entry for that harness:
 
    - **Anthropic's, on a Claude Pro / Max plan** — `model: sonnet` (Claude
-     Code is the default `harness`). No key; the founder signs the CLI in once
+     Code is the default `harness`). No key; the founder signs the harness in once
      on the engine host with `crewlet llm login <key> -from-host` (or
      `-capture-token`).
    - **Anthropic's, on an API key** — `model: sonnet` plus
@@ -197,9 +197,9 @@ live-editable, so the first version does not need to be the last.
    - **OpenAI's** — `harness: codex`, `model: gpt-5`, and the same `auth`, which
      reads an OpenAI API key from `CODEX_API_KEY`, the variable codex signs in
      with; leave `auth` out for a ChatGPT login. **Not on its own:** every
-     agent seat's executor is its coding CLI's own run, which only
+     agent seat's executor is its harness's own run, which only
      `claude-code` and `opencode` can be, so a company on Codex alone is
-     refused. Codex (and every other CLI) serves a seat's reviewer, workers
+     refused. Codex (and every other harness) serves a seat's reviewer, workers
      and side passes through `llm_review`, `llm_subagent`, `llm_auxiliary` or
      `llm_judge`, beside a Claude Code or OpenCode entry the seat's `llm`
      names.
@@ -207,11 +207,11 @@ live-editable, so the first version does not need to be the last.
    **Write `providers.sandbox` with the model**, because every agent seat's
    executor runs in a box from it and a company with an agent seat and a
    model is refused without one. For a local instance, the founder's own
-   machine included, recommend `container`: a `local.image` carrying the CLI
+   machine included, recommend `container`: a `local.image` carrying the harness
    (an image of their own, or a stock one plus a setup step that installs it)
    and `default_run_in: container`. `sandbox: {local: {}, default_run_in:
    direct}` is the shortest start and runs it as the engine's user — a fully
-   permissioned CLI on that host, with whatever that account can read — so
+   permissioned harness on that host, with whatever that account can read — so
    keep it for a dedicated host the founder is willing to hand to an
    autonomous agent, the entry that needs the host itself, or a first run on
    their own machine while its seats take work from them alone, and say that
@@ -219,7 +219,7 @@ live-editable, so the first version does not need to be the last.
    `e2b` keeps the run off the host altogether. See
    [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 
-   Whichever it is, the CLI must be installed on the machine running
+   Whichever it is, the harness must be installed on the machine running
    `crewlet run`, and `crewlet llm doctor` is what proves the entry works —
    tell the founder to run it, and where: with the engine stopped it reaches
    the fleet's secret store itself, through the node's own broker; while the
@@ -228,9 +228,9 @@ live-editable, so the first version does not need to be the last.
    `-api URL` naming a running node). A member of a cluster whose engine is
    stopped cannot reach the store alone, so the doctor is refused there,
    naming `-api`. If they want a plan with a key behind it, that is two
-   entries on the same CLI and a list: `llm: [plan, key]`. A cheap, fast entry
+   entries on the same harness and a list: `llm: [plan, key]`. A cheap, fast entry
    for `llm_auxiliary` is worth suggesting once the company grows: every
-   auxiliary call pays a CLI launch under a fixed deadline. See
+   auxiliary call pays a harness launch under a fixed deadline. See
    [LLM Backends](https://docs.crewlet.ai/engine/latest/concepts/llm-backends/).
 
    Ask whether they want a cost ceiling, and on which window:
@@ -285,7 +285,7 @@ reinvent them:
   a complete seven-seat company with GitLab + Mattermost + sandbox on
   Worklet and Doclet, its model open models through
   OpenCode on an OpenRouter key.
-- [`examples/nimbus-claude-cli.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-cli.company.yaml) —
+- [`examples/nimbus-claude-code.company.yaml`](https://github.com/crewlet/crewlet/blob/main/examples/nimbus-claude-code.company.yaml) —
   the SAME seven seats with everything but chat removed: Mattermost alone, on
   Claude Code with the founder's Claude plan rather than a metered key. The one
   to copy when a founder has no tracker, wiki or code host yet.
@@ -464,7 +464,7 @@ sign in a `kind: human` seat the same way, where they sit in the chart. See
 [Humans in the org chart](https://docs.crewlet.ai/engine/latest/concepts/humans-in-the-org/).
 
 **Every agent seat writes code in its own run.** Its executor is its coding
-CLI's own run (`claude-code` or `opencode`) with a shell and git, in a box
+harness's own run (`claude-code` or `opencode`) with a shell and git, in a box
 from `providers.sandbox`, which the company must configure once it has an
 agent seat and a model; reading and reviewing code on a code host is MCP.
 `role.sandbox` adds what one seat's box reads: `setup` steps, `env` (its

@@ -329,7 +329,7 @@ opened again.
 This is the axis where an agent company differs most from a human one, and it
 is worth stating plainly: **a person in a busy room reads passively, and an
 agent has no passive read**. Every delivery is the seat's own executor in a
-[box](code-sandbox.md), which pays the CLI's whole harness even to decide the
+[box](code-sandbox.md), which pays the harness's whole harness even to decide the
 message was not for it, so "everyone sees everything" — which is free in a
 human chat product — is a company that does nothing but read chat.
 

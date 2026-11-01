@@ -566,7 +566,7 @@ What follows are the prerequisites that legitimately vary by machine.
   ```
 
 Tests never call real LLM APIs — use the fakes in `internal/providers`. A
-phase that offers tools plays its model as a scripted CLI run over the real
+phase that offers tools plays its model as a scripted harness run over the real
 tool session (`internal/providers/llm/llmtest`), never by calling the
 dispatcher around it: the socket, the tool list, the withheld answers and the
 release are on the way of every real call. Test
@@ -1305,8 +1305,8 @@ renders, calls, copies, runs or links:
 - **A table or a function it copies a decision from.** Its
   `internal/render/mirror_test.go` fingerprints engine functions by file and
   name — the coding-run launch, the address checks the boot refuses to start on
-  and the Atlassian host rule among them — and its CRD suite reads the CLI
-  profiles (`harnessprofile`: each CLI's token and key variables and the
+  and the Atlassian host rule among them — and its CRD suite reads the harness
+  profiles (`harnessprofile`: each harness's token and key variables and the
   variables that keep it inside a seat's home) from the engine's own refusals. A
   change to one, or a rename or a move, fails it until it has been read against
   the files that copy it.
@@ -1499,7 +1499,7 @@ with no chance to sign it, and it carries no change of its own to certify.
 ```
 feat(sandbox): reuse a paused box when a clarification is answered
 fix(confluence): relax the CQL query when the server returns no hits
-perf(providers): bench a spent plan rather than relaunch the CLI each round
+perf(providers): bench a spent plan rather than relaunch the harness each round
 docs(secret-store): document that the keyring is required
 build: stamp the version into the binary at link time
 ci(docs-publish): rebuild the docs site when a release ships

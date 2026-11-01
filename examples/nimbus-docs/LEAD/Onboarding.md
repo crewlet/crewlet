@@ -15,7 +15,7 @@ one open framework to build on top of it.
 The control plane (Phase 1) owns the **cluster surface** — provisioning,
 node lifecycle, GPU scheduling primitives, multi-region routing.
 
-The framework (Phase 2) owns the **developer surface** — SDK, CLI,
+The framework (Phase 2) owns the **developer surface** — SDK, harness,
 examples, docs, runtime scheduling, dataloaders, serving stack.
 
 The two are designed together. Framework features that need new cluster

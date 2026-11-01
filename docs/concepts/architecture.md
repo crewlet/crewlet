@@ -64,7 +64,7 @@ flowchart LR
     NODE["<b>A node</b><br/><i>crewlet run</i>"]
 
     subgraph supply["What a turn consumes"]
-        LLM["<b>Models, through coding CLIs</b><br/>Claude Code · Codex · OpenCode · …<br/><i>on a subscription or an API key —<br/>each CLI calls its own vendor</i>"]
+        LLM["<b>Models, through harnesses</b><br/>Claude Code · Codex · OpenCode · …<br/><i>on a subscription or an API key —<br/>each harness calls its own vendor</i>"]
         EMB["<b>Embeddings API</b> — OpenAI-compatible<br/><i>optional — without it, search is<br/>keyword only and nothing is<br/>recalled by similarity</i>"]
         MCPS["<b>MCP servers</b><br/><i>the agents' hands</i>"]
         BOX["<b>Code sandbox</b><br/>where every executor runs:<br/>an E2B VM, a container, or this host"]
@@ -96,7 +96,7 @@ act through, and every other one still routes end to end.
 | MCP servers | In practice | The agents' hands — chat, tracker, wiki, code host | Agents have only the [builtins](agent-runtime.md#built-in-tools) |
 | Chat · tracker · code host | No, each | Where triggers arrive and work is delivered | That surface simply routes nothing |
 | Embeddings provider | No | Vector recall over `agent_diary` and `episodes` | Recall degrades to recency; episodes render nothing |
-| Code sandbox | Yes, with agent seats and a model (a `local:` cell is the engine host itself) | Where every agent seat's executor runs: its coding CLI's own detached run | A company with agent seats and a model is refused at `providers.sandbox` |
+| Code sandbox | Yes, with agent seats and a model (a `local:` cell is the engine host itself) | Where every agent seat's executor runs: its harness's own detached run | A company with agent seats and a model is refused at `providers.sandbox` |
 | OTLP collector | No | Exported traces | Trace ids are still minted and still stored on every event row |
 | External NATS | No | The stream for a fleet that will not embed it | The process embeds its own — the default |
 
@@ -186,7 +186,7 @@ back what it wrote.
 | `/ws/stream` | The dashboard's only read channel: live pushes plus a query channel. The observability edge's projector is what pushes onto it. It carries no write. |
 | `/operator/mcp` · `/operator/act` | The operator catalogue — the tracker, knowledge and chat tools a seat holds — served to a person's own assistant over MCP, and to the dashboard's buttons over the act route. Every call acts as the principal the guard resolved: a person writes as the seat they hold, and so does a token or service account the identity directory binds to one; a credential bound to no seat writes under its own login, and is refused every chat tool, because a room is read and spoken in only as a seat. Always guarded. |
 | `/otlp/{token}/v1/{signal}` | Signed-token trace ingest. |
-| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API at all, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
+| `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a harness in a box. Per-run, expires with the run. A session lives in the process holding the seat, which may serve no API at all, so the node a call reaches relays it to that node over the broker (`internal/httprelay`) and the box dials one address for the whole fleet. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
 **`workers` runs the company-wide singletons, each held on its own
@@ -229,11 +229,11 @@ flowchart TB
         BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
         TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>node.max_concurrent gates every<br/>segment, a run's collection off<br/>.control included; the run holds none</i>"]
         REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED,<br/>plus this role's own MCP children"]
-        PROV["<b>Provider chain</b><br/>fallback chain over<br/>the seat's coding CLIs"]
+        PROV["<b>Provider chain</b><br/>fallback chain over<br/>the seat's harnesses"]
     end
     STREAM[("<b>Event stream</b>")]
     KV[("<b>Coordination KV</b>")]
-    RUN["<b>Executor run</b><br/>the seat's coding CLI in a box,<br/>detached from the turn"]
+    RUN["<b>Executor run</b><br/>the seat's harness in a box,<br/>detached from the turn"]
 
     STREAM --> MBOX
     MBOX --> BATCH --> TURN
@@ -258,7 +258,7 @@ gets its own cloned registry and its own bridge.
 
 **One model call has two layers of failure handling, each owning exactly one
 decision.** The backend *classifies* and does nothing else — it never retries.
-The one thing it holds of its own is a spent plan: a CLI that reported its
+The one thing it holds of its own is a spent plan: a harness that reported its
 vendor's rate limit, in its own structured status or the vendor's words, is
 `rate_limit`, and the entry then sits out on this node until the reset the
 vendor named (never more than an hour away), or, where it named none, for a
@@ -274,7 +274,7 @@ the turn. The sit-out is the node's own and is not shared with the fleet: an
 entry holds one login, every other node learns the same thing from its own
 calls once per window, and a coordination read in front of every model call
 would put the store under every turn. What a classified failure *says* — in a log line,
-`llm_unavailable`, a turn's error — is the backend's own line: how the CLI
+`llm_unavailable`, a turn's error — is the backend's own line: how the harness
 exited and the tail of what it printed, or the vendor's own sentence for a
 spent plan or an expired login.
 
@@ -477,7 +477,7 @@ every turn can outlive the process that started it.
 ```mermaid
 flowchart TB
     WHO["<b>Who is waiting?</b><br/>derived from the trigger's own type,<br/>before any model runs"]
-    EXEC["<b>Executor</b><br/>the seat's coding CLI's own run, in a box:<br/>decide, discover, act, then account for it"]
+    EXEC["<b>Executor</b><br/>the seat's harness's own run, in a box:<br/>decide, discover, act, then account for it"]
     SUSP["<b>Parked</b><br/>the executor's run, detached in its box:<br/>the turn's state, no conversation,<br/>on the run's record"]
     CHECK["<b>Engine check</b><br/>does the record support<br/>what it says it did?"]
     SKIP["<b>skipped</b><br/>nobody was asking<br/>this seat to do anything"]
@@ -514,7 +514,7 @@ flowchart TB
 **Two nested loops, not one.** The outer loop is the turn: executor → reviewer,
 re-entered on `self_iterate` up to `turn_engine.max_iterations`. The inner loop
 is the model↔tool round trip *inside each phase*, bounded by its own cap
-(the executor's coding-CLI run by `role.sandbox.max_turns`, else
+(the executor's harness run by `role.sandbox.max_turns`, else
 `providers.sandbox.default_max_turns`, 96 unless set; a constant for the
 reviewer, which holds one submission tool). A turn is therefore up to
 `max_iterations × (executor rounds + review rounds)` priced model calls, which
@@ -537,7 +537,7 @@ reviews; see [Turn Engine](turn-engine.md).
 send 15–25 KB of tool definitions with every model request, so the executor sees
 *server names* and walks `list_mcp_server_tools` → `activate_tool` to promote
 what it actually needs. From the model's side a builtin and an MCP tool are the
-same thing: two tools of the one `crewlet` server its CLI lists, which the
+same thing: two tools of the one `crewlet` server its harness lists, which the
 engine answers ([Tool calls on this host](llm-backends.md#tool-calls-on-this-host)).
 
 **A parked turn is the reason there is no parked goroutine anywhere.** Every
@@ -940,7 +940,7 @@ here.
 | Live knowledge search | `internal/knowledge` | [Knowledge system](knowledge-system.md) |
 | Diary, episodes, skill induction, profiles | `internal/learning` | [Agent learning](agent-learning.md) |
 | What a seat already said in one thread | `internal/agent/ledger` | [Conversation sessions](conversation-sessions.md) |
-| Models, each a coding CLI, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
+| Models, each a harness, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
 | Every agent seat's executor run, detached in a box | `internal/sandbox`, `internal/hostbox`, `internal/agent/runner` (`agentrun.go`) | [Code sandbox](code-sandbox.md) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |

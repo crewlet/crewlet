@@ -1415,7 +1415,7 @@ printing an empty list.
 answers is a coordination read, and the outage that fails it is exactly when
 somebody opens this to ask why the company has gone quiet. So each log whose
 window the answering node couldn't read is named as that (the report's
-`maintenance_unread`, a line on the CLI page, a banner on the screen) and is
+`maintenance_unread`, a line on the harness page, a banner on the screen) and is
 never shown as a log with no window. So is what holds an open window: when the
 acknowledgements or the admissions couldn't be read, both surfaces say so
 rather than naming every node, or nobody. The answering node is in service
@@ -1637,7 +1637,7 @@ applied on no node, logged `statelog_record_gated` naming `overtaken`.
 
 **A reanchor that stops part-way is re-run.** Once its generation record is on
 the log, the verb rebuilds this node's consumer and commits the checkpoint on
-the node's own time rather than the caller's, and the CLI waits up to six
+the node's own time rather than the caller's, and the harness waits up to six
 minutes for it. If it stops anyway — the broker blinked, the node restarted —
 re-run the same command: it finds its own record, follows the log from one
 below it, and still names every record written after the restore beneath it.
