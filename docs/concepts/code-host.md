@@ -35,6 +35,34 @@ A git repository on a node's disk is never the record. It is a
 [cache](#the-cache-on-a-git-node) derived from the rows, disposable and rebuilt
 from them.
 
+A repository's **changes** are rows on the same log. A change — `web!42`, the
+42nd of the repository `web` — proposes that one of its branches be merged
+into another. A push opens one from its options, or a tool from a branch
+already pushed, and its lifecycle — its opening, its edits, its close and
+reopening, and the revision every push to its branch writes — is decided by
+the repository's one [committer](#the-committer) beside the pushes that move
+its branches, so a change is never both merged and closed
+([Changes](#changes)). What is said **about** a change — who is asked to
+review it, the reviews and the findings they raise, the comments and the
+threads they form — is its conversation, on a subject of the change's own,
+decided by the [change writer](#reviews-and-findings) beside the committer
+and never waiting behind a push. And the repository's [home git
+node](#the-home-git-node) reads each revision against its target — its
+base, what it touches, whether it merges cleanly — so that whether a change
+is ready to merge is one judgement over rows, never a clone
+([A revision's facts](#a-revisions-facts), [Merge
+readiness](#merge-readiness)).
+
+Every record about a change says **whom it concerns**, and that is who hears
+of it: a seat is woken from the code log itself, as it is woken about a work
+item or a page, and a person finds a notice in their inbox ([Who a change
+wakes](#who-a-change-wakes)). Seats, and a person's own assistant, open,
+review and answer changes through the [code
+tools](../guides/tools-and-mcp.md#the-companys-code); a person reviews one on
+its page in the dashboard's [Code
+workspace](../reference/dashboard-design.md#the-code-workspace). The steps are
+the guide's [Review a change](../guides/code.md#review-a-change).
+
 How it scales — git nodes adding reads, data nodes committing pushes, and what
 sizes each — is [Scaling Out: Git nodes](scaling.md#git-nodes); turning it on,
 declaring a repository and pushing to it are the steps of the
@@ -71,33 +99,23 @@ This is the product's current shape, not a configuration choice:
   readiness counts the checks its branch's gate requires ([The merge
   gate](#the-merge-gate)), but nothing asks for a merge in this release
   (below), so no check's result holds one back.
-- **Only a push opens a change, and only its home asks for its review.** A
-  push opens a [change](#changes) from its options
-  ([A change a push opens](#a-change-a-push-opens)); a repository's committer
-  decides a change's opening, its edits and its close, a push to a change's
-  branches writes its revisions, merges it or closes it, the repository's home
-  records each revision's facts — its [classes](#change-classes) among them,
-  asking a review of the [path owners](#path-owners) whose paths it touches —
-  and whether it merges cleanly
-  into its target ([Mergeability](#mergeability)) with the change's
-  [readiness](#merge-readiness) judged beside it, and lands a change whose
-  head its target holds ([The home's change work](#the-homes-change-work)), the
-  [change writer](#reviews-and-findings) beside the committer decides who is
-  asked to review it and what is said on it, and a data node answers a listing
-  of changes and one change in detail ([Reading changes](#reading-changes)),
-  which a seat and a person's assistant read through two code tools,
-  `code_list_changes` and `code_get_change` — but no tool or route opens,
-  edits or discusses a change in this release, no route reads one, and no
-  change is merged in front of a protected branch. A protection
-  rule decides what a push may do to a ref, and nothing else stands in front
-  of one. So a rule's [merge gate](#merge-gates) is recorded and read,
-  every change into its branch is judged under it ([The merge
-  gate](#the-merge-gate)), a change into a branch whose gate requires a
-  check is queued for its landing by its gate ([The merge
-  queue](#the-merge-queue)), and a repository's committer decides a change's
-  merge as one record its gate proves ([A merge, end to
-  end](#a-merge-end-to-end)) — and nothing builds or asks for a merge in this
-  release, so nothing merges by the gate yet, nor lands from a queue.
+- **Nothing asks for a change's merge yet.** A [change](#changes) is
+  opened, edited, closed, reopened, rebased and reviewed, its findings
+  answered and applied, by a push and through the tools and the dashboard
+  ([Review a change](../guides/code.md#review-a-change)); a push that sets its
+  target to its head merges it, and its home lands one whose head its target
+  already holds ([The home's change work](#the-homes-change-work)). But no
+  tool or route asks for a merge in this release, so no change is merged in
+  front of a protected branch: a protection rule decides what a push may do
+  to a ref, and nothing else stands in front of one. A rule's [merge
+  gate](#merge-gates) is recorded and read, every change into its branch is
+  judged under it ([The merge gate](#the-merge-gate)), a change into a
+  branch whose gate requires a check is queued for its landing by its gate
+  ([The merge queue](#the-merge-queue)), a repository's home builds a merge
+  an engine write asks for, and its committer decides the merge as one record
+  its gate proves ([A merge, end to end](#a-merge-end-to-end)) — and since
+  nothing asks for one, nothing merges by the gate yet, nor lands from a
+  queue.
 - **Nothing searches a repository's code yet.** Every repository names how it
   is to be searched — `search: indexed` or `grep`
   ([Declaring repositories](#declaring-repositories)) — and the mode is
@@ -368,8 +386,10 @@ is asked of — or a seat, and the globs of the paths it owns. What a path owner
 is for is **review routing**: a change whose revision touches an owner's paths
 asks it for a review once the revision's facts are recorded ([Recorded on the
 change](#recorded-on-the-change)), which its repository's home does for every
-live change ([The home's change work](#the-homes-change-work)) — and today
-only a push opens one ([A change a push opens](#a-change-a-push-opens)). It
+live change ([The home's change work](#the-homes-change-work)), whether a
+push opened it ([A change a push opens](#a-change-a-push-opens)) or a tool
+did ([Opening, editing and closing a
+change](#opening-editing-and-closing-a-change)). It
 **grants nothing**. A seat named a path owner reads
 and pushes the repository by its [grant](#who-may-read-and-push) exactly as it
 did before — owning `deploy/**` lets no seat push there that could not, and a

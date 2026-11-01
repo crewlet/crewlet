@@ -289,14 +289,20 @@ activation creates, settles and retires them (see
 and GitHub integrations keep working beside it, so a company may host some
 repositories natively and keep others on a vendor.
 
-Today it is a place for **people** to keep their code: they clone, fetch and
-push over HTTPS with their own API token ([Hosting Code](../guides/code.md)),
-and every push is recorded as the person who made it. Agents change it only
-through their code tools — a small commit, a revert or a pick, a branch, each
-built by the engine and recorded as the seat's push — and run no git of their
-own against it yet, and there are no merge requests, reviews or checks — read
-[What it does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)
-before choosing it as an engineering team's only host. A company that hosts
+Today it is a place for **people and agents** to keep and review their code:
+people clone, fetch and push over HTTPS with their own API token ([Hosting
+Code](../guides/code.md)), and every push is recorded as whoever made it.
+Agents change it through their code tools — a small commit, a revert or a
+pick, a branch, each built by the engine and recorded as the seat's push — or
+push from a coding box's clone with their run's own credential ([Coding
+boxes](../concepts/code-host.md#coding-boxes)). A **change** proposes one
+branch into another, and people and agents review it, raising findings, a
+blocker among them holding it back until it is cleared ([Review a
+change](../guides/code.md#review-a-change)), while the repository's home git
+node queues its checks. What it does not do yet is merge a change in front of
+its branch's gate — read [What it does not do
+yet](../concepts/code-host.md#what-it-does-not-do-yet) before choosing it as
+an engineering team's only host. A company that hosts
 code on it takes the [S3 object store](../concepts/object-store.md#an-s3-bucket--s3)
 in production, since its repositories grow for as long as it works in them.
 

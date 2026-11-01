@@ -6956,6 +6956,15 @@ answer to the reader's own grant on the repository, leaving out of a listing
 what a seat may not read, so nothing waits on the reader's access before a
 section mounts.
 
+A change and its conversation are the engine's ([Changes](../concepts/code-host.md#changes),
+[Reviews and findings](../concepts/code-host.md#reviews-and-findings)), and
+reviewing one here is walked through step by step in [Review a
+change](../guides/code.md#review-a-change). What a record about a change
+leaves a person is a notice in the Inbox, never a screen of this workspace
+([The Inbox is where you act](#the-inbox-is-where-you-act)), and who hears of
+what is the engine's routing ([Who a change
+wakes](../concepts/code-host.md#who-a-change-wakes)).
+
 - **Changes** is the engine's listing of changes, `code_changes`, a page at
   a time in the order of the ONE index its filters lead — a work item's
   changes, an owner's in a state, a repository's, the company's in a state, or

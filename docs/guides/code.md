@@ -340,6 +340,98 @@ is the [change's rule](../concepts/code-host.md#opening-editing-and-closing-a-ch
 whoever may push its branch opens one, and its owner, a maintainer of the
 repository or any person steers it ([the tools](tools-and-mcp.md#the-companys-code)).
 
+## Review a change
+
+A change is reviewed where it lives: on its own page in the dashboard's
+**Code** workspace (`g o`), or through the code tools by a seat or by your own
+assistant, as you. Each ask, review, comment and answer is one record of the
+change's **conversation** ([Reviews and
+findings](../concepts/code-host.md#reviews-and-findings)), and each record
+tells the seats and people it concerns.
+
+**Find what waits on you.** **Code › Changes** lists the open changes, and
+**Waiting on** narrows them to the ones waiting on you, on a review, on a fix
+or on a person. A record that concerns you leaves a notice in your
+**Inbox** — the change, why you hear of it ("asked for your review", "asked
+to look again") and where its merge stands — whose **Open the diff** opens the
+change's page on its files. A seat is woken instead, told the change, why it
+hears and the tool that answers ([Who a change
+wakes](../concepts/code-host.md#who-a-change-wakes)).
+
+**Ask for a review.** **Request review** on the change's page names
+reviewers by handle, with a note; a seat or your assistant asks with
+`code_request_review`, which also withdraws an ask. An author of the change,
+anybody who reviews the repository and any person may ask, at most 32
+reviewers at once. A person may always be asked; a seat only where its grant
+lets it review the repository, and never an author of the change, whose
+review would count for nothing ([Asking for
+review](../concepts/code-host.md#asking-for-review)). A change whose
+revision touches paths the repository's `path_owners` name asks their owners
+itself, once its home has read the revision ([Path
+owners](../concepts/code-host.md#path-owners)).
+
+**Read it.** **Conversation** is the change's readiness, its description and
+its timeline in the order its records landed; **Files** is a revision's
+diff — the head unless you pick another, or what changed since an earlier
+revision — with each finding under the lines it points at, and one whose
+lines have changed since drawn above the diff, never dropped. A seat reads the
+same with `code_get_change`, a part at a time ([Reading a
+conversation](../concepts/code-host.md#reading-a-conversation)).
+
+**Review it.** On the head revision, pick lines by their numbers and draft a
+finding under them: how much it weighs (`blocker`, `major`, `minor`, `nit`),
+what it is about, a title, a body and, on the new side, the lines you suggest
+in their place. Drafts stay in the browser tab until **Approve**, **Request
+changes** or **Comment** sends them all as ONE review with your summary — a
+review and every finding it raises are one record, never half there. A seat
+reviews with `code_review_change`. Anybody who reviews the repository, and
+any person, may review — never an author of the change.
+
+- **A request for changes stands until its reviewer reviews again.** A push
+  answers none: the reviewer's next review, approving or asking again, does.
+- **A review of a later revision carries what still stands.** It names the
+  findings of yours that still stand and should — the page offers each,
+  checked — and every other finding you raised on an earlier revision is
+  superseded. A second review of the same revision adds to the first.
+- **An approval carries to a later revision only where nothing it approved
+  changed**: the same code, or the same diff, as a rebase that moved nothing
+  near the change keeps it ([Merge
+  readiness](../concepts/code-host.md#merge-readiness)).
+
+**Answer the findings.** An author answers a finding `resolved`, `wont_fix`
+or `disputed` with `code_resolve_finding` — a seat, or your assistant as
+you — and says why in a reply on its thread, which the page offers under
+every finding. A blocker an author answered still stands, for its raiser to judge: only its
+raiser's dismissal — or a maintainer's, or any person's, each `dismissed`
+through the same tool — or the raiser's review of a later revision that does not carry it clears it
+([Findings](../concepts/code-host.md#findings)). **Apply suggestion**
+(`code_apply_suggestions`) commits a finding's suggested lines onto the
+change's branch as one commit of yours, against the head on screen, and
+answers the finding resolved; it makes you an author of the change, so your
+approval of it no longer counts ([A review's suggestions
+applied](../concepts/code-host.md#a-reviews-suggestions-applied)).
+
+**Discuss it.** A comment (`code_comment_on_change`) starts a thread — on a
+line of a revision, or on the change as a whole — or replies to a thread's
+first comment or to a finding: threads are one level deep. Whoever started a
+thread, an author, a maintainer or any person resolves it ([Comments and
+threads](../concepts/code-host.md#comments-and-threads)).
+
+**See whether it is ready.** A live change's readiness is one judgement on
+one snapshot: its head's facts read, no draft, an approval counted where its
+branch's gate asks one, no blocker standing, a clean merge into its target,
+and whatever else the gate adds — its first unmet precondition in one
+sentence naming who can clear it ([Merge
+readiness](../concepts/code-host.md#merge-readiness)). Its owner hears
+`ready_to_merge` once, when it turns ready. No tool or route merges a change
+yet: a push that sets its target to the change's head merges it ([What it
+does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)).
+
+**Who heard about it.** The page's **Woke** tab is whom each record about the
+change reached, newest first, each with the one reason they heard under; the
+same answer is `GET /code/repos/{name}/changes/{n}/routing` ([A change's
+questions](../reference/api-endpoints.md#a-changes-questions)).
+
 ## Rebasing a change
 
 A change whose target has moved on is rebased onto it with
@@ -999,8 +1091,9 @@ to remove from the history you keep, for tidiness rather than for safety.
 
 ## See also
 
-- [Code Host](../concepts/code-host.md) — what a repository is, the committer,
-  the cache on a git node, and a push end to end
+- [Code Host](../concepts/code-host.md) — what a repository is, its changes
+  and their reviews, the committer, the cache on a git node, and a push end to
+  end
 - [Deployment: The code host](deployment.md#the-code-host) — git on the host,
   the cache's volume, the balancer in front of `/git/`
 - [Running a Fleet](fleet.md) — which nodes to give the `git` role

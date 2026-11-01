@@ -7345,6 +7345,16 @@ curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
   "https://crewlet.example.com/code/repos/web/changes/42?part=diff&since_revision=2&file=upload/retry.go"
 ```
 
+These questions only read. A change is opened, edited, closed, reviewed,
+discussed and answered through the code tools — a seat's, or a person's on
+[`/operator/act` and `/operator/mcp`](#operatormcp--your-own-assistant), each
+made as the human seat they hold — and every record those writes leave tells
+the seats and people it concerns: a seat is woken, and a person's notice is
+read through the composed [`inbox`](#queries) question and marked with
+`code_mark_inbox` ([Who a change wakes](../concepts/code-host.md#who-a-change-wakes)).
+The steps a person takes are [Review a
+change](../guides/code.md#review-a-change).
+
 ### A repository's content
 
 A repository's refs, files, history and diffs are eight more questions,

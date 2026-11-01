@@ -60,9 +60,13 @@ reads, for one, are each a proven, idempotent read: a worker may be handed any
 of them, a turn that only read code delivered nothing, and the operator
 catalogue records no call to one. Two of them read a repository's changes —
 `code_list_changes`, and `code_get_change`, a change a part at a time — and
-are reads like the rest: a reviewer woken about a change that has read its
-diff and its findings has delivered nothing yet, and only a write it makes in
-answer reaches anybody. Each change tool also names, in one table its tests
+are reads like the rest: a reviewer [woken about a
+change](code-host.md#how-a-seat-is-woken) that has read its diff and its
+findings has delivered nothing yet, and only a write it makes in answer
+reaches anybody — a review, a comment or an answer to its findings, each of
+which tells whom it concerns in turn ([Who a change
+wakes](code-host.md#who-a-change-wakes); a person's side of the same
+conversation is [Review a change](../guides/code.md#review-a-change)). Each change tool also names, in one table its tests
 hold to the tool list, the access its call needs on the change's repository —
 of its caller, and in a turn a colleague seat woke of that seat too; a read's
 is read, which the node that answers judges both at, and a write's is the
