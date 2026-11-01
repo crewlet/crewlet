@@ -974,7 +974,7 @@ crewlet run -config crewlet.yaml    # engine + embedded API on :80
 
 (`-api-port 8000` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:8000/webhooks/gitlab`). **Port 80 buys exactly one thing**: a webhook URL with no `:port` suffix, which matters when the address is pasted into a vendor's UI by hand or has to survive a proxy that rewrites ports. It costs a privileged bind — as a non-root process on Linux that needs `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or `CAP_NET_BIND_SERVICE`.
 
-The two bundled examples land on either side of that trade, which is the clearest way to read it. `examples/nimbus.config.yaml` pays for port 80: its company registers GitLab webhooks, so the address gets pasted into a vendor's UI. `examples/nimbus-claude-cli.config.yaml` takes `api.port: 8000`, because a chat-only company has no inbound webhook at all and gets nothing for the privileged bind. Its seats' `direct` boxes dial that port on loopback for their tools, at the address the node derives from the socket it binds, so nothing has to match it; `CREWLET_MCP_BRIDGE_URL` comes in only once an entry places its runs in `container` or `e2b`, or on a node without `ingress`. Make sure nothing else already owns the port you pick.
+The two bundled examples land on either side of that trade, which is the clearest way to read it. `examples/nimbus.config.yaml` pays for port 80: its company registers GitLab webhooks, so the address gets pasted into a vendor's UI. `examples/nimbus-claude-code.config.yaml` takes `api.port: 8000`, because a chat-only company has no inbound webhook at all and gets nothing for the privileged bind. Its seats' `direct` boxes dial that port on loopback for their tools, at the address the node derives from the socket it binds, so nothing has to match it; `CREWLET_MCP_BRIDGE_URL` comes in only once an entry places its runs in `container` or `e2b`, or on a node without `ingress`. Make sure nothing else already owns the port you pick.
 
 Do **not** also start a second node on the same host with such a file — both read the same `api.port`, and the second binder hits `EADDRINUSE` and fails its boot at once, naming the address, before it has recovered anything.
 
@@ -1080,7 +1080,7 @@ What to point where:
   is the vendors' address too; the two are two fields because here they
   cannot be one. Both are Tier A, because both are facts about where the
   operator published this deployment's sockets.
-- **The dashboard and the CLI** stay on `api.port`: `crewlet` commands that
+- **The dashboard and the harness** stay on `api.port`: `crewlet` commands that
   read a node's own Tier A file dial `api.host:api.port`, which is unchanged.
 - **A node without the `ingress` role** serves the network its
   [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
@@ -1154,7 +1154,7 @@ nothing probes it, as long as its boxes have the fleet's address (below).
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
 
-Every agent seat's executor is its coding CLI's run in a box, which calls the seat's tools back through the [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box). A `direct` box is a process of the seats node's host, so it dials that node's own `api.port` on loopback, where the node serves it the bridge to its own host's loopback alone — the commands above need no bridge address at all. A box in any other cell — `container`, `e2b` — or a `direct` one on a seats node started with `-api-port 0` dials `CREWLET_MCP_BRIDGE_URL`, so give **both** nodes the same value there: the ingress node's address as a sandbox reaches it (`http://<host>:8000` here, or its public listener's). A box calls that node, and it relays each call to the seats node over the broker, so a seats node needs no port of its own for those — started with `-api-port 0` it still launches its executors. An ingress node started with `-api-port 0` serves no bridge, and refuses its own seats' executor launches, naming `api.port`.
+Every agent seat's executor is its harness's run in a box, which calls the seat's tools back through the [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box). A `direct` box is a process of the seats node's host, so it dials that node's own `api.port` on loopback, where the node serves it the bridge to its own host's loopback alone — the commands above need no bridge address at all. A box in any other cell — `container`, `e2b` — or a `direct` one on a seats node started with `-api-port 0` dials `CREWLET_MCP_BRIDGE_URL`, so give **both** nodes the same value there: the ingress node's address as a sandbox reaches it (`http://<host>:8000` here, or its public listener's). A box calls that node, and it relays each call to the seats node over the broker, so a seats node needs no port of its own for those — started with `-api-port 0` it still launches its executors. An ingress node started with `-api-port 0` serves no bridge, and refuses its own seats' executor launches, naming `api.port`.
 
 **With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** only the ingress node binds `api.public.port`: a node without `ingress` binds no public port, so the two processes share one Tier A file as they are.
 
@@ -1206,8 +1206,8 @@ user's home. A relative `state_dir` is read against the directory the engine
 was started in. A seat's box is `<box root>/boxes/<id>`, and an
 [Ask Crewlet deep-work run](assistant.md#where-a-run-happens) placed on
 the engine host keeps its confined box at `<box root>/assistant/boxes/<id>`.
-A box holds its run's checkout, its coding CLI's home with a copy of the
-entry's login, its temporary files (`TMPDIR` and the CLI's own temporary root
+A box holds its run's checkout, its harness's home with a copy of the
+entry's login, its temporary files (`TMPDIR` and the harness's own temporary root
 point inside it) and whatever the run installs and builds, and it is removed
 when its run ends ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)).
 
@@ -1267,9 +1267,9 @@ container where an executor's working tree is worth keeping across a deploy.
 ### When the host runs out of memory
 
 A `direct` box is a process tree of the node's own host, in the engine's own
-container or systemd unit, so its coding CLI and everything that CLI builds
+container or systemd unit, so its harness and everything that harness builds
 are counted against the same memory as the engine. Size a node that runs
-`direct` boxes for all of it at once: the engine, its host-run CLI calls
+`direct` boxes for all of it at once: the engine, its host-run harness calls
 (each `providers.llm` entry's `max_concurrent` of them, at 200–400 MB a call)
 and one run per seat at work, a build included (see
 [Replica count](#replica-count)). A `container` box can be bounded on its
@@ -1422,7 +1422,7 @@ the snapshot of the company's secrets its `${VAR}` references resolve from, the
 company built from its document, its shared MCP servers (each bounded by its
 own [`startup_timeout_seconds`](../getting-started/configuration.md#mcp-servers),
 for its start and again for its first tool listing, with no ceiling on the
-setting), its sandboxes, Worklet's, Doclet's and Chatlet's halves, its coding CLIs' credential bundles,
+setting), its sandboxes, Worklet's, Doclet's and Chatlet's halves, its harnesses' credential bundles,
 the first apply of the revision it boots on, and the dashboard's projection. A probe
 sized by the store knows
 nothing about any of them, so none of them is allowed to hold it: the startup
@@ -1539,7 +1539,7 @@ never comes up.
 **Run one `crewlet run`, and scale up before you scale out.** A single
 engine handles many concurrent turns — agent handlers are
 goroutines, so the practical ceiling is your model plans' and keys' rate
-limits and host memory — every model call is a coding CLI process of 200–400 MB:
+limits and host memory — every model call is a harness process of 200–400 MB:
 the reviewer's, the workers' and the side passes', up to each `providers.llm`
 entry's `max_concurrent` (4) at once, and beside them one executor run per seat
 at work, on the engine host itself for a `direct` cell, which no
@@ -1668,7 +1668,7 @@ ahead of time when you would rather not do it on the startup path.
 
 What a fleet gets right, each of which was a real defect before:
 
-- *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn's tool loop re-checks the seat fence as each CLI run opens and again before and after each of its tool calls, as the tool bridge does around each call of the seat's executor run — so a node that loses the seat mid-turn stops before its next call rather than running out the turn beside the seat's new owner. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
+- *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn's tool loop re-checks the seat fence as each harness run opens and again before and after each of its tool calls, as the tool bridge does around each call of the seat's executor run — so a node that loses the seat mid-turn stops before its next call rather than running out the turn beside the seat's new owner. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
@@ -1684,7 +1684,7 @@ a resume — a run's collection off the seat's control topic, the review and any
 relaunch it sends back, or a person's answer carrying a parked run on, inline
 or retried — until it and its settle return. The executor run in its box holds
 no slot, and each seat runs at most one at a time. It is per node — so an org's ceiling becomes N × the configured
-value. Size it per node, not per company. And a spent plan: an entry whose CLI reported its
+value. Size it per node, not per company. And a spent plan: an entry whose harness reported its
 vendor's rate limit sits out on the node that heard it — until the reset the
 vendor named, never more than an hour away, or, where it named none, for a
 window of 1, 2, 5, then 15 minutes that steps up with each probe the limit
@@ -2062,7 +2062,7 @@ flowchart TD
     B["the wake is published to the seat's inbox<br/><i>trace rides in the event envelope</i>"]
     C["<b>agent.turn</b><br/>the dispatcher restores the trigger's trace"]
     D["<b>agent.turn.onboarding / .execute / .review / .judge</b><br/>one span per phase"]
-    E["<b>llm.run</b><br/>one per CLI run, which drives its own requests"]
+    E["<b>llm.run</b><br/>one per harness run, which drives its own requests"]
     F["<b>tool.call</b><br/>one per call, including the refused ones"]
     G["<b>agent.turn.resume</b><br/>a suspended run re-entering, days later"]
     A --> B --> C --> D
@@ -2074,7 +2074,7 @@ flowchart TD
 **Five span names, and that is the whole set.** `webhook.receive`,
 `agent.turn` (plus `agent.turn.resume`), `agent.turn.<phase>`, `llm.run` and
 `tool.call`, alongside `schedule.fire` for cron-started work. A phase is one or
-more runs of its CLI, and each run's tool calls are its children: a run's span
+more runs of its harness, and each run's tool calls are its children: a run's span
 ends once every call it made has settled, and carries the model, the run's
 whole token spend, its call count and how it ended (`crewlet.outcome`: `end`,
 `cap`, `stopped` or `failed`).
@@ -2085,8 +2085,8 @@ round, the tool and its outcome, and token counts. Everything about what a turn
 decision — is already in the [event store](#the-event-store), and a span
 carries what no event does, which is **duration**.
 
-Only the CLI *run* is spanned — not each request the CLI made inside it, which
-the engine reads from the CLI's own record onto the phase event, and not the
+Only the harness *run* is spanned — not each request the harness made inside it, which
+the engine reads from the harness's own record onto the phase event, and not the
 fallback chain and each member tried beneath it, which would nest a span per
 member and tell you nothing you could act on. Which member answered is on the
 phase event.
@@ -2130,7 +2130,7 @@ The full set of variables, including the protocol, the service name and the
 sampling ratio, is in
 [Environment Variables](../reference/environment-variables.md#opentelemetry-optional).
 The engine's exporter and the sandbox OTLP forwarder read the **same** endpoint
-and headers on purpose: a coding agent's spans land in the same backend as the
+and headers on purpose: a harness's spans land in the same backend as the
 turn that started them, nested underneath it.
 
 #### Correlating logs with traces
@@ -2745,4 +2745,4 @@ inside the process to hook them, because the engine loads no plugins.
 - **Communication permissions** — agents can only post to channels they're members of
 - **Manager handoffs**: agents identify their manager from their identity prompt and reach them through the colleague-surface tools (Slack/Jira/Confluence/A2A); engine-detected failures surface to the operator dashboard as the seat's `last_error`, and a model at its usage limit as the seat state `stopped`/`provider`
 - **LLM sandboxing** — tool execution results are validated before returning to the agent
-- **Executor runs** — every agent seat's executor is its coding CLI's own fully permissioned run; `direct` runs it on the engine host as the engine's own user, which keeps each box's state apart and not the host, so it is for a dedicated host you are willing to hand to an autonomous agent, the entry that needs the host itself, or a first run on your own machine while its seats take work from you alone, and any other deployment places its seats' runs in `container` or `e2b`, through each `providers.llm` entry's `run_in` or `providers.sandbox.default_run_in` (see [Code Sandbox § Choosing a cell](../concepts/code-sandbox.md#choosing-a-cell))
+- **Executor runs** — every agent seat's executor is its harness's own fully permissioned run; `direct` runs it on the engine host as the engine's own user, which keeps each box's state apart and not the host, so it is for a dedicated host you are willing to hand to an autonomous agent, the entry that needs the host itself, or a first run on your own machine while its seats take work from you alone, and any other deployment places its seats' runs in `container` or `e2b`, through each `providers.llm` entry's `run_in` or `providers.sandbox.default_run_in` (see [Code Sandbox § Choosing a cell](../concepts/code-sandbox.md#choosing-a-cell))

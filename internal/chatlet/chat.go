@@ -230,7 +230,8 @@ const (
 	//
 	// [MaxMentions], THIRTY-TWO: a collective address wakes no more agents
 	// than one message may name, because a name and `@channel` are the
-	// same wake. More would let the gesture nobody is obliged to answer
+	// same wake, and a person's `@channel` obliges every seat it reaches
+	// to answer exactly as a mention does. More would let one gesture
 	// start more runs than naming each seat could; fewer would only make
 	// the writer name the seats it left out, to wake them all the same.
 	// ONE CONSTANT, not a second figure, so the two cannot drift apart.
@@ -252,10 +253,11 @@ const (
 
 	// MaxRecipients bounds the whole resolved recipient set on one post.
 	//
-	// IT IS A CAP THAT CUTS, NOT A CEILING DERIVED FROM THE ARMS. Three arms
-	// carry limits of their own — [MaxMentions], [MaxThreadParticipants]
-	// and [MaxCollectiveRecipients] — and together with the one lead
-	// fallback they take at most 81. The others carry none: a direct
+	// IT IS A CAP THAT CUTS, NOT A CEILING DERIVED FROM THE ARMS. Three
+	// collections carry limits of their own ([MaxMentions],
+	// [MaxThreadParticipants] and [MaxCollectiveRecipients], the last
+	// under whichever ONE of its two reasons the author raised), and
+	// together with the one answerer they take at most 81. The others carry none: a direct
 	// conversation's participants (at most [MaxDMParticipants], by the
 	// room's own cap), a thread's followers and a room's followers of
 	// everything. Those are cut HERE, and the cut sets
@@ -419,10 +421,10 @@ const (
 	// the unit's agent seats are members with the follow-all flag set, so
 	// the room is where work addressed to nobody in particular lands.
 	//
-	// It is also the only kind a [ReasonLeadFallback] can arise in — a
-	// person who posts to a unit and names nobody is addressing whoever
-	// leads it, and a room where that resolved to silence would be a
-	// person talking to an empty screen.
+	// Its [ReasonAnswerer] is the unit's LEAD, through the chart: a person
+	// who posts to a unit and names nobody is addressing whoever leads
+	// it. Every other named room is answered by its most senior agent
+	// member instead, because nothing but the chart says who leads it.
 	KindUnit Kind = "unit"
 
 	// KindDM is a conversation between exactly two parties.

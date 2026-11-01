@@ -16,53 +16,109 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 
 	"gopkg.in/yaml.v3"
 )
 
-// The tool servers the docs and the examples hand an operator are held here,
-// because each way they go wrong is SILENT: the server starts, reports itself
-// healthy, and the company it serves quietly loses something. A floating
-// version is a build nobody can name afterwards, and a release that renames a
-// tool disarms every skill triggered on the old name without a sound. And
-// slack-mcp-server answers no post unless its entry asks it to, so a seat
-// built from a page that forgot reads every message and answers none. Nothing
-// in the engine can catch either — it is tool-agnostic by design and never
-// names a server — so the documents are checked where they are written.
+// The tool servers the docs, the examples and the curated MCP catalogue hand
+// an operator are held here, because each way they go wrong is SILENT: the
+// server starts, reports itself healthy, and the company it serves quietly
+// loses something. A floating version is a build nobody can name afterwards,
+// and a release that renames a tool disarms every skill triggered on the old
+// name without a sound. And slack-mcp-server answers no post unless its entry
+// asks it to, so a seat built from a page that forgot reads every message and
+// answers none. Running a server cannot catch either, since the engine is
+// tool-agnostic in how it runs one, so each place a launch is written is
+// checked where it is written.
 //
-// A PAGE PINS AND AN EXAMPLE DOES NOT. A page states what one release does —
-// its tools, its variables, what it takes to post — so it names that release.
+// A PAGE PINS AND AN EXAMPLE DOES NOT. A page states what one release does:
+// its tools, its variables, what it takes to post. So it names that release.
 // A shipped example is a company somebody copies and runs long after it was
 // written, and nothing moves a pin in it, so it fetches the newest of
 // everything, except the server a bundled tool skill triggers on by tool name:
-// there a renamed tool would disarm the skill without a sound.
+// there a renamed tool would disarm the skill without a sound. The curated
+// catalogue is a page in this sense: what it offers is one release, read.
 
-// pinnedToolServers are EVERY server a document launches, each at the release
-// what the documents say about it was read against. A server missing here
-// fails [TestEveryDocumentedLaunchNamesAnExactRelease], so a new one cannot
-// reach the docs without somebody reading it first.
-var pinnedToolServers = []struct {
+// pin is one package a launch fetches, at the release what is said about it
+// was read against.
+type pin struct {
 	name string
-	// readAt is the release whose source what the docs say about this server
-	// was read against. A bump that reaches the docs fails here until
-	// somebody reads the new release and moves this, because every one of
-	// those claims is about one release and none of them fails on its own.
+	// readAt is the release whose source what the docs and the catalogue
+	// say about this server was read against. A bump that reaches the docs
+	// fails here until somebody reads the new release and moves the
+	// catalogue entry's Release, because every one of those claims is about
+	// one release and none of them fails on its own.
 	readAt string
-}{
-	// The tool names the bundled skills trigger on, the variables its page
-	// names, and the two tools that reach the engine host's disk.
-	{"mcp-server-mattermost", "0.6.1"},
-	// The switches, the channel cache and the rules [slackRefusal] restates.
-	{"slack-mcp-server", "1.3.0"},
-	// The tools the Jira, Confluence and turn-engine pages name, the variables
-	// a seat sets, the five tools that read a file on the engine host, what an
-	// unset TOOLSETS serves, and the browse_url on an issue it returns.
-	{"mcp-atlassian", "0.23.1"},
-	// Its bin's name and TAVILY_API_KEY, the one variable its entries pass,
-	// and its five tools, which [underAnnotatedReads] names: that they are
-	// the five it lists and that none of them advertises an annotation.
-	{"tavily-mcp", "0.2.22"},
+}
+
+// pinnedToolServers are EVERY package a document launches through a runner,
+// each at the release it was read against: the curated MCP catalogue's
+// (internal/mcp/catalogue), whose entries name the package and the exact
+// release their facts were read against, with what was read beside each. ONE
+// LIST, so the release the catalogue offers and the release a page launches
+// cannot be two. A package missing there fails
+// [TestEveryDocumentedLaunchNamesAnExactRelease], so a new one cannot reach
+// the docs without somebody reading it and cataloguing it first.
+func pinnedToolServers() []pin {
+	var out []pin
+	for _, e := range catalogue.Curated() {
+		if e.Package != "" {
+			out = append(out, pin{name: e.Package, readAt: e.Release})
+		}
+	}
+	return out
+}
+
+// catalogueLaunches are the curated catalogue's own launches, read as a page's
+// are: the catalogue is a document an operator copies a launch from.
+func catalogueLaunches() []launch {
+	var out []launch
+	for _, e := range catalogue.Curated() {
+		if e.Transport == catalogue.TransportStdio {
+			out = append(out, launch{where: "internal/mcp/catalogue, " + e.ID, name: e.Name,
+				line: append([]string{e.Command}, e.Args...)})
+		}
+	}
+	return out
+}
+
+// catalogueServers are the curated catalogue's local servers as the entries a
+// person drafts from them: the launch, the fixed values the entry sets, its
+// tool prefix and its annotation corrections.
+func catalogueServers() map[string]MCPServer {
+	out := map[string]MCPServer{}
+	for _, e := range catalogue.Curated() {
+		if e.Transport != catalogue.TransportStdio {
+			continue
+		}
+		s := MCPServer{Name: e.Name, Command: e.Command, Args: e.Args, ToolPrefix: e.ToolPrefix,
+			Env: map[string]string{}, ToolAnnotations: map[string]ToolAnnotations{}}
+		for _, in := range e.Env {
+			if in.Value != "" {
+				s.Env[in.Name] = in.Value
+			}
+		}
+		for tool, h := range e.ToolAnnotations {
+			s.ToolAnnotations[tool] = ToolAnnotations{ReadOnly: toggleOf(h.ReadOnly),
+				Destructive: toggleOf(h.Destructive), Idempotent: toggleOf(h.Idempotent),
+				OpenWorld: toggleOf(h.OpenWorld)}
+		}
+		out["internal/mcp/catalogue, "+e.ID] = s
+	}
+	return out
+}
+
+func toggleOf(b *bool) Toggle {
+	switch {
+	case b == nil:
+		return Toggle{}
+	case *b:
+		return org.On()
+	}
+	return org.Off()
 }
 
 var exactRelease = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -83,7 +139,7 @@ func shippedExample(where string) bool {
 }
 
 func isPinnedToolServer(name string) bool {
-	for _, p := range pinnedToolServers {
+	for _, p := range pinnedToolServers() {
 		if p.name == name {
 			return true
 		}
@@ -638,7 +694,7 @@ func documentedBlocks(t *testing.T) []docBlock {
 
 func namesAPinnedServer(text string) bool {
 	names := strings.Contains(text, "SLACK_MCP_")
-	for _, pkg := range pinnedToolServers {
+	for _, pkg := range pinnedToolServers() {
 		names = names || strings.Contains(text, pkg.name)
 	}
 	return names
@@ -807,7 +863,7 @@ func TestEveryDocumentedLaunchNamesAnExactRelease(t *testing.T) {
 	}
 
 	launched := map[string]int{}
-	for _, l := range documentedLaunches(t) {
+	for _, l := range append(documentedLaunches(t), catalogueLaunches()...) {
 		commands := commandsOf(l.line)
 		for i, command := range commands {
 			inv, ok := invocationOf(command)
@@ -829,8 +885,9 @@ func TestEveryDocumentedLaunchNamesAnExactRelease(t *testing.T) {
 				t.Errorf("%s: %q runs %q through a package runner and names no package to run", l.where, l.name, strings.Join(l.line, " "))
 			}
 			if name, _ := splitRelease(inv.run); inv.run != "" && !isPinnedToolServer(name) {
-				t.Errorf("%s: %q launches %s, which pinnedToolServers does not list: read the release the "+
-					"documents name — its tools, its variables — against what they say, then add it with readAt", l.where, l.name, name)
+				t.Errorf("%s: %q launches %s, which the curated MCP catalogue does not pin: read the release "+
+					"the documents name (its tools, its variables) against what they say, then catalogue it "+
+					"in internal/mcp/catalogue with that Package and Release", l.where, l.name, name)
 			}
 		}
 	}
@@ -877,7 +934,7 @@ func TestThePinnedToolServersRunOneReleaseEverywhere(t *testing.T) {
 		packages []string
 	}
 	var fetches []fetch
-	for _, l := range documentedLaunches(t) {
+	for _, l := range append(documentedLaunches(t), catalogueLaunches()...) {
 		for _, command := range commandsOf(l.line) {
 			if inv, ok := invocationOf(command); ok {
 				fetches = append(fetches, fetch{l.where, inv.packages})
@@ -892,7 +949,7 @@ func TestThePinnedToolServersRunOneReleaseEverywhere(t *testing.T) {
 	}
 	root := sourcetree.Root(t)
 
-	for _, pkg := range pinnedToolServers {
+	for _, pkg := range pinnedToolServers() {
 		t.Run(pkg.name, func(t *testing.T) {
 			t.Parallel()
 			releases := map[string][]string{}
@@ -912,8 +969,12 @@ func TestThePinnedToolServersRunOneReleaseEverywhere(t *testing.T) {
 					releases[version] = append(releases[version], f.where)
 				}
 			}
+			// THE CATALOGUE LAUNCHES EVERY PIN ITSELF, so a pin no page
+			// launches is still a release somebody is offered, and its
+			// own launch is held to it below with every page's.
 			if entries == 0 {
-				t.Fatalf("no document launches %s — drop it from pinnedToolServers, or this check certifies nothing", pkg.name)
+				t.Fatalf("the catalogue pins %s and nothing launches it, not even its own entry: "+
+					"its launch no longer fetches the package it names", pkg.name)
 			}
 
 			// Prose names it too: a troubleshooting step that says what to run,
@@ -968,9 +1029,10 @@ func TestThePinnedToolServersRunOneReleaseEverywhere(t *testing.T) {
 			}
 			for version := range releases {
 				if version != pkg.readAt {
-					t.Errorf("the docs run %s %s, but what they say about it was read from %s's source: "+
-						"read %s's (its tools, its variables, and for slack-mcp-server the rules slackRefusal "+
-						"restates), correct whatever moved, then set readAt to %s",
+					t.Errorf("the docs run %s %s, but what they and the curated catalogue say about it "+
+						"was read from %s's source: read %s's (its tools, its variables, and for "+
+						"slack-mcp-server the rules slackRefusal restates), correct whatever moved, then set "+
+						"its catalogue entry's Release to %s",
 						pkg.name, version, pkg.readAt, version, version)
 				}
 			}
@@ -1313,8 +1375,22 @@ func TestEverySlackToolServerCanPost(t *testing.T) {
 			}
 		}
 	}
-	if entries == 0 {
-		t.Fatal("no document configures slack-mcp-server — this check was certifying nothing")
+	catalogued := 0
+	for where, s := range catalogueServers() {
+		spec, argv, ok := launchedPackage(s)
+		if name, _ := splitRelease(spec); !ok || name != "slack-mcp-server" {
+			continue
+		}
+		catalogued++
+		for _, tool := range slackWriteTools {
+			if why := slackRefusal(s.Env, argv, tool); why != "" {
+				t.Errorf("%s: the drafted entry %s", where, why)
+			}
+		}
+	}
+	if entries == 0 || catalogued == 0 {
+		t.Fatalf("%d documents and %d catalogue entries configure slack-mcp-server: this check was "+
+			"certifying nothing for one of them", entries, catalogued)
 	}
 }
 
@@ -1363,8 +1439,27 @@ func TestEveryUnderAnnotatedServerHasItsReadsMarked(t *testing.T) {
 			}
 		}
 	}
-	if entries == 0 {
-		t.Fatal("no document configures a server that advertises no annotations — this check was certifying nothing")
+	catalogued := 0
+	for where, s := range catalogueServers() {
+		spec, _, ok := launchedPackage(s)
+		name, _ := splitRelease(spec)
+		reads, under := underAnnotatedReads[name]
+		if !ok || !under {
+			continue
+		}
+		catalogued++
+		for _, tool := range reads {
+			hints, ok := s.ToolAnnotations[tool]
+			if !ok || !hints.ReadOnly.Or(false) {
+				t.Errorf("%s runs %s, which advertises no annotation, and its tool_annotations do not "+
+					"mark %s read_only, so a server drafted from it counts the tool as a possible delivery",
+					where, name, tool)
+			}
+		}
+	}
+	if entries == 0 || catalogued == 0 {
+		t.Fatalf("%d documents and %d catalogue entries configure a server that advertises no "+
+			"annotations: this check was certifying nothing for one of them", entries, catalogued)
 	}
 }
 

@@ -197,8 +197,8 @@ A few things worth knowing when deploying Crewlet:
   credentials, its people and its deployment — and the configuration it
   writes runs code: a stdio `mcp_servers` entry is a `command` the
   engine starts as its own user on every node that runs seats; a
-  `providers.llm` entry names a coding CLI it runs, and every agent seat's
-  executor is that CLI's own fully permissioned run, which a `run_in: direct`
+  `providers.llm` entry names a harness it runs, and every agent seat's
+  executor is that harness's own fully permissioned run, which a `run_in: direct`
   cell (on the entry, or as `providers.sandbox.default_run_in`) runs, with the
   seat's setup steps, as that same user on the engine host; and a seat's model
   chain (which places its run), credentials and `mcp_env` are part of the same
@@ -225,7 +225,7 @@ A few things worth knowing when deploying Crewlet:
   where the engine reads its collector credential (`OTEL_EXPORTER_OTLP_HEADERS`),
   often beside an operator's own provisioning tokens (`GITLAB_ADMIN_TOKEN`,
   `MATTERMOST_ADMIN_TOKEN`); so no process the engine starts inherits it: a
-  stdio MCP server, a coding CLI, a local sandbox's coding agent and the
+  stdio MCP server, a harness, a local sandbox's harness and the
   container runtime's own CLI each get `PATH`, locale, TLS trust and proxy
   settings, the host user's home and temporary directories where they run
   in no box of their own, and what their configuration declares. That keeps the
@@ -404,14 +404,14 @@ A few things worth knowing when deploying Crewlet:
   would trust with every viewer's readable rows. See
   `internal/api/pagepolicy` for why a nonce-based policy cannot close this.
 - **Where each executor runs is the isolation decision.** Every agent seat's
-  executor is its coding CLI's own fully permissioned run — Claude Code under
+  executor is its harness's own fully permissioned run — Claude Code under
   `bypassPermissions`, OpenCode with every action allowed but `question` —
   because a headless run has nobody to answer a permission prompt, so the
-  cell it runs in, not the CLI's own prompts, is the isolation model. The cell
+  cell it runs in, not the harness's own prompts, is the isolation model. The cell
   is the one the `providers.llm` entry it launches on names in `run_in`, else
   `providers.sandbox.default_run_in`. `e2b` is a remote VM per run and
   `container` a Docker or Podman container on the engine host; `direct` runs
-  a fully permissioned CLI **as the engine's own user on the engine host**,
+  a fully permissioned harness **as the engine's own user on the engine host**,
   which keeps each box's state apart and not the host — the run can read
   what that user can. Use `direct` only on a dedicated host you are willing
   to hand to an autonomous agent, for the entry that needs the host itself,

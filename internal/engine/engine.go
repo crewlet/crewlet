@@ -178,11 +178,16 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 	if err != nil {
 		return nil, err
 	}
+	// DESCRIBED BEFORE ANYTHING IS FILED, so every MCP tool this epoch's
+	// registry is given, and every seat's registry cloned from it, carries
+	// what its server is for into the prompt's server list.
+	registry := tools.NewRegistry()
+	registry.DescribeServers(serverDescriptions(c))
 	return &Company{
 		Config:   c,
 		Org:      organization,
 		Models:   models,
-		Tools:    tools.NewRegistry(),
+		Tools:    registry,
 		contacts: env.LookupOK,
 	}, nil
 }

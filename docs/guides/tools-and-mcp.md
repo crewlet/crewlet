@@ -473,7 +473,7 @@ and, above the catalogue on the same screen, as a row of its own: every node
 re-publishes its MCP servers as they are at each beat on its presence heartbeat
 (per server, its instances counted), so **MCP servers** shows each server as
 *Running*, *Partly failing*, *Failing*, *Waiting for credentials*, *Not
-started* or *Not reported* with one cell per live node and the first failure's
+started*, *Not reported* or *Disabled* (turned off, [below](#turning-a-server-off)) with one cell per live node and the first failure's
 reason and seat, and the first waiting instance's sentence and seat
 (`GET /mcp-servers`, which takes `admin` because it shows each server's
 configured launch, as `/config` does; the heartbeat carries each reason
@@ -499,6 +499,119 @@ Over the API it is `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [configure via the API](configure-via-api.md). A per-seat server still needs
 a seat to declare credentials for it under `mcp_env`, which is written in the
 org builder.
+
+### Turning a server off
+
+`enabled: false` on an `mcp_servers` entry turns the server off and keeps
+everything else. Nothing runs it:
+
+- the shared instance, or every seat's instance, that was running is stopped
+  on the apply that turns it off;
+- no seat is granted it, so its tools leave every seat's surface and its
+  `mcp:<server>` leaves every seat's `tool_sources`;
+- no executor box is given it, even where a seat's `sandbox.mcp.servers` lists
+  it.
+
+Everything that names it stays, and is checked as before: the entry, every
+seat's and unit's `mcp_env` block for it, and every box listing. A `${VAR}` it
+would need is nobody's concern while it is off, so one that resolves to nothing
+holds nothing back and is not reported. Its row on Settings › MCP Tools reads
+*Disabled* (`state: disabled` on [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)),
+and an integration's Agents tab says the agent's tool is not running where
+every server that reads the integration's credential is off.
+
+Set it back to `true`, or remove the key (on is the default), and the next apply
+starts it with the credentials its seats kept. Removing a server instead means
+clearing every block that names it first, and losing what they held.
+
+### Saying what a server is for
+
+`description` is one line, at most 200 characters with no line breaks or tabs,
+saying what the server is for. Each agent's prompt names its MCP servers under
+`## Tools to discover` before it shows any of their tools, and prints the
+description beside the name:
+
+```text
+- MCP server `handbook`: Searches the engineering handbook and the runbooks
+```
+
+A name like `internal` says nothing about what is behind it; the description is
+what tells an agent which server to look in before it spends a call listing
+one. Editing it reaches the next turn and restarts nothing, since no server
+process reads it. It is also on the server's row of `GET /mcp-servers`.
+
+### The curated catalogue, and a community registry
+
+Adding a server starts from the **curated catalogue**: the MCP servers this
+build knows, each with its address or launch line, the headers or variables it
+reads, how a static credential's value is spelled, the sign-ins its vendor
+offers, what an admin has to do at the vendor first, and the day its facts
+were last read from the vendor (`read_at`). It is a table compiled into the
+engine and reviewed in pull requests, so every node answers it the same, with
+or without egress. `GET /mcp-servers/catalogue` serves it (see the
+[API reference](../reference/api-endpoints.md#get-mcp-serverscatalogue)).
+
+| Entry | Server | Sign-in |
+|---|---|---|
+| `github` | GitHub's remote server | the GitHub integration (each agent's own app token), or a token header |
+| `datadog` | Datadog's remote server, at your site's address | the Datadog integration, OAuth, or the `DD_API_KEY` and `DD_APPLICATION_KEY` headers |
+| `rovo` | Atlassian's Rovo remote server | OAuth, or an API token an organization admin has allowed |
+| `linear` | Linear's remote server | OAuth, or an API key header |
+| `notion` | Notion's remote server | OAuth |
+| `sentry` | Sentry's remote server | OAuth |
+| `stripe` | Stripe's remote server | OAuth, or an agent API key header |
+| `cloudflare` | The Cloudflare API server | OAuth, or an API token header |
+| `gitlab` | `glab mcp serve`, one per agent | the GitLab integration |
+| `slack` | `slack-mcp-server` 1.3.0, one per agent | the Slack integration |
+| `mattermost` | `mcp-server-mattermost` 0.6.1, one per agent | the Mattermost integration |
+| `atlassian` | `mcp-atlassian` 0.23.1 for Jira and Confluence, one per agent | the Atlassian integration |
+| `tavily` | `tavily-mcp` 0.2.22 | its API key variable |
+| `postgres` | Postgres MCP Pro (`postgres-mcp` 0.3.0), restricted to reads | its connection string variable |
+
+A local entry launched through a package runner names the exact release its
+facts were read against, and every page here that launches the same package
+names the same release: one test holds the catalogue and the pages together,
+so a bump moves them at once.
+
+**The same table recognises a configured server.** A server whose address or
+command matches an entry is drawn on Settings › MCP & tools with that entry's
+title and vendor mark, and `GET /mcp-servers` names it (`title`, `catalogue`,
+`vendor`). For the entries an integration serves, that recognition is also
+what binds each agent's own credential to a per-agent server (see
+[Seat credentials the engine binds](#seat-credentials-the-engine-binds)). An
+address is matched by whole host labels, never a substring.
+
+**A community registry is off until the company names one.** Set
+`mcp_registry.url` to the https address of a registry that speaks the
+[MCP Registry](https://registry.modelcontextprotocol.io) v0.1 API. That is
+usually a mirror the company curates: the official registry is a preview,
+and its own guidance is that a host reads a subregistry of it rather than it.
+
+```yaml
+mcp_registry:
+  url: https://registry.modelcontextprotocol.io
+```
+
+The add flow then offers a search of it beside the catalogue. What a registry
+lists is somebody else's description of somebody else's server, so:
+
+- every result is marked **not reviewed**, and carries no read date, no
+  integration and no fixed value; it is drawn with a vendor's mark only when
+  its address is that vendor's own host;
+- it is a draft for the same add flow, test and save as an address typed by
+  hand, and nothing it says starts a process or skips a step;
+- a result is offered only with a Streamable HTTP address that is https and
+  fixed, or a package from the public npm or PyPI registry at an exact
+  release, launched as `npx -y <package>@<release>` or
+  `uvx <package>==<release>`. A listing that needs a runner argument, a
+  package from another registry, a templated address, a field past its bound
+  or text with a direction override is left out, and the answer counts it;
+- a search reads at most a mebibyte and 20 results and gives up after 10
+  seconds, and the engine dials the registry alone: never an icon, a
+  repository or an address a listing names, and no redirect (a registry that
+  moved is reported with where it points, for you to write);
+- the address must be https, a private one included, because the launch lines
+  a registry answers are only as trustworthy as the connection they came over.
 
 ### What a tool can do
 
@@ -886,7 +999,9 @@ mcp_servers:
 ```
 
 An entry that declares nothing is bound by what the engine recognises it as,
-by its command or its address:
+by its command or its address, through the
+[curated catalogue](#the-curated-catalogue-and-a-community-registry)'s
+recognition:
 
 | Server | Recognised by | Reads |
 |---|---|---|
@@ -1100,6 +1215,7 @@ mcp_servers:
   # stdio, shared by all agents; it advertises no annotations, so these say
   # its tools only read (see Tool annotation overrides below)
   - name: tavily
+    description: Searches and reads the public web
     command: npm
     args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env: { TAVILY_API_KEY: "${TAVILY_API_KEY}" }
@@ -1150,7 +1266,7 @@ A stdio server is handed an **explicit** environment, never the engine's own. Th
 
 | Layer | What | Why |
 |---|---|---|
-| The host allowlist | `PATH`, the locale (`LANG`, `LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_NUMERIC`), `TERM`, `TZ`, the TLS trust variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`) | What a process needs to run at all. It is the same list every child the engine starts is handed — a coding CLI and a local sandbox get it too |
+| The host allowlist | `PATH`, the locale (`LANG`, `LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_NUMERIC`), `TERM`, `TZ`, the TLS trust variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`) | What a process needs to run at all. It is the same list every child the engine starts is handed — a harness and a local sandbox get it too |
 | The engine user's locations | `HOME`, `USER`, `LOGNAME`, `TMPDIR` and the XDG base directories (`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`) | A server launched through `npx` or `uvx` runs as the engine's user and keeps its package cache under that user's `HOME` |
 | A container runtime's own settings — **only** when the server's `command` is `docker` or `podman` | Every `DOCKER_*`, `CONTAINER_*`, `CONTAINERS_*` and `PODMAN_*` variable, `REGISTRY_AUTH_FILE` and `DBUS_SESSION_BUS_ADDRESS` | A server published as an image (`command: docker`, `args: ["run", "-i", "--rm", …]`) *is* the runtime's CLI, and a rootless runtime finds its daemon through `DOCKER_HOST`: without it the CLI dials the system socket and fails at the daemon with a permission error that names nothing you set. It is the same rule the [local sandbox](../concepts/code-sandbox.md) drives the runtime with. What the image itself receives is what `args` passes it — a bare `-e NAME` there copies `NAME` from this environment, so name it in `env:` |
 | What the config declares | The server's `env:`, then the seat's `mcp_env` for it, which wins variable by variable | The server's settings and its identity, resolved as above — a key in `optional_keys` whose value does not resolve is not set at all |
@@ -1257,7 +1373,7 @@ Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); over
 
 ## How Tool Calls Work
 
-From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions, served together to the seat's coding CLI as the tools of one MCP server, `crewlet`, which the CLI calls in its own loop and the engine answers through the dispatch below ([Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host)). The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker. The name `crewlet` is therefore reserved: no `mcp_servers` entry may take it.
+From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions, served together to the seat's harness as the tools of one MCP server, `crewlet`, which the harness calls in its own loop and the engine answers through the dispatch below ([Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host)). The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker. The name `crewlet` is therefore reserved: no `mcp_servers` entry may take it.
 
 **Tool resolution order:**
 

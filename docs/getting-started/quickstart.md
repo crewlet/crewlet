@@ -30,10 +30,10 @@ with no broker to operate and nothing to point a DSN at. The stream takes an
 external address when a deployment outgrows that; see
 [Deployment](../guides/deployment.md).
 
-What it does need is the **coding CLI its model runs through**: every model is
+What it does need is the **harness its model runs through**: every model is
 reached through one, driven as a process on this machine. This page uses
 Claude Code, so `claude --version` should answer before you go on — see
-[Installation § A coding CLI](installation.md#a-coding-cli) for it, Codex and
+[Installation § A harness](installation.md#a-harness) for it, Codex and
 OpenCode.
 
 The compose file in a repo checkout is for the *integration* loops
@@ -139,8 +139,8 @@ policies:
 
 providers:
   llm:
-    default:                            # Claude Code, the default CLI
-      model: sonnet                     # in the CLI's own grammar: an alias or a model id
+    default:                            # Claude Code, the default harness
+      model: sonnet                     # in the harness's own grammar: an alias or a model id
       auth:
         mode: api-key                   # your Anthropic API key, read from ANTHROPIC_API_KEY.
                                         #   On a Claude Pro / Max plan instead, drop this block
@@ -152,7 +152,7 @@ providers:
                                         # `dimensions` to set
     api_key: "${OPENAI_API_KEY}"        # used by the agent-learning subsystem
                                         # (diary vector search + episode recall)
-  sandbox:                              # where every seat's executor runs: its CLI's
+  sandbox:                              # where every seat's executor runs: its harness's
                                         # own run, in a box on this machine
     local:
       state_dir: "./acme-data/sandboxes"
@@ -276,9 +276,9 @@ units:
 ### LLM options
 
 The `providers.llm` map takes named entries (roles select one via `role.llm`;
-`default` is the fallback). **Every entry is a coding CLI** the engine drives —
+`default` is the fallback). **Every entry is a harness** the engine drives —
 the vendor's own harness, signed in with your plan or your key — and its fields
-are that CLI's settings: which CLI (`harness`), which model in its grammar, and
+are that harness's settings: which harness (`harness`), which model in its grammar, and
 how it signs in (`auth`):
 
 ```yaml
@@ -309,7 +309,7 @@ providers:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
 ```
 
-An entry on a **plan** is signed in once, on the engine host — the CLI's own
+An entry on a **plan** is signed in once, on the engine host — the harness's own
 login, landing in a directory of Crewlet's rather than your personal one:
 
 ```bash
@@ -330,8 +330,8 @@ its API instead, with a Tier A token in `CREWLET_API_TOKEN`. Either way,
 `crewlet llm doctor` checks
 every entry end to end — the binary, its version, how it is signed in, and a
 real tool call — before a seat depends on it. Each seat gets its own isolated
-CLI home, so agents never inherit one another's sessions or memory — that,
-every sign-in route and the rest of the CLIs are covered in
+harness home, so agents never inherit one another's sessions or memory — that,
+every sign-in route and the rest of the harnesses are covered in
 [LLM Backends](../concepts/llm-backends.md).
 
 Useful knobs: different roles can use different entries (executives on a
@@ -339,10 +339,10 @@ frontier model, junior agents on a cheaper one), and a role's `llm` also
 accepts a **list** — `llm: [plan, default]` runs on the flat-rate plan and
 falls through to the metered key while the plan's window is spent. Point a
 role's `llm_auxiliary` (reflection, summaries, the turn-start filters) at a
-fast, cheap entry: each of those calls pays a CLI launch under a fixed
+fast, cheap entry: each of those calls pays a harness launch under a fixed
 deadline — see [Auxiliary work and
 latency](../concepts/llm-backends.md#auxiliary-work-and-latency). There is no
-temperature, effort or output cap to set: each CLI configures its own model.
+temperature, effort or output cap to set: each harness configures its own model.
 Embeddings (`providers.embeddings`) power the agent-learning subsystem and are
 the one model call the engine makes itself, to any OpenAI-compatible embeddings
 endpoint via `base_url`.
@@ -420,7 +420,7 @@ crewlet validate            # both tiers, from ./crewlet.yaml and ./company.yaml
 
 Then check the model end to end. This one *does* read the environment, and it
 sends real calls — a smoke test with a tool and two isolation probes — so it is
-the one check that proves the CLI is installed, signed in and still matches the
+the one check that proves the harness is installed, signed in and still matches the
 profile Crewlet drives it with:
 
 ```bash
@@ -785,7 +785,7 @@ is sent to a seat waits on its inbox. The builder's next steps give it: with
 export`, add `providers.llm` and `providers.sandbox` to it (`local: {}` with
 `default_run_in: direct` runs every executor on this host, as you — a first
 run on your own machine while its seats take work from you alone; a company
-with agent seats and a model is refused without a sandbox), sign the CLI in with
+with agent seats and a model is refused without a sandbox), sign the harness in with
 `crewlet llm login`
 (a captured token goes into the fleet's secret store through the node's own
 broker, which the command starts while the node is stopped), import the file
@@ -850,7 +850,7 @@ crewlet run -config crewlet.yaml -api-port 8000   # terminal 1
 crewlet run -config agents.yaml -api-port 8001    # terminal 2
 ```
 
-Every seat's executor runs its CLI in a box on the agents node, and the box
+Every seat's executor runs its harness in a box on the agents node, and the box
 calls the seat's tools back through the tool bridge. The agents node serves
 that bridge itself, on its own port: a `direct` box is a process of the host it
 runs on, so it dials the node that launched it on loopback, and a node without
@@ -889,7 +889,7 @@ does not go through an HTTP route at all.
 ## There is no programmatic setup
 
 The engine has no importable API: every package lives under `internal/`, so
-the CLI, the config format and the wire protocol are the whole public
+the harness, the config format and the wire protocol are the whole public
 surface. That is deliberate — it means the two-tier config is the only way
 to describe a company, and nothing can drift between what a YAML file says
 and what an embedding program set up by hand.
@@ -1024,13 +1024,13 @@ each), then wire them in:
   `crewlet secrets set ANTHROPIC_API_KEY` puts the value in the encrypted
   [secret store](../concepts/secret-store.md), which the engine consults ahead
   of the process environment when resolving the `${...}` references you already
-  wrote — and when an `api-key` entry reads its CLI's own key variable.
+  wrote — and when an `api-key` entry reads its harness's own key variable.
   Provisioners can write there directly (`crewlet gitlab provision …
   -secret-store`), so a minted credential reaches the engine with no file to
   source and no shell to be in
 - Explore the [Nimbus example](../../examples/) — a seven-seat company on
   Mattermost, running on Claude Code with your Claude plan rather than an API
-  key (`nimbus-claude-cli`), every seat running that CLI as its own agentic
+  key (`nimbus-claude-code`), every seat running that harness as its own agentic
   loop, in a `direct` box on the engine host — a first run on your own
   machine while its seats take work from you alone, like this page's.
   It is the next step up from this page and still needs nothing but the chat

@@ -57,7 +57,7 @@ var shippedCompanies = []string{
 	// The reference: the full stack, on a metered key.
 	"nimbus.company.yaml",
 	// The short path: Mattermost alone, on a harness subscription.
-	"nimbus-claude-cli.company.yaml",
+	"nimbus-claude-code.company.yaml",
 }
 
 func TestShippedCompanyExamplesLoad(t *testing.T) {
@@ -142,10 +142,10 @@ func TestBothShippedExamplesModelTheSameCompany(t *testing.T) {
 		slices.Sort(out)
 		return out
 	}
-	full, cli := seats("nimbus.company.yaml"), seats("nimbus-claude-cli.company.yaml")
-	if !slices.Equal(full, cli) {
-		t.Errorf("the two examples no longer model the same seats:\n  full: %v\n  cli:  %v",
-			full, cli)
+	full, subscription := seats("nimbus.company.yaml"), seats("nimbus-claude-code.company.yaml")
+	if !slices.Equal(full, subscription) {
+		t.Errorf("the two examples no longer model the same seats:\n  full: %v\n  subscription: %v",
+			full, subscription)
 	}
 }
 
@@ -338,7 +338,7 @@ func TestQuickstartExportsEveryVariableItReferences(t *testing.T) {
 // and nothing else notices when it stops working.
 func TestBootstrapExampleLoads(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"nimbus.config.yaml", "nimbus-claude-cli.config.yaml"} {
+	for _, name := range []string{"nimbus.config.yaml", "nimbus-claude-code.config.yaml"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			bootstrapExampleLoads(t, name)

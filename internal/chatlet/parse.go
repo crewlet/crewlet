@@ -21,7 +21,7 @@ import (
 // constants, never as literals here, so a rename is a compile error rather
 // than a silence.
 //
-// The three below are facts no vendor has and therefore facts that vocabulary
+// The four below are facts no vendor has and therefore facts that vocabulary
 // cannot hold. EVERY ONE HAS A PRODUCER AND A READER: the parser stamps them
 // and [Prompt] reads them back. A key nobody reads is work that looks done,
 // which is exactly how `routed_via` was going to end up here before the
@@ -60,6 +60,19 @@ const (
 	// complete one: the seats that WERE woken then assume the rest heard
 	// it too, and nobody says the thing again.
 	MetaTruncated = "chat_wakes_truncated"
+
+	// MetaAsked is how many seats a person's `@channel` obliged to answer:
+	// every recipient of the message routed under an addressed reason,
+	// stamped only on the wakes of a message that raised a
+	// [ReasonCollectiveRequest].
+	//
+	// Read by the prompt, because the answer to a question put to thirty
+	// seats is not the answer to one put to three: each seat is told how
+	// many share it, so it answers for its own role rather than for the
+	// room. Counted HERE, from the set this parser routed, because that
+	// is the set that is actually woken; the record's own list was routed
+	// against the roster of an earlier instant.
+	MetaAsked = "chat_asked"
 )
 
 // AddressRule is this domain's answer to "was this message addressed to this
@@ -80,10 +93,10 @@ const (
 //     is filed under the line it is on rather than under one thread of it.
 //   - The follows are the reasons [Reason.Addressed] returns true for. The
 //     rule carries them rather than inheriting notify's own four precisely
-//     because this domain routes on reasons that package has never heard of —
-//     `reply_to_own_root` and `lead_fallback` are not follows anywhere else —
-//     and a rule that fell back to the vendor set would read every one of
-//     them as "does not address".
+//     because this domain routes on reasons that package has never heard of
+//     (`reply_to_own_root`, `collective_request` and `answerer` are not
+//     follows anywhere else), and a rule that fell back to the vendor set
+//     would read every one of them as "does not address".
 //
 // NO DMPrefix. A channel id here is a uuid, so a prefix test would mark
 // arbitrary rooms as direct messages and oblige every seat in them to answer
@@ -116,14 +129,15 @@ func AddressRule() notify.AddressRule {
 //
 // # It holds nothing, and that is the whole of its correctness
 //
-// Not the roster — that arrives per call, because a parser outlives the epoch
-// a wake was written under. Not the leads: the lead a [ReasonLeadFallback]
+// Not the roster: that arrives per call, because a parser outlives the epoch
+// a wake was written under. Not the answerers: the seat a [ReasonAnswerer]
 // resolves to RIDES THE RECORD, resolved at write time inside the decide,
-// because who leads a unit is a fact about the epoch and a parser resolving it
-// later would route a message posted under one org chart to whoever leads
-// under the next one. And not a thread, a membership or a room: the record's
-// [Notify] is the snapshot the routing was decided from, which is what lets
-// this run on a node whose applier has not reached the message.
+// because who answers for a room is a fact about the epoch and the membership,
+// and a parser resolving it later would route a message posted under one org
+// chart to whoever answers under the next one. And not a thread, a membership
+// or a room: the record's [Notify] is the snapshot the routing was decided
+// from, which is what lets this run on a node whose applier has not reached
+// the message.
 type Parser struct{}
 
 // NewParser builds Chatlet's inbound parser.
@@ -152,10 +166,10 @@ func (p *Parser) Source() string { return Source }
 // Running them again here is not redundant. The set on the record was routed
 // against the roster of the instant it was written; this one is routed against
 // the roster the company has now, so a seat that has since been removed is
-// dropped and the lead the record named is offered again. And a record from a
-// NEWER BUILD may name more seats than this build's caps allow — a wake set is
-// SPENT rather than kept like a row, and launching an executor in a box for
-// each of two hundred seats a record named is not something an older build
+// dropped and the answerer the record named is offered again. And a record
+// from a NEWER BUILD may name more seats than this build's caps allow: a wake
+// set is SPENT rather than kept like a row, and launching an executor in a box
+// for each of two hundred seats a record named is not something an older build
 // has to agree to.
 func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) (
 	[]notify.Routed, error) {
@@ -199,6 +213,9 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	}
 
 	base := p.inbound(record)
+	if asked := askedBy(routed); asked > 0 {
+		base.Metadata[MetaAsked] = strconv.Itoa(asked)
+	}
 	// THE RULE IS BUILT ONCE for the whole record: every recipient's
 	// verdict is the same rule read against that recipient's own reason,
 	// and rebuilding it per copy would allocate the vocabulary's two
@@ -234,6 +251,27 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 		})
 	}
 	return out, nil
+}
+
+// askedBy is how many of the routed seats a person's `@channel` obliged to
+// answer ([MetaAsked]), or 0 for a message that raised no such request.
+//
+// EVERY ADDRESSED RECIPIENT COUNTS, not only those routed as the request: a
+// seat the same message also named, or whose thread it answered, was claimed
+// under that stronger reason and is asked all the same, so leaving it out
+// would tell the rest that fewer seats share the question than do.
+func askedBy(routed []Candidate) int {
+	requested, asked := false, 0
+	for _, c := range routed {
+		requested = requested || c.Reason == ReasonCollectiveRequest
+		if c.Reason.Addressed() {
+			asked++
+		}
+	}
+	if !requested {
+		return 0
+	}
+	return asked
 }
 
 // rosterOf narrows the registry to the two facts [Route] needs.
@@ -390,7 +428,7 @@ func withReason(base notify.Inbound, rule notify.AddressRule, reason Reason,
 // THREAD rather than something this message did to it.
 //
 // FOUR, and the split is [notify.FollowingField]'s: being named, being
-// `@channel`-ed and being the lead nobody else answered for are all facts
+// `@channel`-ed and being the answerer nobody else spoke up for are all facts
 // about THIS message, and stamping one of them as a standing follow would
 // make it address every later reply in the thread for ever.
 func standing(reason Reason) bool {

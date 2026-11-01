@@ -1225,12 +1225,15 @@ func captureChat(t *testing.T, n *node, founder *browser, conn *websocket.Conn,
 			AuthorKind: chatlet.AuthorHuman, ThreadRoot: thread}
 	}
 
-	// A ROOM, made from the tab with the seat in it. Its frame names the
-	// room's founding line (its members joined), the row the record wrote,
-	// read back below by its kind.
+	// A ROOM, made from the tab. Its frame names the room's founding line
+	// (its members joined), the row the record wrote, read back below by its
+	// kind. NO AGENT IS IN IT: the first line said below names nobody, and in
+	// a room with an agent member that wakes the room's answerer, a turn this
+	// capture does not script. The seat is reached in the thread by being
+	// named, which a public room carries to a seat that has not joined.
 	made := openRoomAs(t, n, founder, map[string]any{
 		"channel": "launch", "kind": string(chatlet.KindPublic),
-		"topic": "what ships on Thursday", "members": []any{seat},
+		"topic": "what ships on Thursday",
 	})
 	out.Room = made.Channel
 	created := len(out.Changes)

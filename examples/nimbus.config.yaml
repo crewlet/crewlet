@@ -153,7 +153,7 @@ node:
                                        #   single-node company.  Not the same
                                        #   knob as a providers.llm entry's own
                                        #   max_concurrent, which caps that
-                                       #   entry's CLI processes on this host.
+                                       #   entry's harness processes on this host.
 
 api:
   host: "0.0.0.0"
@@ -252,7 +252,7 @@ api:
 
     tokens:
       # This DEPLOYMENT's machine credentials — break-glass, the operator
-      # CLI, a pipeline.  At least one is required once a port is set: the
+      # harness, a pipeline.  At least one is required once a port is set: the
       # identity estate of a fresh deployment is empty, so this is what
       # creates the first person, and on a running one it is the way back
       # in when nobody can sign in.

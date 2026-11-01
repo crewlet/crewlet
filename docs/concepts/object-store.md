@@ -449,7 +449,7 @@ bytes at all:
    reservation expires.
 2. **The transfer.** On `nats` every file streams through the engine. On `s3`,
    when the boot probe proved the bucket honours them, the intent instead hands
-   a browser or the CLI a presigned `PUT` for each file, bound to its exact
+   a browser or the harness a presigned `PUT` for each file, bound to its exact
    length, its served type, its SHA-256 as a signed checksum and
    `if-none-match: *`, so the bytes go straight to the bucket and a second put
    to the same key is refused. An agent's sandbox is never handed one: the

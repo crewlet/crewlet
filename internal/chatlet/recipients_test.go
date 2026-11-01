@@ -20,12 +20,12 @@ import (
 // still has, unless it is listed as gone; the handles listed as people are the
 // `kind: human` seats.
 //
-// THE LEAD IS ASKED FOR ONCE, BY THE WRITE PATH, and never by the routing
-// arithmetic: the decide resolves a room's unit lead through this seam and
-// puts the ANSWER on the record, so every node routing that record later
-// uses the lead the company had when somebody spoke rather than the one it
-// has now. That is why the cases below state a lead on [chatlet.Routing]
-// directly and only the write-path cases set one here.
+// THE ANSWERER IS ASKED FOR ONCE, BY THE WRITE PATH, and never by the routing
+// arithmetic: the decide resolves a room's answerer through this seam and puts
+// the ANSWER on the record, so every node routing that record later uses the
+// answerer the company had when somebody spoke rather than the one it has now.
+// That is why the cases below state an answerer on [chatlet.Routing] directly
+// and only the write-path cases set a lead or a rank here.
 type testRoster struct {
 	people map[string]bool
 	gone   map[string]bool
@@ -35,6 +35,12 @@ type testRoster struct {
 	// about a unit alone could not say a room its unit stopped declaring
 	// is nobody's.
 	lead map[[2]string]string
+
+	// rank is the company's seats from the most senior down, the order
+	// [chatlet.Roster.Senior] picks a hand-made room's answerer by. The
+	// ranking itself is the chart's ([org.Organization.Senior]) and is
+	// held to its rule there; the write path only asks for it.
+	rank []string
 
 	// seats is the company's whole seat list, which an auto-join room
 	// accounts for when the setting is turned on.
@@ -49,6 +55,18 @@ func (r testRoster) Seat(handle string) (exists, human bool) {
 // once, for the room's own unit and the room, and puts the answer on the
 // record.
 func (r testRoster) Lead(unit, room string) string { return r.lead[[2]string{unit, room}] }
+
+// Senior is the [chatlet.Roster] half a hand-made room's answerer is resolved
+// through: the most senior AGENT seat among the handles, as the live roster
+// answers it.
+func (r testRoster) Senior(handles []string) string {
+	for _, h := range r.rank {
+		if slices.Contains(handles, h) && !r.people[h] && !r.gone[h] {
+			return h
+		}
+	}
+	return ""
+}
 
 // Seats is the company's whole seat list.
 func (r testRoster) Seats() []string { return r.seats }
@@ -70,6 +88,13 @@ func (r testRoster) withPeople(handles ...string) testRoster {
 // asks for.
 func (r testRoster) withLead(unit, room, handle string) testRoster {
 	r.lead = map[[2]string]string{{unit, room}: handle}
+	return r
+}
+
+// withRank orders the company's seats from the most senior down, which only
+// the WRITE path asks about.
+func (r testRoster) withRank(handles ...string) testRoster {
+	r.rank = handles
 	return r
 }
 
@@ -153,21 +178,32 @@ func TestAHandleHearsUnderTheFirstReasonThatNamesIt(t *testing.T) {
 	}
 }
 
-// A COLLECTIVE WAKE IS CAPPED, AND THE RECORD SAYS SO.
+// A COLLECTIVE WAKE IS CAPPED, AND THE RECORD SAYS SO, whoever wrote it.
 //
 // One `@channel` must not launch an executor for every agent in a room of any
 // size ([chatlet.MaxCollectiveRecipients] is as many as one message may name),
 // and a room that could not see the cut would read a partial broadcast as a
 // complete one — which is the failure the flag exists for, arriving at the
-// one place nobody is watching.
+// one place nobody is watching. A person's request and an agent's news are
+// two reasons for one address, and both are held to the one cap.
 func TestACollectiveWakeIsCappedAndSaysSo(t *testing.T) {
 	t.Parallel()
+	for _, author := range []chatlet.AuthorKind{chatlet.AuthorHuman, chatlet.AuthorAgent} {
+		t.Run(string(author), func(t *testing.T) {
+			t.Parallel()
+			collectiveIsCapped(t, author)
+		})
+	}
+}
+
+func collectiveIsCapped(t *testing.T, author chatlet.AuthorKind) {
+	t.Helper()
 	room := make([]chatlet.Member, 0, chatlet.MaxCollectiveRecipients+8)
 	for i := range cap(room) {
 		room = append(room, chatlet.Member{Handle: fmt.Sprintf("seat-%02d", i)})
 	}
 	routed, truncated := chatlet.Resolve(chatlet.Routing{
-		ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorHuman,
+		ChannelKind: chatlet.KindPublic, AuthorKind: author,
 		Members: room, Collective: true,
 	})
 
@@ -186,7 +222,7 @@ func TestACollectiveWakeIsCappedAndSaysSo(t *testing.T) {
 	// AND A ROOM THAT FITS IS NOT REPORTED AS CUT, which is the half a
 	// flag set unconditionally would break.
 	_, whole := chatlet.Resolve(chatlet.Routing{
-		ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorHuman,
+		ChannelKind: chatlet.KindPublic, AuthorKind: author,
 		Members: room[:chatlet.MaxCollectiveRecipients], Collective: true,
 	})
 	if whole {
@@ -195,28 +231,28 @@ func TestACollectiveWakeIsCappedAndSaysSo(t *testing.T) {
 	}
 }
 
-// THE TOTAL CAP BOUNDS THE ARMS THAT HAVE NO CAP OF THEIR OWN.
-//
-// A room's full followers have no per-arm limit — [chatlet.MaxRecipients] is what
-// cuts them — so a room where a thousand seats set `follow_all` is exactly
-// where the total has to bite, and say so.
 // THE TOTAL NEVER CUTS WHAT THE CAPPED ARMS LET THROUGH.
 //
-// [chatlet.MaxRecipients] is set above everything the three capped arms and the
-// lead fallback can take together, so that it bites only on the arms nothing
-// else bounds. A total below that sum would truncate a post every per-arm cap
+// [chatlet.MaxRecipients] is set above everything the capped arms and the
+// answerer can take together (one message raises only one of the two
+// collective reasons), so that it bites only on the arms nothing else bounds. A total below that sum would truncate a post every per-arm cap
 // had admitted, and report it as reaching fewer people than it was allowed to.
 func TestTheTotalSitsAboveEveryCappedArmAtItsCap(t *testing.T) {
 	t.Parallel()
 	capped := chatlet.MaxMentions + chatlet.MaxThreadParticipants +
 		chatlet.MaxCollectiveRecipients + 1
 	if chatlet.MaxRecipients < capped {
-		t.Errorf("MaxRecipients is %d, below the %d the capped arms and the lead "+
-			"fallback can fill at once — the total would cut a post its arms admitted",
+		t.Errorf("MaxRecipients is %d, below the %d the capped arms and the "+
+			"answerer can fill at once, so the total would cut a post its arms admitted",
 			chatlet.MaxRecipients, capped)
 	}
 }
 
+// THE TOTAL CAP BOUNDS THE ARMS THAT HAVE NO CAP OF THEIR OWN.
+//
+// A room's full followers have no per-arm limit (the total, [chatlet.MaxRecipients],
+// is what cuts them), so a room where a thousand seats set `follow_all` is
+// exactly where the total has to bite, and say so.
 func TestTheTotalCapBoundsAnArmWithNoCapOfItsOwn(t *testing.T) {
 	t.Parallel()
 	room := make([]chatlet.Member, 0, chatlet.MaxRecipients+16)
@@ -308,14 +344,16 @@ func TestASeatTheCompanyNoLongerHasIsNotWoken(t *testing.T) {
 	}
 }
 
-// THE LEAD FALLBACK IS NARROW, and every clause of it matters.
+// A PERSON IS NEVER ANSWERED BY SILENCE, AND THE ANSWERER IS NARROW.
 //
-// It is the answer to "somebody spoke to this unit and nobody was listening",
-// so it arises only where there is a lead to fall back to, only when a PERSON
-// is speaking — an agent's post that reached nobody has reached exactly who it
-// should, and a credential's line is one no write of this build makes — and
-// only when no ordinary candidate survived.
-func TestTheLeadFallbackIsNarrow(t *testing.T) {
+// The answerer is the answer to "a person spoke to this room and nobody was
+// listening", so it arises in every NAMED room (a unit's, a public one, a
+// private one), only where the room has an answerer, only when a PERSON is
+// speaking (an agent's post that reached nobody has reached exactly who it
+// should, and a credential's line is one no write of this build makes), and
+// only when no ordinary candidate survived. It wakes ONE seat, whichever room
+// it is.
+func TestTheAnswererIsNarrow(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
@@ -326,44 +364,105 @@ func TestTheLeadFallbackIsNarrow(t *testing.T) {
 			name: "a person in a unit room nobody was listening to",
 			routing: chatlet.Routing{
 				ChannelKind: chatlet.KindUnit, AuthorKind: chatlet.AuthorHuman,
-				Members: members("ops"), Lead: "eng-lead",
+				Members: members("ops"), Answerer: "eng-lead",
 			},
 			want: "eng-lead",
 		},
 		{
+			// THE CASE THIS RULE WAS WRITTEN FOR: a room somebody made
+			// by hand, six agents in it, none following everything, and
+			// a person's question that names nobody.
+			name: "a person in a hand-made public room of agents",
+			routing: chatlet.Routing{
+				ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorHuman,
+				Members:  members("cto", "amir", "dev", "ops", "qa", "sre"),
+				Answerer: "cto",
+			},
+			want: "cto",
+		},
+		{
+			name: "a person in a private room",
+			routing: chatlet.Routing{
+				ChannelKind: chatlet.KindPrivate, AuthorKind: chatlet.AuthorHuman,
+				Members: members("amir", "dev"), Answerer: "amir",
+			},
+			want: "amir",
+		},
+		{
+			name: "a room with no agent member has no answerer",
+			routing: chatlet.Routing{
+				ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorHuman,
+				Members: members("bob"),
+			},
+		},
+		{
 			name: "an agent's own post reaches nobody, which is correct",
 			routing: chatlet.Routing{
+				ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorAgent,
+				Members: members("ops"), Answerer: "eng-lead",
+			},
+		},
+		{
+			name: "an agent's own post in a unit room reaches nobody either",
+			routing: chatlet.Routing{
 				ChannelKind: chatlet.KindUnit, AuthorKind: chatlet.AuthorAgent,
-				Members: members("ops"), Lead: "eng-lead",
+				Members: members("ops"), Answerer: "eng-lead",
 			},
 		},
 		{
 			name: "a credential's line, which no room is spoken in as, reaches nobody",
 			routing: chatlet.Routing{
 				ChannelKind: chatlet.KindUnit, AuthorKind: chatlet.AuthorOperator,
-				Members: members("ops"), Lead: "eng-lead",
+				Members: members("ops"), Answerer: "eng-lead",
 			},
 		},
 		{
-			name: "a room no unit owns has no lead to fall back to",
+			// A direct conversation wakes every participant under its own
+			// reason; an answerer there is a record this build never
+			// writes, and it is refused rather than honoured.
+			name: "a direct conversation raises no answerer",
 			routing: chatlet.Routing{
-				ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorHuman,
-				Members: members("ops"), Lead: "eng-lead",
+				ChannelKind: chatlet.KindDM, AuthorKind: chatlet.AuthorHuman,
+				Answerer: "eng-lead",
 			},
 		},
 		{
-			name: "somebody else was reached, so the fallback stands down",
+			name: "somebody else was reached, so the answerer stands down",
 			routing: chatlet.Routing{
 				ChannelKind: chatlet.KindUnit, AuthorKind: chatlet.AuthorHuman,
-				Members: []chatlet.Member{{Handle: "ops", FollowAll: true}},
-				Lead:    "eng-lead",
+				Members:  []chatlet.Member{{Handle: "ops", FollowAll: true}},
+				Answerer: "eng-lead",
 			},
 			want: "ops",
+		},
+		{
+			name: "a person who names somebody has been answered by the name",
+			routing: chatlet.Routing{
+				ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorHuman,
+				Members: members("cto", "dev"), Mentions: []string{"dev"},
+				Answerer: "cto",
+			},
+			want: "dev",
+		},
+		{
+			// A THREAD THE PERSON STARTED and nobody else has spoken in:
+			// the reply reaches its own author and nobody else, and the
+			// author is dropped as the actor, so only the answerer is
+			// left to hear it.
+			name: "a person's thread reply that reaches nobody",
+			routing: chatlet.Routing{
+				ChannelKind: chatlet.KindPublic, AuthorKind: chatlet.AuthorHuman,
+				Members:    members("cto", "dev"),
+				ThreadRoot: "root-1", RootAuthor: "jane",
+				ThreadParticipants: []string{"jane"},
+				Answerer:           "cto",
+			},
+			want: "cto",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			woken := chatlet.Route(chatResolved(tc.routing), agents().Seat, "jane")
+			woken := chatlet.Route(chatResolved(tc.routing), agents().withPeople("bob").Seat, "jane")
 			got := handlesRouted(woken)
 			if tc.want == "" {
 				if len(got) != 0 {
@@ -374,18 +473,64 @@ func TestTheLeadFallbackIsNarrow(t *testing.T) {
 			if len(got) != 1 || got[0] != tc.want {
 				t.Fatalf("woke %v, want exactly [%s]", got, tc.want)
 			}
+			if tc.want == tc.routing.Answerer && woken[0].Reason != chatlet.ReasonAnswerer {
+				t.Errorf("%s was woken under %q, want %q: the room's answerer "+
+					"owes the person an answer", tc.want, woken[0].Reason,
+					chatlet.ReasonAnswerer)
+			}
+		})
+	}
+}
+
+// A PERSON'S `@channel` ASKS EVERY SEAT IN THE ROOM; AN AGENT'S TELLS IT.
+//
+// One gesture, two reasons, and the author decides which: a person addressing
+// the whole room is putting a request to it, so every seat it reaches owes an
+// answer, while an agent doing the same is reporting news, and an obligation
+// there would have every seat in the room answer every broadcast. Exactly one
+// of the two reasons is raised by any one message, and both are held to the
+// same cap ([TestACollectiveWakeIsCappedAndSaysSo]).
+func TestAPersonsChannelAddressAsksAndAnAgentsTells(t *testing.T) {
+	t.Parallel()
+	seats := []string{"cto", "amir", "dev"}
+	for _, tc := range []struct {
+		author chatlet.AuthorKind
+		want   chatlet.Reason
+	}{
+		{chatlet.AuthorHuman, chatlet.ReasonCollectiveRequest},
+		{chatlet.AuthorAgent, chatlet.ReasonCollective},
+	} {
+		t.Run(string(tc.author), func(t *testing.T) {
+			t.Parallel()
+			woken := chatlet.Route(chatResolved(chatlet.Routing{
+				ChannelKind: chatlet.KindPublic, AuthorKind: tc.author,
+				Members: members(seats...), Collective: true, Answerer: "cto",
+			}), agents().Seat, "jane")
+			if !slices.Equal(handlesRouted(woken), seats) {
+				t.Fatalf("the address woke %v, want every member of the room",
+					handlesRouted(woken))
+			}
+			for _, c := range woken {
+				if c.Reason != tc.want {
+					t.Errorf("%s was woken under %q, want %q", c.Handle, c.Reason, tc.want)
+				}
+			}
+			if want := tc.author == chatlet.AuthorHuman; woken[0].Reason.Addressed() != want {
+				t.Errorf("a %s's `@channel` obliges an answer = %v, want %v",
+					tc.author, !want, want)
+			}
 		})
 	}
 }
 
 // THE LEAD WHO ALSO SPOKE IN THE THREAD IS WOKEN AS A PARTICIPANT.
 //
-// The fallback sits among the ADDRESSED reasons in the vocabulary because it
-// obliges an answer as much as a mention does — but it ARISES only in the
+// The answerer sits among the ADDRESSED reasons in the vocabulary because it
+// obliges an answer as much as a mention does, but it ARISES only in the
 // absence of every other reason, so the arithmetic offers it last. Offered
 // where its precedence sits, a lead who had spoken in the thread would be
-// claimed as the fallback and then dropped the moment anybody else was
-// reached: the one person the room was addressed to would be the only one not
+// claimed as the answerer and then dropped the moment anybody else was
+// reached: the one seat the room was addressed to would be the only one not
 // woken.
 func TestTheLeadWhoSpokeInTheThreadIsWokenAsAParticipant(t *testing.T) {
 	t.Parallel()
@@ -395,11 +540,11 @@ func TestTheLeadWhoSpokeInTheThreadIsWokenAsAParticipant(t *testing.T) {
 		ThreadRoot:         "root-1",
 		RootAuthor:         "jane",
 		ThreadParticipants: []string{"eng-lead", "ops"},
-		Lead:               "eng-lead",
+		Answerer:           "eng-lead",
 	}), agents().Seat, "jane")
 
 	if got := reasonOf(woken, "eng-lead"); got != chatlet.ReasonReply {
-		t.Fatalf("the lead was woken as %q, want %q — claimed as the fallback "+
+		t.Fatalf("the lead was woken as %q, want %q: claimed as the answerer "+
 			"they are dropped as soon as anybody else is reached, which is "+
 			"every busy thread", got, chatlet.ReasonReply)
 	}
@@ -459,7 +604,7 @@ func TestTheWritePathAndTheParserRouteOneMessageIdentically(t *testing.T) {
 		ThreadRoot:         "root-1",
 		RootAuthor:         "sarah",
 		ThreadParticipants: []string{"sarah", "eng"},
-		Lead:               "eng-lead",
+		Answerer:           "eng-lead",
 	}
 	company := agents().withPeople("sarah")
 
@@ -467,7 +612,7 @@ func TestTheWritePathAndTheParserRouteOneMessageIdentically(t *testing.T) {
 	record := &chatlet.Notify{
 		MessageID: "m-1", ChannelID: "c-1", ChannelKind: routing.ChannelKind,
 		Author: "jane", AuthorKind: routing.AuthorKind,
-		Lead: routing.Lead, Recipients: chatlet.RecipientsOf(atWrite),
+		Answerer: routing.Answerer, Recipients: chatlet.RecipientsOf(atWrite),
 	}
 	atWake := chatlet.Route(chatlet.Candidates(record), company.Seat, "jane")
 
@@ -482,28 +627,34 @@ func TestTheWritePathAndTheParserRouteOneMessageIdentically(t *testing.T) {
 	}
 }
 
-// THE PARSER RE-OFFERS THE LEAD THE RECORD NAMED.
+// THE PARSER RE-OFFERS THE ANSWERER THE RECORD NAMED, in every named room.
 //
 // A record whose ordinary recipients have all left the company since it was
-// written would otherwise reach nobody at all — which is exactly the state the
-// fallback exists for, arriving later than the write.
-func TestTheParserFallsBackToTheLeadTheRecordNamed(t *testing.T) {
+// written would otherwise reach nobody at all, which is exactly the state the
+// answerer exists for, arriving later than the write. A hand-made room's
+// answerer rides the record exactly as a unit's lead does.
+func TestTheParserFallsBackToTheAnswererTheRecordNamed(t *testing.T) {
 	t.Parallel()
-	record := &chatlet.Notify{
-		MessageID: "m-1", ChannelID: "c-1", ChannelKind: chatlet.KindUnit,
-		Author: "jane", AuthorKind: chatlet.AuthorHuman, Lead: "eng-lead",
-		Recipients: []chatlet.Recipient{{Handle: "ops", Reason: chatlet.ReasonFollowAll}},
-	}
-	woken := chatlet.Route(chatlet.Candidates(record), agents().withGone("ops").Seat, "jane")
+	for _, kind := range []chatlet.Kind{chatlet.KindUnit, chatlet.KindPublic, chatlet.KindPrivate} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			record := &chatlet.Notify{
+				MessageID: "m-1", ChannelID: "c-1", ChannelKind: kind,
+				Author: "jane", AuthorKind: chatlet.AuthorHuman, Answerer: "eng-lead",
+				Recipients: []chatlet.Recipient{{Handle: "ops", Reason: chatlet.ReasonFollowAll}},
+			}
+			woken := chatlet.Route(chatlet.Candidates(record), agents().withGone("ops").Seat, "jane")
 
-	if len(woken) != 1 || woken[0].Handle != "eng-lead" {
-		t.Fatalf("woke %v, want the lead the record named — every ordinary "+
-			"recipient has left the company", handlesRouted(woken))
-	}
-	if !woken[0].Reason.Addressed() {
-		t.Errorf("the lead was woken unaddressed — a person spoke to this " +
-			"unit and nobody was listening, which is a question put to whoever " +
-			"leads it")
+			if len(woken) != 1 || woken[0].Handle != "eng-lead" {
+				t.Fatalf("woke %v, want the answerer the record named: every "+
+					"ordinary recipient has left the company", handlesRouted(woken))
+			}
+			if !woken[0].Reason.Addressed() {
+				t.Errorf("the answerer was woken unaddressed, but a person spoke " +
+					"to this room and nobody was listening, which is a question " +
+					"put to whoever answers for it")
+			}
+		})
 	}
 }
 

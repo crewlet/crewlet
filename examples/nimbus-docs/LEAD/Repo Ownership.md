@@ -13,7 +13,7 @@ Per-role GitLab PATs are scoped to these allowlists at the token level
 | `nimbus-hq/nimbuscode` | SWE | CTO | Terraform for deploying Nimbus's own infra (cloud accounts, DNS, the hosted control plane). Operational, not a product surface. |
 | `nimbus-hq/console` | Frontend SWE | PM (UX review), DevRel (screenshots for docs), CTO | The authenticated React management dashboard. AI Services pages (Models, Jobs, Datasets, Serving) land here in Phase 2. |
 | `nimbus-hq/website` | Frontend SWE | PM (positioning), DevRel (launch posts), CTO | The public-facing React marketing site. |
-| `nimbus-hq/<framework>` *(repo name TBD)* | AI Systems Engineer | CTO (architecture review), DevRel (docs + examples), SWE (control-plane integration) | Phase-2 Python framework. SDK, CLI, runtime, scheduler, worker protocol, nimbuscore-side glue. |
+| `nimbus-hq/<framework>` *(repo name TBD)* | AI Systems Engineer | CTO (architecture review), DevRel (docs + examples), SWE (control-plane integration) | Phase-2 Python framework. SDK, harness, runtime, scheduler, worker protocol, nimbuscore-side glue. |
 | `nimbus-hq/docs` *(TBD)* | DevRel | AI Systems Engineer (framework accuracy), SWE (API accuracy), Frontend SWE (console screenshots), PM (positioning) | The developer-facing docs site. Stack TBD via DevRel's ADR. |
 
 ## Cross-repo work — when does it happen?

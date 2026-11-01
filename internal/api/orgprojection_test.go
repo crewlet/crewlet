@@ -78,6 +78,7 @@ var companyFields = map[string]classified{
 	"Scheduling": {exposure: exposureGuarded, why: "an operational setting"},
 	"MCPServers": {exposure: exposureResolved, into: "tool_sources",
 		why: "only a granted server's NAME reaches an admin, the label its tools carry in every prompt; its command, URL, env and headers stay guarded"},
+	"MCPRegistry":                       {exposure: exposureGuarded, why: "the registry the add flow searches, read by the catalogue route on the configuration's verb"},
 	"NotificationRateLimit":             {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceWindowSeconds": {exposure: exposureGuarded, why: "an operational setting"},
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
