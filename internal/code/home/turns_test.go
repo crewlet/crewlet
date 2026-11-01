@@ -90,6 +90,11 @@ func TestABurstOnABusyRepositoryCostsOneMoreTurn(t *testing.T) {
 	for _, seq := range []uint64{50, 59, 53} {
 		n.subject(t, repoA, seq)
 	}
+	// THE BUSY TURN STAYS HELD a while after the burst: a turn the burst
+	// wrongly scheduled beside it — the loop's second goroutine is idle —
+	// would begin its read within moments, and released at once the busy
+	// turn would end before that read began, the two never seen at once.
+	time.Sleep(100 * time.Millisecond)
 	close(b.release)
 	e.waitDone(t, repoA, 10*time.Second)
 	deadline := time.Now().Add(10 * time.Second)
