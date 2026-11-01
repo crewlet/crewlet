@@ -791,7 +791,9 @@ func registeredStatements() map[string]statement {
 		// index's order; the active repositories holding one, grouped on the
 		// index's leading column; the merge rate's enqueues of a target,
 		// its live entries over code_queue_live_idx and the repository's
-		// entries ended since over code_queue_ended_idx; a target's trains by
+		// entries ended since over code_queue_ended_idx; a repository's
+		// ejections and a target's, each by the index partial on ejections
+		// that leads with what it names; a target's trains by
 		// code_candidates_train_idx; its landings above a place and its
 		// green row by their keys, and a repository's green rows; and a purge
 		// part's bounded deletes and the purge's whole ones, each by its
@@ -828,8 +830,10 @@ func registeredStatements() map[string]statement {
 			MergeRateScan}, []string{"code_queue_live_idx (repo_id=? AND target_ref=?)"}},
 		"a repository's entries ended since": {enqueuedEndedSQL, []any{"repo-1", 1000, "refs/heads/main", 1000,
 			MergeRateScan}, []string{"code_queue_ended_idx (repo_id=? AND ended_at>=?)"}},
-		"a repository's ejections": {ejectedSQL, []any{"repo-1", 1000, "", "", MaxEjectionsShown},
-			[]string{"code_queue_ended_idx (repo_id=? AND ended_at>=?)"}},
+		"a repository's ejections": {ejectedOfRepoSQL, []any{"repo-1", 1000, MaxEjectionsShown},
+			[]string{"code_queue_ejected_idx (repo_id=? AND ended_at>=?)"}},
+		"a target's ejections": {ejectedOfTargetSQL, []any{"repo-1", "refs/heads/main", 1000, MaxEjectionsShown},
+			[]string{"code_queue_target_ejected_idx (repo_id=? AND target_ref=? AND ended_at>=?)"}},
 		"a target's trains": {trainsSQL, []any{"repo-1", "refs/heads/main"},
 			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=?)"}},
 		"a target's landings": {landingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, 200},

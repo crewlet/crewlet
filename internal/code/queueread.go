@@ -144,13 +144,23 @@ const MaxEjectionsShown = defaultQueueLimit
 
 // ejections files into out what repository repo's queues put out in the last
 // [QueueEjectionsShown] — its target's alone, where target names one — newest
-// first, at most [MaxEjectionsShown]: one seek of code_queue_ended_idx from
-// the horizon up, newest first, the ejected state a filter over a day's ended
-// entries of one repository (MaxQueueEntries' day of a queue's capacity), the
-// partial predicate repeated as the index declares it.
+// first, at most [MaxEjectionsShown]: one seek of an index partial on the
+// ejections alone (replicated 0101), the repository's or the target's, from
+// the newest down to the horizon, so the read touches the rows it answers and
+// never the entries the queue LANDED meanwhile — which a healthy queue ends
+// thousands of a day, and an index of every ended entry walked to find a
+// handful of ejections on every poll of the Queue section.
 func (r *Reader) ejections(ctx context.Context, tx *sql.Tx, repo RepoRef, target string, out *ReadAnswer) error {
 	since := store.EncodeTime(r.now().Add(-QueueEjectionsShown))
-	rows, err := tx.QueryContext(ctx, ejectedSQL, repo.ID, since, target, target, MaxEjectionsShown)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if target == "" {
+		rows, err = tx.QueryContext(ctx, ejectedOfRepoSQL, repo.ID, since, MaxEjectionsShown)
+	} else {
+		rows, err = tx.QueryContext(ctx, ejectedOfTargetSQL, repo.ID, target, since, MaxEjectionsShown)
+	}
 	if err != nil {
 		return fmt.Errorf("code: read what %s's queues put out: %w", repo.Name, err)
 	}
@@ -682,8 +692,10 @@ func (e queueEntry) row(repo string, number int64, place int) QueueRow {
 // keeps the range seek (planner.go); every repository's the same way; the
 // repositories holding one, grouped on the index's leading column; a target's
 // trains by code_candidates_train_idx; its landings above a place by their
-// key; and its green row, and a repository's, by theirs. Every read of
-// code_queue's live entries repeats the index's partial predicate verbatim.
+// key; its green row, and a repository's, by theirs; and a repository's
+// ejections, or one target's, newest first by the index partial on them
+// (replicated 0101). Every read of code_queue by a partial index repeats its
+// predicate verbatim.
 // The numbers of a page's changes are [changeNumbersIn]'s, registered as the
 // committer's.
 const (
@@ -706,9 +718,12 @@ const (
 		WHERE q.state IN ('waiting', 'testing') AND q.repo_id > ?1
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = q.repo_id AND r.status = 'active')
 		GROUP BY q.repo_id ORDER BY q.repo_id LIMIT ?2`
-	ejectedSQL = `SELECT ` + entryColumns + `, ejected FROM code_queue INDEXED BY code_queue_ended_idx
-		WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at >= ?
-			AND state = 'ejected' AND (? = '' OR target_ref = ?)
+	ejectedOfRepoSQL = `SELECT ` + entryColumns + `, ejected FROM code_queue INDEXED BY code_queue_ejected_idx
+		WHERE repo_id = ? AND state = 'ejected' AND ended_at >= ?
+		ORDER BY ended_at DESC LIMIT ?`
+	ejectedOfTargetSQL = `SELECT ` + entryColumns + `, ejected FROM code_queue
+			INDEXED BY code_queue_target_ejected_idx
+		WHERE repo_id = ? AND target_ref = ? AND state = 'ejected' AND ended_at >= ?
 		ORDER BY ended_at DESC LIMIT ?`
 	trainsSQL = `SELECT candidate_id, train, ordinal, base_oid, tip_oid, pack_id, state, position, entries
 		FROM code_candidates INDEXED BY code_candidates_train_idx WHERE repo_id = ? AND target_ref = ?
