@@ -721,6 +721,31 @@ type RunRequest struct {
 	// PERSISTED: it names the job's own endpoint, and a resumed turn's next
 	// launch is handed its own.
 	Steer SteerWiring
+
+	// Attribution is the credit every commit the run authors as itself
+	// carries — see [CommitAttribution]. Nil credits nothing: the run's git
+	// is left exactly as the box and the repository configure it.
+	Attribution *CommitAttribution
+}
+
+// CommitAttribution asks a run's runner to credit Crewlet on every commit the
+// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.ai>`, the
+// one trailer GitHub renders as a participant in the commit, and, where Run is
+// set, `Crewlet-Run: <Run>`, which leads a reader of the history back to the
+// run that wrote it.
+//
+// GIT ADDS IT, NOT THE MODEL. The runner installs a hook in the box that git
+// runs on every commit the run makes (internal/sandbox/codingagent's
+// attribution.go), so the credit is there whether or not the agent remembered
+// an instruction — and only on a commit whose author is the identity the run
+// commits as, so a person's commit the run amends, cherry-picks or rebases is
+// never credited to Crewlet.
+type CommitAttribution struct {
+	// Run is what the run's commits name it by, the identifier its page is
+	// addressed by: a seat's job is its turn's. Empty names no run — a run
+	// with no page of its own — and the co-author line is credited alone.
+	// One line of printable text, since it becomes a trailer's value.
+	Run string
 }
 
 // SteerWiring is where a run's CLI asks for its turn's notes: one tool of the

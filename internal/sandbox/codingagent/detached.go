@@ -301,9 +301,11 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // ([Paths.OpenCodeSteerPlugin]) are DIRECTORIES, removed whole: a run writes
 // one file per value, so one with fewer values than the last would otherwise
 // keep the last one's beside its own, and a run wired to no notes would
-// otherwise leave a plugin no configuration names. THE CHECKOUT IS LEFT INTACT
-// — that disk state is the continued context, and it is the whole reason to
-// reuse a box.
+// otherwise leave a plugin no configuration names. The commit attribution
+// ([Paths.CommitAttribution]) is a directory too, removed whole: a run that
+// credits nothing must leave no hook, and one that names another run must not
+// credit the last one. THE CHECKOUT IS LEFT INTACT — that disk state is the
+// continued context, and it is the whole reason to reuse a box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
@@ -315,11 +317,11 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	if out.Stdout != p.Result() {
 		files = append(files, out.Stdout)
 	}
-	// The two directories alone are removed recursively; every other target
+	// The three directories alone are removed recursively; every other target
 	// is a file, removed as it always was. Two statements rather than one
 	// joined by `&&`, so a file that will not go never keeps a directory.
 	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
-		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin()})
+		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution()})
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: clearing the prior run's artefacts: %w", err)
 	}
@@ -379,6 +381,15 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if err != nil {
 		return sandbox.RunHandle{}, err
 	}
+	// THE CREDIT ON THE RUN'S COMMITS, where its request asks for it: the
+	// hook here, and the wrapper pointing git at it ([installAttribution]).
+	hooks := ""
+	if req.Attribution != nil {
+		if err = installAttribution(ctx, box, paths, *req.Attribution); err != nil {
+			return sandbox.RunHandle{}, err
+		}
+		hooks = paths.GitHooks()
+	}
 	out := r.cli.Output(paths)
 	if out.BriefOnStdin {
 		if err = box.WriteFile(ctx, paths.Brief(), []byte(req.Brief)); err != nil {
@@ -386,7 +397,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		}
 	}
 	inner := withBoxBin(r.cli.Command(req, paths, configPath), paths)
-	script := wrapperScript(inner, out, paths)
+	script := wrapperScript(inner, out, paths, hooks)
 
 	// A LOGIN SHELL, and the -l is load-bearing: a coding CLI is commonly
 	// installed through nvm, asdf or a similar version manager, whose PATH
@@ -414,7 +425,11 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 // cannot replace it — and it is copied after the CLI EXITS rather than piped
 // beside it, because a pipe's status is its last command's under a plain
 // `sh`, which has no pipefail to say otherwise.
-func wrapperScript(inner string, out Output, paths Paths) string {
+//
+// hooks is the directory the run's git takes its hooks from — the run's
+// commit attribution ([attributionExports]) — or "" for a run that credits
+// nothing.
+func wrapperScript(inner string, out Output, paths Paths, hooks string) string {
 	stdin := "/dev/null"
 	if out.BriefOnStdin {
 		stdin = shellQuote(paths.Brief())
@@ -424,6 +439,12 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 	// command could only add to its environment, never remove from it.
 	if len(out.Unset) > 0 {
 		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
+	}
+	// AFTER THE PROFILE, BEFORE THE CLI, for the reason the unset is: an
+	// entry exported around the shell would be replaced by a profile that
+	// sets the count.
+	if hooks != "" {
+		b.WriteString(attributionExports(hooks))
 	}
 	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; ",
 		inner, stdin, shellQuote(out.Stdout), shellQuote(paths.Err()))

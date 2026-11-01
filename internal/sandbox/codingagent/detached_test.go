@@ -47,6 +47,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
 		p.MCPConfig(), p.Findings(), p.BinDir(),
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(),
+		p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
@@ -171,9 +172,11 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	}
 	// OpenCode's values and its notes plugin are DIRECTORIES, removed whole —
 	// a run with fewer values than the last would keep the last one's beside
-	// its own, and a run wired to no notes a plugin nothing names.
+	// its own, and a run wired to no notes a plugin nothing names. So is the
+	// commit attribution: a run that credits nothing leaves no hook behind,
+	// and one naming another run never credits the last one.
 	_, removed, _ := strings.Cut(cleared, "; rm -rf ")
-	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin()} {
+	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin(), p.CommitAttribution()} {
 		if !strings.Contains(removed, "'"+dir+"'") {
 			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
 		}
