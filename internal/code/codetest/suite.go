@@ -117,6 +117,7 @@ func cases() []suiteCase {
 		{"F36_ASeatPastItsQuotaIsRefused", aSeatPastItsQuotaIsRefused},
 		{"F37_ASeatsPushToAPersonsBranchIsRefused", aSeatsPushToAPersonsBranchIsRefused},
 		{"F38_AnEngineWriteCrashedAtEveryPointIsOnePush", anEngineWriteCrashedAtEveryPointIsOnePush},
+		{"F54_ARenamedRepositoryRedirectsAndIsReleased", aRenamedRepositoryRedirectsAndIsReleased},
 		{"F43_ABoxPushesAndFetchesItsGrants", aBoxPushesAndFetchesItsGrants},
 		{"F44_AnEndedRunIsRefused", anEndedRunIsRefused},
 		{"F45_ABoxReadsItsOwnPushThroughAnotherNode", aBoxReadsItsOwnPushThroughAnotherNode},

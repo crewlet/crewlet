@@ -172,6 +172,13 @@ type Fleet interface {
 	// home itself (code.EngineWrite.Home) and asking the next git node the
 	// same write where one ran nothing or went silent (code.git_write).
 	Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
+	// Lifecycle is a repository's lifecycle request — a create, a rename, a
+	// settings change, an archive, a deletion, a restore, a protection or a
+	// turn's hold — through the fleet's routing, as a seat's or a person's
+	// tool asks one: the production estate router asking the data nodes
+	// (code.lifecycle), each deciding it by its own chart in its lifecycle
+	// store.
+	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
 }
 
 // Shape is what a case asks of the fleet it is run on.
@@ -194,6 +201,11 @@ type Shape struct {
 	// compactions and publications through — the window a case has onto what
 	// a maintainer asks a committer to decide: a lying publisher's.
 	WrapCompactions func(Compactions) Compactions
+	// Clock is the fleet's clock, which the case moves on ([Clock]): what
+	// every data node's lifecycle store decides by, and the broker's instant
+	// on every record applied past a move. Nil is the wall clock, moved by
+	// nothing.
+	Clock *Clock
 }
 
 // Compactions is what a git node's compactor proposes a compaction or a
@@ -330,7 +342,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	t.Cleanup(f.teardown)
 	f.data = StartDataNode(t, DataOptions{ID: soloDataNode, Queue: f.openBroker(t), Dir: f.dir,
 		Limits: o.Limits, Faults: o.Faults, LogBytes: o.LogBytes, Operator: soloOperatorNode,
-		WrapApplier: o.WrapApplier})
+		WrapApplier: o.WrapApplier, Clock: o.Clock})
 	var seam host.Estate = &soloEstate{data: f.data}
 	if o.WrapEstate != nil {
 		seam = o.WrapEstate(seam)
@@ -496,6 +508,17 @@ func (f *SoloFleet) Write(ctx context.Context, w code.EngineWrite) (code.EngineW
 		return code.EngineWriteResult{}, errors.New("codetest: the solo fleet routes nothing while it is killed")
 	}
 	return r.Code().GitWrite(ctx, w)
+}
+
+// Lifecycle is a lifecycle request through the fleet's routing (Fleet): the
+// router [SoloFleet.Write] asks through, which asks the git nodes' estate
+// services, each serving the one data node's copy.
+func (f *SoloFleet) Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+	rt := f.router.Load()
+	if rt == nil {
+		return code.LifecycleResult{}, errors.New("codetest: the solo fleet routes nothing while it is killed")
+	}
+	return rt.Code().Lifecycle(ctx, r)
 }
 
 // GitRead is a read of a repository by object id through the fleet's routing

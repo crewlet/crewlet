@@ -770,6 +770,16 @@ func (c *cluster) Write(ctx context.Context, w code.EngineWrite) (code.EngineWri
 	return m.router.Load().Code().GitWrite(ctx, w)
 }
 
+// Lifecycle is a lifecycle request through the first running member's router
+// (codetest.Fleet).
+func (c *cluster) Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+	m, err := c.first()
+	if err != nil {
+		return code.LifecycleResult{}, err
+	}
+	return m.router.Load().Code().Lifecycle(ctx, r)
+}
+
 // GitReadThrough is a read of a repository by object id through member node's
 // own router (codetest.Cluster).
 func (c *cluster) GitReadThrough(ctx context.Context, node string, q code.GitQuery) (code.GitAnswer, error) {
