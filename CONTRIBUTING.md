@@ -1539,8 +1539,8 @@ format — please open an issue first to discuss the approach.
 
 ### Land a large change as a series of pull requests
 
-When a change is large enough that one pull request would be hard to review,
-and it has seams where `main` can take part of it alone (a refactor the
+When a change is large enough that one pull request would be hard to review
+or would stay open long enough to drift from `main`, and it has seams where `main` can take part of it alone (a refactor the
 feature needs, a new package before the code that wires it in, a migration
 before its readers), land it as a sequence of pull requests rather than one
 large one. A small change, or one with no such seam, stays a single pull
