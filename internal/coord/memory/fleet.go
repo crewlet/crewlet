@@ -97,6 +97,10 @@ type Fleet struct {
 	listings entryRecords[coord.MCPListing, coord.MCPListingUpdate]
 	schemas  map[string]coord.MCPToolSchema
 
+	// restarts are the MCP restarts people asked for, by entry
+	// ([coord.MCPRestartEntry]).
+	restarts entryRecords[coord.MCPRestart, coord.MCPRestartUpdate]
+
 	// version is the one counter every versioned write draws from, sandbox
 	// runs, mailbox records and chat read records alike. Store-wide rather
 	// than per record, as a KV revision is, so a record deleted and created
@@ -154,6 +158,7 @@ func NewFleet() *Fleet {
 		retries:      newRetryRecords(),
 		signIns:      newSignInRecords(),
 		listings:     newListingRecords(),
+		restarts:     newRestartRecords(),
 	}
 }
 
