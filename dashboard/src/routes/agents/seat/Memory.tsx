@@ -1,15 +1,18 @@
 /**
- * What a seat remembers, and what it has said on surfaces the engine does not
- * own.
+ * What a seat remembers, what it has said on surfaces the engine does not own,
+ * and — its Sessions, last (`Sessions.tsx`) — what its harness wrote on each
+ * turn.
  *
  * # Read from the node that holds the seat
  *
  * A seat's memory is written to the store of the node running it, and a
  * compacted changelog carries it to whichever node holds the seat next — so
  * the holder's copy is the one kept current, and any other node's may be a
- * placement behind. Both answers here are the HOLDER'S (`held_by`), asked
- * across the fleet; a seat no node holds answers `none`, with nothing in it,
- * and the tab says why rather than drawing a seat that remembers nothing.
+ * placement behind. The memory and the threads here are the HOLDER'S
+ * (`held_by`), asked across the fleet; a seat no node holds answers `none`,
+ * with nothing in it, and the tab says why rather than drawing a seat that
+ * remembers nothing. The Sessions are not: their rows are the replicated
+ * estate's and their bytes the fleet's object store's, so any node answers.
  *
  * # A header counts the whole, a list shows the newest
  *
@@ -30,13 +33,14 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { useLayoutEffect, useRef } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { reveal } from "~/lib/scroller.ts";
+import { keepInView, reveal } from "~/lib/scroller.ts";
 import { QueryState } from "~/components/common.tsx";
 import { cutThen, DiaryCard, EpisodesCard, heldWords, pageWords } from "~/components/memory.tsx";
 import { conversationLabel, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
+import { Sessions } from "./Sessions.tsx";
 import type { CounterpartyProfile } from "~/contract/memory.ts";
 import type { ConversationEntry } from "~/protocol/index.ts";
 
@@ -125,6 +129,7 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
         )}
       </QueryState>
       <Conversations seat={seat} now={now} />
+      <Sessions seat={seat} now={now} />
     </div>
   );
 }
@@ -285,20 +290,6 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
 
 /** The open thread's heading, which a press [reveal]s and focuses. */
 const THREAD_DETAIL_ID = "prof-thread-turns";
-
-/**
- * Scroll `row` into its list's own view, moving nothing outside the list.
- *
- * NOT `scrollIntoView`, which scrolls every scrollable ancestor to reach the
- * row — the page included, so reopening a profile on a thread near the list's
- * end would open the page there.
- */
-export function keepInView(box: HTMLElement, row: HTMLElement): void {
-  const top = row.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
-  const bottom = top + row.offsetHeight;
-  if (top < box.scrollTop) box.scrollTop = top;
-  else if (bottom > box.scrollTop + box.clientHeight) box.scrollTop = bottom - box.clientHeight;
-}
 
 /** A counterparty's stable identity, for a key and for a link.
  *

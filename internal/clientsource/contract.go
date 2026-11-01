@@ -276,6 +276,20 @@ var contract = []Entry{
 	{"MemoryOverview", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"MemoryOverviewSeat", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 
+	// sessions.ts
+	{"ExecutorSessionsAnswer", ReadInterface,
+		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"ExecutorSessionRow", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SessionEnding", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"ExecutorSessionAnswer", ReadInterface,
+		"internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptEntry", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptBounds", ReadInterface, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptState", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptEntryKind", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"TranscriptCut", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+	{"SessionOutcome", ReadUnion, "internal/api/queries.TestTheSessionsScreenReadsWhatTheAnswersSend"},
+
 	// identity.ts
 	{"GRANTS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},
 	{"APPS", ReadLiteral, "internal/api/iamapi.TestTheDashboardOffersExactlyTheEnginesGrants"},

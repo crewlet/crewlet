@@ -1235,7 +1235,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
 | `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the units and seats and the company's name are written; the company's node carries no Edit, and its principles are the toolbar's Edit principles, which opens Company › Principles, the one place its mission, vision and standing policies are written *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `project=` (with `unit=` or `seat=`: Worklet's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
-| `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
+| `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` · `session=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory of every integration by category (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence; beside it the page of the line chosen (an app's Agents, Activity and Settings, its settings form opening in place; a service's counts, its projects or spaces each linking to the service's own list of them, then its Agents, Activity and Settings, or what does its work instead), and with nothing chosen what is in use, as compact cards, with what needs a look, the recent activity and the address apps deliver to. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`worklet`, `doclet`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
@@ -3807,7 +3807,34 @@ inside a box bounded by the scroller's view, handing the wheel back to the page
 at either end, and the thread's turns stick under the page's top; stacked
 on a phone, the turns are scrolled to and their heading takes focus. Each
 turn's trigger reads as plain words, its markdown stripped. A seat no
-node holds says why it shows nothing. **Settings** is the seat's half of the
+node holds says why it shows nothing. Beside them are the seat's
+**Sessions** (`session=` opens one): every turn whose executor captured its
+harness's session, kept so a later turn of its conversation can continue it —
+read through any node, since the rows are the replicated estate's and the
+bytes the fleet's object store's, and on the same `audit.seat.read` as the
+rest of the tab, the verb an executor's live output is decided by. Each row is
+what its turn was asked, as plain words in two lines, over how the turn ended
+(its outcome in the reviewer's tone, or `not ended`), the harness and its
+release, and when; the list pages by the engine's cursor (**Load older
+sessions**), is asked again each minute, and says when the node that answered
+may be missing rows it could not read. Choosing one shows it as a thread is
+shown, the list bounded beside it and the chosen row kept in its view: the
+engine's account of how the turn ended — the decision, whether its reply
+reached anybody and where, what landed, what blocked it, who stopped it and
+why, the failure — each only where the ending carries it, what is kept of the
+session and its size, whether a later launch can continue it or the engine's
+sentence for why not, and a link to the turn. Under it is the **transcript**,
+a page at a time (**Load more of the transcript**) as the harness recorded it:
+each entry labelled by who it is from (brief, model, tool call, result,
+summary), a subagent's entries naming the subagent, a result's tool and a
+failure marked, a call's input and a tool's output as blocks that scroll
+within a ceiling and the prose as prose — an entry cut to its bound says how
+large the whole was, and a part of the record that could not be read is a
+warning in its place. Every text is the engine's redacted one. A session whose
+object is gone, does not open, is no archive or is of a format this build does
+not read is a warning naming which, with the engine's sentence, and a page cut
+where no later page can go further says the rest cannot be shown.
+**Settings** is the seat's half of the
 company document, read by its handle — the seat and its home unit, whose
 `mcp_env` a seat inherits per variable — through the same one read the Setup
 card makes (`useSeatSetup`): the company document for an admin, the seat's
@@ -6329,8 +6356,8 @@ into view) runs only when the heading is outside the scroller's box, and with a
 document that cannot scroll there is no other ancestor for it to move.
 
 **A box inside the page may scroll its own content, on two conditions.** A
-running phase's transcript, a seat's thread list beside its open thread, the
-Settings column, a board lane's body and a long record each scroll inside
+running phase's transcript, a seat's thread list beside its open thread and
+its session list beside its open transcript, the Settings column, a board lane's body and a long record each scroll inside
 themselves, and each is a second thing under the reader's wheel — so each has
 to keep the page within reach:
 

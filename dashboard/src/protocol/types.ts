@@ -51,6 +51,7 @@ import type {
 } from "../contract/integrations.ts";
 import type { AgentEpisode, AgentMemory, MemoryOverview } from "../contract/memory.ts";
 import type { BackupsAnswer } from "../contract/backups.ts";
+import type { ExecutorSessionAnswer, ExecutorSessionsAnswer } from "../contract/sessions.ts";
 import type {
   LinkedFromStatus,
   PageBacklinks,
@@ -7724,6 +7725,11 @@ export interface QueryMap {
   link_hosts: LinkHostsAnswer;
   executors: { runs: ExecutorRow[] };
   executor_tail: ExecutorTailAnswer;
+  /** A seat's executor sessions, a page at a time — its trail, as the run's
+   *  live output is. */
+  executor_sessions: ExecutorSessionsAnswer;
+  /** One turn's session and a page of its transcript. */
+  executor_session: ExecutorSessionAnswer;
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;
