@@ -2749,7 +2749,7 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// EVERY BRIDGED CALL LANDS, HOWEVER MANY WRITE AT ONCE. A coding run's tool
+// EVERY BRIDGED CALL LANDS, HOWEVER MANY WRITE AT ONCE. An executor's tool
 // calls reach its row from as many as twenty subagents at once — Claude Code's
 // default — and the seat's own lease and status writes race them. Each append
 // is a decision the store takes again on a lost race, so none of them is

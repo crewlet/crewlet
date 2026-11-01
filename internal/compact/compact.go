@@ -229,8 +229,8 @@ type Request struct {
 	// Use is whose cost the rewrite is — its stage, the turn it serves and,
 	// inside a turn, the turn's tally — as the caller states it. The
 	// purpose is this package's to set, from Kind: `condense_<kind>`
-	// (types.AuxCondense), so a rewrite of a chat thread and one of a
-	// coding run's report are told apart on every breakdown. The event
+	// (types.AuxCondense), so a rewrite of a chat thread and one of an
+	// executor's report are told apart on every breakdown. The event
 	// catalogue keeps its own copy of the kinds, and this package's suite
 	// holds the two equal in both directions.
 	Use auxspend.Use

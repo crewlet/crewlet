@@ -594,7 +594,7 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 
 	// A PARKED RUN'S QUESTION is what the seat's coding agent wrote, in the
 	// seat's name, and whoever answers it reads it back: fenced as that run's,
-	// by the one rule for a coding run's words (provenance.Executor).
+	// by the one rule for an executor's words (provenance.Executor).
 	t.Run("answer_executor", func(t *testing.T) {
 		t.Parallel()
 		forged := provenance.NewBoundary()

@@ -52,7 +52,7 @@ import (
 //
 // The seat fence is about OWNERSHIP, and it deliberately leaves a running run
 // alone: a seat that moves to another node on an ordinary rebalance must not
-// kill an hour of somebody's coding run (see seat.Host.Fence). A stop is a
+// kill an hour of an executor's work (see seat.Host.Fence). A stop is a
 // person's decision about the work, not about where it runs, so it is its own
 // call, made by the node that holds the seat when the pause reaches it.
 

@@ -560,7 +560,7 @@ func TestAnOverlayViewStatesLiveCallAndTurnAlways(t *testing.T) {
 	noBody(t, "a masked overlay's call", call)
 }
 
-// A CODING RUN SHOWS ITS QUESTION TO THE PEOPLE IT IS PUT TO.
+// AN EXECUTOR SHOWS ITS QUESTION TO THE PEOPLE IT IS PUT TO.
 //
 // What the run was asked and what it asked back are its seat's trail, and a
 // reader the trail is not open to is told the run's status and that the rest

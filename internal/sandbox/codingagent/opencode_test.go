@@ -47,7 +47,7 @@ func TestATranscriptLineHonoursItsOwnBound(t *testing.T) {
 
 	// Degenerate limits must not panic: `limit - len("…")` is negative for
 	// anything under 3, and a negative slice index is a crash on a path
-	// that only ever runs while a coding run is already failing.
+	// that only ever runs while a run is already failing.
 	for _, limit := range []int{-1, 0, 1, 2, 3} {
 		func() {
 			defer func() {

@@ -96,10 +96,10 @@ func (c *clock) advance(d time.Duration) {
 // ONE MINT AN HOUR PER INSTALLATION, however many readers ask, and a new one
 // exactly when the held token can no longer promise what the reader needs.
 //
-// The seat's tool servers, its coding runs, the poll keeping a long run's
-// token current and the inbound participant lookup all read the same token,
-// so minting per read would spend a request per delivery, per poll and per
-// launch to learn something good for an hour.
+// The seat's tool servers, its executor's launches, the poll keeping a long
+// run's token current and the inbound participant lookup all read the same
+// token, so minting per read would spend a request per delivery, per poll and
+// per launch to learn something good for an hour.
 func TestAnIssuerHandsOutTheHeldTokenUntilItRunsShort(t *testing.T) {
 	t.Parallel()
 	c := &clock{at: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)}

@@ -1647,7 +1647,7 @@ type TurnRecord struct {
 	Trigger string `json:"trigger"`
 	// Outcome is how the segment ended: the turn's own decision, `failed`,
 	// `stopped` for one a person's pause ended, or `suspended` for a segment
-	// that parked on a coding run.
+	// that parked on its executor.
 	Outcome string `json:"outcome"`
 	// Phases are the phases that ran in the segment, in first-run order.
 	Phases []string `json:"phases"`

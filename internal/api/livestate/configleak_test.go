@@ -17,7 +17,7 @@ const rawFailure = "llm chain exhausted after 1 providers (" + entryKey + "): us
 
 // leakyState is a seat whose live state has met every field that can carry the
 // company's configuration: a fallback off the entry, a CLI run it served, a
-// phase that failed naming it, the chain's exhaustion, and a coding run
+// phase that failed naming it, the chain's exhaustion, and an executor
 // launched on it.
 func leakyState() *livestate.LiveState {
 	s := livestate.New()
@@ -51,14 +51,14 @@ func wireOf(t *testing.T, v any) string {
 
 // NO BROADCAST FIELD CARRIES THE COMPANY'S CONFIGURATION OR A RAW FAILURE, to
 // any reader but an admin. Every shape a seat's live state reaches a reader in
-// (its overlay, its live call whole and lean, its roster row, and the coding
-// run it launched, which the `executors` push and snapshot carry) is read for
+// (its overlay, its live call whole and lean, its roster row, and the executor
+// it launched, which the `executors` push and snapshot carry) is read for
 // the entry's key and for the failure's own words; a seat's lead reads its
 // trail and is still not an admin. The failure's kind stays, which the
-// dashboard words for a person, and so does the model a coding run runs
+// dashboard words for a person, and so does the model an executor runs
 // under; an admin is sent the text and the run's entry.
 //
-// Mutation: leave the failure's text, a CLI run's entry or a coding run's in
+// Mutation: leave the failure's text, a CLI run's entry or an executor's in
 // any one of the masks, or broadcast it as status, and the lead's copy names
 // the entry.
 func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {

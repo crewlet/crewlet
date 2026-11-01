@@ -73,7 +73,7 @@ func TestASingleBackendNeedsNoDefault(t *testing.T) {
 
 // A DEFAULT NAMING A BACKEND NOBODY CONFIGURED IS THE FAILURE THIS RESHAPE
 // EXISTS TO MAKE IMPOSSIBLE, and it is caught at construction: left to the
-// first coding run, it fails hours after the config was applied, inside a turn
+// first launch, it fails hours after the config was applied, inside a turn
 // that has already spent its rounds.
 func TestADefaultWithNoBackendIsRefusedAtConstruction(t *testing.T) {
 	t.Parallel()

@@ -313,7 +313,7 @@ func TestASpentSeatIsParkedUntilItsWindowTurnsOver(t *testing.T) {
 
 // A PARK IS THE GATE'S REFUSAL, AND THE COUNTER RECORDS IT.
 //
-// The Lead's day was filled by a post-charge — a collected coding run, a
+// The Lead's day was filled by a post-charge — a collected executor launch, a
 // background pass — which refuses nothing and stamps nothing, so no turn ever
 // had a charge refused there: every delivery was parked before one could run.
 // Unrecorded, that window held every message its seat was sent while its

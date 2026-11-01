@@ -23,7 +23,7 @@ import (
 // AnswerExecutorTool is the tool's wire name.
 const AnswerExecutorTool = "answer_executor"
 
-// MaxRunAnswerBytes bounds one answer to a parked coding run.
+// MaxRunAnswerBytes bounds one answer to a parked executor.
 //
 // THE PAGE ITS QUESTION'S CONTEXT IS HELD TO ([sandbox.MaxAskContextBytes]),
 // because the answer travels where the question does, beside it. It is sealed onto the
@@ -77,8 +77,8 @@ type runParties struct {
 	requester string
 }
 
-// answerExecutor answers a coding run that stopped to ask a person something,
-// by naming the run.
+// answerExecutor answers an executor that stopped to ask a person something,
+// by naming its turn.
 //
 // # Why by turn
 //
@@ -104,7 +104,7 @@ type runParties struct {
 // It answers `pending`: the answer is on the seat's control topic, and the
 // node holding the seat records it on the run when it takes it off (the run
 // then reads `answered`) and resumes the run with it once the seat is free of
-// any other coding run, any turn in flight and a person's pause. That node is
+// any other executor, any turn in flight and a person's pause. That node is
 // the only one that can, and it may be restarting, so the answer's fate is
 // settled there and not here. The result names the question it answers
 // (`launch_id`) and the answer's own id (`answer_id`), and the run's record is
@@ -313,7 +313,7 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	// THE QUESTION IS THE RUN'S WORDS, written by the seat's coding agent in
 	// the seat's name, and whoever answers it is usually reading through an
-	// assistant: it goes back fenced by the one rule for a coding run's words
+	// assistant: it goes back fenced by the one rule for an executor's words
 	// ([provenance.Executor]), as every other door to them reads them
 	// (ADR-0040), not as a line of the engine's receipt.
 	read := newForeignRead(turn, actor.Handle)

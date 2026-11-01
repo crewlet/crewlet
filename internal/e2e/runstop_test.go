@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A PERSON'S STOP ENDS THE CODING RUN THE SEAT HAS OUT, END TO END.
+// A PERSON'S STOP ENDS THE EXECUTOR THE SEAT HAS OUT, END TO END.
 //
 // The run is the stand-in coding CLI in a real `direct` box, held: nothing
 // will ever release it, so it would run for ever. A pause with `stop_running`

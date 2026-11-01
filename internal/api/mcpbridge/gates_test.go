@@ -214,7 +214,7 @@ func TestABoxIsAnsweredAtOnceWhenItsRunsToolsClose(t *testing.T) {
 
 // A SUSPEND IS REFUSED, AND THE CALL THAT RAN IS RECORDED. A detached run's
 // loop is its CLI's own, which would wait for ever on a call parked unanswered,
-// so the box is told at once the tool cannot be used from a coding run — and
+// so the box is told at once the tool cannot be used from an executor — and
 // the run goes on. But the tool ran, and started what it would have parked on,
 // so the run's record holds the call as it holds any call that ran: when, for
 // how long, who answered, and refused as forbidden.

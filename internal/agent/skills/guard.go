@@ -126,11 +126,12 @@ func NewGuard(r *Registry, phase prompts.Phase, surface prompts.Surface) *Guard 
 // already loaded.
 //
 // The one legitimate way to hand a guard somebody else's loads, and it exists
-// for exactly one caller: an executor that suspended on a detached coding run
-// is re-entered as the same message history days later, so the bodies it
-// loaded before the suspend are still in front of the model. A guard rebuilt
-// empty would block the very tools that session already unlocked, and the
-// model would be told to load a skill it can see in its own transcript.
+// for exactly one caller: a parked executor's surface, rebuilt by every later
+// segment of its turn — days later, perhaps, on another node — for a CLI
+// session that still has the bodies it loaded before in front of its model. A
+// guard rebuilt empty would block the very tools that session already
+// unlocked, and the model would be told to load a skill it can see in its own
+// transcript.
 func (g *Guard) Restore(keys []string) {
 	if g == nil {
 		return

@@ -1089,13 +1089,14 @@ func TestTheSeatsHalfOutlivesACallerWhoHangsUp(t *testing.T) {
 // A POST-CHARGE WHOSE SEAT WRITE FAILS KEEPS ITS SPEND ON THE COMPANY, AND THE
 // SEAT'S HALF CAN BE FINISHED ALONE.
 //
-// The spend already happened (a collected coding run, an auxiliary call), so
-// the company's record of it is true when its write lands and the seat's then
-// fails. The compensation this replaced took it back so a caller that retried
-// would not count the company twice — but an auxiliary call is never offered
-// again, and a coding run only when its resume fails, so in the common case
-// the company lost the spend for good. Kept, the partial is named, and the one
-// caller that does offer the spend again finishes the seat's half alone.
+// The spend already happened (a collected executor launch, an auxiliary call),
+// so the company's record of it is true when its write lands and the seat's
+// then fails. The compensation this replaced took it back so a caller that
+// retried would not count the company twice — but an auxiliary call is never
+// offered again, and an executor launch only when its resume fails, so in the
+// common case the company lost the spend for good. Kept, the partial is named,
+// and the one caller that does offer the spend again finishes the seat's half
+// alone.
 func TestAPostChargeWhoseSeatWriteFailsKeepsTheCompanysHalf(t *testing.T) {
 	t.Parallel()
 	store := openFleet(t, embeddedNATS(t))

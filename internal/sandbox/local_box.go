@@ -39,8 +39,8 @@ type hostCommand struct {
 // A control command produces a line or two; this exists for the pathological
 // case — a runtime that streams a pull progress bar, an image whose entrypoint
 // floods stderr — where an unbounded buffer would be the engine's memory. The
-// coding job's own output does not come through here at all: it is redirected
-// to files inside the box and read back by the runner.
+// launched job's own output does not come through here at all: it is
+// redirected to files inside the box and read back by the runner.
 const captureLimit = 256 << 10
 
 // capture is a bounded io.Writer. Once full it keeps the HEAD, because a
@@ -331,7 +331,7 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 	})
 }
 
-// StartBackground spawns the detached coding job in its own session.
+// StartBackground spawns a launch's detached job in its own session.
 //
 // Spawned directly rather than backgrounded inside a throwaway shell, because
 // the pid has to be usable for three different things and only a direct spawn
@@ -720,7 +720,7 @@ func (b *containerBox) explain(path, rel string, err error) error {
 // file it named, or with a named pipe whose open never returned.
 //
 // Rewritten per call rather than kept: extra differs between the setup steps
-// and the coding job, and a stale file would hand one phase another's
+// and the launched job, and a stale file would hand one phase another's
 // environment.
 func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 	merged := make(map[string]string, len(b.env)+len(extra))
@@ -781,7 +781,7 @@ func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (
 
 // StartBackground backgrounds the job inside the container and echoes its pid.
 //
-// `docker exec` would otherwise block for the whole length of a coding job;
+// `docker exec` would otherwise block for the whole length of a launched job;
 // backgrounding and echoing $! lets the exec return at once while the job
 // keeps running under the container's PID 1. That PID 1 is started with
 // --init precisely so it reaps the job when it finishes — an unreaped process

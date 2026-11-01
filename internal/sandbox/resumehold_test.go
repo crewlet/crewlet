@@ -82,13 +82,13 @@ func TestReadmittingTheBudgetLiftsAHeldResume(t *testing.T) {
 // A RESUMED RUN KEEPS ITS SEAT HELD FOR THE WHOLE RESUMED TURN, and lets go of
 // it once the turn is over.
 //
-// What a running engine did: a coding job finished, its completion claimed the
-// run (`resumed`, which holds the seat) and resumed the turn that launched it.
-// The resume gave the seat's count back BEFORE the resumer ran, so the seat's
-// inbox hold lifted for the length of the resumed turn, and the seat's next
-// mail started a second turn beside it 444 ms later: that turn launched a
-// second job, and the seat held two runs at once. A seat busy coding takes no
-// other work (seathold.go), and the resumed turn is that work.
+// What a running engine did: an executor's job finished, its completion
+// claimed the run (`resumed`, which holds the seat) and resumed the turn that
+// launched it. The resume gave the seat's count back BEFORE the resumer ran,
+// so the seat's inbox hold lifted for the length of the resumed turn, and the
+// seat's next mail started a second turn beside it 444 ms later: that turn
+// launched a second job, and the seat held two runs at once. A seat busy
+// coding takes no other work (seathold.go), and the resumed turn is that work.
 //
 // Mutation: give the count back before the resumer runs, and the inbox is not
 // held during the turn; skip the recount after it, and it is never let go of.

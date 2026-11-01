@@ -18,7 +18,7 @@ import (
 // earlier message has been handed back until it is inside the reserve keeps
 // collecting replies, and each arrives with a whole budget; folding those two
 // into the SMALLEST refuses the fresh reply and keeps refusing every later
-// one, which spends a person's answer on an ordinary turn while a coding run
+// one, which spends a person's answer on an ordinary turn while an executor
 // is still parked on the question it answers.
 func TestOneMessageWithDeliveriesToSpareKeepsTheOfferOpen(t *testing.T) {
 	t.Parallel()

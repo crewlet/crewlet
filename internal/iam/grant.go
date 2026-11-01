@@ -12,7 +12,7 @@ import (
 // A CLOSED SET OF FIVE (ADR-0033), and the set is the whole point. Eleven
 // grants carved the engine by surface (a read of the board, a read of the
 // trail, a read of the document, a write of work, a write of pages, the
-// credential store twice, the deployment, the directory, a coding run) and a
+// credential store twice, the deployment, the directory, `sandbox:run`) and a
 // company had to compose those eleven into the three or four things it meant
 // to say about a person. Nobody could: an operator inviting a teammate faced a
 // list of capabilities that each opened part of a screen, and a person handed

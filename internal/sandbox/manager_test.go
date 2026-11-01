@@ -60,7 +60,7 @@ func TestTheRoundCapOverlaysTheProviderDefault(t *testing.T) {
 }
 
 // The cap has to reach the runner, which is the only place it does anything.
-// It was carried on LaunchRequest and set by nobody, so every coding run went
+// It was carried on LaunchRequest and set by nobody, so every launch went
 // out uncapped while the field looked wired.
 func TestTheResolvedCapReachesTheCodingAgent(t *testing.T) {
 	t.Parallel()

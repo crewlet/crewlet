@@ -185,7 +185,7 @@ type ResumeRequest struct {
 	// carried on again, and the turn's executor phase ends saying why.
 	Lost *LostRun
 
-	// Success is whether the sandbox run itself succeeded, for the resumed
+	// Success is whether the launch itself succeeded, for the resumed
 	// phase's own record.
 	Success bool
 
@@ -717,7 +717,7 @@ type CoordinatorOptions struct {
 //     the instant it was asked. The seat then works as usual, with one
 //     difference: every delivery is offered to
 //     [Coordinator.TryResumeFromAnswer] before anything else consumes it,
-//     because the reply that resumes an hours-old coding run is an ordinary
+//     because the reply resuming an executor launched hours ago is an ordinary
 //     chat message and nothing about it says so. The wait is DURABLE FIRST
 //     and everything else follows it: a park whose write does not land gives
 //     the claim it holds back instead, and ends the run where even that
@@ -2207,10 +2207,10 @@ func (c *Coordinator) owes(turnID string) bool {
 // The answer is addressed to a RUN, so it travels the way everything else
 // addressed to a run does: on the seat's control topic ([AnswerDesk.Deliver],
 // [Coordinator.OnAnswerGiven]), which no hold stops and no backlog stands in
-// front of. It rode the seat's inbox, and there it waited behind every coding
-// run that held the seat (a held inbox fetches nothing) and then behind every
-// older message the seat had not worked yet, any of which could launch the
-// next job and hold the seat again. A seat with a backlog and steady coding
+// front of. It rode the seat's inbox, and there it waited behind every
+// executor that held the seat (a held inbox fetches nothing) and then behind
+// every older message the seat had not worked yet, any of which could launch
+// the next job and hold the seat again. A seat with a backlog and steady coding
 // work never reached it: the person was told `pending`, the run waited out its
 // pause TTL, and nothing in the log said why, because nothing had fetched the
 // answer to say anything about it.
@@ -2218,9 +2218,9 @@ func (c *Coordinator) owes(turnID string) bool {
 // What the seat's mail used to give it for free, it now asks for: RECORDING
 // needs nothing from the seat but its lease, so it happens on arrival and the
 // run reads `answered` at once; the RESUME starts a turn, so it waits, through
-// [Coordinator.queueOwed], for the seat to be free of another coding run
-// ([SeatCoding]), of a turn in flight and of a person's pause, and is then the
-// first thing the seat does, its inbox held behind it.
+// [Coordinator.queueOwed], for the seat to be free of another executor holding
+// it ([SeatCoding]), of a turn in flight and of a person's pause, and is then
+// the first thing the seat does, its inbox held behind it.
 //
 // # Recorded first, like a chat reply
 //

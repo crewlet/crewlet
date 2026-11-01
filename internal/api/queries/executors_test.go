@@ -519,7 +519,7 @@ func TestARunNamesTheItemItIsOn(t *testing.T) {
 	}
 }
 
-// parkedRun is a coding run of the agent seat `swe` parked on a question put
+// parkedRun is an executor of the agent seat `swe` parked on a question put
 // to ana, carrying every body field, a work item, and the entry its job was
 // launched on.
 func parkedRun() sandbox.PendingRun {

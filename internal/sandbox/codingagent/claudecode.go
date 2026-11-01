@@ -429,7 +429,7 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	}
 	if u := msg.Usage; u != nil {
 		// INPUT TOKENS ARE A SUM: the vendor's input_tokens is only the
-		// UNCACHED remainder, and a coding run is almost entirely cached
+		// UNCACHED remainder, and a run is almost entirely cached
 		// rounds — so reading it alone put a fraction of every run's
 		// prompt on the budget counter and the spend rollup.
 		res.CacheReadTokens = u.CacheReadInputTokens

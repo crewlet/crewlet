@@ -76,7 +76,7 @@ type OperatorDeps struct {
 	// four differently.
 	Authorize Authorizer
 
-	// Runs answers a parked coding run by its turn — see answerexecutor.go.
+	// Runs answers a parked executor by its turn — see answerexecutor.go.
 	// A nil desk omits the tool.
 	Runs RunDeps
 
@@ -159,9 +159,9 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&commentOnPage{deps: pages}, pages.Writer != nil && pages.Reader != nil},
 		{&searchKnowledge{search: deps.Knowledge, org: deps.Org},
 			deps.Knowledge != nil && deps.Org != nil},
-		// A SEAT IS NEVER GIVEN IT: a question a coding run asked is a
-		// person's to answer, and a seat that could answer its own run's
-		// question would be one guessing on its own behalf.
+		// A SEAT IS NEVER GIVEN IT: a question an executor asked is a
+		// person's to answer, and a seat that could answer its own
+		// executor's question would be one guessing on its own behalf.
 		{&answerExecutor{deps: deps.Runs, authorize: deps.Authorize},
 			deps.Runs.Desk != nil},
 		// NOR THESE: whether a seat works is a person's decision about it,

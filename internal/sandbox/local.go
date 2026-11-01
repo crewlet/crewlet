@@ -39,9 +39,9 @@ const ContainerPrefix = "crewlet-sbx-"
 
 // ControlTimeout bounds a CONTROL-PLANE command: mkdir, `docker exec`, the
 // liveness probe, and a container box's start — its `docker run`, with the
-// pull of an image the host does not hold yet inside it. Never the coding job
-// itself, which is detached and deliberately uncapped. Sized for a container
-// runtime under load, not for work.
+// pull of an image the host does not hold yet inside it. Never the launched
+// job itself, which is detached and deliberately uncapped. Sized for a
+// container runtime under load, not for work.
 //
 // EXPORTED for the one reader outside this package: a scheduled turn's
 // default cap (internal/org's DefaultScheduleTimeout) has to outlast what its
@@ -1149,7 +1149,7 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 		"-v", layout.home() + ":" + DefaultHome,
 		"-w", DefaultHome + "/" + WorkspaceSubdir,
 		"-e", "HOME=" + DefaultHome,
-		// A reaping PID 1. The detached coding job is backgrounded inside an
+		// A reaping PID 1. A launch's detached job is backgrounded inside an
 		// `exec`, so without an init that reaps it, a finished job lingers as
 		// a zombie — which `kill -0` reports as ALIVE, hanging the runner's
 		// completion check on a job that already died.
@@ -1166,7 +1166,7 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 	// every process in the box and not only its first: both runtimes start an
 	// `exec` from the container's own process specification, the value
 	// included (Docker's daemon/exec.go, Podman's
-	// libpod/oci_conmon_exec_common.go), so the coding job and every setup
+	// libpod/oci_conmon_exec_common.go), so the launched job and every setup
 	// command take it too. Neither raises it unasked: Docker runs a container
 	// at 0, and Podman at its own CLI's value, which is the engine's. A
 	// container on the engine's own kernel competes with the engine for the
@@ -1181,7 +1181,7 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 	// a config knob whose only job is to undo the line above.
 	argv = append(argv, l.opts.RunArgs...)
 	// PID 1 exists only to hold the namespace open; every command is an
-	// `exec` into it, which is what makes a detached coding job survive the
+	// `exec` into it, which is what makes a launch's detached job survive the
 	// turn that started it.
 	return append(argv, l.opts.Image, "sleep", "infinity")
 }

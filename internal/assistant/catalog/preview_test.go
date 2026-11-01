@@ -468,7 +468,7 @@ func TestAPreviewReadsTheSeatWithoutItsCalls(t *testing.T) {
 	}
 }
 
-// AN ANSWER TO A CODING RUN IS PREVIEWED AGAINST THE QUESTION IT ANSWERS. A
+// AN ANSWER TO AN EXECUTOR IS PREVIEWED AGAINST THE QUESTION IT ANSWERS. A
 // run that moved on to another question since the proposal was drafted is
 // refused before anybody approves an answer to a question it no longer asks,
 // and so is a choice its question does not offer; an offered choice is shown

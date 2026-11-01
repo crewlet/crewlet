@@ -97,8 +97,8 @@ type Config struct {
 	// the first turn will need must be ready before the first event can
 	// arrive. A seat mid-detached-run is the case that makes it matter —
 	// its runs have to be recovered and its mail parked before anything
-	// can deliver, or the first message starts a second turn beside a
-	// coding job that is still going.
+	// can deliver, or the first message starts a second turn beside an
+	// executor that is still going.
 	SeatReady func(ctx context.Context, seat placement.Seat, lease coord.Lease) error
 
 	// AttachHolds names the pause holds a seat's mailbox must already carry
@@ -592,7 +592,7 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 		if err := n.cfg.SeatReady(ctx, s, lease); err != nil {
 			// The seat is REFUSED rather than attached anyway: a seat
 			// whose in-flight runs could not be recovered would take new
-			// work beside a coding job nothing is tracking.
+			// work beside an executor nothing is tracking.
 			return fmt.Errorf("node: preparing seat %q: %w", handle, err)
 		}
 	}

@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A PROPOSAL MADE AFTER READING OUTSIDE TEXT SAYS SO (D25): a coding run's
+// A PROPOSAL MADE AFTER READING OUTSIDE TEXT SAYS SO (D25): an executor's
 // question is a third party's text, so a task proposed after reading one
 // carries the taint its card shows; a task proposed after reading only the
 // company's own records carries none. Mutation: label every read colleague

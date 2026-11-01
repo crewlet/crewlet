@@ -373,7 +373,7 @@ func (b *lockedBuffer) String() string {
 
 // A REFUSAL'S LOG LINE NEVER CARRIES THE RUN TOKEN A PATH DOES. The tool bridge
 // and the OTLP receiver are authenticated by a signed token in their own path,
-// and a coding run calling back while its node restarts meets the boot
+// and an executor calling back while its node restarts meets the boot
 // surface's refusal; a line naming the raw path would put a live credential in
 // the log. NOT PARALLEL: it installs this process's log sink for its duration,
 // which only a case running alone may do.

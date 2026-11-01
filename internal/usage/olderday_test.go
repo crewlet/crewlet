@@ -984,7 +984,7 @@ var hourBin = func() int {
 // A TURN WHOSE EARLIER RECORDS THE SWEEP REMOVED KEEPS ITS STATISTICS.
 //
 // A turn whose end states no tally is read off its records, and those reach
-// back to wherever the turn started: a park lasts as long as its coding run,
+// back to wherever the turn started: a park lasts as long as its executor,
 // which nothing stops on a timer, or as long as a person takes to answer. So
 // a day inside the event log's read floor can hold such a turn whose earlier
 // records the sweep has already removed, and derived again — a kept settle

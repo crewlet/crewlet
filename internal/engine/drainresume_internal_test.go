@@ -25,7 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A DRAINING NODE STARTS NO TURN THROUGH A CODING RUN'S COMPLETION.
+// A DRAINING NODE STARTS NO TURN THROUGH A LAUNCH'S COMPLETION.
 //
 // What a running engine did: the drain closed the node's turn gate and quiesced
 // every seat's inbox, the box's waiter went on running through it (its
@@ -44,7 +44,7 @@ import (
 // only thing standing in for production is what runs inside the box.
 
 // drainRig is one engine over a store and a stream that outlive it, holding the
-// swe seat with a coding run in its box.
+// swe seat with its executor in its box.
 type drainRig struct {
 	b        config.Bootstrap
 	provider *sandbox.FakeProvider
@@ -190,7 +190,7 @@ func withLaunchModels(t *testing.T, e *Engine, entry *cliagent.Provider) {
 	e.epoch.current.Store(&c)
 }
 
-// seedRun records a coding run on the swe seat whose job is running in the
+// seedRun records a launch on the swe seat whose job is running in the
 // rig's box, the turn that launched it parked on it, as the node that launched
 // it leaves it for the waiter: the executor's round, its parked turn state of
 // a version this build resumes. The job finishes when the case calls

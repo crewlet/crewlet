@@ -8,7 +8,7 @@
 
 ## The decision
 
-**A coding run that cannot go on without a person's answer asks through one
+**An executor that cannot go on without a person's answer asks through one
 tool on its bridge, `ask_and_wait`, in the shape a work item's decision is
 asked** ([ADR-0023](0023-a-decision-is-a-structured-ask.md)): a question in one
 sentence, its context in Markdown, and, where the person is to choose, a

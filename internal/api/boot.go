@@ -313,7 +313,7 @@ func (b *Boot) refuse(w http.ResponseWriter, r *http.Request) {
 //
 // THE SERVING NODE NEVER NEEDED THIS, which is why the drain gate's line names
 // the raw path: it serves both prefixes through a drain, so it never logs one.
-// A starting node refuses them — a coding run calling back while its node
+// A starting node refuses them — an executor calling back while its node
 // restarts — and a line naming the raw path would write a live credential
 // into the log.
 func loggedRoute(path string) string {

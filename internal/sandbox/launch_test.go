@@ -111,7 +111,7 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 	}
 	// THE DELIVERY OBLIGATION, persisted because the resumed turn never
 	// sees its trigger: without it a turn somebody asked for comes back
-	// from its coding run free to end in silence.
+	// from its executor free to end in silence.
 	if run.Reply != "tool" {
 		t.Fatalf("who is waiting was not persisted: %+v", run)
 	}

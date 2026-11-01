@@ -720,7 +720,7 @@ A person can [steer](turn-engine.md#steering-a-running-turn) a turn while its
 executor works in its box. From the executor's launch until its turn ends, the turn's notes
 wait on the **run's record** in the coordination store, each sealed under the
 fleet keyring by the node that filed it, beside a sealed anchor naming the seat
-the run serves ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
+the run serves ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)).
 The run reads them at four kinds of step, and every read is recorded on the
 record by the write that hands the note over — so a note is never handed to a
 model twice, and the record's read notes are exactly what the turn carries into

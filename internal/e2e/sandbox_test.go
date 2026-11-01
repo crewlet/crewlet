@@ -316,7 +316,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 		return false
 	})
 	if launch == "" {
-		t.Error("the resumed sandbox phase names no launch_id")
+		t.Error("the resumed execute phase names no launch_id")
 	}
 	// THE RUN'S STREAM REACHED ITS RECORD: the transcript the runner built
 	// from the stand-in's stream-json messages — its bridged submission
@@ -790,7 +790,7 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 	return payload.Runs
 }
 
-// THE RESTART LEG of the gate. A coding job outlives the engine that started
+// THE RESTART LEG of the gate. An executor outlives the engine that started
 // it, so the state that matters is the row: a fresh process picks the run up
 // on the seat's next claim, drives it to completion, and re-enters the SAME
 // turn the dead process parked.

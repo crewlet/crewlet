@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CODING RUN IS LISTED UNDER WHAT ITS TURN WAS ASKED, IN A PERSON'S WORDS.
+// AN EXECUTOR IS LISTED UNDER WHAT ITS TURN WAS ASKED, IN A PERSON'S WORDS.
 //
 // A wake reaches swe, and the turn launches its executor's run. The run's
 // brief carries the turn's task, whatever somebody else wrote in it fenced

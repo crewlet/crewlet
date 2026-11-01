@@ -98,9 +98,9 @@ const (
 	// CLI's own harness prompt and tool definitions (about 15k input tokens
 	// for Claude Code), the seat's bridged tool array beside them, and the
 	// seat's system prompt. A floor below one such request refuses nothing
-	// it was meant to — the 2000 it replaced was sized for a delegated
-	// coding job's brief, and passed every run that then died on its first
-	// round.
+	// it was meant to — the 2000 it replaced was sized for the brief the
+	// old `run_sandbox` tool handed a second agent, and passed every run
+	// that then died on its first round.
 	defaultExecutorMinBudgetTokens = 25000
 
 	// defaultOnboardingRounds is the pass's own budget: activate the

@@ -133,7 +133,7 @@ type SandboxProvider struct {
 	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a run launched on a providers.llm entry with no run_in happens. Required unless the catalogue names exactly one cell, or every entry a seat's executor can launch on names its own."`
 
 	// DefaultTimeoutSeconds is the box TTL and keepalive window. NOT a run
-	// limit: a coding job is never force-stopped on a timer, and the
+	// limit: an executor is never force-stopped on a timer, and the
 	// waiter refreshes a running box's TTL every tick so the clock never
 	// kills it. Effectively the orphan-reclaim grace — how long a box
 	// outlives an engine that stopped heart-beating.

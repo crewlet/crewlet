@@ -26,7 +26,7 @@ import (
 // for the operator catalogue, over the artifacts estate through the router (a
 // node without `data` acts through a data node), the node's one publish
 // pipeline, the running chart, the identity directory for whoever a turn is
-// acting for, and the coding run's box a publish reads.
+// acting for, and the executor's box a publish reads.
 
 // ArtifactToolDeps are the artifacts tools' dependencies on this node, or the
 // zero value (which serves none of them) where the node takes no artifact
@@ -159,9 +159,9 @@ func (r artifactRequesters) Requester(ctx context.Context, handle string) (iam.P
 	return p, nil
 }
 
-// ---- the coding run's box ------------------------------------------------ //
+// ---- the executor's box -------------------------------------------------- //
 
-// artifactBoxes attaches the box of the coding run working in a turn, for a
+// artifactBoxes attaches the box of the executor working in a turn, for a
 // publish reading its build.
 //
 // THE RUN READS ITS OWN BOX, WHILE IT WORKS. A seat's executor is its coding

@@ -602,7 +602,7 @@ func (s Sources) feedSchedules(ctx context.Context, names scopeNames, actor,
 // ---- decisions -----------------------------------------------------------
 
 // DecisionItem is one thing waiting on a person's decision: a structured ask
-// on a work item, or a coding run parked on a question put to them.
+// on a work item, or an executor parked on a question put to them.
 type DecisionItem struct {
 	Kind string    `json:"kind"`
 	At   time.Time `json:"at"`
@@ -612,7 +612,7 @@ type DecisionItem struct {
 }
 
 // decisions answers what is waiting on one person — the open asks put to
-// them and the coding runs parked on a question to them — newest first, at
+// them and the executors parked on a question to them — newest first, at
 // most [worklet.MaxDecisions], with the full count and the oldest one's
 // instant beside the page.
 //
@@ -628,7 +628,7 @@ type DecisionItem struct {
 // arm). A list of what is waiting on them that refused them would leave the
 // only way to find those asks closed.
 //
-// AND A CODING RUN'S QUESTION IS SHOWN AS THE BOARD SHOWS IT ([serialiseRun]):
+// AND AN EXECUTOR'S QUESTION IS SHOWN AS THE BOARD SHOWS IT ([serialiseRun]):
 // to the people it is put to — the record being read, when it is the caller's
 // own — and its seat's trail to whoever reads that.
 func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
@@ -724,7 +724,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 //     Each is the ask as `decisions` listed it while it was open, who answered
 //     it and when, the option chosen or the words, and the asker's first
 //     record on the task since.
-//   - A coding run's questions THEY answered, and only those ([Sources.answeredRuns]):
+//   - An executor's questions THEY answered, and only those ([Sources.answeredRuns]):
 //     a run's question can be put to a whole team, and one teammate's answer
 //     is that teammate's decision, so a question somebody else answered is in
 //     the other person's list and not in this one.
@@ -784,7 +784,7 @@ func (s Sources) answeredDecisions(ctx context.Context, p Params) (any, error) {
 		answer["read_level"] = got.Level
 		answer["complete"] = got.Complete
 	}
-	// AND THE CODING RUNS' QUESTIONS THEY ANSWERED (ADR-0068), over the same
+	// AND THE EXECUTORS' QUESTIONS THEY ANSWERED (ADR-0068), over the same
 	// window, whether or not this company keeps a tracker: a run asks in a
 	// decision's shape on every company, and is read back beside a work
 	// item's answered ask.

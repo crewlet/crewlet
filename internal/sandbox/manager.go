@@ -12,7 +12,7 @@ import (
 
 // DefaultBoxTimeout is a box's TTL and keepalive window.
 //
-// NOT a run-time limit: a coding job is never force-stopped on a timer, and
+// NOT a run-time limit: a launched job is never force-stopped on a timer, and
 // the waiter refreshes a running box's TTL to this value every tick so the
 // clock never kills it. It is effectively the ORPHAN-RECLAIM GRACE — how long
 // a box outlives an engine that stops heart-beating before the provider
@@ -52,7 +52,7 @@ type ManagerOptions struct {
 	// DefaultPlacement is where a seat that names none runs. It MUST be a
 	// key of Providers: a default naming a backend nobody configured is
 	// the failure this whole reshape exists to make impossible, and it is
-	// checked here rather than at the first coding run.
+	// checked here rather than at the first launch.
 	DefaultPlacement Placement
 
 	// Runners are the coding agents a box can run, by CLI name. A launch

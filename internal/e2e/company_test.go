@@ -109,7 +109,7 @@ const ceoSeat = "    handle: ceo\n    llm: [scripted, coder]\n"
 // runPollInterval is how often a node here polls its executor runs for
 // completion ([engine.Options.SandboxPollInterval]).
 //
-// Sized in production against coding jobs that run for minutes; at that
+// Sized in production against executors that run for minutes; at that
 // cadence every turn here — each one's executor a run in a box that finishes
 // in a moment — would wait out a real tick before its review.
 const runPollInterval = 100 * time.Millisecond
@@ -928,7 +928,7 @@ func (m *scriptedModel) toolResults() []string {
 // # Why it is this large
 //
 // The conditions here are not in-process flags: they are a seat claimed
-// through a lease, an engine booted, a detached sandbox run recovered from a
+// through a lease, an engine booted, a detached executor recovered from a
 // row. And the machine they run on is not this one — CI runs the suite under
 // the race detector, with this package's single-engine cases running beside
 // each other, as many at once as the runner has cores ([testing.T.Parallel]),
@@ -939,7 +939,7 @@ func (m *scriptedModel) toolResults() []string {
 //
 // A wait that will never complete. When this was raised from thirty seconds
 // the reasoning was that a loaded machine missed the budget — and that was
-// wrong: the restart case was losing a RACE, because its stand-in coding job
+// wrong: the restart case was losing a RACE, because its stand-in executor
 // slept for a fixed three seconds and a loaded second boot took longer, so
 // recovery found a run that had already finished and the seat was never
 // parked. The test then waited out whatever budget it had and failed at

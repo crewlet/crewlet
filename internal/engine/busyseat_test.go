@@ -22,7 +22,7 @@ import (
 
 // A BUSY SEAT'S MAIL WAITS ON THE BROKER, AND NOTHING CIRCLES, on BOTH backends.
 //
-// What used to spin: while a detached coding run held a seat, every delivery to
+// What used to spin: while a detached executor held a seat, every delivery to
 // it was PARKED — requeued onto the inbox it had just been fetched from, then
 // acked — and nothing stopped the consumer, so the copy was the next thing it
 // fetched. For the length of the run each waiting message went round fetch,

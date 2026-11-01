@@ -754,7 +754,7 @@ yet:
   a record is **sealed** under the fleet keyring by the node that files it, and
   the record carries a sealed anchor naming the seat the run serves, which a
   person's authority is decided on; a reader opens both before using either
-  ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
+  ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)).
 
 The launch **hands the box over in the write that creates the record**: the
 box stops taking notes just before that write, and every note it held that the

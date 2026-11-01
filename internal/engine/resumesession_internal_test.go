@@ -68,7 +68,8 @@ const (
 
 // The finding this commit closes: a turn that ended on the resume path wrote
 // no conversation entry at all, so the thread's history stopped at the moment
-// the coding run detached and the seat's next turn planned the work again.
+// the turn detached its executor and the seat's next turn planned the work
+// again.
 func TestAResumedTurnRecordsWhatItSaidToTheConversation(t *testing.T) {
 	t.Parallel()
 	e, conversations := resumingEngine(t)

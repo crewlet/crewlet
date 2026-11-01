@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// The durable state of a detached coding job.
+// The durable state of an executor's detached run.
 //
 // A run OUTLIVES its kick-off turn, its process, and sometimes its node. What
 // survives is this row: the completion turn rebuilds everything it needs from
@@ -46,7 +46,7 @@ const (
 	// later on an idle host and hundreds of milliseconds on a loaded one.
 	// A completion fired inside that window was claimed against a row with
 	// no ExecuteState, and the coordinator — finding nothing to resume —
-	// FAILED the run: a coding job that finished too fast destroyed the
+	// FAILED the run: a job that finished too fast destroyed the
 	// agent's whole turn, permanently, with no retry. The window is not
 	// theoretical, it is measured: a job that completes in ~100 ms against
 	// an unwind that takes longer is the ordinary case for a trivial run.
@@ -646,7 +646,7 @@ type BridgeAppend struct {
 // MaxBridgeCalls bounds the durable log of a bridged run.
 //
 // The row is ONE VALUE in the coordination store, read and written whole on
-// every mutation, and a coding run can make hundreds of calls — so an
+// every mutation, and an executor can make hundreds of calls — so an
 // unbounded list turns a busy run's every status change into a growing write.
 // Two hundred is well past what a reviewer reads (the ledger elides a long log
 // anyway) and small enough that the row stays a row.
@@ -780,7 +780,7 @@ type PendingRun struct {
 	//
 	// It has to be persisted rather than re-derived: the resumed turn does
 	// not see the trigger, so without this a turn somebody was waiting on
-	// would come back from its coding run free to end in silence. Every
+	// would come back from its executor free to end in silence. Every
 	// launch writes a kind — `none` when nobody is waiting — so a resume
 	// refuses a row that names none rather than guessing; see
 	// [turn.Reply].
@@ -860,7 +860,7 @@ type PendingRun struct {
 	// resumes under the same launch), and its charge to the turn's work
 	// item includes the job's tokens exactly as a completion's resume does
 	// (ADR-0022). Without these the answer's resume charged the task for
-	// the collection and never for the coding run that asked.
+	// the collection and never for the launch that asked.
 	ParkedInputTokens  int `json:"parked_input_tokens,omitempty"`
 	ParkedOutputTokens int `json:"parked_output_tokens,omitempty"`
 	// ParkedCacheReadTokens and ParkedCacheWriteTokens are the cached share
@@ -2519,7 +2519,7 @@ func (a AuxTokens) newest(b AuxTokens) AuxTokens {
 
 // EngineSpend is what the ENGINE spent on a job outside every segment of the
 // turn it belongs to: its own auxiliary calls, and the workers it ran for the
-// job. A coding run's OWN tokens are not here — they are the job's, reported
+// job. The executor's OWN tokens are not here — they are the job's, reported
 // by its CLI ([Result.InputTokens]).
 //
 // Two things put it there, and both happen while no segment is running to

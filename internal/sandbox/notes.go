@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// A person's notes to a turn whose coding run is out, on the run's own record.
+// A person's notes to a turn whose executor is out, on the run's own record.
 //
 // # Who has to agree on them: the whole company, now
 //

@@ -534,9 +534,9 @@ func TestASeatThatMovedAfterActingIsStillRecordedRatherThanDeferred(t *testing.T
 //
 // The NAK above used to be unconditional, on a premise that held only for the
 // two writes internal/workkey guards: every MCP write, chat post, colleague
-// ask and coding run is keyed on nothing, so a deterministic mid-turn failure
-// replayed round one's external effects across the broker's whole delivery
-// budget — 25 attempts a second apart.
+// ask and executor launch is keyed on nothing, so a deterministic mid-turn
+// failure replayed round one's external effects across the broker's whole
+// delivery budget — 25 attempts a second apart.
 func TestATurnThatBrokeAfterActingIsRecordedRatherThanRedelivered(t *testing.T) {
 	t.Parallel()
 	completions := ledgerstore.NewMemoryCompletions()
@@ -1402,7 +1402,7 @@ func TestTheTriggersDelegationReachesTheTurn(t *testing.T) {
 	}
 }
 
-// A SEAT A CODING RUN HOLDS DEFERS UNDER THE SANDBOX HOLD, AND OFFERS NOTHING.
+// A SEAT ITS EXECUTOR HOLDS DEFERS UNDER THE SANDBOX HOLD, AND OFFERS NOTHING.
 //
 // It used to PARK every delivery — requeue it onto the inbox it came from and
 // ack it — offering it to the seat's parked runs first. Nothing stopped the
@@ -1508,7 +1508,7 @@ func TestAnAnswerIsClaimedBeforeItBecomesAnOrdinaryTurn(t *testing.T) {
 // company — so it gave the claim back and the run is awaiting THIS message
 // again. Read as "not the answer", which is what an error used to mean here,
 // the delivery went on to the ordinary route and was consumed as an unrelated
-// turn: the person answered, a turn ran on their reply, and the coding run
+// turn: the person answered, a turn ran on their reply, and the executor
 // that asked waited out its pause TTL for a further message that may never
 // come. It is requeued instead, so this node or the seat's next owner is
 // offered it again.
@@ -1571,7 +1571,7 @@ func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
 // decides whether a parked run is offered this message at all, and an
 // UNSTATED count leaves the route exactly as it was before this clause
 // existed: a node whose transport said nothing must not stop answering
-// coding runs.
+// parked executors.
 func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -1842,7 +1842,7 @@ func TestAPartitionWhoseMessagesAreAllSpentIsNotOffered(t *testing.T) {
 //
 // The offer on this path sits after the completion read, so the partition it
 // is handed is already shorter than the one that arrived: a trigger this seat
-// has already worked must never be spliced into somebody's coding run as its
+// has already worked must never be spliced into somebody's executor as its
 // answer as well.
 //
 // THE NAK STILL RETURNS THE WHOLE DELIVERY, because that is what a nak is, and
@@ -1967,7 +1967,7 @@ func TestAMessageThatAnswersNothingStillRunsItsTurn(t *testing.T) {
 //
 // The offer on this path sits AFTER the completion read, and that is the
 // ordering under test: a redelivery of a trigger that already produced a turn
-// must not be spliced into somebody's coding run as the answer to its
+// must not be spliced into somebody's executor as the answer to its
 // question, which is a second use of one message and the run's whole
 // disambiguation is "the next thing to arrive here".
 func TestAnAlreadyWorkedTriggerIsNotOfferedAsAnAnswer(t *testing.T) {
@@ -2444,7 +2444,7 @@ func TestTheMergedAskCarriesEverySpeakerInTheOrderTheySpoke(t *testing.T) {
 // from the trigger's ids, is reproduced by construction. That is what it is
 // for. What must NOT be reproduced is the run: everything a turn publishes is
 // keyed on it, so a second attempt under the first one's id writes its phases,
-// its live row and its detached sandbox run on top of the attempt it is
+// its live row and its detached executor's row on top of the attempt it is
 // repeating. See ADR-0017.
 func TestARedeliveredTriggerRunsUnderItsOwnIdentity(t *testing.T) {
 	t.Parallel()
@@ -2645,7 +2645,7 @@ func TestADMThreadReplyAnswersAndFilesUnderTheWholeDMLine(t *testing.T) {
 //
 // AND THE FAIL-OPEN IS STILL RIGHT, which is why this is not simply inverted:
 // on a seat with no parked run at all, an unreadable store must not swallow a
-// message that has nothing to do with any coding run — which there is every
+// message that has nothing to do with any executor — which there is every
 // message the seat receives. The two resolve on the seat's own awaiting count,
 // which this node holds in memory and needs no store to read.
 //

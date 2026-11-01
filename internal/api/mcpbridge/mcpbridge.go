@@ -462,7 +462,7 @@ type Options struct {
 
 // DefaultTTL is how long a run's endpoint stays valid.
 //
-// Four hours, matched to the thing it has to outlive: a coding run that stops
+// Four hours, matched to the thing it has to outlive: an executor that stops
 // to ask a person something is parked until they answer, and the ordinary
 // human latency on that is hours rather than minutes. Shorter and a run comes
 // back to a dead endpoint through no fault of its own; much longer and a

@@ -215,8 +215,8 @@ func TestAnAskInheritsTheAskersItem(t *testing.T) {
 //
 // The event that resumes a run — a box's completion, or a person's answer on
 // chat — names no item, so the row is the only place the item can come from.
-// Read off the event instead, a coding run's second half would be charged to
-// nothing.
+// Read off the event instead, the second half of a turn parked on its
+// executor would be charged to nothing.
 func TestAResumedTurnKeepsTheItemItParkedWith(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, refusingModels(t))
@@ -583,9 +583,9 @@ func TestTheToolsAndTheCompletionShareOneWriteSet(t *testing.T) {
 	}
 }
 
-// WHO WOKE THE TURN REACHES THE TURN CONTEXT, which is the one frame a coding
-// run it detaches copies onto its row — and a resumed turn keeps the one the
-// row recorded rather than whoever answered it.
+// WHO WOKE THE TURN REACHES THE TURN CONTEXT, which is the one frame an
+// executor it detaches copies onto its row — and a resumed turn keeps the one
+// the row recorded rather than whoever answered it.
 func TestTheTurnContextCarriesWhoWokeIt(t *testing.T) {
 	t.Parallel()
 	e, _ := starting(t, refusingModels(t))

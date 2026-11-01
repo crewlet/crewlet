@@ -255,8 +255,8 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		// Refused HERE, naming the seat and the fix, rather than by the
 		// runner's own nil check, which reads as a wiring fault. The
 		// dispatcher never gets this far for a company with no models, so
-		// what reaches it is a path that bypasses the inbox: a coding run
-		// resuming after a revision removed every provider.
+		// what reaches it is a path that bypasses the inbox: a turn resuming
+		// from its executor after a revision removed every provider.
 		return nil, fmt.Errorf("engine: seat %q cannot take a turn: %w", handle, phase.ErrNoProviders)
 	}
 	if reg == nil {

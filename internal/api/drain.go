@@ -50,11 +50,11 @@ const DrainRetryAfter = 30 * time.Second
 //     renders a page, and it goes with the rest rather than being carved out,
 //     because a per-route list is what the default below exists to avoid.
 //   - The sandbox bridge and the telemetry edge are SERVED. They carry the tool
-//     calls and the spans of coding runs that started before the drain, and a
-//     detached run OUTLIVES the turn that started it: the turn suspended the
-//     moment the run detached, so the drain never waits on one (see
-//     docs/concepts/code-sandbox.md, where being detached is what keeps a
-//     coding job out of the drain). Refusing these therefore shortens no drain
+//     calls and the spans of executors launched before the drain, and a
+//     detached executor OUTLIVES the turn that launched it: the turn suspended
+//     the moment the executor detached, so the drain never waits on one (see
+//     docs/concepts/code-sandbox.md, where being detached is what keeps an
+//     executor out of the drain). Refusing these therefore shortens no drain
 //     and does nothing but break a run mid-flight against the node still
 //     holding its bridge session and its receiver.
 //   - Every other read is SERVED: the probes, the dashboard, the REST reads and

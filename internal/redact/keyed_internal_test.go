@@ -188,7 +188,7 @@ func TestAKeyedPatternsTailCannotEscapeItsWords(t *testing.T) {
 	}
 }
 
-// BenchmarkSecrets is the pass over two mebibytes of a coding run's
+// BenchmarkSecrets is the pass over two mebibytes of an executor's
 // transcript, the largest text it is handed — the figure [keyed]'s doc comment
 // cites.
 //

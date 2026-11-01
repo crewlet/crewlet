@@ -39,7 +39,7 @@ import (
 //
 // # Why the streaming call is drained rather than followed
 //
-// The engine's own model of a coding run is DETACHED: a job is started, the
+// The engine's own model of a launch is DETACHED: a job is started, the
 // turn suspends, and something later reads a result file. So nothing here
 // needs to watch output arrive — a foreground command is run to completion
 // and its frames are folded into one [ExecResult], and a background command
@@ -412,7 +412,7 @@ func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessRe
 			if background {
 				// The pid is the whole answer for a detached start.
 				// Reading on would block this turn for the length of
-				// the coding run.
+				// the job.
 				return out, nil
 			}
 		case frame.Event.Data != nil:

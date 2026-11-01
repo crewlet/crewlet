@@ -24,7 +24,7 @@ import (
 // A RESUME NEVER RUNS INTO A LIMIT ITS MODELS ALREADY KNOW, and one that meets
 // a limit it did not know waits for it: neither is a failure.
 //
-// What a running engine did: a coding run's completion reached a seat whose
+// What a running engine did: a launch's completion reached a seat whose
 // models were all at their usage limit, the resume ran a turn into the limit,
 // the turn was reverted, and the control topic NAKed the completion, which the
 // broker redelivered into the same limit 25 times in about ten minutes.
@@ -302,7 +302,7 @@ func (m *midTurnLimit) limitedErr() error {
 		Err: errors.New("You've hit your 5-hour limit")}
 }
 
-// limitedResume is a drain rig whose swe seat's coding run has finished and
+// limitedResume is a drain rig whose swe seat's launch has finished and
 // whose resume has met the model's limit mid-turn, with the waiter stopped so
 // nothing but a signal can bring the kept completion back: the engine, the
 // model, how many times the gate admitted a resume, how many it had once the

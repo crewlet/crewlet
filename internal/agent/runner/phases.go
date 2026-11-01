@@ -226,7 +226,7 @@ type Config struct {
 	// Steer is where the turn's notes from a person wait
 	// (internal/agent/steer): taken at the opening of every run of the
 	// REVIEWER — the turn's own conversation the engine drives — and by the
-	// brief of every coding run the turn launches. Never a worker's (a leaf
+	// brief of every launch of the turn's executor. Never a worker's (a leaf
 	// its parent directs), the onboarding pass's (orientation, not the work)
 	// or the extension judge's (a question about the phase, not part of it):
 	// a note waiting while one of those runs is read by the next step of the
@@ -245,14 +245,14 @@ type Config struct {
 }
 
 // SteerSource is where a turn's notes from a person wait, as the runner reads
-// them: the first segment's box ([steer.Box]), or the record of the coding run
+// them: the first segment's box ([steer.Box]), or the record of the executor
 // a resumed segment collects. Declared here, by the consumer.
 type SteerSource interface {
 	// Take takes every note waiting, recording it read where at says, and
 	// answers what it took — what a run of the engine's loop opens with.
 	Take(ctx context.Context, at steer.Reading) []steer.Note
 
-	// Brief is the notes a coding run's brief takes, oldest first. They are
+	// Brief is the notes a launch's brief takes, oldest first. They are
 	// the launch's from here: recorded read by the write that opens the
 	// run's job, or handed back with [SteerSource.Return] where the launch
 	// fails before that write.
@@ -471,8 +471,8 @@ type Runner struct {
 	// from the next unless it is carried: a later reviewer would judge the
 	// work against the task the person corrected. Carried as the SAME
 	// message rather than summarised, because the note's words are the
-	// person's and a paraphrase is the engine's. A turn that resumes from a
-	// coding run starts from the reads its run's record holds
+	// person's and a paraphrase is the engine's. A turn that resumes from
+	// its executor starts from the reads its run's record holds
 	// ([Resume.Steered]), which is every note the turn read before it — the
 	// record is where every read is written. Guarded by mu.
 	steered []steer.Read
@@ -1475,10 +1475,10 @@ type phaseResult struct {
 	// re-deriving one from the other is how the two come to disagree.
 	Result toolloop.Result
 
-	// RunSteers is what a collected coding run read of the turn's notes —
+	// RunSteers is what a collected executor read of the turn's notes —
 	// in its brief, and at boundaries of its CLI's own loop — at the run's
 	// one round with each one's boundary. A run of the engine's loop reads
-	// its notes at its rounds, which its Result records; a coding run's
+	// its notes at its rounds, which its Result records; an executor's
 	// reads are on its record instead ([Runner.resumeAgentRun]).
 	RunSteers []types.PhaseSteer
 }
@@ -1869,7 +1869,7 @@ func (r *Runner) carriedSteers() []string {
 	return out
 }
 
-// steerBrief is the notes a coding run's brief takes — none on a turn nobody
+// steerBrief is the notes a launch's brief takes — none on a turn nobody
 // can steer.
 func (r *Runner) steerBrief(ctx context.Context) []steer.Note {
 	if r.cfg.Steer == nil {

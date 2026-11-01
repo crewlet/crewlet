@@ -158,7 +158,7 @@ type WorkReader interface {
 // is absent, and its own read says so. A merged answer is not: the half it
 // cannot read is a part to leave out, and the rest is still the answer.
 // Without a way to ask, each of them read the absent half, met its refusal and
-// refused WHOLE, so a company on Jira saw no coding run parked on a question
+// refused WHOLE, so a company on Jira saw no executor parked on a question
 // to a person and no schedule run in its feed.
 //
 // OPTIONAL, read by [keptHere]: a source that does not implement it is one

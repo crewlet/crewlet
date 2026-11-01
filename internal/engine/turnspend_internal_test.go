@@ -104,7 +104,7 @@ func resumeTel(item *types.WorkItem, carried *execstate.Uncharged, jobIn, jobOut
 //
 // What a turn charges its work item is a SHARE of what the turn's own records
 // state it spent — the phases, the workers, the judge, the auxiliary calls made
-// inside it and the coding runs it collected — and, across every segment of a
+// inside it and the launches it collected — and, across every segment of a
 // turn, never more than their sum.
 // Folding anything in twice (a resumed phase's pre-park half, a worker counted
 // inside its host phase and again beside it) would show a task costing more
@@ -170,7 +170,7 @@ func TestTaskSpendNeverExceedsTheRollup(t *testing.T) {
 
 // A RESUMED SEGMENT PAYS WHAT THE ENGINE SPENT ON ITS JOB.
 //
-// Between the segment that launched a coding run and the one that resumes from
+// Between the segment that launched the executor and the one that resumes from
 // it, the engine spends on the job with no segment running: a run's bridged
 // calls — the auxiliary rewrites its tools asked for, the workers it delegated
 // to — and the condensation of the run's account at collection.
@@ -217,7 +217,7 @@ func TestAResumedSegmentPaysWhatTheEngineSpentOnItsJob(t *testing.T) {
 // A SUSPENDED TURN IS COUNTED ONCE AND PAID IN FULL.
 //
 // One turn, two segments, one turn on the task: only the dispatch segment
-// counts a turn, the resumed segment pays for the coding run it collected, and
+// counts a turn, the resumed segment pays for the launch it collected, and
 // a turn charged by its sole write — which a parked segment cannot conclude —
 // is paid for its first half by the segment that finishes it.
 func TestASuspendedTurnIsCountedOnceAndPaidInFull(t *testing.T) {

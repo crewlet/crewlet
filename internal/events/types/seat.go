@@ -50,7 +50,7 @@ type SeatPaused struct {
 
 	// StopRunning is whether the pause also asked the seat's running work
 	// to stop rather than finish: the turn it was on ends at its next round,
-	// and a coding run it had launched — launching or running — is ended at
+	// and an executor it had launched — launching or running — is ended at
 	// once, its box reclaimed ([ExecutorStopped]). Its effect, when a
 	// turn was running or parked on such a run, is that turn's own
 	// [AgentTurnStopped].
@@ -119,7 +119,7 @@ func (e SeatResumed) SummaryFor(actor string) string {
 
 // AgentTurnStopped records that a turn was ended by a person rather than by
 // itself: a pause that asked to stop the running turn reached that turn's next
-// round, and the turn ended there — or ended the coding run the turn was
+// round, and the turn ended there — or ended the executor the turn was
 // parked on, and the turn with it ([ExecutorStopped]).
 //
 // THE TRIGGER IS SPENT, not handed back: the dispatcher records it in the
@@ -171,7 +171,7 @@ const (
 	// SteerExpired — the turn ended before anything read the note. It is not
 	// carried to a later turn: a note is an instruction about the work in
 	// flight, and a later turn is other work. Never at a park: a turn parked
-	// on its coding run's question holds its notes for whatever resumes it.
+	// on its executor's question holds its notes for whatever resumes it.
 	SteerExpired SteerOutcome = "expired"
 )
 
@@ -186,8 +186,8 @@ func (o SteerOutcome) Valid() bool { return slices.Contains(SteerOutcomes, o) }
 //
 // FIVE, because a turn reads notes in two kinds of place and they mean
 // different things. The engine's own loop reads a note at the opening of one of
-// its runs ([SteerBoundaryRound]) and a coding run in its brief
-// ([SteerBoundaryBrief]): the engine sent it. Inside a coding run the CLI reads
+// its runs ([SteerBoundaryRound]) and an executor in its brief
+// ([SteerBoundaryBrief]): the engine sent it. Inside its run the CLI reads
 // it at a step of its own loop — Claude Code after a batch of tool calls
 // ([SteerBoundaryToolBatch]) or as it was about to finish
 // ([SteerBoundaryFinish]), each where the CLI handed the note to its model;
@@ -200,7 +200,7 @@ const (
 	// (the reviewer), at the round it starts.
 	SteerBoundaryRound SteerBoundary = "round"
 
-	// SteerBoundaryBrief — in the brief a coding run started with.
+	// SteerBoundaryBrief — in the brief an executor was launched with.
 	SteerBoundaryBrief SteerBoundary = "brief"
 
 	// SteerBoundaryToolBatch — Claude Code, after a batch of tool calls.
@@ -227,7 +227,7 @@ func (b SteerBoundary) Valid() bool { return slices.Contains(SteerBoundaries, b)
 // because the turn ended first.
 //
 // PUBLISHED BY THE NODE WHOSE STEP READ THE NOTE — the runner's node for a round
-// of the engine's loop or a coding run's brief, the node serving the run's tool
+// of the engine's loop or an executor's brief, the node serving the run's tool
 // bridge for a read inside the run — or BY THE NODE THAT FINISHED THE TURN'S
 // ENDING, for a note nothing read. Never by the node that took the request,
 // which answered `pending` and cannot see the turn. A note to a turn with no run
@@ -256,8 +256,8 @@ type AgentTurnSteered struct {
 
 	// Phase, Iteration and Round are where a DELIVERED note landed: the
 	// phase and iteration that read it, and the round, on the phase's
-	// one-based scale, whose provider call first saw it — round 1 for a
-	// coding run, whose record is one round of the engine's
+	// one-based scale, whose provider call first saw it — round 1 for an
+	// executor, whose record is one round of the engine's
 	// ([AgentPhaseCompleted.Rounds]). Absent on an expired note, which
 	// nothing read.
 	Phase     Phase `json:"phase,omitempty"`
@@ -265,7 +265,7 @@ type AgentTurnSteered struct {
 	Round     int   `json:"round,omitempty"`
 
 	// Boundary is the kind of step that read a delivered note
-	// ([SteerBoundary]), and LaunchID the coding run's job that read it —
+	// ([SteerBoundary]), and LaunchID the executor's launch that read it —
 	// set for a brief and for every read inside a run, so a reader puts the
 	// note on the job whose record the read belongs to. Both absent on an
 	// expired note, which nothing read — and LaunchID on a read the engine's

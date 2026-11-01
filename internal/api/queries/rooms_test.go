@@ -658,7 +658,7 @@ func TestTheSpendChartDrawsExactlyTheEnginesPhaseBands(t *testing.T) {
 // and the dashboard draws it in its BAND's (`PHASE_BANDS`, read by
 // `phaseColor`), so a phase is one colour on every chart. That table is
 // tokens.PhaseBand written out by phase, and it can drift two ways, both
-// silent: an entry the engine folds elsewhere is a coding run drawn as Review
+// silent: an entry the engine folds elsewhere is an executor drawn as Review
 // in one chart and counted as Execute in the next, and a phase the table does
 // not name falls to Auxiliary's hue whatever the engine does with it.
 func TestEveryPhaseIsDrawnInTheBandTheEngineFoldsItInto(t *testing.T) {

@@ -91,8 +91,8 @@ type Engine struct {
 	// githubIssuer holds the installation tokens this process has issued
 	// its agents' own GitHub Apps, one per installation and scope, in
 	// memory only. ONE for every reader of a seat's token (its tool
-	// servers, its coding runs, the poll that keeps a long run's token
-	// current and the inbound participant lookup), so an installation
+	// servers, its executor's launches, the poll that keeps a long run's
+	// token current and the inbound participant lookup), so an installation
 	// costs one mint an hour however many ask, and a refusal one request
 	// per wait of the seats' restart schedule ([Engine.seatRetryDelay],
 	// set in [New]). See githubtoken.go.
@@ -511,7 +511,7 @@ type Engine struct {
 	// to end it. Nil on a node with no store or no seat host.
 	fill *memoryFill
 
-	// sandboxOtel mints each coding run's telemetry endpoint. Nil exports
+	// sandboxOtel mints each launch's telemetry endpoint. Nil exports
 	// nothing from inside a box, which is the ordinary configuration.
 	//
 	// Held here and handed OUT to the API this process serves rather than
@@ -912,8 +912,8 @@ type Engine struct {
 	steers         *steerDesk
 	stopSteerServe queue.Unsubscribe
 
-	// runSteers is this node's half of the notes a turn's coding run holds
-	// on its record, from the run's launch to the turn's end. See
+	// runSteers is this node's half of the notes a turn's executor holds
+	// on its record, from its launch to the turn's end. See
 	// runsteer.go and ADR-0067.
 	runSteers *runSteers
 
@@ -943,7 +943,7 @@ type Engine struct {
 	memoryReads     *memread.Reader
 	stopMemoryServe queue.Unsubscribe
 
-	// executorTails answers a running coding run's live output from the node
+	// executorTails answers a running executor's live output from the node
 	// that owns it, sandboxFeeds is this node's readings of the runs it owns,
 	// and stopTailServe withdraws this node as one of its answerers. See
 	// executortail.go.
@@ -1132,7 +1132,7 @@ type Options struct {
 	SandboxRuns func(handle string) (held, awaitsAnswer bool)
 
 	// SandboxPollInterval overrides the completion poll's cadence. Zero
-	// takes the production value, which is sized against coding jobs that
+	// takes the production value, which is sized against launched jobs that
 	// run for minutes; a test shrinks it so a run settles in a second
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
@@ -1275,7 +1275,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// AND A NOTE THAT WAITS ON A CODING RUN'S RECORD, which any node files
+	// AND A NOTE THAT WAITS ON AN EXECUTOR'S RECORD, which any node files
 	// and any node reads: sealed there, in domains of its own, for the reason
 	// the scatter's are (runsteer.go).
 	steerSeals, err := newSteerSeals(recordKeyring(opts.Bootstrap))
@@ -2265,7 +2265,7 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
 		// exported and tested since the clarification path was written, and
-		// nothing in the engine called it — so a coding run that asked a
+		// nothing in the engine called it — so an executor that asked a
 		// person a question waited out its pause TTL however promptly they
 		// replied.
 		//
@@ -2959,7 +2959,7 @@ func newObjectives(rec *metrics.Recorder) *objectives.Meter {
 // UNEXPORTED BECAUSE IT IS NOT AN ENTRY POINT. The node calls it only after it
 // has admitted the delivery's turn ([node.Node.AdmitTurn]), so a caller that
 // reached it any other way would start a turn the node never admitted
-// (ADR-0063). A turn that does not arrive by the mailbox, a coding run's
+// (ADR-0063). A turn that does not arrive by the mailbox, a launch's
 // completion or a person's recorded answer, re-enters through the sandbox
 // coordinator's resume, which asks the same admission itself.
 func (e *Engine) mailboxTurn(ctx context.Context, handle string, evs []*events.Event) queue.Result {
@@ -3103,8 +3103,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// It is NOT the work key, and that is the whole of ADR-0017: a trigger
 	// that fails without acting is NAK'd and redelivered, so one work key
 	// legitimately runs several times — and a run that borrowed that
-	// identity wrote its phases, its live row and its sandbox run on top of
-	// the attempt it was repeating.
+	// identity wrote its phases, its live row and its executor's row on top
+	// of the attempt it was repeating.
 	//
 	// THE DISPATCH'S WHERE THERE IS ONE, written back onto the local copy of
 	// the request rather than kept beside it: [Dispatcher.Dispatch] mints it
@@ -3225,8 +3225,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	ask := colleagueAskOf(askOf(req.Events))
 	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
-	// through until it launches its coding run, which hands what the box
-	// still holds to the run's record (steer.go).
+	// through until it launches its executor, which hands what the box
+	// still holds to the executor's record (steer.go).
 	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask)
 	box := steer.New()
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{

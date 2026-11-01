@@ -23,7 +23,7 @@ const unsupportedReason = ""
 
 // runHost runs one command on the engine host and captures it.
 //
-// The command gets its own session for the same reason a coding job does: on
+// The command gets its own session for the same reason a launched job does: on
 // a timeout the whole tree is killed, not just the process the engine holds.
 // `docker run` spawning a stuck child is precisely the case — killing the CLI
 // alone would leave it behind.

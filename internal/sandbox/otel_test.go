@@ -252,7 +252,7 @@ func TestAReceiverWithNoUpstreamAcceptsAndDrops(t *testing.T) {
 
 // A FAILING BACKEND IS NOT THE BOX'S PROBLEM. An exporter that gets a 5xx
 // retries, and retries against a backend that is down turn one outage into
-// two: the coding run's own traffic multiplies while nothing it carries is
+// two: the box's own traffic multiplies while nothing it carries is
 // recoverable anyway.
 func TestAFailingUpstreamNeverRaises(t *testing.T) {
 	t.Parallel()

@@ -769,7 +769,7 @@ type EventQueue interface {
 	// does not gate every other group on a shared subject. The engine
 	// holds a seat's inbox under four, each lifted only by the subsystem
 	// that took it: a company with no turn engine, a person's pause, a
-	// spent budget window, and a detached coding run holding the seat
+	// spent budget window, and a detached executor holding the seat
 	// (or an answer's resume it owes) — see internal/agent/inbox's Hold
 	// and the engine's budget park.
 	PauseTopic(ctx context.Context, topic, group, reason string) error

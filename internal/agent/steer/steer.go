@@ -38,7 +38,7 @@
 //
 // # Two homes, one after the other
 //
-// Before a turn launches its coding run, its notes wait in the [Box] the turn's
+// Before a turn launches its executor, its notes wait in the [Box] the turn's
 // first segment holds, on the node running it, reached by the signed scatter
 // on the steer wire (wire.go). From the run's launch to the turn's end they wait
 // on the run's own record in the coordination store, sealed, where any node may
@@ -151,13 +151,13 @@ func (s Status) Valid() bool { return slices.Contains(Statuses, s) }
 type Reads string
 
 const (
-	// ReadsNextStep — the turn is working: its coding run, or the engine's
+	// ReadsNextStep — the turn is working: its executor, or the engine's
 	// own loop, reads the note at its next step.
 	ReadsNextStep Reads = "next_step"
 
-	// ReadsAfterAnswer — the turn's coding run is parked on a question it
+	// ReadsAfterAnswer — the turn's executor is parked on a question it
 	// asked a person: the note waits, and whatever resumes the turn reads it
-	// — the run carried on with the answer, or the reviewer after it.
+	// — the executor carried on with the answer, or the reviewer after it.
 	ReadsAfterAnswer Reads = "after_answer"
 )
 
@@ -220,7 +220,7 @@ func (e *TooLongError) Error() string {
 
 // Reading is where a turn read a note: the phase, iteration and round, on the
 // phase's own one-based scale, the kind of step ([types.SteerBoundary]) and, for
-// a coding run's read, the job that read it; At is when.
+// an executor's read, the launch that read it; At is when.
 type Reading struct {
 	Phase     types.Phase
 	Iteration int
@@ -269,7 +269,7 @@ func Record(turn Turn, note Note, read *Reading) types.AgentTurnSteered {
 }
 
 // Box holds the notes offered to ONE turn segment and not yet read by it: the
-// turn's first, until it launches its coding run and hands what it still holds
+// turn's first, until it launches its executor and hands what it still holds
 // to the run's record ([Box.HandOver]).
 //
 // Safe for concurrent use: an offer arrives on a broker goroutine while the
@@ -354,7 +354,7 @@ func (b *Box) Drain() []Note {
 // read is the caller's to record, and a box has nothing to write it on.
 func (b *Box) Take(_ context.Context, _ Reading) []Note { return b.Drain() }
 
-// Brief is [Box.Drain] as a coding run's brief reads it: the notes the launch
+// Brief is [Box.Drain] as an executor's brief reads it: the notes the launch
 // takes, which are the box's no longer — see [Box.Return] for a launch that
 // fails.
 func (b *Box) Brief(context.Context) []Note { return b.Drain() }
@@ -377,7 +377,7 @@ func (b *Box) Return(_ context.Context, notes []Note) {
 }
 
 // HandOver ends the box's intake and answers every note it holds unread, for the
-// caller to file where the turn's notes wait from here — its coding run's
+// caller to file where the turn's notes wait from here — its executor's
 // record, in the write the launch makes to create it. A new note is answered
 // closed from here, which tells its caller to look where the turn's notes went.
 //
