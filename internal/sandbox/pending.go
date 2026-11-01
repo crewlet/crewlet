@@ -186,6 +186,13 @@ type Release struct {
 	// from the first. Zero for a release that is not a failed collection.
 	CollectFailedAt time.Time
 
+	// ResumeFailedAt, when set, is the instant the resume of this job's
+	// turn failed: the release counts it onto the job's record
+	// ([LaunchRecord.ResumeFailures]), dating the run of failures from the
+	// first. Zero for any other release, a resume held on a condition
+	// included, which is a wait and not a failure.
+	ResumeFailedAt time.Time
+
 	// Hold, where set, holds the run's resume back until the refusal lifts
 	// ([PendingRun.HeldFor]): the claim is handed back because the seat's
 	// conditions refused the resumed turn, not because it failed, and the
@@ -2432,6 +2439,21 @@ type LaunchRecord struct {
 	// the one write through which a retry reaches the collection again.
 	CollectFailures     int       `json:"collect_failures,omitempty"`
 	CollectFailingSince time.Time `json:"collect_failing_since,omitzero"`
+
+	// ResumeFailures is how many resumes of this job's turn have failed, and
+	// ResumeFailingSince when the
+	// first of them failed: the run of failures [Coordinator.resumeAndSettle]
+	// bounds before it settles the run ([ResumeGiveUp]). A resume held on a
+	// condition is a wait, and counts nothing.
+	//
+	// ON THE JOB'S RECORD for the reason CollectFailures is: every failure
+	// hands the claim back and the poll announces the job again, here, on
+	// another node or after a restart, so a count held in memory granted
+	// every attempt a fresh allowance and a resume that always failed was
+	// retried on every poll for as long as the engine ran. WRITTEN BY THE
+	// RELEASE ([Release.ResumeFailedAt]).
+	ResumeFailures     int       `json:"resume_failures,omitempty"`
+	ResumeFailingSince time.Time `json:"resume_failing_since,omitzero"`
 
 	// Collected is whether a collection READ THIS JOB'S BOX BACK and handed
 	// what it found to the job's turn, whose resume then gave the claim back
