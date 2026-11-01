@@ -60,12 +60,17 @@ This is the product's current shape, not a configuration choice:
   rename, archive, delete, restore and protect repositories through the same
   tools, a seat's own scratch repositories among them
   ([Repositories made by tools](#repositories-made-by-tools)).
-- **Nothing queues a check yet.** A repository defines its checks in
-  `.crewlet/checks.yaml`, `crewlet validate` reads that file as the code host
-  does, the code log has the records a check's attempts take
-  ([Checks](#checks)), and every git node runs whatever attempt is queued
-  ([Who runs a check](#who-runs-a-check)); nothing queues one in this release,
-  and nothing gates on one, so no check runs but one a record queued.
+- **A check holds no merge back yet.** A repository defines its checks in
+  `.crewlet/checks.yaml`, which `crewlet validate` reads as the code host does
+  ([Checks](#checks)); its home git node queues the checks its target's file
+  defines at every live change's head ([How a head's checks are
+  dispatched](#how-a-heads-checks-are-dispatched)) and a protected branch's
+  required checks at its newest landing ([Tip checks and
+  code_green](#tip-checks-and-code_green)), and every git node runs whatever
+  attempt is queued ([Who runs a check](#who-runs-a-check)). A change's
+  readiness counts the checks its branch's gate requires ([The merge
+  gate](#the-merge-gate)), but nothing asks for a merge in this release
+  (below), so no check's result holds one back.
 - **Only a push opens a change, and only its home asks for its review.** A
   push opens a [change](#changes) from its options
   ([A change a push opens](#a-change-a-push-opens)); a repository's committer

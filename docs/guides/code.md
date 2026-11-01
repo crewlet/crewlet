@@ -439,10 +439,16 @@ checks file](../concepts/code-host.md#the-checks-file).
    checked by the file it edits, and its edit governs the changes after it
    lands.
 
-Every git node runs a queued check in a box of the company's sandbox
-catalogue ([Who runs a check](../concepts/code-host.md#who-runs-a-check)), but
-nothing queues one yet in this release: the file is defined and validated
-([What it does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)).
+Once the file is on a branch, the repository's home git node queues its
+checks at the head of every live change into that branch ([How a head's
+checks are dispatched](../concepts/code-host.md#how-a-heads-checks-are-dispatched))
+and, on a protected branch, the required ones at its newest landing ([Tip
+checks and code_green](../concepts/code-host.md#tip-checks-and-code_green)),
+and every git node runs a queued check in a box of the company's sandbox
+catalogue ([Who runs a check](../concepts/code-host.md#who-runs-a-check)). A
+change's readiness counts the checks its branch's gate requires, but nothing
+asks for a merge yet, so no result holds one back ([What it does not do
+yet](../concepts/code-host.md#what-it-does-not-do-yet)).
 
 ## Reading a failed check
 
