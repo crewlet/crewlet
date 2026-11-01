@@ -1,6 +1,6 @@
 /**
  * Add a model, or edit one, step by step: its name and CLI, how it signs in,
- * the model, where its coding runs, what it is used for, its limits and a
+ * the model, where it runs a seat's executor, what it is used for, its limits and a
  * test call. Review checks the whole change with the engine before anything
  * is stored, and the engine's problems land on the fields they are about,
  * each with the step that fixes it.
@@ -89,7 +89,7 @@ const LEADS: Record<WizardStep, string> = {
   cli: "Name the model and choose the coding CLI it runs. Seats and Ask Crewlet name it, so keep it short.",
   signin: "How this model proves who it is to the vendor.",
   model: "The model the CLI runs, in its own naming.",
-  runs: "Where a seat's coding run happens when it starts on this model.",
+  runs: "Where a seat's executor runs when it launches on this model.",
   assign: "What should this model do, and for which seats?",
   limits:
     "How many CLI processes run at once, how long one may go without progress, and its web tools.",

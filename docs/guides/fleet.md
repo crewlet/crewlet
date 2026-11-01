@@ -34,8 +34,8 @@ than silently short. See [Search](search.md).
 `coordination.type: local` holds them in this process, so every node
 would believe it owns the whole company. It is *only* the leases: the
 fleet's shared records — the token counter, the completion ledger, the
-delivery dedupe, agent-to-agent channels, scheduled-fire claims, detached
-sandbox runs — are on the KV whatever this setting says, because each of
+delivery dedupe, agent-to-agent channels, scheduled-fire claims, the
+executors' records — are on the KV whatever this setting says, because each of
 them has to outlive the process rather than merely be visible to a peer. A fleet needs
 `coordination.type: embedded-kv` — and Tier A refuses `local` beside a
 clustered or external stream by name, because this is the one

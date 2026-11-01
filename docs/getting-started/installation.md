@@ -76,7 +76,7 @@ RUN apt-get update \
 USER crewlet
 ```
 
-— `2.1.263`, a release pinned exactly: the hooks a seat's coding run takes a
+— `2.1.263`, a release pinned exactly: the hooks a seat's executor takes a
 person's notes through need Claude Code 2.1.163 or later (an older release runs
 without them) and were measured on 2.1.263 and 2.1.310, and the `claude-code` profile's flags, output paths and
 limit sentences on 2.1.303 and 2.1.310; take a newer one when

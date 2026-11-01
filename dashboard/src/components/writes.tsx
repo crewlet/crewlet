@@ -679,7 +679,7 @@ const DECISION_REPLY_MAX = 2000;
  * quiet button so Accept is the one filled control on the row, and open it is
  * `line`'s open state. `buttons` is for a screen where the question is the
  * whole of what is open (the Inbox's pane): every option is a button that
- * sends it with one press (`AnswerChoices`, which a coding run's options are
+ * sends it with one press (`AnswerChoices`, which an executor's options are
  * drawn with too), the recommended one first and filled, and
  * "Something else" opens the field in their place. An ask with no options is
  * answered in that field from the start. Whichever the layout, the answer
@@ -926,21 +926,21 @@ export function AnswerAsk({
 }
 
 /**
- * Answer a coding run that stopped to ask a person something, by its turn,
- * which reaches a run whatever woke the turn that launched it, chat thread or
+ * Answer an executor that stopped to ask a person something, by its turn,
+ * which reaches it whatever woke the turn that launched it, chat thread or
  * none.
  *
  * `pending` IS THE ORDINARY ANSWER: the answer is on the seat's inbox and the
- * node holding the seat resumes the run with it, which the run's own record
- * says once it has.
+ * node holding the seat launches the executor again with it, which the
+ * executor's own record says once it has.
  */
 export function AnswerRunButton({
   run,
   seat,
 }: {
-  /** The parked run: its turn and the question it asks, which the answer names. */
+  /** The parked executor: its turn and the question it asks, which the answer names. */
   run: AnsweredRun;
-  /** Whose run it is, by name, for the dialog's title. */
+  /** Whose executor it is, by name, for the dialog's title. */
   seat: string;
 }) {
   const write = useAct("answer_executor");
@@ -973,8 +973,8 @@ export function AnswerRunButton({
 }
 
 /**
- * What the answer dialog is handed of a parked run: a durable row, or a live
- * entry, which carries no launch.
+ * What the answer dialog is handed of a parked executor: a durable row, or a
+ * live entry, which carries no launch.
  */
 type AnsweredRun = Pick<
   ExecutorRow,
@@ -982,19 +982,19 @@ type AnsweredRun = Pick<
 >;
 
 /**
- * The run's question as the Inbox reads it: its title (`RunQuestion`), its
- * context as Markdown, the run's recommendation, and, for a run that asked to
- * choose, its options as the buttons an ask's are (`AnswerChoices`), each
- * answering with one press. "Something else", and an open question from the
- * start, answers in words.
+ * The executor's question as the Inbox reads it: its title (`RunQuestion`),
+ * its context as Markdown, the executor's recommendation, and, for a question
+ * that asked to choose, its options as the buttons an ask's are
+ * (`AnswerChoices`), each answering with one press. "Something else", and an
+ * open question from the start, answers in words.
  *
- * READ OFF THE RUN'S DURABLE ROW where the dialog has it, because THE ANSWER
- * NAMES THE QUESTION DRAWN (`launch_id`), and the live projection a seat's
- * page draws from carries no launch: until the row is read, nothing is sent
- * ([unanswerable]). A run that has moved on to another question refuses the
- * answer `conflict`, in the engine's words, and the refusal asks the durable
- * row again, so the dialog then draws the question the run asks now under
- * that sentence.
+ * READ OFF THE EXECUTOR'S DURABLE ROW where the dialog has it, because THE
+ * ANSWER NAMES THE QUESTION DRAWN (`launch_id`), and the live projection a
+ * seat's page draws from carries no launch: until the row is read, nothing is
+ * sent ([unanswerable]). An executor that has moved on to another question
+ * refuses the answer `conflict`, in the engine's words, and the refusal asks
+ * the durable row again, so the dialog then draws the question it asks now
+ * under that sentence.
  */
 function AnswerRunDialog({
   run,
@@ -1025,7 +1025,7 @@ function AnswerRunDialog({
   const send = async (args: { choice: string } | { answer: string }) => {
     const result = await write.run(
       { turn_id: run.turn_id, launch_id: shown.launch_id, ...args },
-      { done: `Sent your answer to ${seat}'s coding run` },
+      { done: `Sent your answer to ${seat}'s executor` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -1038,7 +1038,7 @@ function AnswerRunDialog({
     <Modal
       open
       size="md"
-      title={`Answer ${seat}'s coding run`}
+      title={`Answer ${seat}'s executor`}
       icon={<CornerDownLeftGlyph />}
       onClose={onClose}
       onSubmit={inWords ? submit : undefined}
@@ -1087,7 +1087,7 @@ function AnswerRunDialog({
               <FormField
                 label="Your answer"
                 htmlFor="answer-run-text"
-                helper="The run resumes with your answer."
+                helper="The executor carries on with your answer."
               >
                 <Textarea
                   id="answer-run-text"
@@ -1514,8 +1514,9 @@ const PAUSE_REASON_MAX = 500;
  * no new turn, what is sent to it waits on its inbox in order, its scheduled
  * runs are skipped — and the turn it is on FINISHES FIRST. Stopping that turn
  * is a separate, explicit choice ("Also stop the current turn"), because a
- * turn stopped at its next round — and a coding run it has out, which the stop
- * ends at once with its box — loses what it had not done and is not run again;
+ * turn stopped at its next round — and its executor running in its box, which
+ * the stop ends at once with the box — loses what it had not done and is not
+ * run again;
  * `stop_running` is sent only when it is ticked.
  *
  * RESUME IS ONE PRESS: it changes nothing a person has to weigh, and the mail
@@ -1672,8 +1673,8 @@ function PauseSeatDialog({
           label="Also stop the current turn"
           description={
             working
-              ? "Otherwise the current turn finishes first. A stop also ends a coding run " +
-                "it has out, at once. Unfinished work is lost."
+              ? "Otherwise the current turn finishes first. A stop also ends its executor " +
+                "at once, if it is running in its box. Unfinished work is lost."
               : "It isn’t on a turn now."
           }
         />
@@ -1691,10 +1692,10 @@ function PauseSeatDialog({
  * Why a turn cannot take a note now, or undefined when it can.
  *
  * EVERY TURN THAT IS STILL GOING TAKES ONE (`internal/agent/steer`): a turn in
- * the engine's own loop reads it at its next round, one whose coding run is out
- * keeps it on the run's record — read by the run at its next step, or after its
- * question is answered, or by the review that follows it. Only a turn that has
- * ended is held, because nothing would ever read the note.
+ * the engine's own loop reads it at its next round, one whose executor is in
+ * its box keeps it on the executor's record — read by the executor at its next
+ * step, or after its question is answered, or by the review that follows it.
+ * Only a turn that has ended is held, because nothing would ever read the note.
  */
 function steerBlocked(running: boolean): string | undefined {
   return running ? undefined : "The turn has ended.";
@@ -1702,12 +1703,12 @@ function steerBlocked(running: boolean): string | undefined {
 
 /**
  * Steer a running turn: a short note the turn reads at its next step — a round
- * of the engine's own loop, or a step of the coding run it has out — and keeps
+ * of the engine's own loop, or a step of its executor in its box — and keeps
  * to for the rest of the turn.
  *
  * WHAT A PRESS PROMISES IS `pending`: the engine took the note, and says when
  * the turn will read it (`reads`), which the toast says. What became of it —
- * read at a round or by the run, or expired because the turn ended first — is
+ * read at a round or by the executor, or expired because the turn ended first — is
  * the turn's own `agent_turn_steered`, which the trace draws where it was read.
  * A retry of an unknown answer reuses the request id, and the request id IS
  * the note's id, so the turn takes it once.

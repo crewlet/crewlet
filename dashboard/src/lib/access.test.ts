@@ -121,9 +121,9 @@ describe("the words", () => {
   });
 });
 
-// A WITHHELD QUESTION IS SAID, never drawn as a run that asked nothing: only
-// a run with no question whose body the engine said it withheld is one.
-test("a coding run's question is withheld only where the engine said so", () => {
+// A WITHHELD QUESTION IS SAID, never drawn as an executor that asked nothing:
+// only one with no question whose body the engine said it withheld is one.
+test("an executor's question is withheld only where the engine said so", () => {
   expect(questionWithheld({ body_withheld: true })).toBe(true);
   expect(questionWithheld({ question: "Which branch?", body_withheld: true })).toBe(false);
   expect(questionWithheld({})).toBe(false);

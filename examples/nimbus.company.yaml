@@ -150,14 +150,14 @@ providers:
     # touch it are different runs, and a company-wide backend could only
     # ever answer for both.
     #
-    # This company configures the ENGINE HOST only: each coding job runs as a
-    # process tree on the machine running `crewlet run` — no remote account,
-    # no API key, nothing to provision — as a first run on your own machine
-    # while its seats take work from you alone.  Every run is the coding
-    # CLI's own, fully permissioned, as the engine's user, so before a seat
-    # takes work from anyone else (a chat other people are in, a shared
-    # tracker or code host), or on a host others share, move the runs into
-    # `container` (below) or `e2b`.
+    # This company configures the ENGINE HOST only: each seat's executor runs
+    # as a process tree on the machine running `crewlet run` — no remote
+    # account, no API key, nothing to provision — as a first run on your own
+    # machine while its seats take work from you alone.  Every executor is
+    # its coding CLI, fully permissioned, as the engine's user, so before a
+    # seat takes work from anyone else (a chat other people are in, a shared
+    # tracker or code host), or on a host others share, move the executors
+    # into `container` (below) or `e2b`.
     #
     # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
     # self-hosted cluster) and give the entry those seats run on

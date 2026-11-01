@@ -1,8 +1,8 @@
 /**
  * What the turns list says a turn IS.
  *
- * A turn that launched a detached coding run PARKS: it completes a segment and
- * will complete again when the run is collected. The engine used to list it as
+ * A turn whose executor launched in its box PARKS: it completes a segment and
+ * will complete again when the launch is collected. The engine used to list it as
  * finished the moment it parked, and before that distinction existed this
  * screen had only two words for a row — finished, or `running`. A parked turn
  * is neither, and drawing it as either sends a reader to the wrong place: a
@@ -279,7 +279,7 @@ test("a turn that carried a failure is marked in the danger tone", async () => {
 // THE AXIS IS THE ENGINE'S COUNT OF THE TURNS THAT ENDED, over the whole
 // window. It was folded from the page of rows this screen held, so a busy
 // week drawn from the newest two hundred turns read as a quiet one — and a
-// turn that parked on a coding run and resumed wrote two completions, so a
+// turn that parked on its executor and resumed wrote two completions, so a
 // count of the type alone drew it twice.
 //
 // Mutation: fold the bars from the rows again, and the total is the page's 1

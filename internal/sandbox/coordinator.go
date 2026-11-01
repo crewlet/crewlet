@@ -1510,7 +1510,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		// calls that can fail on their own, and neither failing is a
 		// reason to leave a seat parked on a run that is finished.
 		c.settleFailed(ctx, run, types.ExecutorFailureCollect,
-			"the coding job finished but its box could not be read back, so its "+
+			"the executor's launch finished but its box could not be read back, so its "+
 				"result is lost; the work it pushed, if any, is on its branch")
 		return nil
 	}
@@ -1685,7 +1685,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	if result, floored = result.usageFloored(); floored {
 		log.WarnContext(ctx, "sandbox_usage_negative",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID,
-			"detail", "the coding run reported a negative token count or cost; it "+
+			"detail", "the executor reported a negative token count or cost; it "+
 				"is read as nothing spent rather than subtracted from the seat's budget")
 	}
 	result = boundBox(result)
@@ -1918,7 +1918,7 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		rec.Failed = true
 		rec.Error = redact.Secrets(result.Error)
 		if rec.Error == "" {
-			rec.Error = "the coding run did not succeed and gave no reason"
+			rec.Error = "the executor's launch did not succeed and gave no reason"
 		}
 		rec.ErrorKind = "launch_failed"
 	}
@@ -3341,23 +3341,23 @@ func (c *Coordinator) settleFailed(ctx context.Context, run PendingRun, reason, 
 // name the coordination store, because a claim that could not be handed back
 // is what brought every one of them here.
 const (
-	parkUnannouncedDetail = "the coding run stopped to ask a person a question, but neither the " +
-		"question could be announced nor the run's own claim given back to the " +
+	parkUnannouncedDetail = "the executor stopped to ask a person a question, but neither the " +
+		"question could be announced nor its own claim given back to the " +
 		"coordination store, so nobody was asked and the turn cannot be continued; the " +
 		"work it pushed, if any, is on its branch"
 
-	parkUnrecordedDetail = "the coding run stopped to ask a person a question, but neither the " +
-		"question nor the run's own claim could be written to the coordination store, so " +
+	parkUnrecordedDetail = "the executor stopped to ask a person a question, but neither the " +
+		"question nor its own claim could be written to the coordination store, so " +
 		"the turn cannot be continued and nobody can answer it; the work it pushed, if " +
 		"any, is on its branch"
 
-	resumeUnrevertedDetail = "the coding job finished but the turn it belongs to could not be " +
-		"re-entered, and the run's claim could not be given back to the coordination " +
+	resumeUnrevertedDetail = "the executor's launch finished but the turn it belongs to could " +
+		"not be re-entered, and the executor's claim could not be given back to the coordination " +
 		"store for another attempt, so the turn cannot be continued; the work it pushed, " +
 		"if any, is on its branch"
 
-	collectUnrevertedDetail = "the coding job finished but its box could not be read back, and " +
-		"the run's claim could not be given back to the coordination store for another " +
+	collectUnrevertedDetail = "the executor's launch finished but its box could not be read " +
+		"back, and the executor's claim could not be given back to the coordination store for another " +
 		"attempt, so its result is lost; the work it pushed, if any, is on its branch"
 )
 
@@ -3365,7 +3365,7 @@ const (
 // began reaches an operator's board with: nothing of the turn ran, and trying
 // again would re-enter the same parked turn and reach the same defect, so the
 // run is ended rather than retried.
-const resumeBrokenDetail = "the turn this coding run belongs to could not be re-entered — " +
+const resumeBrokenDetail = "the turn this executor's launch belongs to could not be re-entered — " +
 	"resuming it broke before the turn began, and another attempt would reach the same " +
 	"defect — so the turn cannot be continued; the work it pushed, if any, is on its branch"
 

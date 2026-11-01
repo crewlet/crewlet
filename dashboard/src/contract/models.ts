@@ -161,7 +161,7 @@ export const SEAT_JOB_FIELDS = {
 } as const;
 
 /**
- * Where a model's coding runs happen (`config.Placement`). Held against
+ * Where a model's executors run (`config.Placement`). Held against
  * `config.Placements` by the entry gate.
  */
 export type RunnerCellName = "direct" | "container" | "e2b";

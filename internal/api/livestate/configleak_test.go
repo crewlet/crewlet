@@ -70,7 +70,7 @@ func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 	}
 	runs := s.ActiveExecutors()
 	if len(runs) != 1 || runs[0].ProviderKey != entryKey {
-		t.Fatalf("runs = %+v, want the coding run launched on the entry", runs)
+		t.Fatalf("runs = %+v, want the executor launched on the entry", runs)
 	}
 	shapes := func(r livestate.Reach) map[string]any {
 		rows := s.MergeAgents([]map[string]any{{"agent_id": "Lead", "handle": "lead"}})
@@ -80,7 +80,7 @@ func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 			"the call lean":  livestate.MaskCall(overlay.LiveCall.Without(livestate.CallVersions{}), r),
 			"the roster row": livestate.MaskRow(rows[0], r),
 			"the pushed row": livestate.MaskRow(s.OverlayRows([]string{"Lead"})[0], r),
-			"the coding run": runs[0].For(r),
+			"the executor":   runs[0].For(r),
 		}
 	}
 	for reader, r := range map[string]livestate.Reach{
@@ -103,7 +103,7 @@ func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 	admin := livestate.Reach{Body: true, Tracker: true, Config: true}
 	for shape, v := range shapes(admin) {
 		want := rawFailure
-		if shape == "the coding run" {
+		if shape == "the executor" {
 			want = `"provider_key":"` + entryKey + `"`
 		}
 		if wire := wireOf(t, v); !strings.Contains(wire, want) {
@@ -113,7 +113,7 @@ func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 	// THE MODEL A RUN RUNS UNDER STAYS EVERYBODY'S: it is what the run is
 	// doing, as a call's model is.
 	if wire := wireOf(t, runs[0].For(livestate.Reach{})); !strings.Contains(wire, `"model":"opus"`) {
-		t.Errorf("everybody is sent the coding run without its model: %s", wire)
+		t.Errorf("everybody is sent the executor without its model: %s", wire)
 	}
 }
 

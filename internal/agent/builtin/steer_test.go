@@ -816,21 +816,21 @@ func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 			runs.fileErr = unanswered
 			return runs
 		}, tools.RefusalUnavailable, "Could not file the note on the record of turn run-1's " +
-			"coding run (the coordination store did not answer). Try again shortly."},
+			"executor (the coordination store did not answer). Try again shortly."},
 		{"a record the store did not read", func(*testing.T) *runRecords {
 			return &runRecords{seatErr: unanswered}
-		}, tools.RefusalUnavailable, "Could not read the record of turn run-1's coding run " +
+		}, tools.RefusalUnavailable, "Could not read the record of turn run-1's executor " +
 			"(the coordination store did not answer). Nothing was sent. Try again shortly."},
 		{"a filing this node could not make", func(t *testing.T) *runRecords {
 			runs := recordedTurn(t, builtin.RunFiled{})
 			runs.fileErr = undecodable
 			return runs
 		}, tools.RefusalInternalError, "Could not file the note on the record of turn run-1's " +
-			"coding run: a fault in this node itself"},
+			"executor: a fault in this node itself"},
 		{"a record this node cannot read", func(*testing.T) *runRecords {
 			return &runRecords{seatErr: undecodable}
-		}, tools.RefusalInternalError, "Could not read the record of turn run-1's coding " +
-			"run: a fault in this node itself"},
+		}, tools.RefusalInternalError, "Could not read the record of turn run-1's executor: " +
+			"a fault in this node itself"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

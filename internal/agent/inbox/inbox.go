@@ -332,13 +332,13 @@ func Screen(c Conditions, evs []*events.Event) Screening {
 			Reason: "no turn engine: the company configures no providers.llm",
 		}
 	case c.SeatHeldBySandbox:
-		// NOT OFFERED as an answer, even when another of the seat's runs
-		// waits for a person: the held seat receives nothing, and that
+		// NOT OFFERED as an answer, even when the seat's executor on another
+		// turn waits for a person: the held seat receives nothing, and that
 		// answer waits on the inbox with the rest of its mail — offered
-		// first when the run stops holding the seat. See sandbox.SeatHold.
+		// first when the executor stops holding the seat. See sandbox.SeatHold.
 		return Screening{
 			Action: ActionHoldAndDefer, Hold: HoldSandbox, NoteDeferred: true,
-			Reason: "a detached sandbox run holds the seat",
+			Reason: "the seat's executor holds it from its box",
 		}
 	case !c.AdmitsTriggers:
 		return Screening{Action: ActionDefer, Reason: "config posture refuses new work", NoteDeferred: true}

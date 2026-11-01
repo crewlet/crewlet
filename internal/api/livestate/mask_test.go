@@ -231,7 +231,7 @@ func TestEveryLiveFieldIsClassified(t *testing.T) {
 	t.Parallel()
 	families := map[string]map[string]class{
 		"the call family": callFamily, "the overlay family": overlayFamily,
-		"the live turn": turnFields, "the coding run": sandboxFields,
+		"the live turn": turnFields, "the executor": sandboxFields,
 	}
 	roots := []struct {
 		typ    reflect.Type
@@ -243,7 +243,7 @@ func TestEveryLiveFieldIsClassified(t *testing.T) {
 		{reflect.TypeFor[Overlay](), "the overlay family"},
 		{reflect.TypeFor[overlayView](), "the overlay family"},
 		{reflect.TypeFor[LiveTurn](), "the live turn"},
-		{reflect.TypeFor[ExecutorEntry](), "the coding run"},
+		{reflect.TypeFor[ExecutorEntry](), "the executor"},
 	}
 	delegatedTo := map[string][]reflect.Type{
 		"live_call": {reflect.TypeFor[*LiveCall](), reflect.TypeFor[any]()},
@@ -594,10 +594,10 @@ func TestACodingRunShowsItsQuestionToThePeopleItIsPutTo(t *testing.T) {
 	}
 	if entry.Task != "fix the build" || entry.Question != "which branch?" ||
 		entry.WorkItem == nil {
-		t.Error("masking a coding run wrote through to the entry it was handed")
+		t.Error("masking an executor wrote through to the entry it was handed")
 	}
 	if strings.Contains(string(mustJSON(t, entry)), "dana") {
-		t.Error("a coding run puts the people its question is put to on the wire")
+		t.Error("an executor puts the people its question is put to on the wire")
 	}
 }
 

@@ -1550,7 +1550,7 @@ func TestAnAnswerAParkedRunIsStillOwedIsHandedBackRatherThanRun(t *testing.T) {
 			"queue logs this one", got.Reason)
 	}
 	if len(r.reqs) != 0 {
-		t.Errorf("a turn ran on an answer a parked coding run is still owed: %d", len(r.reqs))
+		t.Errorf("a turn ran on an answer a parked executor is still owed: %d", len(r.reqs))
 	}
 	if len(r.parked) != 0 {
 		t.Fatalf("the answer was republished as well as handed back (%v): a "+
@@ -1619,7 +1619,7 @@ func TestADeliveryInsideTheReserveIsNotOfferedToAParkedRun(t *testing.T) {
 						got.Outcome)
 				}
 				if len(r.reqs) != 0 {
-					t.Errorf("a turn ran on an answer a parked coding run is still owed")
+					t.Errorf("a turn ran on an answer a parked executor is still owed")
 				}
 				return
 			}
@@ -1792,7 +1792,7 @@ func TestAFreshReplyIsOfferedBesideASpentSibling(t *testing.T) {
 		t.Errorf("outcome = %v, want a deferral: the run is still owed this answer", got.Outcome)
 	}
 	if len(r.reqs) != 0 {
-		t.Errorf("a turn ran on an answer a parked coding run is still owed: %d", len(r.reqs))
+		t.Errorf("a turn ran on an answer a parked executor is still owed: %d", len(r.reqs))
 	}
 }
 

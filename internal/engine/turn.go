@@ -1134,7 +1134,7 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 			"reserve", sandbox.AnswerDeliveryReserve,
 			"detail", "every message of this delivery has spent nearly all of its "+
 				"deliveries, so what is left is kept for the ordinary route rather "+
-				"than offered to a parked coding run again; handing it back once "+
+				"than offered to a parked executor again; handing it back once "+
 				"more risks the broker dead-lettering the reply instead")
 		return false
 	}
@@ -1143,7 +1143,7 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 			"seat", handle, "partition_deliveries_left", least,
 			"reserve", sandbox.AnswerDeliveryReserve,
 			"detail", "a message of this delivery still has the deliveries to spare, "+
-				"so a parked coding run is being offered it; another message in the "+
+				"so a parked executor is being offered it; another message in the "+
 				"same partition is inside the reserve, and a hand-back returns the "+
 				"whole partition, so that one may dead-letter")
 	}

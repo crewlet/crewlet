@@ -20,7 +20,7 @@
  *   decommissions them, and the dialog lists them by name
  *   (`vendorIdentities`).
  * - The seat's mailbox is retired 24 hours after the engine applies the
- *   removal, its coding runs are ended then, and its memory is kept and
+ *   removal, its executor is ended then, and its memory is kept and
  *   reattaches to a seat added later under the same handle
  *   (`docs/concepts/seat-ownership.md`, "The removed seat").
  *

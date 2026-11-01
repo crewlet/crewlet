@@ -764,12 +764,12 @@ because nothing says that failure lasts. An apply that changes the company's
 models releases every park at once, so the redelivery asks the new entries; an
 entry that still calls as the same account keeps its sit-out
 ([below](#a-limit-is-the-sign-ins)) and refuses before any CLI starts, so a limit that still holds parks the seat
-again at the cost of one delivery and no process. A seat whose mail its coding
-run holds has no delivery to come: the release re-fires the run's held
+again at the cost of one delivery and no process. A seat whose mail its
+executor holds has no delivery to come: the release re-fires the launch's held
 completion instead, which is collected again and refused on the carried limit
 before its turn runs, and that parks the seat again at the cost of one
 collection and no process.
-A coding run's completion, or a person's answer to one, that arrives while the
+A launch's completion, or a person's answer to its executor, that arrives while the
 models its first call would take are at a limit they reported waits for it
 rather than resuming into it, and resumes once the park lifts or the first
 entry is tried again. Those are the reviewer's chain for a completion, whose
@@ -787,8 +787,8 @@ than left uncollected, its box kept awake, for as long as the entry sat out.
 An answer has nothing to collect and waits at the admission. **A resumed
 segment that meets the limit itself parks the seat**, as a dispatch's turn
 does: a review whose chain is spent, or a send-back or an answer whose relaunch
-finds every runner member sitting out, which is how a plan spent inside a
-coding run is usually met. And **a parked seat runs no resume** until its park
+finds every runner member sitting out, which is how a plan spent inside an
+executor's launch is usually met. And **a parked seat runs no resume** until its park
 is released, whichever chain the resume's first call would take: a completion
 its review sent back to spent runners waits for the probe that finds them
 answering, rather than being collected and reviewed again, and its box
@@ -3072,7 +3072,7 @@ names no key variable, a pairing every write refuses: it is told that the mode
 puts its key in no variable, and to set `auth.mode: subscription` and sign the
 CLI in with a login. Nothing offers either command for such an entry — not
 `-from-host`'s closing advice, `doctor`, the `-username` refusal, `logout`'s
-notice or a [remote coding run's refusal](code-sandbox.md#failure-modes) — and
+notice or a [refusal of an executor in a remote box](code-sandbox.md#failure-modes) — and
 the variable is never asked of a running node.
 
 ### 3. Username / password, where the CLI genuinely has one
@@ -3871,8 +3871,8 @@ it. Every member opens the page; every change on it is an admin's.
 
 **Adding and editing a model is one wizard**, which writes the model and every
 use it is given as one revision: the name and the coding CLI (both fixed once
-the model exists), how it signs in, the model, where its coding runs (only for
-a CLI with a runner), what it is used for, its limits, a test call, and a review
+the model exists), how it signs in, the model, where it runs a seat's executor
+(only for a CLI with a runner), what it is used for, its limits, a test call, and a review
 of exactly what changes. *Use it for* offers the work a person tells apart
 rather than the engine's five fields, and each choice writes every field it
 covers:
@@ -4159,7 +4159,7 @@ token is stored in.
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
 problem, naming first a route you configured whose `${VAR}` resolved to
 nothing, and then the routes the entry's `auth.mode` reads — the remedy a
-[remote coding run's refusal](code-sandbox.md#failure-modes) gives too, and the
+[refusal of an executor in a remote box](code-sandbox.md#failure-modes) gives too, and the
 one `crewlet llm login` names when it refuses a token the mode never reads:
 
 | `auth.mode` | Routes `doctor` names |

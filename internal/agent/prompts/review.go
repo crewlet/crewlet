@@ -69,7 +69,7 @@ const ReviewHeader = "\n## REVIEW phase" +
 	"— editing files, running commands and tests, committing — is not in " +
 	"`## What the agent did`, which lists only the calls it made to your " +
 	"tools. Judge that work on its report and on any branches or pull " +
-	"requests listed under `## What the run delivered`; a missing shell or " +
+	"requests listed under `## What the agent delivered`; a missing shell or " +
 	"test call is not fabrication." +
 	"\n**Delivery is already settled:** the engine checked the agent's " +
 	"delivery claims against this turn's whole log, earlier rounds " +
@@ -225,7 +225,7 @@ func BuildReview(seat Seat, in ReviewInput) Prompt {
 		b.Heading("produced", "\n## What the agent produced", in.Produced)
 	}
 	if in.Delivered != "" {
-		b.Heading("delivered_refs", "\n## What the run delivered", in.Delivered)
+		b.Heading("delivered_refs", "\n## What the agent delivered", in.Delivered)
 	}
 	return b.Build()
 }
@@ -246,7 +246,7 @@ func DeliveredRefs(refs []string, elided int) string {
 		lines = append(lines, "- "+ref)
 	}
 	if elided > 0 {
-		lines = append(lines, fmt.Sprintf("- (and %d more the run reported)", elided))
+		lines = append(lines, fmt.Sprintf("- (and %d more the agent reported)", elided))
 	}
 	return strings.Join(lines, "\n")
 }

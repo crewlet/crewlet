@@ -172,23 +172,23 @@ type ArtifactBox interface {
 	Open(ctx context.Context, path string) (io.ReadCloser, error)
 }
 
-// ErrNoBox reports a turn with no coding run's box a publish may read.
-var ErrNoBox = errors.New("builtin: this turn holds no coding run's box to publish from")
+// ErrNoBox reports a turn with no executor's box a publish may read.
+var ErrNoBox = errors.New("builtin: this turn holds no executor's box to publish from")
 
-// ErrNotADirectory is a directory a publish named that the coding run's
-// workspace does not hold as one: it is missing, or it is a file or a link,
+// ErrNotADirectory is a directory a publish named that the box's workspace
+// does not hold as one: it is missing, or it is a file or a link,
 // which a listing never follows. The caller's argument, as a path naming no
 // file is ([sandbox.ErrNotRegularFile]), and never a fault of this node.
-var ErrNotADirectory = errors.New("builtin: the path is not a directory in the coding run's workspace")
+var ErrNotADirectory = errors.New("builtin: the path is not a directory in the box's workspace")
 
-// ErrNoWorkspace is a coding run's box whose workspace is gone: no dir a
+// ErrNoWorkspace is an executor's box whose workspace is gone: no dir a
 // publish names can list, so it is never the dir's fault ([ErrNotADirectory]).
-var ErrNoWorkspace = errors.New("builtin: the coding run's workspace is gone from its box")
+var ErrNoWorkspace = errors.New("builtin: the box's workspace is gone from it")
 
 // ErrListIncomplete is a listing that could not read all of the dir it walked:
 // a directory under it the box's user can't open, or a read error. What it did
 // read is not the build, so it is refused rather than published short.
-var ErrListIncomplete = errors.New("builtin: the coding run's box could not list all of the directory")
+var ErrListIncomplete = errors.New("builtin: the executor's box could not list all of the directory")
 
 // ArtifactRequesters composes the principal a seat's turn is acting for.
 type ArtifactRequesters interface {

@@ -344,14 +344,14 @@ func (e *Engine) retireSeatRuns(ctx context.Context, seat uuid.UUID, handle, own
 	}
 	if e.backends == nil || e.backends.Fleet == nil {
 		return fmt.Errorf("engine: this node has no fleet store, so it cannot tell whether "+
-			"retired seat %s left coding runs behind", seat)
+			"retired seat %s left its executor in a box", seat)
 	}
 	runs, err := sandbox.NewCoordStore(e.backends.Fleet).ListActiveForSeatID(ctx, seat)
 	if err != nil {
-		return fmt.Errorf("engine: reading the coding runs of retired seat %s: %w", seat, err)
+		return fmt.Errorf("engine: reading the executor records of retired seat %s: %w", seat, err)
 	}
 	if len(runs) > 0 {
-		return fmt.Errorf("engine: retired seat %s still has %d coding runs and this node runs no "+
+		return fmt.Errorf("engine: retired seat %s still has %d executor records and this node runs no "+
 			"sandbox coordinator to end them (no company it has served configures providers.sandbox); "+
 			"its mailbox is kept until a node that runs one holds the maintenance duty, or this "+
 			"node applies a company that configures providers.sandbox", seat, len(runs))

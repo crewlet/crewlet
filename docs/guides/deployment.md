@@ -411,8 +411,8 @@ config mistake into a half-minute hang with the same message at the end.
 one without it.** Empty selects an in-memory member: a restart loses that
 member's replicas, and the same server holds the KV buckets carrying the
 fleet's shared records — the token counters, the completion ledger, open
-agent-to-agent asks, claimed scheduled fires, detached (and billed) sandbox
-runs. The rule is asked of the broker, not of the roles: every **member** —
+agent-to-agent asks, claimed scheduled fires, the records of executors out
+in their (billed) boxes. The rule is asked of the broker, not of the roles: every **member** —
 every `data` node on the embedded broker — sets `store_dir` whatever else it
 does, a single node included, because an in-memory member creates every
 stream it provisions in memory. A leaf and a client of an external cluster
@@ -1226,7 +1226,7 @@ one holding `store.path` and `stream.store_dir`: a run that fills the volume it
 writes on stops everything else writing there, and a store and a broker with
 no room stop the node. Whether that volume should outlive the engine's
 container is what a run's working tree is worth across a deploy
-([below](#a-restart-and-the-coding-runs-on-its-host)).
+([below](#a-restart-and-the-executors-on-its-host)).
 
 **The box root bounds where a box's files land, not what a `direct` run may
 write.** A `direct` run is a process of the engine's own user with no mount
@@ -1237,7 +1237,7 @@ home, the one directory mounted into it, and the container's own layer, which
 its runtime keeps. A deep-work run on the engine host writes its own box and
 nothing else.
 
-### A restart and the coding runs on its host
+### A restart and the executors on its host
 
 A seat's executor in a `direct` cell is a process tree of the node's own host,
 detached into a session of its own so that it outlives the engine's process —
@@ -1245,24 +1245,24 @@ and it does, when only that process dies. What usually replaces an engine takes
 more than the process: a container restart takes every process in the
 container, a systemd unit stopped or restarted kills every process in its
 control group (the default `KillMode=control-group`), and a host reboot takes a
-`container` box's job as well. So a run's job does not survive a deploy of the
-node it runs on, and none of these needs a setting of its own to be safe: the
-node finds the job **lost** when it is back — its box records the engine
-process that last saw the job running, and that process is gone too — and the
-run's round is **carried on** in a fresh run rather than its truncated output
-judged as a result. Where the box's directory survived the restart
+`container` box's launch as well. So an executor's launch does not survive a
+deploy of the node it runs on, and none of these needs a setting of its own to
+be safe: the node finds the launch **lost** when it is back — its box records
+the engine process that last saw it running, and that process is gone too — and
+the executor's round is **carried on** in a fresh launch rather than its
+truncated output judged as a result. Where the box's directory survived the restart
 (`providers.sandbox.local.state_dir` on a disk that outlives the process), the
-fresh run continues in it, its working tree as the lost job left it, changes
+fresh launch continues in it, its working tree as the lost launch left it, changes
 it had not committed included; where it did not — a pod recreated with its
-scratch volume — the fresh run starts in a new box from whatever the lost job
-pushed. Either way what the lost job did through the seat's tools stands, and
-a round is carried on after at most two lost jobs (see
+scratch volume — the fresh launch starts in a new box from whatever the lost one
+pushed. Either way what the lost launch did through the seat's tools stands, and
+a round is carried on after at most two lost launches (see
 [Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
 
-What a deploy costs a run is therefore the work it had not committed, or not
-pushed where its box does not survive, and the restart of the run that
+What a deploy costs an executor is therefore the work it had not committed, or
+not pushed where its box does not survive, and the restart of the launch that
 carries it on. Keep `state_dir` on a volume that outlives the engine's
-container where a run's working tree is worth keeping across a deploy.
+container where an executor's working tree is worth keeping across a deploy.
 
 ### When the host runs out of memory
 
@@ -1595,18 +1595,18 @@ draining, and rolling upgrades. The two things that bite hardest:
 > --replicas=3`, which covers the buckets too — a bucket *is* a stream), or
 > stand the fleet up fresh.
 
-**A sandbox run record the engine cannot read.** Every reader of the sandbox
-runs lists them: the boot's epoch floor (before a node claims a seat, it raises
-each seat's fencing epoch above the highest epoch that seat's runs carry), each
-seat's recovery, the completion poll, the lookup that matches a reply to a
-parked run, a seat's retirement, and the dashboard. A record that does not
-decode is skipped by all of them and logged at error as
-`sandbox_run_undecodable` with its key, and every run they can read is worked
+**An executor record the engine cannot read.** Every reader of the
+executors' records lists them: the boot's epoch floor (before a node claims a
+seat, it raises each seat's fencing epoch above the highest epoch that seat's
+records carry), each seat's recovery, the completion poll, the lookup that
+matches a reply to a parked executor, a seat's retirement, and the dashboard. A
+record that does not decode is skipped by all of them and logged at error as
+`sandbox_run_undecodable` with its key, and every record they can read is worked
 as usual, so the node starts and its seats are prepared. Its seat, status and
 owner cannot be known, so nothing polls, resumes or ends it, and nothing
-deletes or rewrites it: a retirement ends the seat's readable runs and leaves
-it as it is. A listing of the runs that fails as a whole still stops the boot,
-naming the bucket. Remove the record once you know its run is over (its box,
+deletes or rewrites it: a retirement ends the seat's readable records and leaves
+it as it is. A listing of the records that fails as a whole still stops the boot,
+naming the bucket. Remove the record once you know its executor is over (its box,
 if any, is the provider's to reclaim):
 
 - **An external NATS cluster** (`stream.type: nats`): with the NATS CLI,
@@ -2628,7 +2628,7 @@ and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter
 and the next charge the scope admits clears it, as does the window turning
 over. The gate turns work away in two ways, and both are recorded: it refuses
 a round's charge, or — once a window is already full, because a context
-assembly, a rewrite, a coding run, a person's answers or an earlier round took
+assembly, a rewrite, an executor's launch, a person's answers or an earlier round took
 it there — the work is turned away before its first call, since that call
 would be billed and then refused. That second way is every refusal of a full
 window the engine can see coming: a turn stops its next call, the
@@ -2642,7 +2642,7 @@ nothing. Because the counter carries every round it refused, `GET /budgets`,
 the live meter and the park all read a window that refused a round **over** its
 ceiling by the round that crossed it, never just short of it; `refused_at` is
 when the gate last said no. A window filled with nothing asked of it since — a
-background pass, a coding run whose turn has not resumed, and no delivery,
+background pass, an executor whose turn has not resumed, and no delivery,
 question or pass for that scope after it — carries no `refused_at` until
 something is, though its `state` is already `refusing`.
 
@@ -2655,10 +2655,10 @@ stop by the time their size is known, so each is **post-charged** — added to
 the counters in the windows it is recorded in, without a verdict — behind a
 gate that reads the room left *before* it starts:
 
-- **A coding run** — every seat's executor. Its box spends while the turn is
-  parked, so its tokens are known only when the run is collected, and they
-  reach both the seat's counter and the company's in the windows the run is
-  collected in. A run that takes a counter past its cap is logged as
+- **An executor's launch** — every seat's executor, in its box. Its box spends
+  while the turn is parked, so its tokens are known only when the launch is
+  collected, and they reach both the seat's counter and the company's in the
+  windows the launch is collected in. A launch that takes a counter past its cap is logged as
   `sandbox_spend_over_budget`. Its gate is
   `turn_engine.executor_min_budget_tokens` (default 25 000): every launch, a
   turn's first and each relaunch, is refused while a capped window of the seat
@@ -2696,7 +2696,7 @@ gate that reads the room left *before* it starts:
 
 In each case the next round the seat or the company attempts is refused
 against the recorded figure — and for a turn's own auxiliary calls, and for a
-coding run its resumed turn collects, that round is refused before it is sent:
+launch its resumed turn collects, that round is refused before it is sent:
 the turn's meter holds what the post-charge answered, or reads it once before
 the resumed turn's first call.
 

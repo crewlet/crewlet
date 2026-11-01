@@ -24,13 +24,13 @@ export type TurnStep = (typeof TURN_STEPS)[number];
 /**
  * The turn's steps and which one it is on.
  *
- * A PARKED turn is in Execute — its coding run is the execute phase's work —
- * with the run named. Before it parks, Execute carries the round it is on
- * against the cap the phase states, which for an executor is its launch: the
- * one round of one the engine records its run as ("round 1 of 1"). Context
- * reads Onboarding on a seat's first turn.
+ * A PARKED turn is in Execute — its executor, running in its box, is the
+ * execute phase's work — with where it is said. Before it parks, Execute
+ * carries the round it is on against the cap the phase states, which for an
+ * executor is its launch: the one round of one the engine records it as
+ * ("round 1 of 1"). Context reads Onboarding on a seat's first turn.
  *
- * `detail` is that word on its own ("coding run"), and `inLabel: false` leaves
+ * `detail` is that word on its own ("in its box"), and `inLabel: false` leaves
  * it OUT of the Execute step for a row with no room for it — a phone's card,
  * where the word in the Execute step pushed Review onto a second line behind
  * its own connector — so the caller can say it beside the stepper instead.
@@ -50,7 +50,7 @@ export function turnSteps(
     current !== "execute"
       ? ""
       : parked
-        ? "coding run"
+        ? "in its box"
         : round > 0
           ? `round ${round}${call?.max_rounds ? ` of ${call.max_rounds}` : ""}`
           : "";

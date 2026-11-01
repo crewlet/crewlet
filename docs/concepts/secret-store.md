@@ -207,12 +207,12 @@ store's rows — and a sealed company document is an authenticated one, so a
 node refuses one its peers published unsealed. It **signs** the two per-run tokens a sandbox carries. And it
 **signs every record on every state log** — the tracker's, the knowledge
 base's, and any domain a later build registers. The same material also seals a
-person's answer to a parked coding run onto the run's row, in a key domain of
-its own (`seat.run.answer`), which whichever node resumes the run opens before
+person's answer to a parked executor onto the executor's row, in a key domain of
+its own (`seat.run.answer`), which whichever node resumes the executor opens before
 the turn is handed anything of it, signs every box read one node asks of
 the node whose host a `direct` or `container` box is on (`sandbox.box_read`),
-and seals each note a person sends a running coding run's turn onto the run's
-row (`seat.steer.note`) beside an anchor naming the seat the run serves
+and seals each note a person sends a turn whose executor is in its box onto the
+executor's row (`seat.steer.note`) beside an anchor naming the seat it serves
 (`seat.steer.seat`), each in a domain of its own so neither opens as the
 other or as anything else.
 
@@ -235,10 +235,10 @@ whatever it was written to precede.
 The keyring seals the company's secrets and also signs the two **per-run
 tokens** a sandbox carries — the OTLP receiver's and the MCP bridge's — every
 **session cookie** a signed-in browser holds, every person's **answer to a
-parked coding run** while it waits on the run's record, and every person's
-**note to a running coding run** while it waits on the run's record. The tokens travel in a URL
-path, are minted on the node that starts a run and verified on whichever node
-the box can reach, and a detached coding run holds one for as long as the run
+parked executor** while it waits on the executor's record, and every person's
+**note to a turn whose executor is in its box** while it waits on that record. The tokens travel in a URL
+path, are minted on the node that launches an executor and verified on whichever node
+the box can reach, and an executor in its box holds one for as long as its launch
 lasts, which outlives a rollout. A cookie is the same shape of problem with a
 longer life and a person on the other end of it.
 
@@ -309,13 +309,13 @@ That makes the rotation a runbook with no window in it:
    or lapses within a week of being issued. It must also report no
    Ask Crewlet value under it: dropped while a conversation is still sealed under
    it, that conversation no longer opens for its owner for the rest of its
-   retention. And no answer to a parked coding run recorded before step 3 may
+   retention. And no answer to a parked executor recorded before step 3 may
    still be waiting on its resume — one is resumed within minutes unless its
    seat is paused or held for budget, and a node that cannot open one logs
    `sandbox_answer_key_unknown`: dropped under it, that answer waits, with its
    seat's mail behind it, until the key is back on the ring. Nor may a note to
-   a running coding run filed before step 3 still be waiting on its run's
-   record — a note is read at the run's next step or by its review, so one
+   a turn whose executor is in its box filed before step 3 still be waiting on
+   the executor's record — a note is read at the executor's next step or by its review, so one
    waits for as long as its turn runs — and a node that cannot open one logs
    `steer_note_key_unknown`, naming the keys it holds: dropped under it, the
    note waits until the key is back on the ring, or expires with its turn.
@@ -641,7 +641,7 @@ outranks](../reference/cli.md#a-sink-the-store-outranks)).
 
 ## Operational notes
 
-- **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. A tool server and a coding run are held to theirs: a tool server whose reference resolves to nothing is not started — and says which variable, by name — unless the key holding it is listed under `optional_keys` ([Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)); an executor run starts without it and logs `sandbox_env_unresolved` (names only, and nothing for a key under `optional_keys`; [Code sandbox](code-sandbox.md#credentials-and-the-run-environment)); and the sandbox credential check refuses to launch a coding agent on an empty credential. A `providers.llm` entry's `env` is not held: it is resolved when the company's providers are built, where a refusal would take the whole company down rather than one entry, so an unset reference there reaches the CLI empty, with a `cli_agent_env_unresolved` warning naming it.
+- **A missing value still resolves to `""`.** The store removes the most common cause, not the failure mode itself. A tool server and an executor are held to theirs: a tool server whose reference resolves to nothing is not started — and says which variable, by name — unless the key holding it is listed under `optional_keys` ([Tools & MCP](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value)); an executor run starts without it and logs `sandbox_env_unresolved` (names only, and nothing for a key under `optional_keys`; [Code sandbox](code-sandbox.md#credentials-and-the-run-environment)); and the sandbox credential check refuses to launch a coding agent on an empty credential. A `providers.llm` entry's `env` is not held: it is resolved when the company's providers are built, where a refusal would take the whole company down rather than one entry, so an unset reference there reaches the CLI empty, with a `cli_agent_env_unresolved` warning naming it.
 - **Backups.** The bucket holds only ciphertext; the keyring is the sole root of trust and lives in Tier A. Back them up separately — a coordination backup alone is unrecoverable, which is the point. With the keyring, though, a backup opens everything it held when it was taken — the bucket's values, and the identity estate's sealed names and addresses in its rows and its log, those of every person removed since included. Removing somebody cannot reach a backup that already exists, so an erasure is finished only once every backup taken before the identity log's trim passed their records is gone ([what a removal reaches](identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows)).
 - **Key rotation.** Follow [the rotation runbook](#rotating-the-keyring-with-nothing-in-flight-lost): add the new key on every node and restart, flip `active_key_id` and restart again, re-seal both halves (`crewlet secrets rekey`, and the company document with `POST /config/reload` or, on a stopped node, `crewlet config rekey` — which a node booting on another revision than the fleet's needs either way), and only then drop the old key. Flipping `active_key_id` in the same restart that adds the key is safe on a single node and not on a fleet: a node that flips first signs records, cookies and requests under a key its peers do not hold yet. Each record's envelope names the key that sealed it, so mixed-key states are readable throughout. The store is shared, so `crewlet secrets rekey` is run **once** for the fleet, not once per node — and it refuses if the node it reaches seals under a different `active_key_id` than the config it was given, because a silent success there would report a rotation that did not happen. Run with this node's engine stopped it reaches the store itself and re-seals every row there, under the keyring in the Tier A it was given. It aborts rather than half-completing if any record cannot be opened with the keyring in hand. Each record is re-sealed only at the version the pass read, so a rotation or a deletion that lands while it runs is never undone — a credential an operator deleted in particular stays deleted rather than being written back as the value the pass read before. Through a running node the same command moves every person's sealed values in the identity estate, one record per person, and a run that cannot confirm one says so and is run again; a run made directly cannot reach them, says so, and is run again through a running node.
 - **The `_secrets` bucket is created on demand** by the first process to open the fleet's store — a node at its first boot, or a command that reached a solo node's store, or an external broker, before any engine had, through the same constructor, so the engine adopts it — and it is durable: on the embedded topology it lives under `stream.store_dir` like every other bucket, so a restart does not lose it. Back that directory up alongside the keyring.

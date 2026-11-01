@@ -1372,24 +1372,24 @@ const (
 	// replaced by a relaunch.
 	endedNote = "This run has ended; this call was not run. End your turn now."
 
-	// stoppedNote answers a call once the run's tools are closed: the seat
-	// moved off this node, a person asked it to stop, or a tool failed
+	// stoppedNote answers a call once the executor's tools are closed: the
+	// seat moved off this node, a person asked it to stop, or a tool failed
 	// inside the engine.
-	stoppedNote = "This run's tools are closed and this call was not run. " +
+	stoppedNote = "Your tools are closed and this call was not run. " +
 		"End your turn now."
 
 	// unrunNote answers a call the seat's surface could not run at all,
-	// because the turn the run belongs to was torn down under it.
-	unrunNote = "This call was not run, because the turn this coding run belongs " +
-		"to has ended. End your turn now."
+	// because the turn the executor works for was torn down under it.
+	unrunNote = "This call was not run, because the turn you are working for " +
+		"has ended. End your turn now."
 
 	// failedInsideNote answers the call that broke inside the engine.
-	failedInsideNote = "This call failed inside the engine, and this run's tools are " +
+	failedInsideNote = "This call failed inside the engine, and your tools are " +
 		"now closed. End your turn now."
 
 	// suspendNote answers a tool that would park the caller's own loop,
-	// which a detached run does not have.
-	suspendNote = "This tool cannot be used from a coding run; it suspends the " +
+	// which an executor in its box does not have.
+	suspendNote = "This tool cannot be used from inside a box; it suspends the " +
 		"caller's own loop."
 )
 

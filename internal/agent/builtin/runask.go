@@ -175,12 +175,13 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		runID = turn.RunID
 	}
 	if runID == "" || launch == "" {
-		// NOT A RUN'S CALL: nothing names the job to park. The tool is
-		// offered on an executor run's surface alone, so this is a
-		// wiring fault, said as one rather than as the model's mistake.
+		// NOT AN EXECUTOR'S CALL: nothing names the launch to park. The tool
+		// is offered on the executor's surface alone, so this is a wiring
+		// fault, said as one rather than as the model's mistake.
 		return refusedBy(tools.RefusalUnavailable, waitless(), AskAndWaitTool+
-			" is unavailable here: it parks a coding run, and this call was not made by "+
-			"one. Ask on the work item with `"+CommentOnWorkTool+"` and `ask` instead."), nil
+			" is unavailable here: it parks a seat's executor in its box, and this call "+
+			"was not made by one. Ask on the work item with `"+CommentOnWorkTool+"` and "+
+			"`ask` instead."), nil
 	}
 	ask, refusal := t.readAsk(ctx, args)
 	if refusal != nil {

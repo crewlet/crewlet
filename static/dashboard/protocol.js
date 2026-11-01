@@ -3848,8 +3848,8 @@ var SessionKeepAlive = class {
 *    authority row names them: its app for an app's change, the row's own set
 *    for one that draws on whichever of several the caller holds
 *    (`answer_knowledge`, the tracker and the knowledge base it answers
-*    from), and none for a change no app holds (pausing a seat, answering a
-*    coding run). What a control the engine does not offer is held with —
+*    from), and none for a change no app holds (pausing a seat, answering an
+*    executor). What a control the engine does not offer is held with —
 *    "needs Worklet access" — so a reader is told what to ask an admin for
 *    (`lib/useWriteAccess.ts`). It is the authority table's, stated per row
 *    rather than guessed from the domain: a change can need an app and land
@@ -4248,7 +4248,7 @@ var ACTIONS = {
 * TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
 * (`protocol/writeOutcome.ts`, `sentenceOf`): a refusal the engine answered
 * with a `detail`, which it writes only in a person's words (ADR-0060), is
-* shown in that `detail`, as a coding run's question somebody already
+* shown in that `detail`, as an executor's question somebody already
 * answered names who did and a spent token budget names whose it was; and a
 * sentence below that asks for a wait (`unavailable`, `identity_unavailable`)
 * gives way to the engine's own sentence for the code where the answer

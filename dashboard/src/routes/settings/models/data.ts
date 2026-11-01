@@ -7,7 +7,7 @@
  * NOTHING HERE DECIDES A CONDITION OR A USE. Whether a model is ready, which
  * seat runs which job on it and what its alarms say are the engine's answer:
  * the page names them. The document is read only for what the engine does
- * not report and an edit must keep (where its coding runs, its limits, its
+ * not report and an edit must keep (where it runs executors, its limits, its
  * web tools, the fields the wizard does not hold).
  *
  * KEPT CURRENT three ways, because each misses what the others catch: every
@@ -57,7 +57,7 @@ export interface ModelView {
   admin: ModelEntry | null;
   /** What runs on it now, from the engine's `used_by`. */
   uses: Uses;
-  /** Where its coding runs, as written; null for the company default. */
+  /** Where it runs executors, as written; null for the company default. */
   runIn: string | null;
   timeoutSeconds: number | null;
   maxConcurrent: number | null;

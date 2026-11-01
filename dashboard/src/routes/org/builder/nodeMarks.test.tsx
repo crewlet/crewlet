@@ -144,7 +144,7 @@ describe("a seat's live state", () => {
   });
 
   /*
-   * THE ROW'S WORD IS THE ENGINE'S, a seat's coding runs included: the chart
+   * THE ROW'S WORD IS THE ENGINE'S, a seat's executor included: the chart
    * folds nothing in. A running box beside an idle row is a row the engine
    * has not yet re-sent, not a seat this client may call busy.
    */

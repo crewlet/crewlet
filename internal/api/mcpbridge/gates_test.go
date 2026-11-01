@@ -226,7 +226,7 @@ func TestASuspendIsRefusedAndRecordedAsACallThatRan(t *testing.T) {
 	g := newGatedParking(t, map[string]bool{"launch": true}, launch)
 	sess := dial(t, g.url)
 	res := callTool(t, sess, "launch", map[string]any{})
-	if !res.IsError || !strings.Contains(text(res), "cannot be used from a coding run") {
+	if !res.IsError || !strings.Contains(text(res), "cannot be used from inside a box") {
 		t.Fatalf("a suspend was answered %v %q, want the refusal", res.IsError, text(res))
 	}
 	rows := g.ledger.rows()

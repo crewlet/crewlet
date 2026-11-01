@@ -507,12 +507,12 @@ test("Event log links to the log, with the seat when one is chosen", async () =>
 });
 
 // THE EMPTY BOX SAYS WHAT IS TRUE. It promised every finished run was "still
-// in the record under Runs" — a settled run's row is deleted; its record is
-// its turn's trace.
-test("an empty In a box says where a finished run's record is", async () => {
+// in the record under Runs" — a settled executor's row is deleted; its record
+// is its turn's trace.
+test("an empty In a box says where a finished executor's record is", async () => {
   mount();
   const card = cardOf("In a box");
-  expect(card.textContent).toContain("Finished runs are on their turn’s trace.");
+  expect(card.textContent).toContain("What a finished one did is on its turn’s trace.");
   expect(card.textContent).not.toMatch(/still in the record/);
 });
 

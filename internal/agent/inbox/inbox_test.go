@@ -170,10 +170,10 @@ func TestAPausedSeatParksAndHoldsItsInbox(t *testing.T) {
 			t.Errorf("%s: parked %d of %d events — a park that drops one loses mail",
 				name, len(got.Events), len(evs))
 		}
-		// NOTHING IS OFFERED to a parked run either: an answer waits behind
-		// a pause like any other mail, because resuming a run is work.
+		// NOTHING IS OFFERED to a parked executor either: an answer waits
+		// behind a pause like any other mail, because resuming it is work.
 		if got.OfferAsSandboxAnswer {
-			t.Errorf("%s: a paused seat offered its mail to a parked coding run", name)
+			t.Errorf("%s: a paused seat offered its mail to a parked executor", name)
 		}
 	}
 	// And the no-model park keeps its own.

@@ -69,7 +69,7 @@ var _ a2a.Owed = colleagueOwed{}
 func (o colleagueOwed) AnswerOwed(ctx context.Context, ch a2a.Channel) (bool, error) {
 	runs, err := o.runs.ListActiveForSeat(ctx, ch.Target)
 	if err != nil {
-		return false, fmt.Errorf("engine: reading the coding runs of %s, which channel %s asked: %w",
+		return false, fmt.Errorf("engine: reading the executor records of %s, which channel %s asked: %w",
 			ch.Target, ch.ID, err)
 	}
 	for _, run := range runs {

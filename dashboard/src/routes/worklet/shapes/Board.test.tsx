@@ -226,8 +226,8 @@ describe("the card", () => {
   });
 
   // THE BAND IS A STATE AND SAYS SO IN WORDS: the seat and what it is doing on
-  // THIS task, and a run parked waiting on the reader — never somebody else's.
-  test("a running turn and a run waiting on the reader each say so in words", async () => {
+  // THIS task, and an executor parked waiting on the reader — never somebody else's.
+  test("a running turn and an executor waiting on the reader each say so in words", async () => {
     mountBoard({
       props: {
         // KEYED ON EACH TASK'S ID, as the screen builds them (`liveOnItems`):
@@ -249,7 +249,7 @@ describe("the card", () => {
       "SWE · executing · round 7 of 206m",
     );
     expect(cardOf("ENG-3").querySelector(".work-card-live")?.textContent).toContain(
-      "Waiting on you · coding run parked",
+      "Waiting on you · executor parked",
     );
     expect(cardOf("ENG-2").querySelector(".work-card-live")).toBeNull();
   });

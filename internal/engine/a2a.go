@@ -227,7 +227,7 @@ func (e *Engine) answerLostTurn(ctx context.Context, run sandbox.PendingRun) {
 type runLostError struct{ reason, detail string }
 
 func (e *runLostError) Error() string {
-	return fmt.Sprintf("the coding run was lost (%s): %s", e.reason, e.detail)
+	return fmt.Sprintf("the executor's launch was lost (%s): %s", e.reason, e.detail)
 }
 
 // lostRunOf recovers the loss that ended a turn from its error.
@@ -274,7 +274,7 @@ func answerContent(res turn.Result, err error) string {
 			"Take it up with them, or on a shared surface."
 	}
 	if lost, ok := lostRunOf(err); ok {
-		return "I could not answer this: the coding run my turn launched for it was lost " +
+		return "I could not answer this: my executor's work on it in its box was lost " +
 			"before the turn could finish (" + lost.reason + ": " + redact.Secrets(lost.detail) +
 			"). Please ask again, or take it up on a shared surface."
 	}

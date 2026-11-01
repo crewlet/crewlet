@@ -678,13 +678,13 @@ function liveOutput(text: string) {
   };
 }
 
-// A SETTLED RUN STILL HAS A PAGE: its record is gone from the board, and what
-// it did is its launch's own `executor_collected` record, with the transcript
-// on it. It used to answer "no coding run" to a link to a run that had
-// finished.
+// A SETTLED EXECUTOR STILL HAS A PAGE: its row is gone from the board, and
+// what it did is its launch's own `executor_collected` record, with the
+// transcript on it. It used to answer that there was none to a link to an
+// executor that had finished.
 //
-// Mutation: drop the collected records, and the page claims there is no run.
-test("a collected run's page shows what its job did, off its turn", async () => {
+// Mutation: drop the collected records, and the page claims there is none.
+test("a collected executor's page shows what its launch did, off its turn", async () => {
   mountPage({
     executors: { runs: [] },
     turn: {
@@ -755,13 +755,13 @@ test("a collected run's page shows what its job did, off its turn", async () => 
   await settle();
   expect(screen.getByText("edited retry.go; tests pass")).toBeTruthy();
   // NAMED BY ITS TASK, off the launch the turn holds — the row that carried
-  // it is gone once the run is collected.
+  // it is gone once the launch is collected.
   expect(screen.getByRole("heading", { name: /Add retry to the webhook client/ })).toBeTruthy();
   expect(screen.getByText("collected")).toBeTruthy();
   expect(screen.getByText("crewlet/ada/retry")).toBeTruthy();
-  // ONE JOB: the round's own record is not a second one.
-  expect(screen.queryByText(/What job \d+ of/)).toBeNull();
-  expect(screen.queryByText("No coding run for this turn")).toBeNull();
+  // ONE LAUNCH: the round's own record is not a second one.
+  expect(screen.queryByText(/What launch \d+ of/)).toBeNull();
+  expect(screen.queryByText("No executor for this turn")).toBeNull();
 });
 
 // WHAT A RUN DELIVERED IS NOT CUT SHORT UNSAID. The record lists its refs up
@@ -808,15 +808,15 @@ test("a collected run's delivered refs say how many the record does not list", a
   ).toBeTruthy();
 });
 
-// "COULD NOT READ" IS NOT "NONE". The page is drawn from two reads, and a run
-// found in neither is absent only when both answered. It said "Neither the
-// run record nor the turn holds a coding run" whenever ONE read failed — a
-// claim about a record it never read — and headed the page "No task was
-// recorded" as though a run existed.
+// "COULD NOT READ" IS NOT "NONE". The page is drawn from two reads, and an
+// executor found in neither is absent only when both answered. It said that
+// neither the record nor the turn held one whenever ONE read failed — a claim
+// about a record it never read — and headed the page "No task was recorded"
+// as though one existed.
 //
 // Mutation: gate the empty state on `!run && collected.length === 0` alone
-// (as it was), and the failed board reads as an absent run.
-test("a failed run record is named rather than read as no run", async () => {
+// (as it was), and the failed board reads as an absent executor.
+test("a failed executor record is named rather than read as none", async () => {
   mountPage({
     executors: new Error("unavailable"),
     turn: { turn_id: "turn-1", events: [] },
@@ -824,32 +824,32 @@ test("a failed run record is named rather than read as no run", async () => {
   await settle();
   expect(screen.queryByText(/The id may be wrong, or the turn is too old/)).toBeNull();
   expect(
-    screen.getByText("Couldn’t read the run record. Showing what the turn holds."),
+    screen.getByText("Couldn’t read the executor’s record. Showing what the turn holds."),
   ).toBeTruthy();
-  expect(screen.queryByRole("heading", { name: "No coding run" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "No executor" })).toBeNull();
 });
 
-test("a failed turn is named rather than read as no run", async () => {
+test("a failed turn is named rather than read as no executor", async () => {
   mountPage({
     executors: { runs: [] },
     turn: new Error("timeout"),
   });
   await settle();
   expect(screen.queryByText(/The id may be wrong, or the turn is too old/)).toBeNull();
-  expect(screen.getByText("Couldn’t read the turn. Showing the run record.")).toBeTruthy();
+  expect(screen.getByText("Couldn’t read the turn. Showing the executor’s record.")).toBeTruthy();
 });
 
-// A TURN WITH NO RUN IS HEADED AS HAVING NONE. "No task was recorded" is a
-// fact about a run whose launch carried no task, and over a turn with no run
-// at all it asserted a run that does not exist.
+// A TURN WITH NO EXECUTOR IS HEADED AS HAVING NONE. "No task was recorded" is
+// a fact about an executor whose launch carried no task, and over a turn with
+// none at all it asserted an executor that does not exist.
 //
-// Mutation: fall back to "No task was recorded" for every run-less page.
-test("a turn with no coding run is headed as having none", async () => {
+// Mutation: fall back to "No task was recorded" for every page with none.
+test("a turn with no executor is headed as having none", async () => {
   mountPage({ executors: { runs: [] }, turn: { turn_id: "turn-1", events: [] } });
   await settle();
-  expect(screen.getByRole("heading", { name: "No coding run" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "No executor" })).toBeTruthy();
   expect(screen.queryByText("No task was recorded")).toBeNull();
-  expect(screen.getByText("No coding run for this turn")).toBeTruthy();
+  expect(screen.getByText("No executor for this turn")).toBeTruthy();
 });
 
 // A RUN'S PAGE NAMES THE MEMBER IT WAS LAUNCHED ON, and its model: a fallback

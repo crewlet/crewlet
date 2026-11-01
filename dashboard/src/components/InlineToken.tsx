@@ -32,7 +32,7 @@
  *
  * WHERE A TOKEN LINKS is the run's `LinkMode` (`lib/inlineTokens.ts`):
  * `text` draws every token as words with its mark (an Inbox row, an answer's
- * option), and `checked` (the assistant's answers, the Inbox, a coding run's
+ * option), and `checked` (the assistant's answers, the Inbox, an executor's
  * question) links only what the dashboard built: every token but an address
  * is built from checked parts already, and an address opens only as it is
  * rebuilt on the company's own host, else it is drawn inert, as written. An

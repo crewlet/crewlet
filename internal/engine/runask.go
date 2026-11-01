@@ -20,10 +20,10 @@ type runAsks struct{ engine *Engine }
 
 var _ builtin.RunAskDesk = runAsks{}
 
-// errNoRunStore is why a question cannot be recorded, nor a run's row read, on
-// a node holding no sandbox runtime: there is no run row for either.
-var errNoRunStore = errors.New("engine: this node holds no sandbox runtime, so a coding " +
-	"run has no row to record its question on or to read it from")
+// errNoRunStore is why a question cannot be recorded, nor an executor's row
+// read, on a node holding no sandbox runtime: there is no row for either.
+var errNoRunStore = errors.New("engine: this node holds no sandbox runtime, so an " +
+	"executor has no row to record its question on or to read it from")
 
 // RecordAsk records the ask on the job's row; see
 // [sandbox.PendingStore.RecordAsk].

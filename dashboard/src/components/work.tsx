@@ -572,9 +572,9 @@ function CardFoot({
   );
 }
 
-/** A parked coding run on this task that is waiting on the reader. */
+/** An executor parked on this task that is waiting on the reader. */
 export interface CardWaiting {
-  /** When the run's box began being held for an answer. */
+  /** When the executor's box began being held for an answer. */
   since?: string;
 }
 
@@ -588,9 +588,9 @@ export interface CardWaiting {
  * the rows above it.
  *
  * THE BAND IS A STATE, so it is the one part of a card with a hue: blue while
- * a seat's turn is on the task, amber while a coding run on it is parked
- * waiting for the READER — never for somebody else, whose waiting run is a
- * fact on the task page rather than a call to this person. Both say it in
+ * a seat's turn is on the task, amber while an executor on it is parked
+ * waiting for the READER — never for somebody else, whose waiting executor is
+ * a fact on the task page rather than a call to this person. Both say it in
  * words, because a tint alone is invisible to a reader who does not see it.
  *
  * TOKENS, NEVER MONEY. What the task has cost is the tokens its turns were
@@ -621,7 +621,7 @@ export function WorkCard({
   omit?: ReadonlySet<CardFact>;
   /** The turn running on this task, where one is. */
   live?: CardLive | null;
-  /** A coding run on this task parked waiting on the reader. */
+  /** An executor on this task parked waiting on the reader. */
   waiting?: CardWaiting | null;
   /** The holder's state, as the glyph on their badge, where the engine reports one. */
   status?: AvatarStatus | undefined;
@@ -676,7 +676,7 @@ export function WorkCard({
       ) : waiting ? (
         <div className="work-card-live" data-tone="needs">
           <CircleAlertGlyph size="xs" aria-hidden="true" />
-          <span className="truncate">Waiting on you · coding run parked</span>
+          <span className="truncate">Waiting on you · executor parked</span>
           <span className="work-card-age">{shortAge(waiting.since, now)}</span>
         </div>
       ) : null}

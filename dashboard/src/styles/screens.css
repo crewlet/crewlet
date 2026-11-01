@@ -6275,7 +6275,7 @@ a.work-cal-chip {
 }
 
 /* RENDERED MARKDOWN. `.prose` on its own is a plain `pre-wrap` block, for text
-   whose every space and break is the record — a coding run's activity log. A
+   whose every space and break is the record — a launch's activity log. A
    page body, a work item's description and a model's own words ARE markdown,
    so they carry `.md` beside it: the whitespace rule goes back to normal (the
    renderer decides what a break is — every newline, for a model's words) and
@@ -8392,7 +8392,7 @@ a.live-row:focus-visible {
   font-size: var(--font-size-2xs);
 }
 /* A CONTAINER'S NAME IS WEIGHTED, its parts are not: a phase, a CLI run, a
-   coding run and the reflection pass read as the headings the rows under them
+   launch and the reflection pass read as the headings the rows under them
    belong to. */
 .wf-row:is(
     [data-kind="turn"],

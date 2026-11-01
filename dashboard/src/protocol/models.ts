@@ -181,7 +181,7 @@ export interface RunnerNodeCell {
   checked_at: string | null;
 }
 
-/** `llm_runners`: where a model's coding runs can happen, and on which nodes each is ready. */
+/** `llm_runners`: where a model's executors can run, and on which nodes each is ready. */
 export interface RunnersAnswer {
   default_run_in: RunnerCellName;
   cells: Record<RunnerCellName, { declared: boolean; ready_on: string[]; not_ready_on: string[] }>;

@@ -789,7 +789,7 @@ describe("delegated workers", () => {
 //
 // Mutation: count the transcript's lines without the elided fields, or join
 // the refs without the count, and these go red.
-describe("what a coding run's record left out", () => {
+describe("what a launch's record left out", () => {
   test("is read off the record", () => {
     const run = fromPhaseEvent(
       launchEvent({

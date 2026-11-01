@@ -613,7 +613,7 @@ it.
 While an agent is working, the Live row counts the seats at work and a
 **Running** group under the sidebar's shortcuts (after Projects, Pinned and
 Starred) lists up to four running turns. Press one to watch it — its
-transcript, with the phase it is on open, or the coding run it is parked on
+transcript, with the phase it is on open, or the executor it is parked on
 drawn live above its phases. `g r` does the same for the one running turn, and
 opens Live's *Now running* when several are running (or none).
 
@@ -702,7 +702,7 @@ queue, inbox and pins, the trash, the board drag, the chat's furniture — makin
 a room, opening a conversation, a room's settings and membership, editing and
 taking back a message, and how far you have read — and the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
-steering a running turn, answering a coding run's question and answering a
+steering a running turn, answering an executor's question and answering a
 question from the company's knowledge.
 Each is decided by the same authority table a seat's calls are, and knowledge
 search sits beside them. On the deployment's token its writes carry the token's

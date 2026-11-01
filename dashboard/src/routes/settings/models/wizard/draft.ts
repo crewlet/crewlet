@@ -386,7 +386,7 @@ export function entityOf(d: Draft, base?: Base): Record<string, unknown> {
   );
   entity.agent = d.agent;
   entity.model = modelId(d);
-  // WHERE CODING RUNS is a choice only a CLI with a runner has; any other leaves it unset.
+  // WHERE AN EXECUTOR RUNS is a choice only a CLI with a runner has; any other leaves it unset.
   if (d.runIn && canExecute(d)) entity.run_in = d.runIn;
   if (d.timeout.trim()) entity.timeout_seconds = wholeOrText(d.timeout);
   if (d.concurrent.trim()) entity.max_concurrent = wholeOrText(d.concurrent);

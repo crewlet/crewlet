@@ -49,7 +49,7 @@ A deployment's durable state lives in six places:
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
 | **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day), the artifacts and their datastores, Ask Crewlet's conversations and the engine's own chat), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
-| **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, each human seat's chat read state, the sealed credentials |
+| **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, the executors' records, each human seat's chat read state, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **LLM CLI homes** | Each `providers.llm` entry's state directory on the engine host (`state_dir`, or one per key under `CREWLET_LLM_CLI_HOME`), each CLI's files under `<state_dir>/<agent>` | The coding CLIs' logins and per-seat homes (a login is portable via `crewlet llm export`) |
 
@@ -84,7 +84,7 @@ Classify before you size the job:
   the case `retention.backup_max_age` exists to keep from arising.
 - **Authoritative, with no other copy:** the event log's history, the config
   revision history, the sealed credential bucket, the budget counters, and
-  each detached sandbox-run record, which is the only thing that knows a
+  each executor's record, which is the only thing that knows a
   billed box exists.
 
 ## What `crewlet backup` produces
@@ -605,7 +605,7 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   the token counters lose the current day's, week's and month's spend (every
   capped window re-arms silently — a company or seat that had spent its
   ceiling gets the whole allowance back until that window turns over),
-  sandbox-run records vanish (a billed box leaks until its own TTL), and the
+  executors' records vanish (a billed box leaks until its own TTL), and the
   completion ledger forgets (bounded duplicate turns).
 
 ### The last step is `crewlet iam invalidate-all`

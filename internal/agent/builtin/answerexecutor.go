@@ -135,16 +135,16 @@ var _ tools.SeatCallable = (*answerExecutor)(nil)
 func (t *answerExecutor) Name() string { return AnswerExecutorTool }
 
 func (t *answerExecutor) Description() string {
-	return "Answer a coding run that stopped to ask a person a question, by " +
-		"naming the run's turn. Where the question offers options, name the one " +
+	return "Answer a seat's executor that stopped to ask a person a question, " +
+		"by naming its turn. Where the question offers options, name the one " +
 		"chosen in `choice`, with any words beside it in `answer`; an open " +
-		"question is answered in `answer`. The answer is recorded on the run at once, and " +
-		"the run resumes with it as the reply to the question it is waiting on " +
-		"now, on the node that holds its seat, as soon as that seat is free of " +
-		"any other coding run. Use this for any parked run, including one " +
-		"started by a schedule, an assignment or a colleague, which has no " +
-		"conversation to reply in. Find parked runs and their questions on the " +
-		"executors board."
+		"question is answered in `answer`. The answer is recorded on the " +
+		"executor's row at once, and the executor carries on with it as the " +
+		"reply to the question it is waiting on now, on the node that holds its " +
+		"seat, as soon as that seat is free of any other turn's executor. Use " +
+		"this for any parked executor, including one started by a schedule, an " +
+		"assignment or a colleague, which has no conversation to reply in. Find " +
+		"parked executors and their questions on the executors board."
 }
 
 func (t *answerExecutor) Parameters() map[string]any {
@@ -153,26 +153,26 @@ func (t *answerExecutor) Parameters() map[string]any {
 		"properties": map[string]any{
 			"turn_id": map[string]any{
 				"type":        "string",
-				"description": "The turn id of the parked run — its `turn_id` on the executors board.",
+				"description": "The turn id of the parked executor — its `turn_id` on the executors board.",
 			},
 			"launch_id": map[string]any{
 				"type": "string",
-				"description": "The question you are answering: the run's `launch_id` on the " +
-					"executors board, read with the question. A run that has moved on to " +
-					"another question since refuses the answer, so it never answers one you did " +
-					"not see.",
+				"description": "The question you are answering: the executor's `launch_id` on " +
+					"the executors board, read with the question. An executor that has moved " +
+					"on to another question since refuses the answer, so it never answers one " +
+					"you did not see.",
 			},
 			"choice": map[string]any{
 				"type": "string",
-				"description": "The id of the option chosen, where the run's question " +
+				"description": "The id of the option chosen, where the executor's question " +
 					"offers options: one of its `decision.options` on the executors board.",
 			},
 			"answer": map[string]any{
 				"type": "string",
-				"description": fmt.Sprintf("Your answer to the run's question, as the "+
-					"coding agent should read it: the whole answer to an open question, "+
+				"description": fmt.Sprintf("Your answer to the executor's question, as "+
+					"its coding agent should read it: the whole answer to an open question, "+
 					"or what to add to a `choice`. At most %d KiB: put anything longer on "+
-					"a page the run can read, and say where it is.", MaxRunAnswerBytes>>10),
+					"a page the executor can read, and say where it is.", MaxRunAnswerBytes>>10),
 			},
 		},
 		"required": []any{"turn_id", "launch_id"},
@@ -188,7 +188,7 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	if t.deps.Desk == nil || t.deps.Actor == nil {
 		return refusedBy(tools.RefusalUnavailable, waitless(), AnswerExecutorTool+
-			" is unavailable: this surface was built without the run record."), nil
+			" is unavailable: this surface was built without the executors' record."), nil
 	}
 	actor, err := t.deps.Actor(ctx, turn)
 	if err != nil {
@@ -198,12 +198,12 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	turnID := strings.TrimSpace(argString(args, "turn_id"))
 	if turnID == "" {
-		return failed(AnswerExecutorTool + " needs a `turn_id` — the parked run's turn id."), nil
+		return failed(AnswerExecutorTool + " needs a `turn_id` — the parked executor's turn id."), nil
 	}
 	launchID := strings.TrimSpace(argString(args, "launch_id"))
 	if launchID == "" {
 		return failed(AnswerExecutorTool + " needs a `launch_id`: the question you are answering, " +
-			"the run's `launch_id` read with it on the executors board."), nil
+			"the executor's `launch_id` read with it on the executors board."), nil
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
 	choice := strings.TrimSpace(argString(args, "choice"))
@@ -213,9 +213,10 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"`answer` saying what the coding agent should be told, or both."), nil
 	case len(answer) > MaxRunAnswerBytes:
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
-			"it becomes the run's next message, or a fresh run's brief where the run cannot "+
-			"carry on in its own session, and its coding agent reads it again at every step "+
-			"after. Put the detail on a page the run can read, and answer with where it is.",
+			"it becomes the executor's next message, or a fresh launch's brief where the "+
+			"executor cannot carry on in its own session, and its coding agent reads it again "+
+			"at every step after. Put the detail on a page the executor can read, and answer "+
+			"with where it is.",
 			kib(len(answer)), MaxRunAnswerBytes>>10)), nil
 	}
 
@@ -223,16 +224,16 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	switch {
 	case err != nil:
 		return nodeFailure(ctx, AnswerExecutorTool, err, fmt.Sprintf(AnswerExecutorTool+" could not "+
-			"read run %s", clip(turnID)), "This does NOT mean it is gone, and "+
+			"read the executor of turn %s", clip(turnID)), "This does NOT mean it is gone, and "+
 			"nothing was answered."), nil
 	case !found:
 		// NOT_RUNNING RATHER THAN NOT_FOUND: a run that has ended has no
 		// record, exactly like a turn id that never named one, and a
 		// person holding the id of a run that finished is told the true
 		// thing about both — nothing there is waiting for them.
-		return refused(tools.RefusalNotRunning, fmt.Sprintf("No coding run is "+
-			"parked under turn %s: it has finished or ended, or the id names no run.",
-			clip(turnID))), nil
+		return refused(tools.RefusalNotRunning, fmt.Sprintf("No executor is "+
+			"parked under turn %s: it has finished or ended, or the id names no turn "+
+			"with one.", clip(turnID))), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status) && run.Answer != nil:
 		// THE FIRST RECORDED ANSWER WINS, and a later one is told whose it
 		// was and when, rather than taken quietly: an answer is recorded the
@@ -242,8 +243,8 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return toPerson(refused(tools.RefusalAlreadyAnswered, answeredAlready(run, by)),
 			caveat.AnsweredAlready(by)), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status):
-		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s is %s, not "+
-			"waiting for an answer, so there is no question for this to answer.",
+		return refused(tools.RefusalNotRunning, fmt.Sprintf("The executor of turn %s is "+
+			"%s, not waiting for an answer, so there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
 	}
 	// THE QUESTION THE PERSON READ, never the one the run asks now if
@@ -251,10 +252,10 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// otherwise take an answer, or a choice by id, given to one it no
 	// longer asks.
 	if launchID != run.LaunchID {
-		return toPerson(refused(tools.RefusalStaleVersion, fmt.Sprintf("Run %s has moved on to "+
-			"another question since the one you answered (launch %s): read its question "+
-			"again on the executors board and answer that one. Nothing was answered.",
-			clip(turnID), clip(launchID))), caveat.QuestionChanged()), nil
+		return toPerson(refused(tools.RefusalStaleVersion, fmt.Sprintf("The executor of "+
+			"turn %s has moved on to another question since the one you answered (launch "+
+			"%s): read its question again on the executors board and answer that one. "+
+			"Nothing was answered.", clip(turnID), clip(launchID))), caveat.QuestionChanged()), nil
 	}
 	// THE CHOICE NAMES AN OPTION OF THIS QUESTION, checked against the
 	// row just read as waiting, whose job the answer is pinned to: a run
@@ -340,9 +341,9 @@ func answeredAlready(run sandbox.PendingRun, by string) string {
 		by, when)
 	switch run.Status {
 	case sandbox.StatusAnswered:
-		return said + " The run resumes with that answer once its seat is free."
+		return said + " The executor resumes with that answer once its seat is free."
 	case sandbox.StatusResumed:
-		return said + " The run was resumed with that answer."
+		return said + " The executor was resumed with that answer."
 	}
 	return said
 }
@@ -364,8 +365,8 @@ func (t *answerExecutor) parties(ctx context.Context, run sandbox.PendingRun) (r
 	if err != nil || id == uuid.Nil {
 		return runParties{}, refusalOf(faulted(ctx, AnswerExecutorTool,
 			fmt.Errorf("pending run %s names seat id %q: %w", run.TurnID, run.AgentID,
-				errUnreadableSeatID), fmt.Sprintf(AnswerExecutorTool+" cannot answer run %s: its "+
-				"record names no seat id this build can read, so the seat it would wake "+
+				errUnreadableSeatID), fmt.Sprintf(AnswerExecutorTool+" cannot answer the executor of "+
+				"turn %s: its record names no seat id this build can read, so the seat it would wake "+
 				"cannot be named — %s.", clip(run.TurnID), faultSaid)))
 	}
 	return runParties{seat: id, handle: run.AgentHandle, requester: run.Requester}, nil

@@ -1,33 +1,35 @@
 /**
  * Executors.
  *
- * A coding run is a seat's executor: its coding CLI's own run, in a box. The
- * turn parks at the launch, and the run's collection resumes that same turn
- * minutes later — possibly after a restart, possibly on another node — for
- * the engine's check and the reviewer. So there are two sources and they
- * answer different questions: the live projection knows what is in flight
- * right now, and `executors` knows what the store remembers, including runs
- * whose box has already been reclaimed. The screen this replaces showed only
- * the first, so a run parked on a question with its box gone appeared NOWHERE.
+ * A seat's executor is its coding CLI, running in a box. The turn parks at the
+ * launch, and the launch's collection resumes that same turn minutes later —
+ * possibly after a restart, possibly on another node — for the engine's check
+ * and the reviewer. So there are two sources and they answer different
+ * questions: the live projection knows what is in flight right now, and
+ * `executors` knows what the store remembers, including executors whose box
+ * has already been reclaimed. The screen this replaces showed only the first,
+ * so an executor parked on a question with its box gone appeared NOWHERE.
  *
  * # The row, the rail and the page
  *
- * A plain click opens the run BESIDE the list rather than in place of it. This
- * screen is read while something is in flight, and a reader comparing three
- * parked runs loses the comparison the moment the list navigates away. The
- * path `#/live/executors/{turn_id}` is the run's OWN page — what a ⌘-click, the
- * rail's `Open ↗` and every link to one run reach — and it draws the run
- * alone. It used to draw the whole list with the run tacked on beneath it, so
- * a link to one run landed on a board with the run below the fold.
+ * A plain click opens the executor BESIDE the list rather than in place of it.
+ * This screen is read while something is in flight, and a reader comparing
+ * three parked executors loses the comparison the moment the list navigates
+ * away. The path `#/live/executors/{turn_id}` is the executor's OWN page — what
+ * a ⌘-click, the rail's `Open ↗` and every link to one executor reach — and it
+ * draws that executor alone. It used to draw the whole list with the executor
+ * tacked on beneath it, so a link to one landed on a board with it below the
+ * fold.
  *
- * # What the page says a run did
+ * # What the page says an executor did
  *
- * Two sources, one per half of a run's life. While the job runs, its output is
- * asked of the node that owns it (`executor_tail`, every few seconds, only while
- * the page is open); once the run is collected its record is deleted and what
- * it did is each launch's own `executor_collected`, with the transcript on it.
- * So a run that has settled still has a page: it is the turn's collected runs,
- * read from the turn — the record a reader followed the link for.
+ * Two sources, one per half of its life. While a launch runs, its output is
+ * asked of the node that owns it (`executor_tail`, every few seconds, only
+ * while the page is open); once the launch is collected its record is deleted
+ * and what it did is the launch's own `executor_collected`, with the
+ * transcript on it. So an executor that has settled still has a page: it is
+ * the turn's collected launches, read from the turn — the record a reader
+ * followed the link for.
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
@@ -118,8 +120,8 @@ const STATUS_TONE: Record<ExecutorStatus, "success" | "warning" | "danger" | "in
   // question survives.
   awaiting_clarification: "warning",
   reseed: "warning",
-  // A person's reply is recorded as the answer and the engine is resuming
-  // the run with it: nobody is waited on any more.
+  // A person's reply is recorded as the answer and the engine is launching
+  // the executor again with it: nobody is waited on any more.
   answered: "info",
 };
 
@@ -127,7 +129,7 @@ const STATUS_TONE: Record<ExecutorStatus, "success" | "warning" | "danger" | "in
 const AWAITING: ExecutorStatus[] = ["awaiting_clarification", "reseed"];
 
 /**
- * A live projection entry as the run it is.
+ * A live projection entry as the executor's row it stands for.
  *
  * The fields the projection has never held are left EMPTY rather than guessed:
  * a placement of `""` is "this node has not written the row yet", and the
@@ -140,15 +142,15 @@ function fromLiveBox(box: ExecutorEntry): ExecutorRow {
     agent_handle: box.agent_handle,
     role: box.role,
     // The live projection types its status as a plain string because it
-    // mirrors whatever the run reported; it is the same vocabulary.
+    // mirrors whatever the executor reported; it is the same vocabulary.
     status: box.status as ExecutorStatus,
     coding_agent: box.coding_agent,
     ...(box.provider_key ? { provider_key: box.provider_key } : {}),
     ...(box.model ? { model: box.model } : {}),
     placement: "",
     // THE BODY AS THE PROJECTION SENT IT: absent where the engine withheld it
-    // from this reader, who is told so (`body_withheld`) rather than shown a
-    // run with no task.
+    // from this reader, who is told so (`body_withheld`) rather than shown an
+    // executor with no task.
     ...(box.task !== undefined ? { task_description: box.task } : {}),
     ...(box.question !== undefined ? { question: box.question } : {}),
     question_context: box.question_context,
@@ -178,8 +180,8 @@ function fromLiveBox(box: ExecutorEntry): ExecutorRow {
  * branch, the owner and the pause deadline the projection never held, and it
  * is the only one that survives the box being reclaimed. A live entry the
  * store has not caught up with still belongs on screen, which is the other
- * half — a run that started two seconds ago is exactly what somebody watching
- * this screen is watching for.
+ * half — an executor that launched two seconds ago is exactly what somebody
+ * watching this screen is watching for.
  *
  * Exported because Live now draws the same rows from the same two sources:
  * two screens folding "what is in a box" their own way is how they come to
@@ -198,13 +200,13 @@ export function mergeRuns(durable: ExecutorRow[], live: ExecutorEntry[]): Execut
 }
 
 /**
- * What to call one coding run in a header, which always needs a word in the
+ * What to call one executor in a header, which always needs a word in the
  * slot — the page's, the peek's and Live now's alike, so they cannot drift. A
  * task the engine withheld from this reader says so: "no task was recorded"
- * about a run whose task the reader may not read is a claim about the run.
+ * about an executor whose task the reader may not read is a claim about it.
  *
- * The placeholder is deliberately NOT what this screen publishes as the run's
- * label: see the `usePageLabels` call below.
+ * The placeholder is deliberately NOT what this screen publishes as the
+ * executor's label: see the `usePageLabels` call below.
  */
 export function runTitle(run: ExecutorRow): string {
   if (run.task_description) return run.task_description;
@@ -212,13 +214,13 @@ export function runTitle(run: ExecutorRow): string {
 }
 
 /**
- * The facts a run is recognised by, in ONE order.
+ * The facts an executor is recognised by, in ONE order.
  *
- * The page and the rail read this same function, because a reader who peeks a
- * run and then opens it must not have to re-learn where each fact sits. The
- * STATUS is deliberately not among them: it is the header's own pill, where
- * the tone carries it — spelled once in colour and again in a list, it reads
- * as two different facts about one run.
+ * The page and the rail read this same function, because a reader who peeks
+ * an executor and then opens it must not have to re-learn where each fact
+ * sits. The STATUS is deliberately not among them: it is the header's own
+ * pill, where the tone carries it — spelled once in colour and again in a
+ * list, it reads as two different facts about one executor.
  */
 function runFacts(run: ExecutorRow, nameOf: NameOf): Fact[] {
   return [
@@ -226,20 +228,20 @@ function runFacts(run: ExecutorRow, nameOf: NameOf): Fact[] {
       label: "Seat",
       // THE SEAT'S NAME, LINKED, rather than a chip: a fact wraps inside its
       // two-line clamp, and a chip is one line cut at the track's edge — the
-      // seat a run belongs to read "Agent Fronten…" on a page with room for
-      // it three times over. An agent seat by construction: the engine never
-      // runs a human seat, so a coding run is always an agent's.
+      // seat an executor belongs to read "Agent Fronten…" on a page with room
+      // for it three times over. An agent seat by construction: the engine
+      // never runs a human seat, so an executor is always an agent's.
       value: nameOf(run.agent_handle) || run.role,
       path: run.agent_handle ? ["company", "org", "seats", run.agent_handle] : undefined,
     },
     { label: "Runs in", value: run.placement },
     { label: "Coding agent", value: run.coding_agent },
-    // THE MEMBER THE JOB WAS LAUNCHED ON, and its model: a fallback at launch
-    // runs it on an entry other than the chain's head, and which entry's plan a
-    // long run is spending is the first thing an admin watching it asks. The
-    // entry is the company's configuration, which the engine sends an admin
-    // alone; every other reader is sent the model, the run's own fact, and is
-    // told that rather than nothing.
+    // THE MEMBER IT WAS LAUNCHED ON, and its model: a fallback at launch runs
+    // it on an entry other than the chain's head, and which entry's plan a
+    // long launch is spending is the first thing an admin watching it asks.
+    // The entry is the company's configuration, which the engine sends an
+    // admin alone; every other reader is sent the model, the executor's own
+    // fact, and is told that rather than nothing.
     {
       label: "Launched on",
       value: run.provider_key ? (
@@ -253,8 +255,8 @@ function runFacts(run: ExecutorRow, nameOf: NameOf): Fact[] {
     },
     { label: "Branch", value: run.branch ? <InlineCode>{run.branch}</InlineCode> : "" },
     // NOT "up / reclaimed" as a plain word pair: whether the box still exists
-    // is the difference between a run somebody can answer and a run whose work
-    // is gone, and `FactLine` drops a fact whose value is empty — so this one
+    // is the difference between an executor somebody can answer and one whose
+    // work is gone, and `FactLine` drops a fact whose value is empty — so this one
     // is always present and always says which.
     { label: "Box", value: run.box_exists ? "up" : "reclaimed" },
   ];
@@ -263,7 +265,7 @@ function runFacts(run: ExecutorRow, nameOf: NameOf): Fact[] {
 /**
  * The engine's own status word, toned.
  *
- * Exported for the same reason [mergeRuns] is: Live now draws these runs too,
+ * Exported for the same reason [mergeRuns] is: Live now draws these executors too,
  * and a second spelling of one status is how one screen comes to call a
  * `reseed` unremarkable while this one calls it a caution.
  */
@@ -279,7 +281,7 @@ export function RunStatus({ status }: { status: ExecutorStatus }) {
  * When the hold on the box runs out, or null when nothing is holding it.
  *
  * BOTH HALVES OR NEITHER. A TTL with no `paused_at` names no instant, and a
- * `paused_at` carrying a zero TTL is a run the engine parked with no hold at
+ * `paused_at` carrying a zero TTL is an executor the engine parked with no hold at
  * all rather than one held for no time — the zero is a missing setting, not a
  * deadline in the past, and rendering it as one would tell a reader the box
  * was reclaimed in 1970.
@@ -291,19 +293,20 @@ function pauseDeadline(run: ExecutorRow): string | null {
 }
 
 /**
- * What a parked run is waiting for, from whom — and the answer to it.
+ * What a parked executor is waiting for, from whom — and the answer to it.
  *
  * ONE COPY for the page and the rail: the sentences below are the whole of
- * what a reader can DO about a paused run, and two spellings of them is how
- * one of them comes to describe a chat reply path the run does not have.
+ * what a reader can DO about a paused executor, and two spellings of them is
+ * how one of them comes to describe a chat reply path it does not have.
  *
  * # Answered here, whatever launched it
  *
- * A run is answered by its TURN (`answer_executor`), which reaches a run whatever
- * woke the turn that launched it. The banner used to say how to answer and
- * offer nothing to press: a run a schedule tick or a task assignment launched
- * stored no conversation at all, so "the run resumes when the coordinator
- * carries an answer back" described a door with no handle on it. The chat
+ * An executor is answered by its TURN (`answer_executor`), which reaches it
+ * whatever woke the turn that launched it. The banner used to say how to
+ * answer and offer nothing to press: an executor a schedule tick or a task
+ * assignment launched stored no conversation at all, so "the run resumes when
+ * the coordinator carries an answer back" described a door with no handle on
+ * it. The chat
  * path is still named where there is one, as the other way in.
  */
 export function AwaitingBanner({
@@ -328,13 +331,13 @@ export function AwaitingBanner({
             empty={
               questionWithheld(run)
                 ? "Waiting on a question you can’t see."
-                : "The run asked a question."
+                : "The executor asked a question."
             }
           />
         </strong>
         <span className="t-caption">
-          {/* WHO IT IS PUT TO, as the engine resolved it when the run parked
-              — never re-derived here from the coding agent's own label. */}
+          {/* WHO IT IS PUT TO, as the engine resolved it when the executor
+              parked — never re-derived here from the coding agent's own label. */}
           {audience.length > 0
             ? `Put to ${andList(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
             : "Anyone can answer."}
@@ -344,10 +347,10 @@ export function AwaitingBanner({
             : ""}
           {/* THE HOLD IS THE DEADLINE, and a passed one is the fact that
               explains the rest of the screen: the box is reaped, the work in
-              it is gone, and answering now re-seeds the run from the question
-              alone. A deadline rendered as "in -3m" would bury that. */}
+              it is gone, and answering now launches the executor afresh from
+              the question alone. A deadline rendered as "in -3m" would bury that. */}
           {expired
-            ? ` The hold expired at ${fmtDateTime(deadline)}. Answering now restarts the run.`
+            ? ` The hold expired at ${fmtDateTime(deadline)}. Answering now restarts the work.`
             : ""}
         </span>
         <span className="row gap-2">
@@ -358,7 +361,7 @@ export function AwaitingBanner({
   );
 }
 
-/** What the run is doing, for a run nobody is being waited on by. */
+/** What the executor is doing, for one nobody is being waited on by. */
 function doingLine(run: ExecutorRow): string {
   switch (run.status) {
     case "launching":
@@ -375,7 +378,7 @@ function doingLine(run: ExecutorRow): string {
 }
 
 /**
- * What a bridged run called, in one line.
+ * What an executor called over the bridge, in one line.
  *
  * THE COUNT, NOT THE LOG. The rail answers "is this the one I meant, and what
  * is it doing"; two hundred tool calls with their arguments and results is the
@@ -383,7 +386,7 @@ function doingLine(run: ExecutorRow): string {
  */
 function BridgeSummary({ run }: { run: ExecutorRow }) {
   // NOT KNOWN IS NOT NONE — see [BridgeLog]: absent is a log this reader was
-  // not sent, and an empty one is a run that has called nothing, said so.
+  // not sent, and an empty one is an executor that has called nothing, said so.
   if (run.bridge_calls === undefined) return null;
   const calls = run.bridge_calls;
   if (calls.length === 0) {
@@ -413,21 +416,22 @@ function BridgeSummary({ run }: { run: ExecutorRow }) {
 }
 
 /**
- * One coding run, beside the list it was found in.
+ * One executor, beside the list it was found in.
  *
- * # It asks for its own run
+ * # It asks for its own row
  *
  * From the durable record, merged with the live projection exactly as the list
  * does — because a `peek=run:` arrives from a pasted URL as often as from a
- * row, and the two sources answer different halves: the projection has the run
- * that started a second ago, and the store has the one whose box is gone.
+ * row, and the two sources answer different halves: the projection has the
+ * executor that launched a second ago, and the store has the one whose box is
+ * gone.
  *
  * # What it answers
  *
  * The question it is parked on, the box it is parked in, and who is being
- * waited on — in that order, because a run nobody is waiting on is a run
- * nobody needs to open, and a run parked on a question is the reason this
- * screen exists at all.
+ * waited on — in that order, because an executor nobody is waiting on is one
+ * nobody needs to open, and an executor parked on a question is the reason
+ * this screen exists at all.
  */
 export function RunPeek({ turnId }: { turnId: string }) {
   const now = useNow();
@@ -445,16 +449,17 @@ export function RunPeek({ turnId }: { turnId: string }) {
 
   return (
     <>
-      {loading && !data && <Skeleton variant="text" rows={6} label="Loading the run" />}
+      {loading && !data && <Skeleton variant="text" rows={6} label="Loading the executor" />}
       <QueryState error={error} refusal={refusal} loading={loading}>
-        {/* NOT AN EMPTY RAIL. A turn id that matches no run is a hand-edited
-            URL or a run swept past the retention horizon, and naming which
-            turn resolved to nothing is more use than a header over no run. */}
+        {/* NOT AN EMPTY RAIL. A turn id that matches no executor is a
+            hand-edited URL or one swept past the retention horizon, and naming
+            which turn resolved to nothing is more use than a header over no
+            executor. */}
         {data && !run && (
           <EmptyState
             size="compact"
             icon={<SquareTerminalGlyph size={32} />}
-            title="No coding run in flight for this turn"
+            title="No executor in flight for this turn"
             description="It may have finished. Its output is on the turn."
           />
         )}
@@ -490,7 +495,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
                         {
                           label: "Owner node",
                           value: run.owner,
-                          title: "the node that holds this run's record",
+                          title: "the node that holds the executor's record",
                         },
                         { label: "Started", value: fmtDateTime(run.started_at) },
                         { label: "Updated", value: fmtDateTime(run.updated_at) },
@@ -523,8 +528,8 @@ export function Executors() {
   const seatBadge = useSeatBadgeOf();
   const live = useExecutors();
   const now = useNow();
-  // Durable runs have no push behind them, so this is the one place a poll is
-  // correct — and it is slow, because a run's lifetime is minutes.
+  // The durable rows have no push behind them, so this is the one place a poll
+  // is correct — and it is slow, because a launch's lifetime is minutes.
   const { data, loading, error, refusal } = useQuery("executors", undefined, {
     pollMs: RUNS_POLL_MS,
   });
@@ -533,8 +538,8 @@ export function Executors() {
 
   // THE ORDER `[` AND `]` WALK is the one on screen, which is this list sorted
   // as the reader left it. Published from the merged rows rather than from the
-  // query's own, so the stepper cannot walk past a live run the store has not
-  // written yet — the rail would open on a run this list does not show.
+  // query's own, so the stepper cannot walk past a live executor the store has
+  // not written yet — the rail would open on one this list does not show.
   usePeekNeighbours(
     useMemo(() => rows.map((r) => ({ kind: "run" as const, id: r.turn_id })), [rows]),
   );
@@ -547,7 +552,7 @@ export function Executors() {
       // THE GRID HANDS THIS BOTH EVENTS. `peekClickHandler` is the frame's one
       // copy of "which clicks mean elsewhere" and reads a mouse event — ⌘,
       // ctrl, shift, alt and the middle button belong to the browser, which is
-      // what keeps the row a real link to the run's page. The `enter` chord
+      // what keeps the row a real link to the executor's page. The `enter` chord
       // carries no button at all and is never "open elsewhere".
       if (!("button" in e)) {
         go();
@@ -572,7 +577,7 @@ export function Executors() {
               </Tag>
             )}
             {waiting > 0 && (
-              <Tag variant="warning">{plural(waiting, "run")} waiting on a person</Tag>
+              <Tag variant="warning">{plural(waiting, "executor")} waiting on a person</Tag>
             )}
           </>
         }
@@ -590,10 +595,10 @@ export function Executors() {
           icon={<CircleQuestionMarkGlyph size="xs" />}
           label="Waiting on an answer"
           value={waiting}
-          sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
+          sub={waiting ? "it cannot continue until someone replies" : "nothing is blocked"}
         />
         {/* NO "FAILED" TILE, and its absence is the honest answer rather
-            than a gap. A settled run has no record, so a count of failed
+            than a gap. A settled executor has no row, so a count of failed
             rows is structurally zero on every company for ever — and a tile
             reading "Failed 0" tells an operator nothing failed, when what is
             true is that this is not where failures are recorded. They are on
@@ -604,11 +609,11 @@ export function Executors() {
           icon={<PackageGlyph size="xs" />}
           label="In the record"
           value={rows.length}
-          sub="every run the fleet still holds"
+          sub="every executor the fleet still holds a row for"
         />
       </StatGroup>
 
-      {loading && !rows.length && <Skeleton variant="text" rows={4} label="Loading runs" />}
+      {loading && !rows.length && <Skeleton variant="text" rows={4} label="Loading executors" />}
       <QueryState
         error={error}
         refusal={refusal}
@@ -617,8 +622,8 @@ export function Executors() {
           rows.length
             ? undefined
             : {
-                title: "No coding run is in flight",
-                hint: "Finished runs are on their turn’s trace.",
+                title: "No executor is in flight",
+                hint: "What a finished one did is on its turn’s trace.",
               }
         }
       >
@@ -637,7 +642,7 @@ export function Executors() {
                 sortValue: (r) => r.status,
                 // A BADGE, NOT `TableStatusCell`: the engine's seven words are a
                 // vocabulary rather than two lifecycle states, and this is the
-                // pill the Inbox and Live now draw for the same run — a third
+                // pill the Inbox and Live now draw for the same executor — a third
                 // rendering of one status is a third thing to keep in step.
                 cell: (r) => <RunStatus status={r.status} />,
               },
@@ -646,14 +651,14 @@ export function Executors() {
                 header: "Seat",
                 // THE TWO COLUMNS A ROW IS RECOGNISED BY keep a width beside a
                 // peek; the three that describe the box give way first — see
-                // DataGrid's `fitColumns`. At 1280 with a run open they were
+                // DataGrid's `fitColumns`. At 1280 with an executor open they were
                 // drawn one letter wide.
                 floor: "9rem",
                 sortValue: (r) => r.role || r.agent_handle,
                 // NOT `linkedSeat` or `SeatChip`: both are anchors and every row
                 // here is one, and an anchor inside an anchor is markup no
                 // browser agrees about. The seat is one ⌘-click away from the
-                // run's own page, where it is a link again.
+                // executor's own page, where it is a link again.
                 cell: (r) =>
                   r.role || r.agent_handle ? (
                     <TableEntityCell {...plainSeat({ ...seatBadge(r.role || r.agent_handle) })} />
@@ -665,7 +670,7 @@ export function Executors() {
                 key: "task",
                 header: "Task",
                 floor: "10rem",
-                // A RUN WITH NO TASK RECORDED (or one withheld) sorts last.
+                // AN EXECUTOR WITH NO TASK RECORDED (or one withheld) sorts last.
                 sortValue: (r) => r.task_description || null,
                 cell: (r) =>
                   r.task_description ? (
@@ -703,8 +708,8 @@ export function Executors() {
                   ) : (
                     // NOT "—" FOR A LIVE ROW'S SAKE: the projection carries no
                     // placement, so this is genuinely "the store has not
-                    // written this run yet" rather than a run with nowhere to
-                    // run, and the dash says the first on hover.
+                    // written this row yet" rather than an executor with
+                    // nowhere to run, and the dash says the first on hover.
                     <EmptyValue label="Not recorded yet" />
                   ),
               },
@@ -745,15 +750,15 @@ function useNameOf(): NameOf {
   return useMemo(() => nameOfIn(indexOrg(org)), [org]);
 }
 
-/** The statuses whose job is running now, so its output is asked of its owner. */
+/** The statuses whose launch is running now, so its output is asked of its owner. */
 const RUNNING: ExecutorStatus[] = ["launching", "running"];
 
 /**
- * The launches a turn's executor collected — one `executor_collected` per job,
- * oldest first.
+ * The launches a turn's executor collected — one `executor_collected` per
+ * launch, oldest first.
  *
- * WHAT A SETTLED RUN LEAVES. The run's record is deleted once its box is
- * reclaimed, so after collection the only account of what the job did is the
+ * WHAT A SETTLED EXECUTOR LEAVES. Its row is deleted once its box is
+ * reclaimed, so after collection the only account of what a launch did is the
  * record its collection published, with the transcript on it.
  */
 export function collectedRuns(events: readonly EventRecord[] | undefined): PhaseRecord[] {
@@ -765,21 +770,21 @@ export function collectedRuns(events: readonly EventRecord[] | undefined): Phase
 }
 
 /**
- * One coding run, on its own page.
+ * One executor, on its own page.
  *
  * # Two records, one per half of its life
  *
  * The durable row (`executors`, merged with the live projection exactly as
- * the board does) while the run is in flight — its status, its box, the
+ * the board does) while the executor is in flight — its status, its box, the
  * question it is parked on and the bridge's tool log — and each launch's own
- * `executor_collected` once it is collected. The page reads both, because a
- * run page is reached from a link long after the run it names has settled,
- * and "no such run" is the wrong thing to tell somebody holding a link to a
- * run that finished.
+ * `executor_collected` once it is collected. The page reads both, because an
+ * executor's page is reached from a link long after the turn it names has
+ * settled, and "no such executor" is the wrong thing to tell somebody holding
+ * a link to one that finished.
  *
- * THE TURN IS ASKED AGAIN when the run's status moves: a collected job's own
- * record lands on the turn, and the row leaving the board is the moment it
- * does.
+ * THE TURN IS ASKED AGAIN when the executor's status moves: a collected
+ * launch's own record lands on the turn, and the row leaving the board is the
+ * moment it does.
  */
 export function ExecutorScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
@@ -789,7 +794,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
   const viewer = useViewer();
   const board = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   // THE TURN IS THE COMPANY-WIDE TRAIL, an admin's question: everybody else
-  // reads the run's own row, and nothing is asked that would be refused.
+  // reads the executor's own row, and nothing is asked that would be refused.
   const asksTurn = viewer.admin;
   const turn = useQuery("turn", { turn_id: turnId }, { enabled: asksTurn });
 
@@ -808,26 +813,26 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
     refetchTurn();
   }, [status, refetchTurn]);
 
-  // WHAT THE RUN IS CALLED, for the breadcrumb, the browser tab and the
+  // WHAT THE EXECUTOR IS CALLED, for the breadcrumb, the browser tab and the
   // palette's recents — the task only, never the header's "No task was
-  // recorded", which two runs would wear as two identical recents rows. A
-  // collected run's row is gone, and its task is on the `executor_launched`
-  // its launch published, which the turn holds.
+  // recorded", which two executors would wear as two identical recents rows.
+  // A collected executor's row is gone, and its task is on the
+  // `executor_launched` its launch published, which the turn holds.
   const task = run?.task_description || launchedTask(turn.data?.events);
   usePageLabels(task ? { [turnId]: task } : {});
 
   // WHO IS READING IS PART OF WHAT THE PAGE WAITS FOR: drawn before the
-  // viewer answered, the page mounted the run's live output, went back to its
-  // skeleton once an admin's turn read began, and asked the output again for
-  // a job the first read had moved off.
+  // viewer answered, the page mounted the executor's live output, went back to
+  // its skeleton once an admin's turn read began, and asked the output again
+  // for a launch the first read had moved off.
   const loading =
     (board.loading && !board.data) || viewer.loading || (asksTurn && turn.loading && !turn.data);
   const settled = !run && collected.length > 0;
   const last = collected[collected.length - 1];
-  // TWO READS, AND "NONE" NEEDS BOTH. The page is drawn from the run record
-  // (`executors`) and the turn (`turn`), and only when BOTH answered does
-  // finding the run in neither mean there is none. It used to say "neither
-  // holds a coding run" whenever one of them failed, which is a claim about a
+  // TWO READS, AND "NONE" NEEDS BOTH. The page is drawn from the executor's
+  // record (`executors`) and the turn (`turn`), and only when BOTH answered
+  // does finding the executor in neither mean there is none. It used to say
+  // "neither holds one" whenever one of them failed, which is a claim about a
   // record the page never read — "could not read" and "none" are opposite
   // answers, so a single failure is named rather than folded into either.
   const answered =
@@ -836,9 +841,9 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
   const unread =
     board.error && turn.error ? null : board.error ? "board" : turn.error ? "turn" : null;
   // THE HEADER SAYS WHAT THE BODY KNOWS. "No task was recorded" is a fact
-  // about a RUN whose launch carried no task, so it is only worn by one; a
-  // turn with no run is headed as having none, and a page still reading (or
-  // missing one of its two sources) claims neither.
+  // about an EXECUTOR whose launch carried no task, so it is only worn by one;
+  // a turn with no executor is headed as having none, and a page still reading
+  // (or missing one of its two sources) claims neither.
   const title = run
     ? runTitle(run)
     : task
@@ -846,10 +851,10 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
       : collected.length > 0
         ? "No task was recorded"
         : absent && answered
-          ? "No coding run"
-          : "Coding run";
+          ? "No executor"
+          : "Executor";
   const seat = run?.agent_handle || last?.role || "";
-  // THE TRACE the run belongs to: its row names it while it is in flight, and
+  // THE TRACE the executor belongs to: its row names it while it is in flight, and
   // the turn's own events do once it is collected.
   const traceId = run?.trace_id || turn.data?.events?.find((e) => e.trace_id)?.trace_id || "";
 
@@ -876,7 +881,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
               ? [
                   { label: "Seat", value: nameOf(seat) },
                   { label: "Coding agent", value: last?.codingAgent ?? "" },
-                  { label: "Jobs", value: String(collected.length) },
+                  { label: "Launches", value: String(collected.length) },
                 ]
               : []
         }
@@ -901,7 +906,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
           </>
         }
       />
-      {loading && <Skeleton variant="text" rows={6} label="Loading the run" />}
+      {loading && <Skeleton variant="text" rows={6} label="Loading the executor" />}
       <QueryState
         error={board.error && turn.error ? board.error : null}
         refusal={board.refusal}
@@ -910,22 +915,22 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
         {unread && (
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             {unread === "board"
-              ? "Couldn’t read the run record. Showing what the turn holds."
-              : "Couldn’t read the turn. Showing the run record."}
+              ? "Couldn’t read the executor’s record. Showing what the turn holds."
+              : "Couldn’t read the turn. Showing the executor’s record."}
           </Callout>
         )}
         {absent && answered && (
           <EmptyState
             icon={<SquareTerminalGlyph size={32} />}
-            title="No coding run for this turn"
+            title="No executor for this turn"
             description="The id may be wrong, or the turn is too old."
           />
         )}
         {run && AWAITING.includes(run.status) && (
           <AwaitingBanner run={run} now={now} nameOf={nameOf} />
         )}
-        {/* WHAT IT IS DOING, for a run nobody is being waited on by: a parked
-            run's banner above already says what it is waiting for. */}
+        {/* WHAT IT IS DOING, for an executor nobody is being waited on by: a
+            parked executor's banner above already says what it is waiting for. */}
         {run && !AWAITING.includes(run.status) && (
           <Card>
             <Card.Header icon={<SquareTerminalGlyph size="sm" />}>
@@ -933,17 +938,17 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
             </Card.Header>
             {run.body_withheld ? (
               // ITS OUTPUT IS THE SEAT'S TRAIL, asked only by a reader the
-              // engine sends the run's body to (`executor_tail` is decided as
+              // engine sends the executor's body to (`executor_tail` is decided as
               // the seat's trail is): everybody else is told what it is doing.
               <p className="t-body">
                 {doingLine(run)} {WITHHELD_WHY}
               </p>
             ) : RUNNING.includes(run.status) && run.launch_id ? (
-              // KEYED BY THE JOB: the row's launch moves to a later job on the
-              // same run, and that job's view starts empty rather than with
-              // the last job's output above it. A `replaced` answer reads the
-              // board again, so the page follows the job the row holds now
-              // rather than waiting out the board's poll.
+              // KEYED BY THE LAUNCH: the row's launch moves to a later one of
+              // the same executor, and that launch's view starts empty rather
+              // than with the last launch's output above it. A `replaced`
+              // answer reads the board again, so the page follows the launch
+              // the row holds now rather than waiting out the board's poll.
               <LiveOutput
                 key={`${run.turn_id}|${run.launch_id}`}
                 turnId={run.turn_id}
@@ -952,7 +957,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
                 onReplaced={board.refetch}
               />
             ) : RUNNING.includes(run.status) ? (
-              <span className="t-caption">Live output appears once the run is recorded.</span>
+              <span className="t-caption">Live output appears once the launch is recorded.</span>
             ) : (
               <p className="t-body">{doingLine(run)}</p>
             )}
@@ -973,7 +978,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
                     {
                       label: "Owner node",
                       value: run.owner,
-                      title: "the node that holds this run's record",
+                      title: "the node that holds the executor's record",
                     },
                     { label: "Started", value: fmtDateTime(run.started_at) },
                     { label: "Updated", value: fmtDateTime(run.updated_at) },
@@ -1012,7 +1017,7 @@ export function launchedTask(events: readonly EventRecord[] | undefined): string
 }
 
 /**
- * One collected job: what it delivered and what it said, off the
+ * One collected launch: what it delivered and what it said, off the
  * `executor_collected` record its collection published.
  */
 function CollectedRun({
@@ -1029,10 +1034,12 @@ function CollectedRun({
       <Card.Header
         icon={<SquareTerminalGlyph size="sm" />}
         className="card-head-stacked"
-        subtitle={`collected ${fmtDateTime(record.at)}${record.launchId ? ` · job ${record.launchId.slice(0, 8)}` : ""}`}
+        subtitle={`collected ${fmtDateTime(record.at)}${record.launchId ? ` · launch ${record.launchId.slice(0, 8)}` : ""}`}
         actions={record.failed ? <Tag variant="danger">failed</Tag> : undefined}
       >
-        <Card.Title>{of > 1 ? `What job ${ordinal} of ${of} did` : "What the run did"}</Card.Title>
+        <Card.Title>
+          {of > 1 ? `What launch ${ordinal} of ${of} did` : "What the executor did"}
+        </Card.Title>
       </Card.Header>
       <div className="col gap-3">
         <PropertiesRail
@@ -1052,9 +1059,9 @@ function CollectedRun({
                   label: "Tokens",
                   value: record.totalTokens > 0 ? fmtCount(record.totalTokens) : "",
                 },
-                // ONLY A JOB THAT FAILED HAS ONE, so only its row carries the
-                // property — a dash under "Error" on every run that worked
-                // reads as a field somebody forgot to fill.
+                // ONLY A LAUNCH THAT FAILED HAS ONE, so only its row carries
+                // the property — a dash under "Error" on every launch that
+                // worked reads as a field somebody forgot to fill.
                 ...(record.error ? [{ label: "Error", value: record.error }] : []),
               ],
             },
@@ -1067,9 +1074,15 @@ function CollectedRun({
           </div>
         )}
         {record.transcript ? (
-          <CodeBlock plain selectable copyable label="What the run did" code={record.transcript} />
+          <CodeBlock
+            plain
+            selectable
+            copyable
+            label="What the executor did"
+            code={record.transcript}
+          />
         ) : (
-          <span className="t-caption">The run&rsquo;s record carries no transcript.</span>
+          <span className="t-caption">The launch&rsquo;s record carries no transcript.</span>
         )}
       </div>
     </Card>
@@ -1077,20 +1090,20 @@ function CollectedRun({
 }
 
 /**
- * What a bridged run actually called.
+ * What an executor actually called over the bridge.
  *
  * THE ONE TOOL LOG WITH NOWHERE ELSE TO LIVE, which is why the engine keeps it
- * on the run's own durable row: a native tool loop's calls sit on a surface in
- * memory until the turn writes them, while a bridged run's are made by a
- * process outside the engine, minutes or hours apart and possibly across a
- * restart. Nothing read it, so a resumed run's whole tool log was answerable
- * and unaskable — and "it called nothing" is exactly the shape the delivery
- * check reads as a turn that did not act.
+ * on the executor's own durable row: a native tool loop's calls sit on a
+ * surface in memory until the turn writes them, while an executor's are made
+ * by a process outside the engine, minutes or hours apart and possibly across
+ * a restart. Nothing read it, so a resumed executor's whole tool log was
+ * answerable and unaskable — and "it called nothing" is exactly the shape the
+ * delivery check reads as a turn that did not act.
  *
- * EVERY RUN IS BRIDGED, so an empty log is a FACT and is said: a run that has
- * called nothing — not even its submission — is exactly the run a reader
- * opened this page to understand, and a panel that vanished for it read as a
- * page with nothing to show. ABSENT is different: a log this reader was not
+ * EVERY EXECUTOR IS BRIDGED, so an empty log is a FACT and is said: an
+ * executor that has called nothing — not even its submission — is exactly the
+ * one a reader opened this page to understand, and a panel that vanished for
+ * it read as a page with nothing to show. ABSENT is different: a log this reader was not
  * sent (a live entry whose row is not read yet, a body withheld from them)
  * draws no panel, because "made no calls" would be a claim nobody can make.
  */
@@ -1099,8 +1112,8 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
   const calls = run.bridge_calls;
   const elided = run.bridge_calls_elided ?? 0;
   // AN EMPTY LOG IS AN EMPTY LOG, elision included: the engine drops the
-  // MIDDLE of a bounded list and keeps the first and last hundred, so a run
-  // with calls elided always still has calls.
+  // MIDDLE of a bounded list and keeps the first and last hundred, so an
+  // executor with calls elided always still has calls.
   if (calls.length === 0) {
     return (
       <Card>
@@ -1127,9 +1140,9 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
       <div className="col gap-2">
         {elided > 0 && (
           // SAID OUT LOUD. The engine bounds the log at 200 and drops the
-          // MIDDLE rather than the start, because how a run began and how it
-          // ended are what explain it — and a log that silently skips is a
-          // log that lies about what the run did.
+          // MIDDLE rather than the start, because how an executor began and how
+          // it ended are what explain it — and a log that silently skips is a
+          // log that lies about what it did.
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             {plural(elided, "call")} from the middle {elided === 1 ? "isn’t" : "aren’t"} shown.
           </Callout>
@@ -1145,8 +1158,8 @@ export function BridgeLog({ run }: { run: ExecutorRow }) {
 }
 
 /**
- * What a run with an empty bridge log is said to have done: nothing YET while
- * its job may still be working, and nothing at all once it has stopped.
+ * What an executor with an empty bridge log is said to have done: nothing YET
+ * while its launch may still be working, and nothing at all once it has stopped.
  */
 function noCallsWords(run: ExecutorRow): string {
   return run.status === "launching" || run.status === "running"
@@ -1159,8 +1172,8 @@ function noCallsWords(run: ExecutorRow): string {
  *
  * INSIDE the lazy disclosure, and that placement is the point. `useMemo` in
  * the row above would run for every row the moment the log rendered, because
- * `lazy` defers a disclosure's CHILDREN and not its parent's body — so a run
- * at the engine's bound of two hundred calls parsed every argument and every
+ * `lazy` defers a disclosure's CHILDREN and not its parent's body — so an
+ * executor at the engine's bound of two hundred calls parsed every argument and every
  * result, results included, before the reader opened one of them.
  */
 function BridgeCallRecords({ call }: { call: BridgeCall }) {
@@ -1220,7 +1233,7 @@ function BridgeCallRecords({ call }: { call: BridgeCall }) {
 /**
  * One bridged call, opened.
  *
- * ITS OWN COMPONENT so the indenting below can be memoised: a run's log runs
+ * ITS OWN COMPONENT so the indenting below can be memoised: an executor's log runs
  * to two hundred of these, and `useMemo` is not available inside a `map`.
  */
 function BridgeCallRow({ call }: { call: BridgeCall }) {
@@ -1238,7 +1251,7 @@ function BridgeCallRow({ call }: { call: BridgeCall }) {
       // trigger in a real heading by default, which is right for this screen's
       // own cards and wrong for a tool call: the engine bounds this log at two
       // hundred, so the default puts two hundred headings into the document
-      // outline of one run. The phase card reached the same conclusion about
+      // outline of one executor's page. The phase card reached the same conclusion about
       // its own rows.
       headingLevel="none"
       // MOUNTED ON OPENING, for the reason uilet gives the flag: a closed row

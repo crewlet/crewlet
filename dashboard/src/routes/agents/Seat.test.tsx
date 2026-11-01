@@ -2539,7 +2539,7 @@ test("a parked run is answered from its seat with its context and options", asyn
     ]),
   );
   await settle();
-  expect(screen.getByText(/A coding run is waiting on a question:/).textContent).toContain(
+  expect(screen.getByText(/Its executor is waiting on a question:/).textContent).toContain(
     "Which retry ceiling should the client use?",
   );
   fireEvent.click(screen.getByRole("button", { name: "Answer" }));

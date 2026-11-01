@@ -1058,8 +1058,8 @@ func TestABoxServerWithheldForAMintedCredentialIsSaidAtInfo(t *testing.T) {
 		MCP: org.RoleSandboxMCP{Servers: []string{"gitlab"}}})
 	withheld := logs.records("sandbox_mcp_server_withheld", "swe")
 	if len(withheld) != 1 || withheld[0]["level"] != "INFO" ||
-		!strings.Contains(withheld[0]["detail"].(string), "a coding run launched once the seal") {
-		t.Errorf("sandbox_mcp_server_withheld = %v: want one line at INFO saying which run "+
+		!strings.Contains(withheld[0]["detail"].(string), "a launch made once the seal") {
+		t.Errorf("sandbox_mcp_server_withheld = %v: want one line at INFO saying which launch "+
 			"is given the server", withheld)
 	}
 }

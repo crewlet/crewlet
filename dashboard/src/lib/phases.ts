@@ -427,7 +427,7 @@ export interface PhaseRecord {
   eventId: string;
   /**
    * Where the TURN this live call belongs to is, when the seat's own turn is
-   * that turn — `parked` while a detached coding run holds it — and "" on a
+   * that turn — `parked` while its executor holds it from its box — and "" on a
    * finished record or a call whose turn the seat has moved past.
    *
    * ON THE RECORD because the card that draws a live call's staleness has no
@@ -1042,7 +1042,7 @@ export function streamedPhases(
 }
 
 /**
- * How long a coding run's transcript is, as its Activity fold counts it.
+ * How long a launch's transcript is, as its Activity fold counts it.
  *
  * NEVER THE KEPT COUNT AS THE WHOLE. A long transcript reaches the record as
  * its start and its end with one note line between them, so the lines on the
