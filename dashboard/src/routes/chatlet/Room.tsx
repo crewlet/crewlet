@@ -46,7 +46,7 @@ import { usePageCoverage, usePageInView } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { ActivityLine, Button, Callout, Skeleton } from "@crewlethq/ui";
-import { CompassGlyph } from "@crewlethq/icons/glyphs";
+import { CompassGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
 import { useChatRead } from "~/lib/chatLive.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useAct } from "~/lib/useAct.ts";
@@ -75,6 +75,7 @@ import { useChatFrame, useChatNav, useOpenRoom } from "./nav.tsx";
 import { coverageOf, PAGE } from "./page.ts";
 import { useChatPeople } from "./people.ts";
 import { ARCHIVED, RoomScopeProvider, useRoomScope } from "./scope.tsx";
+import { useRoomStar } from "./star.ts";
 import { reportFor, type StartReport } from "./start.ts";
 import { StartNote } from "./StartNote.tsx";
 import { Transcript, type EntryUnread, type TranscriptHandle } from "./Transcript.tsx";
@@ -392,11 +393,17 @@ function Conversation({ channelID }: { channelID: string }) {
  * where it would not (the org chart keeps a team's room, a private room is
  * joined by being added). A room not yet read, or one this build cannot
  * classify, says that.
+ *
+ * A TEAM'S ROOM SOMEBODY OUTSIDE THE TEAM IS READING offers a star in place of
+ * the join it cannot take: its membership is the org chart's, and a starred
+ * room the reader may read stays in their Rooms menu, which is how they come
+ * back to it without Browse rooms.
  */
 function JoinBar({ channelID, where }: { channelID: string; where: string }) {
   const scope = useRoomScope();
   const nav = useChatNav();
   const open = useOpenRoom();
+  const star = useRoomStar(channelID);
   const join = useAct("join_channel");
   const [report, setReport] = useState<StartReport | null>(null);
   const channel = scope.channel;
@@ -464,6 +471,25 @@ function JoinBar({ channelID, where }: { channelID: string; where: string }) {
           {join.busy ? "Joining" : "Join room"}
         </WriteButton>
       </>
+    );
+  } else if (standing && !standing.member && standing.kind === "unit" && !scope.rules.post) {
+    words = (
+      <>
+        {membershipNote(standing)}{" "}
+        {star.starred ? "It’s in your Starred rooms." : "Star it to keep it in your Rooms menu."}
+      </>
+    );
+    actions = star.starred ? null : (
+      <Button
+        size="small"
+        variant="secondary"
+        leadingIcon={<StarGlyph size="sm" />}
+        disabledReason={star.held || undefined}
+        title={star.held || undefined}
+        onClick={() => star.set(true)}
+      >
+        Add to Starred
+      </Button>
     );
   } else {
     // WHY THERE IS NO BUTTON, said rather than left to an absence: a person

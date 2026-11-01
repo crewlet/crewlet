@@ -152,7 +152,8 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   "routes/chatlet/Room.tsx": {
     why:
       "a room's Join bar in place of its composer, for a room the reader may read and is " +
-      "not in (join_channel), the room's own refusal said once above the transcript",
+      "not in (join_channel), or the star a team's room offers in its place, the room's " +
+      "own refusal said once above the transcript",
     suite: "routes/chatlet/Access.test.tsx",
   },
   "routes/chatlet/scope.tsx": {
@@ -194,7 +195,9 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     suite: "routes/chatlet/Dialogs.test.tsx",
   },
   "routes/chatlet/Details.tsx": {
-    why: "a room's details pane: Leave room (leave_channel)",
+    why:
+      "a room's details pane: Leave room (leave_channel), and each agent member's " +
+      "gets-every-message switch (set_channel_members), held with the room's sentence",
     suite: "routes/chatlet/Details.test.tsx",
   },
   "routes/chatlet/notify.tsx": {

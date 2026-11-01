@@ -104,6 +104,12 @@ export interface MessageRules {
    * on an archived room, and only from inside the room.
    */
   members: string;
+  /**
+   * `set_channel_members`, for whether an agent gets every message: the
+   * same rule as `members`, said for following. A unit's room says who
+   * follows it, which is the chart's.
+   */
+  following: string;
 }
 
 /** Why a unit's room takes no members by hand. */
@@ -115,6 +121,13 @@ export const DIRECT_MEMBERS =
 
 /** Why a room takes no members from somebody outside it. */
 export const OUTSIDE_MEMBERS = "Join the room to add people to it.";
+
+/** Why a unit's room's agents follow it as they do. */
+export const ORG_FOLLOWING =
+  "The org chart sets this. A team’s own agents get every message in its room, and agents from the teams under it answer when named.";
+
+/** Why a room takes no change to who follows it from somebody outside it. */
+export const OUTSIDE_FOLLOWING = "Join the room to change which agents get every message.";
 
 /**
  * The room's rules for each change, read off its detail.
@@ -138,6 +151,7 @@ export function roomRules(
       remove: waiting,
       settings: waiting,
       members: waiting,
+      following: waiting,
     };
   }
   const archived = !!channel.archived_at;
@@ -150,18 +164,20 @@ export function roomRules(
     edit: unknown ? NEWER_ROOM : "",
     remove: unknown ? NEWER_ROOM : "",
     settings: unknown ? NEWER_ROOM : outsider ? OUTSIDER : "",
-    members: unknown
-      ? NEWER_ROOM
-      : channel.kind === "unit"
-        ? ORG_MEMBERS
-        : isDirect(channel.kind)
-          ? DIRECT_MEMBERS
-          : archived
-            ? ARCHIVED
-            : !inside
-              ? OUTSIDE_MEMBERS
-              : "",
+    members: membership(ORG_MEMBERS, OUTSIDE_MEMBERS),
+    following: membership(ORG_FOLLOWING, OUTSIDE_FOLLOWING),
   };
+
+  // ONE RULE FOR A ROOM'S MEMBERSHIP, said for the change it holds: adding
+  // people and moving who follows the room are both writes of the membership,
+  // refused for the same rooms, and only the sentences differ.
+  function membership(org: string, outside: string): string {
+    if (unknown) return NEWER_ROOM;
+    if (channel?.kind === "unit") return org;
+    if (channel && isDirect(channel.kind)) return DIRECT_MEMBERS;
+    if (archived) return ARCHIVED;
+    return inside ? "" : outside;
+  }
 }
 
 /**
@@ -264,11 +280,13 @@ function OwnScope({
   // nobody should have to open to find that out.
   const settingsAccess = useWriteAccess("update_channel");
   const membersAccess = useWriteAccess("add_channel_members");
+  const followingAccess = useWriteAccess("set_channel_members");
   const room = roomRules(channel, detail);
   const rules: MessageRules = {
     ...room,
     settings: held(room.settings, settingsAccess),
     members: held(room.members, membersAccess),
+    following: held(room.following, followingAccess),
   };
 
   const react = useAct("react_to_message");

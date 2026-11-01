@@ -6,7 +6,9 @@ import { NEWER_ROOM } from "./rooms.ts";
 import {
   ARCHIVED,
   DIRECT_MEMBERS,
+  ORG_FOLLOWING,
   ORG_MEMBERS,
+  OUTSIDE_FOLLOWING,
   OUTSIDE_MEMBERS,
   OUTSIDER,
   READING,
@@ -27,7 +29,7 @@ const detail = (member: boolean) => ({ data: { member } as never, error: null })
 
 describe("a room's rules, one per change", () => {
   test("a room not yet read takes nothing yet, and one whose read failed says so", () => {
-    expect(Object.values(roomRules(undefined, null))).toEqual(Array(6).fill(READING));
+    expect(Object.values(roomRules(undefined, null))).toEqual(Array(7).fill(READING));
     expect(roomRules(undefined, { data: null, error: "query_failed" }).post).toBe(UNREAD);
   });
 
@@ -47,7 +49,7 @@ describe("a room's rules, one per change", () => {
 
   test("a kind this build cannot classify refuses every change", () => {
     const rules = roomRules(room({ kind: "galaxy" }), detail(true));
-    expect(Object.values(rules)).toEqual(Array(6).fill(NEWER_ROOM));
+    expect(Object.values(rules)).toEqual(Array(7).fill(NEWER_ROOM));
   });
 
   test("members are the org chart's in a team's room and the people in a direct conversation", () => {
@@ -57,5 +59,22 @@ describe("a room's rules, one per change", () => {
     );
     expect(roomRules(room(), detail(true)).members).toBe("");
     expect(roomRules(room(), detail(false)).members).toBe(OUTSIDE_MEMBERS);
+  });
+
+  // WHO FOLLOWS A ROOM IS ITS MEMBERSHIP TOO, refused for the same rooms as
+  // adding people and said for following: a team's room's agents follow it as
+  // the org chart says.
+  test("following is the membership's rule, said for following", () => {
+    expect(roomRules(room({ kind: "unit", unit: "eng" }), detail(true)).following).toBe(
+      ORG_FOLLOWING,
+    );
+    expect(roomRules(room({ kind: "dm", name: undefined }), detail(true)).following).toBe(
+      DIRECT_MEMBERS,
+    );
+    expect(roomRules(room({ archived_at: "2026-02-01T00:00:00Z" }), detail(true)).following).toBe(
+      ARCHIVED,
+    );
+    expect(roomRules(room(), detail(true)).following).toBe("");
+    expect(roomRules(room(), detail(false)).following).toBe(OUTSIDE_FOLLOWING);
   });
 });
