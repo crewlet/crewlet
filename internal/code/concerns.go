@@ -467,7 +467,7 @@ type changeNotices struct {
 // handles hear of it ([Concern.Hears]), in the order each change's first
 // hearer comes in [Concerns]. PURE OVER THE ROUTINGS, as [Concerns] is: the
 // count a change's notices column takes from a record (code_changes.notices,
-// replicated 0101) is the same on every node, whatever the horizon let each
+// replicated 0102) is the same on every node, whatever the horizon let each
 // write.
 func noticesByChange(routings ...*ChangeRouting) []changeNotices {
 	var out []changeNotices

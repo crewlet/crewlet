@@ -37,7 +37,7 @@
 -- each node sweeps its own (maintenance.NodeLocal), and why a repository's
 -- purge charges a purged change's notices to its bounded parts, whose counts
 -- must agree on every node, by the count the change keeps of them rather
--- than by these rows (0101).
+-- than by these rows (0102).
 --
 -- # The columns
 --

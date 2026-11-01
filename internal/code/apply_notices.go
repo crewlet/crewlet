@@ -46,7 +46,7 @@ import (
 //
 // Beside its rows, every record that writes notices adds to each change it
 // tells anybody about how many handles hear of it ([noticesByChange]) —
-// code_changes.notices (replicated 0101), REPRODUCIBLE — whether or not the
+// code_changes.notices (replicated 0102), REPRODUCIBLE — whether or not the
 // recipient's horizon let this node write the row. The count is a pure
 // function of the records, so it is the same on every node, and it is never
 // below the rows any node holds of the change: a node writes at most one row
