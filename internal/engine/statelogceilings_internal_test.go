@@ -858,13 +858,26 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 // thirty-second of the cap, leaving the mailboxes and coordination less than
 // the gibibyte the bucket's derivation promises them on every volume under
 // 32 GiB. Against the cap itself, the bucket, every log and the remainder fit
-// on every volume large enough to hold the floors.
+// on every volume large enough to hold the floors with the remainder beside
+// them.
 //
-// Mutation: stand the whole free space in for the limit again and the 16 GiB
-// case fails.
+// THE SMALLEST ROW IS THAT VOLUME, computed from the register rather than
+// written down. It was 16 GiB while the logs' floors came to 8120172544
+// bytes; the code host's log joined at its gibibyte, and on 16 GiB the bucket's
+// quarter and the floors leave 448 MiB of the cap. That volume still BOOTS a
+// fresh node (BrokerFloor counts no remainder: the least that boots is not the
+// least that runs, as the deployment guide says), so it is not a row this
+// claim is about; the least free space whose cap holds the floors, the bucket
+// and the remainder is, and it moves with the register as the floor does.
+//
+// Mutation: stand the whole free space in for the limit again and the
+// smallest case fails.
 func TestAnUnstatedServerHoldsTheBucketAndEveryLog(t *testing.T) {
 	t.Parallel()
-	for _, free := range []int64{16 * gib, 20 * gib, 24 * gib, 86104199168, 1 << 40} {
+	boot := config.DefaultBootstrap()
+	floors := BrokerFloorFor(&boot).Logs
+	least := BrokerFloor{Limit: leastLimitHolding(floors+objectsCoordinationFloor, 0)}.FreeAtDefault()
+	for _, free := range []int64{least, 20 * gib, 24 * gib, 86104199168, 1 << 40} {
 		t.Run(strconv.FormatInt(free, 10), func(t *testing.T) {
 			t.Parallel()
 			bucket := derivedObjectsReservation(unstatedLimit(free), 0)
