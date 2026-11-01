@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -39,6 +40,8 @@ type gitHome struct {
 	work string
 	repo string
 	e    *estate
+	// logs, where set, is what the home's loop logs to.
+	logs *lines
 }
 
 // newGitHome is a fleet holding codetest.RepoName declared under settings.
@@ -138,10 +141,14 @@ func (h *gitHome) homeLoop(t *testing.T, n *nudges, backstop time.Duration, now 
 	if err != nil {
 		t.Fatal(err)
 	}
-	l, err := home.New(home.Options{Estate: h.e, Placement: asNode{placement: p, node: node.ID()}, Nudges: n,
+	o := home.Options{Estate: h.e, Placement: asNode{placement: p, node: node.ID()}, Nudges: n,
 		Cache: node.Cache(), Git: node.Pool(), Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node.ID(),
 		Share:   units(2),
-		Metrics: rec, Now: now})
+		Metrics: rec, Now: now}
+	if h.logs != nil {
+		o.Logger = slog.New(slog.NewTextHandler(h.logs, nil))
+	}
+	l, err := home.New(o)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -249,6 +256,41 @@ func TestMergeabilityRunsInAScratch(t *testing.T) {
 			names = append(names, s.Name())
 		}
 		t.Errorf("the merges left scratches %v behind their turn", names)
+	}
+}
+
+// A MERGE'S LANDING THAT DECIDED NOTHING FAILS THE TURN: a change owing its
+// merge alone whose head its target came to hold — found by the merge's
+// ancestry, its landing asked of the committer — whose landing the committer
+// answers busy ends its turn FAILED, counted so and logged
+// code_home_turn_failed, with no merge recorded of it.
+//
+// Mutation: drop the landing's error on the merge branch of the change's step
+// (answer `true` and the other steps' errors alone once the merge found it
+// landed), and the turn counts worked.
+func TestAMergesLandingThatDecidedNothingFailsTheTurn(t *testing.T) {
+	t.Parallel()
+	h := newGitHome(t, codetest.Settings())
+	base := h.commit(map[string]string{"a.go": "a\n"}, "base")
+	h.git("checkout", "-q", "-b", "change", base)
+	head := h.commit(map[string]string{"a.go": "a, changed\n"}, "a change")
+	h.git("checkout", "-q", "main")
+	h.git("merge", "-q", "--ff-only", "change")
+	tip := h.commit(map[string]string{"b.go": "b\n"}, "main moves past the change")
+	h.push("refs/heads/main", "refs/heads/change")
+	h.e.owe(h.repo, h.due(head, tip))
+	h.e.mu.Lock()
+	h.e.landRefusal = code.ChangeRefusalBusy
+	h.e.mu.Unlock()
+	h.logs = &lines{}
+	_, rec := h.homeLoop(t, newNudges(), time.Hour, nil)
+	waitTurns(t, rec, 1)
+	assertTurnFailed(t, rec, h.logs)
+	if _, landings := h.e.wrote(); len(landings) != 1 || landings[0].HeadOID != head || landings[0].TargetOID != tip {
+		t.Errorf("the turn asked the landings %+v, want the change's once, at %s into %s", landings, head, tip)
+	}
+	if merged := h.e.merged(); len(merged) != 0 {
+		t.Errorf("the turn recorded %+v of a change its ancestry found landed, want no merge", merged)
 	}
 }
 

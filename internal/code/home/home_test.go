@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"go/build"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -58,7 +59,12 @@ type estate struct {
 	revises   []code.Revise
 	merges    []code.Mergeability
 	landings  []code.ChangeLanded
-	changed   chan struct{}
+	// landRefusal and landErr are what every landing is answered while
+	// either is set — a refusal that decided nothing, or a call that failed —
+	// the change left on the list as its rows would leave it.
+	landRefusal code.ChangeRefusal
+	landErr     error
+	changed     chan struct{}
 }
 
 func newEstate() *estate {
@@ -219,6 +225,12 @@ func (e *estate) Change(_ context.Context, p code.ChangeProposal) (code.ChangeRe
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.landings = append(e.landings, *p.Landed)
+	switch {
+	case e.landErr != nil:
+		return code.ChangeResult{}, e.landErr
+	case e.landRefusal != "":
+		return code.ChangeResult{Refusal: e.landRefusal, Detail: "the case's committer decided nothing"}, nil
+	}
 	e.done(p.Landed.RepoID, p.Landed.ChangeID, func(d *code.ChangeDue) { d.FactsDue, d.MergeDue = false, false })
 	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.Landed.ChangeID, Position: e.at}, nil
 }
@@ -688,6 +700,84 @@ func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
 		t.Fatalf("change 2's facts are %+v, want them matched to %v under digest %s at the tip's position %s",
 			r, matched, digest, measured.TipPosition)
 	}
+}
+
+// A LANDING THAT DECIDED NOTHING FAILS THE TURN: a change whose head its
+// target holds, owing its facts and its merge, whose landing the committer
+// answers busy — or whose Change call fails before any answer — ends its
+// turn FAILED, counted so and logged code_home_turn_failed, and that turn does
+// no more work on the change: no merge is asked of it (the loop's cache and
+// pool are stand-ins any use of which fails the case), and the landing is
+// asked once. A repository whose landings keep failing reads as failing,
+// never as healthy.
+//
+// Mutation: drop the landing's error on the facts branch of the change's step
+// (answer `true, nil` once a landing was asked), and both turns count worked.
+func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
+	t.Parallel()
+	for name, refuse := range map[string]func(*estate){
+		"the committer answers busy": func(e *estate) { e.landRefusal = code.ChangeRefusalBusy },
+		"the Change call fails": func(e *estate) {
+			e.landErr = errors.New("the router reached no committer")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newEstate()
+			due := e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("a"),
+				HeadInTarget: true, Touched: []string{}})
+			e.mu.Lock()
+			e.due[repoA][0].MergeDue = true
+			refuse(e)
+			e.mu.Unlock()
+			logs := &lines{}
+			p := &placement{homes: map[string]string{repoA: "node-a"}}
+			_, rec := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: "node-a"},
+				Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
+				Tasks: unqueued{t: t}, NodeID: "node-a", Logger: slog.New(slog.NewTextHandler(logs, nil))},
+				time.Hour)
+			waitTurns(t, rec, 1)
+			assertTurnFailed(t, rec, logs)
+			if _, landings := e.wrote(); len(landings) != 1 || landings[0].ChangeID != due.ID {
+				t.Errorf("the turn asked the landings %+v, want change 1's once", landings)
+			}
+			if merged := e.merged(); len(merged) != 0 {
+				t.Errorf("the turn recorded %+v of a change it found landed, want nothing more of it", merged)
+			}
+		})
+	}
+}
+
+// assertTurnFailed fails t unless rec counts the change work's one turn
+// failed and none worked, and logs hold code_home_turn_failed.
+func assertTurnFailed(t *testing.T, rec *metrics.Recorder, logs *lines) {
+	t.Helper()
+	failed := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges, "outcome": "failed"})
+	worked := counted(rec, metrics.CodeHomePasses, metrics.Attrs{"worker": home.WorkerChanges, "outcome": "worked"})
+	if failed != 1 || worked != 0 {
+		t.Errorf("the turn whose landing decided nothing counted failed=%d worked=%d, want failed=1", failed, worked)
+	}
+	if !strings.Contains(logs.String(), "code_home_turn_failed") {
+		t.Errorf("the turn whose landing decided nothing logged no code_home_turn_failed: %s", logs.String())
+	}
+}
+
+// lines is a log a case reads while the loop's goroutines write it.
+type lines struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lines) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lines) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
 }
 
 // A HOME REFRESHES A READINESS WITHOUT A MERGE: a change owing only a refresh

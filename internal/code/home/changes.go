@@ -172,7 +172,12 @@ func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Positi
 // REFRESH of its readiness ([changes.refresh]) where it owes one, or where
 // this turn recorded facts its stored readiness was judged before. A merge
 // records the readiness itself, judged with its own snapshot, so a change
-// merged this turn owes no refresh. It answers whether the change was landed.
+// merged this turn owes no refresh. It answers whether the change was found
+// landed — its head inside its target's tip, which this turn does no more
+// work on whatever its landing answered — and every step's failure, A
+// LANDING THAT DECIDED NOTHING among them ([undecidedLandings]): a committer
+// that keeps refusing a landing busy, or a Change call that keeps failing,
+// is a turn that failed, never one that worked.
 func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue, owners []code.PathOwner,
 	at statelog.Position) (bool, error) {
 
@@ -181,7 +186,7 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 	if due.FactsDue {
 		landed, recorded, err := c.facts(ctx, repoID, due, owners, at)
 		if landed {
-			return true, nil
+			return true, err
 		}
 		revised = recorded
 		if err != nil {
@@ -191,11 +196,11 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 	switch {
 	case due.MergeDue:
 		landed, err := c.merge(ctx, repoID, due, at)
-		if landed {
-			return true, errors.Join(failed...)
-		}
 		if err != nil {
 			failed = append(failed, err)
+		}
+		if landed {
+			return true, errors.Join(failed...)
 		}
 	case due.RefreshDue || revised:
 		if err := c.refresh(ctx, repoID, due, at); err != nil {
