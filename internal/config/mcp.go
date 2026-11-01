@@ -351,11 +351,13 @@ func (m *MCPServer) validate(path Path) error {
 // A LINE BREAK IS REFUSED, not folded: the prompt lists one server per line,
 // so a description carrying a newline would start a line of its own that reads
 // as something else in the list, and a tab or another control character is
-// nothing a reader of the list can see. Refused rather than rewritten, because
-// a description the engine silently reflowed is not the one the operator reads
-// back from the configuration.
+// nothing a reader of the list can see. Unicode's own line and paragraph
+// separators (U+2028, U+2029) are line breaks too, to every reader that
+// follows the standard, though no control character. Refused rather than
+// rewritten, because a description the engine silently reflowed is not the
+// one the operator reads back from the configuration.
 func (m *MCPServer) validateDescription(p *problems, path Path) {
-	if i := strings.IndexFunc(m.Description, unicode.IsControl); i >= 0 {
+	if i := strings.IndexFunc(m.Description, breaksALine); i >= 0 {
 		control, _ := utf8.DecodeRuneInString(m.Description[i:])
 		p.add(path, ErrUnknownValue,
 			"holds %q at character %d: a description is one line beside the server's "+
@@ -367,6 +369,13 @@ func (m *MCPServer) validateDescription(p *problems, path Path) {
 			"is %d characters, and a description is at most %d: it is one line "+
 				"beside the server's name in each agent's prompt", n, MaxMCPDescription)
 	}
+}
+
+// breaksALine reports whether r is a character a one-line description may not
+// hold ([MCPServer.validateDescription]): a control character, or a line or
+// paragraph separator.
+func breaksALine(r rune) bool {
+	return unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp)
 }
 
 // ToolAnnotations are the behavioural hints the engine reasons about a tool
