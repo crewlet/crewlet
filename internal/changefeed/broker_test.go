@@ -25,7 +25,7 @@ type groupOpener struct {
 }
 
 func (o *groupOpener) Open(ctx context.Context, group string) (changefeed.Records, error) {
-	g, err := o.log.Group(ctx, group)
+	g, _, err := o.log.Group(ctx, group, 0)
 	if err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -66,6 +67,12 @@ type domainFeed struct {
 	// is the register's own check of what each entry declares.
 	estate  store.ReplicatedReader
 	applied *statelog.Runner
+
+	// marks is the fleet's record of how far each wake feed's group had
+	// acknowledged, which a group created again starts after
+	// ([coord.FeedMark]). Nil records and reads nothing, and a group
+	// created then starts at its log's first retained record.
+	marks coord.FeedMarkRegister
 }
 
 // One adapter serves every domain that declares a wake feed, so each domain's
@@ -79,12 +86,31 @@ var (
 
 // Consume implements each feed-declaring domain's DomainConsumer —
 // [worklet.DomainConsumer], [doclet.DomainConsumer] and [chatlet.DomainConsumer].
+//
+// A GROUP THIS OPEN CREATES starts after the fleet's recorded floor
+// ([feedPosition.start]), and every open records the floor as it advances
+// ([feedMarker]): see feedmark.go.
 func (f domainFeed) Consume(ctx context.Context, group string) (changefeed.Records, error) {
-	g, err := f.log.Group(ctx, group)
+	at, marked := f.position(group)
+	var from uint64
+	if marked {
+		from = at.start(ctx)
+	}
+	g, created, err := f.log.Group(ctx, group, from)
 	if err != nil {
 		return nil, err
 	}
-	return &domainRecords{group: g, stream: f.stream, envel: f.envel, verify: f.verify}, nil
+	if created {
+		log.InfoContext(ctx, "changefeed_group_created", "stream", f.stream, "group", group,
+			"from", from, "detail", "the group did not exist and was created; it starts after "+
+				"the fleet's recorded floor, or at the log's first retained record (from 0) "+
+				"where none is recorded")
+	}
+	records := &domainRecords{group: g, stream: f.stream, envel: f.envel, verify: f.verify}
+	if marked {
+		records.marker = startFeedMarker(ctx, at)
+	}
+	return records, nil
 }
 
 // domainRecords is one open group, as the change feed reads it.
@@ -99,6 +125,10 @@ type domainRecords struct {
 
 	envel  func(payload []byte) (statelog.Envelope, error)
 	verify *statelog.Verifier
+
+	// marker records the group's floor while it is open. Nil where no
+	// register is wired.
+	marker *feedMarker
 }
 
 // Next blocks for the next record.
@@ -178,8 +208,13 @@ func (r *domainRecords) Next(ctx context.Context) (*changefeed.Message, error) {
 	}
 }
 
-// Stop ends this process's consumption; the durable position survives.
-func (r *domainRecords) Stop() error { return r.group.Stop() }
+// Stop ends this process's consumption; the durable position survives, and
+// the fleet's mark is raised to it once more.
+func (r *domainRecords) Stop() error {
+	err := r.group.Stop()
+	r.marker.close()
+	return err
+}
 
 // feedRecord is one verified delivery of a log as the change feed reads it:
 // the envelope's operation id and generation, the delivery's place on stream,
@@ -233,6 +268,7 @@ func (e *Engine) feedFor(running *runningLog) (changefeed.Translator, changefeed
 			verify:  running.verifier,
 			estate:  e.feedEstate(),
 			applied: running.runner,
+			marks:   e.feedMarks(),
 		})
 	}
 	if err := checkFeed(running.domain, translator); err != nil {
@@ -242,6 +278,15 @@ func (e *Engine) feedFor(running *runningLog) (changefeed.Translator, changefeed
 		return nil, nil, nil
 	}
 	return translator, opener, nil
+}
+
+// feedMarks is the fleet's register of wake feed marks, or nil where no fleet
+// store is wired.
+func (e *Engine) feedMarks() coord.FeedMarkRegister {
+	if e.backends == nil || e.backends.Fleet == nil {
+		return nil
+	}
+	return e.backends.Fleet
 }
 
 // feedEstate is this node's replicated estate as a wake feed reads it, or the

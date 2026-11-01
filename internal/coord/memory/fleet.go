@@ -73,6 +73,7 @@ type Fleet struct {
 	positions   map[string]coord.NodePositions
 	holds       map[string]coord.TrimHold
 	floors      map[string]coord.TrimFloor
+	feedMarks   map[string]coord.FeedMark
 	backups     map[string]coord.BackupPoint
 	maintenance map[string]coord.MaintenanceOperation
 	admissions  map[string]coord.Admission

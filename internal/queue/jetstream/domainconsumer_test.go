@@ -630,7 +630,7 @@ func TestAGroupsBlockingReadEndsWithItsContext(t *testing.T) {
 	defer func() { _ = q.Stop(context.Background()) }()
 
 	ctx, cancel := context.WithCancel(t.Context())
-	group, err := log.Group(ctx, "waker")
+	group, _, err := log.Group(ctx, "waker", 0)
 	if err != nil {
 		t.Fatalf("open the group: %v", err)
 	}
@@ -1425,5 +1425,75 @@ func BenchmarkAnIdlePull(b *testing.B) {
 			statelog.FetchBytes, time.Millisecond); err != nil {
 			b.Fatalf("fetch: %v", err)
 		}
+	}
+}
+
+// A GROUP CREATED FROM A START BEGINS THERE, AND ONE THAT EXISTS WHERE IT
+// STANDS. The start is the caller's record of where the group had got to, and
+// it is for the one case the durable position cannot answer: the consumer is
+// gone and has to be created again. Created at the log's first record instead,
+// a wake feed's group replayed the log's whole retention as wakes. An existing
+// group is the fleet's position, and a start must never move it.
+func TestAGroupCreatedFromAStartBeginsThereAndAnExistingOneWhereItStands(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_GROUP_START", "crewlet.groupstart")
+	defer func() { _ = q.Stop(context.Background()) }()
+	for i := range 8 {
+		if _, _, err := log.Append(t.Context(), "crewlet.groupstart.task."+id(i), "", nil,
+			[]byte(`{"n":`+itoa(i)+`}`)); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	next := func(g *DomainGroup) *DomainDelivery {
+		t.Helper()
+		d, err := g.Next(t.Context())
+		if err != nil || d == nil {
+			t.Fatalf("read the group: %v, %v", d, err)
+		}
+		return d
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started, created, err := log.Group(ctx, "waker", 6)
+	if err != nil || !created {
+		t.Fatalf("create the group from 6 = created %v, %v", created, err)
+	}
+	for want := uint64(6); want <= 8; want++ {
+		d := next(started)
+		if d.Seq != want {
+			t.Fatalf("a group created from 6 delivered %d, want %d", d.Seq, want)
+		}
+		if err := d.Ack(); err != nil {
+			t.Fatalf("ack: %v", err)
+		}
+	}
+	if err := started.Stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	// ONE RECORD AFTER THE STOP, so the reopened group has exactly one to
+	// hand over if it stands where it was, and the log's first if it was
+	// moved back.
+	if _, _, err := log.Append(t.Context(), "crewlet.groupstart.task.late", "", nil,
+		[]byte(`{"n":9}`)); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	again, created, err := log.Group(ctx, "waker", 1)
+	if err != nil || created {
+		t.Fatalf("open the existing group = created %v, %v; want it opened as it stands", created, err)
+	}
+	if d := next(again); d.Seq != 9 {
+		t.Fatalf("an existing group asked to start at 1 delivered %d, want 9 where it stood", d.Seq)
+	}
+	_ = again.Stop()
+
+	fresh, created, err := log.Group(ctx, "other", 0)
+	if err != nil || !created {
+		t.Fatalf("create a group with no start = created %v, %v", created, err)
+	}
+	defer func() { _ = fresh.Stop() }()
+	if d := next(fresh); d.Seq != 1 {
+		t.Fatalf("a group created with no start delivered %d first, want the log's first record", d.Seq)
 	}
 }
