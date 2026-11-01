@@ -592,6 +592,18 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 	if j.fallback != nil {
 		d.concern.lead = *j.fallback
 	}
+	// AND WHOSE ERRAND THEY ARE: the home records the facts, but a revision
+	// is somebody's push — the opener's for revision 1, whoever moved the head
+	// for every later one — and the review it asks for is that principal's
+	// request. Named as the record's actor, the wake it sends a path owner or
+	// a reviewer states that principal as its writer, so the woken seat's
+	// reads are decided for both grants (the requester ceiling); named as
+	// nobody, a seat that may push one repository could have a reviewer
+	// that may read a `visibility: unit` one read for it unbounded. The pusher
+	// hears nothing of their own revision, as every actor.
+	if d.concern.actor, d.concern.actorKind, err = revisionPusher(ctx, tx, row.id, r.N); err != nil {
+		return conversationDecision{}, err
+	}
 	d.payload = r
 	// THE FACTS, A ROW EACH REVIEWER ASKED AND A PARTICIPANT ROW EACH, the
 	// ask of each reviewer it asks to look again, and the conversation's own.

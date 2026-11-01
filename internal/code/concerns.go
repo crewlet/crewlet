@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -121,7 +122,8 @@ import (
 // ([ActorSystem]): the principal is in its payload. So the routing names who
 // acted ([ChangeRouting.Actor]) — the asker, the pusher of a push's entry, the
 // enqueuer of an entry a queue landed, the pusher of the head a check
-// measured, nobody for the home's own records — and a code reason is news to
+// measured and of the revision whose facts the home records, nobody for the
+// home's other records — and a code reason is news to
 // whoever made the change only where [Reason.WakesActor] says so: a reviewer
 // is not told of their own review, a pusher of their own merge, and a pusher
 // IS told that the head they pushed fails its checks.
@@ -258,8 +260,9 @@ type ChangeRouting struct {
 	RepoName string `json:"repo_name"`
 	Title    string `json:"title"`
 	// Actor is who made the change the record records — its asker, a push
-	// entry's pusher — and "" for the home's own records, which nobody
-	// asked. Nobody hears of a change they made.
+	// entry's pusher, and for a revision's facts, which the home records,
+	// whoever pushed the revision — and "" for the home's other records,
+	// which no principal's act made. Nobody hears of a change they made.
 	Actor string `json:"actor,omitempty"`
 	// Owner is the change's owner, and OwnerKind what it is.
 	Owner     string    `json:"owner,omitempty"`
@@ -750,8 +753,8 @@ type concerning struct {
 	// change is the change's row as the record leaves it: its id, number,
 	// title, owner and work item.
 	change changeRow
-	// actor is who made the change, "" for the home's own records, and
-	// actorKind what it is: a person's actor is named among the routing's
+	// actor is who made the change — for a revision's facts, its pusher —
+	// "" for the home's other records, and actorKind what it is: a person's actor is named among the routing's
 	// persons, so a wake says a person wrote what it announces.
 	actor     string
 	actorKind PartyKind
@@ -1002,6 +1005,20 @@ func stampedRouting(what string, r *ChangeRouting) error {
 	return nil
 }
 
+// revisionPusher is who pushed revision n of changeID, as a routing's actor
+// names them — the opener for revision 1, whoever moved the head for every
+// later one — and "" where tx holds no such revision.
+func revisionPusher(ctx context.Context, tx *sql.Tx, changeID string, n int64) (string, PartyKind, error) {
+	var pusher, kind string
+	switch err := tx.QueryRowContext(ctx, headPusherSQL, changeID, n).Scan(&pusher, &kind); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", nil
+	case err != nil:
+		return "", "", fmt.Errorf("code: read who pushed revision %d of %s: %w", n, changeID, err)
+	}
+	return pusher, PartyKind(kind), nil
+}
+
 // The routing's reads, each registered in plan_test.go: a change's authors and
 // its participants, a range of each key in its order; and a thread's newest
 // comments, a range of code_comments_thread_idx read back from its end.
@@ -1011,7 +1028,8 @@ const (
 	routingWatchersSQL = `SELECT handle, kind FROM code_participants WHERE change_id = ?
 		ORDER BY handle LIMIT ?`
 	// headPusherSQL is who pushed a change's revision — the actor of a failed
-	// check of its head — one seek of the revisions' key.
+	// check of its head and of the revision's facts ([revisionPusher]) — one
+	// seek of the revisions' key.
 	headPusherSQL         = `SELECT pusher, pusher_kind FROM code_revisions WHERE change_id = ? AND n = ?`
 	threadParticipantsSQL = `SELECT author, author_kind FROM code_comments INDEXED BY code_comments_thread_idx
 		WHERE change_id = ? AND thread_id = ? ORDER BY position DESC LIMIT ?`

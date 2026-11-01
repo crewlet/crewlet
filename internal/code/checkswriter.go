@@ -856,17 +856,8 @@ func routeFailedHead(ctx context.Context, tx *sql.Tx, repoName string, d checksD
 	c := concerning{repoName: repoName, change: change, authors: true, checksFailed: true}
 	if reporter != nil {
 		c.actor, c.actorKind = reporter.party()
-	} else {
-		var pusher, kind string
-		switch err := tx.QueryRowContext(ctx, headPusherSQL, change.id, change.revision).Scan(&pusher,
-			&kind); {
-		case errors.Is(err, sql.ErrNoRows):
-		case err != nil:
-			return checksDecision{}, fmt.Errorf("code: read who pushed revision %d of %s: %w", change.revision,
-				change.id, err)
-		default:
-			c.actor, c.actorKind = pusher, PartyKind(kind)
-		}
+	} else if c.actor, c.actorKind, err = revisionPusher(ctx, tx, change.id, change.revision); err != nil {
+		return checksDecision{}, err
 	}
 	if f.Routing, err = routingFor(ctx, tx, c); err != nil {
 		return checksDecision{}, err

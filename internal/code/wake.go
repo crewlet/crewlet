@@ -214,10 +214,11 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		Body:      wakeText(payload, r.ChangeID),
 		Metadata:  meta,
 		// WHO WROTE WHAT THE WAKE ANNOUNCES, by the routing's own record of
-		// it: a person as the seat they hold, a seat as itself, and nobody —
-		// the engine — for the home's own records. The record's ACTOR is the
-		// deciding node for every code record, so the routing's actor is the
-		// writer here.
+		// it: a person as the seat they hold, a seat as itself — a revision's
+		// facts, which the home records, as whoever pushed the revision — and
+		// nobody, the engine, for the home's other records. The record's ACTOR
+		// is the deciding node for every code record, so the routing's actor
+		// is the writer here.
 		Writer: writerOf(r),
 	}
 }

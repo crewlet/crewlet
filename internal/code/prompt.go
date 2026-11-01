@@ -211,7 +211,8 @@ func wakeHandling(reason Reason) string {
 }
 
 // wakeSender renders who made the change as a colleague, by handle — the actor on
-// a code wake is a handle, or nobody for the home's own records.
+// a code wake is a handle, or nobody for the home's records but a revision's
+// facts, which name its pusher.
 func wakeSender(n notify.Inbound, parties notify.Parties) string {
 	actor := n.Metadata[notify.ActorField]
 	if actor == "" {

@@ -13,6 +13,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -512,6 +514,62 @@ func TestARevisionsFirstFactsWakeWhoMustLookAgain(t *testing.T) {
 		t.Fatalf("a change its path owner is asked of asks %+v; want its path owner", r.Asked)
 	} else if _, lead := woken(r); lead != "" {
 		t.Fatalf("a change its path owner is asked of falls back to %q; want nobody to fall back to", lead)
+	}
+}
+
+// A REVISION'S FACTS ARE ITS PUSHER'S ERRAND: the home records them, but a
+// revision is somebody's push, so the review they ask for is that principal's
+// request. The facts of revision 1, which the seat dev opened, ask Platform's
+// lead to review as dev — the routing's actor, the wake's sender and its
+// writer the seat dev, which bounds the woken seat's reads by dev's grant
+// too — and the facts of revision 2, which the person holding the seat
+// harness pushed, ask plat-lead to look again as that person.
+//
+// Mutation: drop the pusher from the revise's concern, and both wakes say
+// nobody wrote them — a turn bounded by nothing beyond the reviewer's own
+// grant, red.
+func TestARevisionsFactsAreItsPushersErrand(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	owners := []code.PathOwner{pathOwner(code.OwnerUnit, "Platform", "upload/**")}
+	repo, change := ownedChange(t, n, "web", owners...)
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	wokenBy := func(p statelog.Position, want string) notify.Routed {
+		t.Helper()
+		_, relayed, routed := wakesOf(t, feedRecord(t, n, p))
+		if !relayed || !slices.Equal(woken(routed), []string{want}) {
+			t.Fatalf("the facts at %s wake %v (relayed %v), want %s", p, woken(routed), relayed, want)
+		}
+		return routed[0]
+	}
+
+	first, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go"))
+	requireConversed(t, first, err)
+	if r := decodedRevise(t, n, first.Position).Routing; r == nil || r.Actor != "dev" || r.Person("dev") {
+		t.Fatalf("revision 1's facts route %+v, want the seat dev, who opened the change, as their actor", r)
+	}
+	asked := wokenBy(first.Position, "plat-lead:review_requested")
+	if asked.Sender != "dev" || asked.Writer == nil || asked.Writer.Kind != iam.ActorAgent ||
+		asked.Writer.Seat != "dev" {
+		t.Errorf("the path owner's wake is sent by %q, written by %+v; want the seat dev, whose revision it is",
+			asked.Sender, asked.Writer)
+	}
+
+	review, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil))
+	requireReviewed(t, review, err)
+	n.revise(repo, "B", "B2")
+	second, err := w.Converse(ctx, n.revising(repo, change, 2, oidOf("B2"), mainRef, owners, "upload/retry.go"))
+	requireConversed(t, second, err)
+	if r := decodedRevise(t, n, second.Position).Routing; r == nil || r.Actor != "harness" || !r.Person("harness") {
+		t.Fatalf("revision 2's facts route %+v, want the person on the seat harness, who pushed it, as their "+
+			"actor", r)
+	}
+	again := wokenBy(second.Position, "plat-lead:re_review")
+	if again.Sender != "harness" || again.Writer == nil || again.Writer.Kind != iam.ActorHuman ||
+		again.Writer.Seat != "harness" {
+		t.Errorf("the reviewer's wake to look again is sent by %q, written by %+v; want the person on the "+
+			"seat harness, whose push it is", again.Sender, again.Writer)
 	}
 }
 

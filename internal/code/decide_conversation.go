@@ -640,7 +640,13 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 	}
 	c := d.concern
 	c.repoName, c.change, c.roster = repoName, row, roster
-	c.actor, c.actorKind = w.Asker.party()
+	// WHO WROTE IT: the asker of a write somebody asked; for the home's own
+	// records, which name no asker, the principal the decide found the record
+	// answers — a revision's facts their pusher ([decideRevise]) — and nobody
+	// for a mergeability, which nobody's act made.
+	if c.actor == "" {
+		c.actor, c.actorKind = w.Asker.party()
+	}
 	r, err := routingFor(ctx, tx, c)
 	if err != nil {
 		return conversationDecision{}, err

@@ -4620,7 +4620,7 @@ the [artifacts tools](artifacts.md) apply, here on a repository's grant.
 
 | The turn was woken by | What the seat reads |
 |---|---|
-| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge, a revision's facts — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
+| nobody — a schedule, a watch, the seat's own work, the outcome of its own act (a workflow or a pipeline its own push failed), or the engine's own notice on a work item, such as one it reports unblocked, a change's home's own record — a conflict, a change ready to merge, a change it found landed — or an [alarm's wake](event-system.md#alarm-wakes) | what its own grant allows |
 | a person of the company | what its own grant allows: a person maintains every repository, so they bound nothing |
 | a colleague seat | what **both** grants allow: a listing leaves out every repository the colleague may not read, and a read of one is refused, naming the colleague and the visibility that shuts it out |
 | a person who may not act in the company now — invited and not yet enrolled, suspended, or removed | nothing |
@@ -4631,7 +4631,11 @@ holds, never by how the name is spelled: a seat's change, or a person's made
 as the seat they hold, is that seat's, and the engine's own is nobody's. A
 record about a repository's change names who made it in the routing its
 writer stamped, a person by the human seat they hold, and its home's own
-records name nobody. A
+records name nobody — but a revision's facts, which its home records and
+which ask a path owner to review or a reviewer to look again: a revision is
+somebody's push, the opener's for the first and whoever moved the head for
+every later one, so the facts name that pusher, and a seat asked to review a
+colleague's revision reads for both grants. A
 credential acting as no seat holds no seat a ceiling could be decided for, so
 the turn its change wakes reads nothing, as a stranger's does. The seat's own
 voice is never its requester: when the outcome of its own act opens a thread,
@@ -6563,7 +6567,8 @@ stops after its record committed loses no wake.
 - **Who wrote it bounds what the seat reads**: a review a colleague seat
   asked for is that colleague's errand, and a code read in the turn is
   decided for both grants ([Reads made for somebody else](#reads-made-for-somebody-else));
-  the home's own records — a conflict, a change ready to merge — are nobody's.
+  the home's own records — a conflict, a change ready to merge — are nobody's,
+  and a revision's facts are whoever pushed the revision.
 - **What the seat is told** is the change by name, why it hears, whatever
   the record says in full — a comment, a review's summary, an ask's note, a
   description — and the tool that answers it: `code_review_change` for a

@@ -176,7 +176,7 @@ func wakesASeat(concerns []Concern) bool {
 
 // routedActor is who made the change a payload records — the one actor its
 // routings share — or "" for a record of several actors (a push record of
-// several pushers) or of none (the home's own records).
+// several pushers) or of none (the home's records but a revision's facts).
 func routedActor(payload any) string {
 	actor := ""
 	for i, r := range RoutingsOf(payload) {
