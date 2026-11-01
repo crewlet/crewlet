@@ -486,10 +486,10 @@ func (t *setChannelMembers) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// empty room and refuse every change, so it too has the one spelling.
 	var expected *[]chatlet.Member
 	if args["expected_members"] != nil {
-		read, refusal := argMemberSet(name, args, "expected_members", "everybody "+
+		read, readRefusal := argMemberSet(name, args, "expected_members", "everybody "+
 			"in the room as you read it, or an empty list, [], for an empty room")
-		if refusal != nil {
-			return *refusal, nil
+		if readRefusal != nil {
+			return *readRefusal, nil
 		}
 		expected = &read
 	}
