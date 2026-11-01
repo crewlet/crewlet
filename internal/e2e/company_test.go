@@ -740,10 +740,6 @@ func (m *scriptedModel) sawCall(phase, tools string, call cliCall) {
 func (m *scriptedModel) misrouted() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.channels) != len(m.calls) {
-		// [scriptedModel.saw] records a phase alone.
-		return []string{"this model recorded calls without their channels"}
-	}
 	var bad []string
 	for i, phase := range m.calls {
 		want := ""
@@ -760,14 +756,6 @@ func (m *scriptedModel) misrouted() []string {
 		}
 	}
 	return bad
-}
-
-// saw records a phase alone, for a scripted model that keeps no prompts —
-// see [newSandboxModel], whose handler never recorded them.
-func (m *scriptedModel) saw(phase string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls = append(m.calls, phase)
 }
 
 func (m *scriptedModel) seen() []string {

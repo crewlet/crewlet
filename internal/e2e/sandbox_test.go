@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -370,21 +371,28 @@ func newCodingModel(t *testing.T, args map[string]any) *scriptedModel {
 		if !ok {
 			return
 		}
+		// EVERY CALL RECORDED WITH ITS PROMPT, as [scriptedModel.serve]
+		// records its own: what the resumed round was handed back by
+		// run_sandbox rides the transcript ([scriptedModel.toolResults]),
+		// and a case that asserts what the run was told has nowhere else to
+		// read it.
+		names := slices.Sorted(maps.Keys(offered))
+		saw := func(phase string) { m.sawCall(phase, strings.Join(names, "+"), call) }
 		var reply string
 		switch {
 		case offered["submit_review"]:
-			m.saw("review")
+			saw("review")
 			reply = toolUse("submit_review", map[string]any{
 				"decision": "done", "final_artifact": "The fix is up for review.",
 			})
 		case offered["mark_onboarded"]:
-			m.saw("onboarding")
+			saw("onboarding")
 			reply = toolUse("mark_onboarded", map[string]any{"notes": "read the handbook"})
 		case offered["submit_work"] && sawSandboxResult(call.Prompt):
 			// The RESUMED executor round: the conversation now carries the
 			// tool message the engine spliced in. Submitting is the
 			// executor reporting and finishing.
-			m.saw("resumed")
+			saw("resumed")
 			reply = toolUse("submit_work", map[string]any{
 				"outcome": "delivered",
 				"summary": "The sandbox fixed it and opened a pull request.",
@@ -393,14 +401,14 @@ func newCodingModel(t *testing.T, args map[string]any) *scriptedModel {
 				"deliveries": []string{"run_sandbox"},
 			})
 		case offered["submit_work"]:
-			m.saw("execute")
+			saw("execute")
 			reply = toolUse("run_sandbox", args)
 		default:
 			// AN AUXILIARY PASS, not a phase. The prefetch's filters reach
 			// this same model with no tools offered, and counting them
 			// as executor rounds made "the executor opened once" a claim
 			// about the memory filter.
-			m.saw("aux")
+			saw("aux")
 			reply = textReply("")
 		}
 		_, _ = io.WriteString(w, reply)
@@ -609,15 +617,22 @@ func withBoxRepo(doc string) string {
 // Asserted from the code host's own record, never the box's word: the push
 // row names the seat as an agent, received over git, made by THIS run's
 // launch with its coding agent, onto the seat's default branch for a turn on
-// no work item (`seats/swe/run-<the turn id's last 12 hex>`); the commit the
-// row moved the branch to, read back from the code host, carries the run's
-// three trailers; and once the run has ended its token admits nothing.
-// (A `direct` box on the node that serves git: warned, never refused.)
+// no work item (`seats/swe/run-<the turn id's last 12 hex>`); the resumed
+// executor's run_sandbox result names that branch at that commit, under
+// "Pushed to this company's code host (its push record):" — the engine's read
+// of the run's push rows (the first page linearizable, later pages at session
+// from its launch) proven through a running engine, which every other test of
+// it fakes; the commit the row moved the branch to, read back from the code
+// host, carries the run's three trailers; and once the run has ended its token
+// admits nothing. (A `direct` box on the node that serves git: warned, never
+// refused.)
 //
 // Mutations: a launch whose RunEnv sets no trailer variables → the commit
 // carries no trailer, red; boxGitEnv without the credential helper → the
 // clone step fails the launch and no push row is written, red; the run's
-// token minted for another launch → the clone is refused `run_superseded`, red.
+// token minted for another launch → the clone is refused `run_superseded`, red;
+// the engine's RunPushes answering nothing → the result says no push of the
+// run was recorded, red.
 func TestACodingRunClonesPushesAndIsToldWhatItPushed(t *testing.T) {
 	t.Parallel()
 	// THE NODE'S OWN ADDRESS, BOUND BEFORE IT BOOTS: CREWLET_BOX_GIT_URL is
@@ -691,6 +706,24 @@ func TestACodingRunClonesPushesAndIsToldWhatItPushed(t *testing.T) {
 			push.Run.CodingAgent, run.LaunchID)
 	case len(push.Commands) != 1 || push.Commands[0].Ref != branch || push.Commands[0].Result != code.ResultOK:
 		t.Fatalf("the push moved %+v; want %s created", push.Commands, branch)
+	}
+
+	// AND THE RESUMED ROUND WAS TOLD WHAT IT PUSHED, from that record: the
+	// run_sandbox result the engine spliced into the resumed executor's
+	// conversation names the branch the row created, at its commit — read
+	// by the coordinator's collect through the engine's own reader of the
+	// run's push rows, the first page linearizable and every later one at
+	// session from its launch position. Never the box's own report, which
+	// says "Pushed the fix." whatever it did.
+	results := slices.DeleteFunc(n.model.toolResults(), func(result string) bool {
+		return !strings.Contains(result, "The sandbox coding run")
+	})
+	told := "- web " + branch + " created at " + push.Commands[0].New[:12]
+	switch {
+	case len(results) != 1:
+		t.Errorf("the resumed round was handed %d run_sandbox results, want its one: %q", len(results), results)
+	case !strings.Contains(results[0], "Pushed to this company's code host (its push record):\n"+told):
+		t.Errorf("the resumed round was told %q; want it told what its push record names, %q", results[0], told)
 	}
 
 	// THE COMMIT, READ BACK FROM THE CODE HOST, CARRIES THE RUN'S TRAILERS:
