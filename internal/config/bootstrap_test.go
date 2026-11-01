@@ -377,32 +377,119 @@ func TestAPeerTheServerCannotDialIsRefused(t *testing.T) {
 // from secrets.keys (ADR-0064): the engine writes each route's userinfo itself,
 // and a leaf link presents an nkey, beside which a URL's userinfo would be sent
 // in clear. So a userinfo in a peer or a leaf URL — `user:pass@` or a bare
-// `token@` — is refused at that element, by a sentence that quotes none of it.
+// `token@`, with a scheme or without one — is refused at that element, and no
+// sentence the document produces quotes any of it: not the refusal, not a
+// rule that counts the entry beside it, and not an advisory.
 //
-// Mutation: drop the rule → every row loads or is refused for its shape alone,
-// red.
+// WITHOUT A SCHEME is the case a parse misses: `ops:s3cret@host:6222` parses
+// as the scheme `ops` with no userinfo, `s3cret@host:6222` does not parse, and
+// neither does a userinfo beside a mistyped port — and each was refused by a
+// shape sentence quoting the entry whole. An entry that is this node's own
+// route is discounted from the member count, whose sentence named it whole.
+//
+// Mutation: read the userinfo off url.Parse of the entry as written → the
+// schemeless and unparseable rows are refused for their shape, quoting the
+// credential, red. Quote a discounted or misshapen entry as written → the
+// own-route row and the advisory row print it, red.
 func TestAFleetURLCarriesNoCredential(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ doc, path string }{
-		{"coordination:\n  type: embedded-kv\nstream:\n  cluster:\n    name: acme\n    port: 6222\n" +
-			"    peers: [\"nats://node-c.internal:6222\", \"nats://ops:s3cret@node-b.internal:6222\"," +
-			" \"nats://node-d.internal:6222\"]\n", "stream.cluster.peers[1]"},
-		{"coordination:\n  type: embedded-kv\nstream:\n  cluster:\n    name: acme\n    port: 6222\n" +
-			"    peers: [\"nats://s3cret@node-b.internal:6222\", \"nats://node-c.internal:6222\"]\n",
+	const kv = "coordination:\n  type: embedded-kv\n"
+	peers := func(list string) string {
+		return kv + "stream:\n  cluster:\n    name: acme\n    port: 6222\n    peers: [" + list + "]\n"
+	}
+	leaf := func(list string) string {
+		return "node:\n  roles: [seats]\n" + kv + "stream:\n  leaf:\n    urls: [" + list + "]\n"
+	}
+	for _, tc := range []struct{ name, doc, path string }{
+		{"a user and password", peers(`"nats://node-c.internal:6222", "nats://ops:s3cret@node-b.internal:6222", ` +
+			`"nats://node-d.internal:6222"`), "stream.cluster.peers[1]"},
+		{"a bare token", peers(`"nats://s3cret@node-b.internal:6222", "nats://node-c.internal:6222"`),
 			"stream.cluster.peers[0]"},
-		{"node:\n  roles: [seats]\ncoordination:\n  type: embedded-kv\nstream:\n  leaf:\n" +
-			"    urls: [\"nats-leaf://ops:s3cret@member-a.internal:7422\"]\n", "stream.leaf.urls[0]"},
+		{"a user and password with no scheme", peers(`"nats://node-c.internal:6222", ` +
+			`"ops:s3cret@node-b.internal:6222"`), "stream.cluster.peers[1]"},
+		{"a bare token with no scheme", peers(`"s3cret@node-b.internal:6222", "nats://node-c.internal:6222"`),
+			"stream.cluster.peers[0]"},
+		{"a userinfo beside a port that does not parse", peers(`"nats://node-c.internal:6222", ` +
+			`"nats://ops:s3cret@node-b.internal:62x22"`), "stream.cluster.peers[1]"},
+		// THIS NODE'S OWN ROUTE is discounted from the count, and the
+		// quorum rule's sentence names every discounted entry.
+		{"this node's own route", kv + "stream:\n  cluster:\n    name: acme\n    port: 6222\n" +
+			"    host: 10.0.0.11\n    peers: [\"nats://ops:s3cret@10.0.0.11:6222\", " +
+			"\"nats://node-b.internal:6222\"]\n", "stream.cluster.peers[0]"},
+		{"a leaf's user and password", leaf(`"nats-leaf://ops:s3cret@member-a.internal:7422"`),
+			"stream.leaf.urls[0]"},
+		{"a leaf's user and password with no scheme", leaf(`"nats-leaf://member-b.internal:7422", ` +
+			`"ops:s3cret@member-a.internal:7422"`), "stream.leaf.urls[1]"},
+		{"a leaf's bare token with no scheme", leaf(`"s3cret@member-a.internal:7422"`), "stream.leaf.urls[0]"},
+		{"a leaf's userinfo beside a port that does not parse",
+			leaf(`"nats-leaf://ops:s3cret@member-a.internal:74x22"`), "stream.leaf.urls[0]"},
 	} {
-		t.Run(tc.path, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := rejectsBootstrap(t, tc.doc, tc.path)
-			if !strings.Contains(err.Error(), "carries a credential") {
-				t.Fatalf("the refusal does not say what is wrong: %v", err)
-			}
 			if strings.Contains(err.Error(), "s3cret") {
-				t.Fatalf("the refusal prints the credential it refuses: %v", err)
+				t.Fatalf("a refusal prints the credential the rule refuses: %v", err)
+			}
+			if !slices.ContainsFunc(Problems(err), func(p Problem) bool {
+				return p.Path == tc.path && strings.Contains(p.Message, "carries a credential")
+			}) {
+				t.Fatalf("%s is not refused for its credential: %v", tc.path, err)
 			}
 		})
+	}
+
+	// THE ADVISORIES name a discounted entry too, and are asked of a
+	// bootstrap directly, since a document carrying a credential never
+	// validates.
+	t.Run("an advisory naming a discounted entry", func(t *testing.T) {
+		t.Parallel()
+		b := RunnableBootstrap()
+		b.Coordination = Coordination{Type: CoordinationEmbeddedKV}
+		b.Stream.StoreDir = "/var/lib/crewlet/stream"
+		b.Stream.Cluster = StreamCluster{
+			Name: "acme", Port: 6222, Host: "10.0.0.11",
+			Peers: []string{"nats://ops:s3cret@10.0.0.11:6222", "nats://node-b.internal:6222",
+				"nats://node-c.internal:6222", "nats://s3cret@node-c.internal:6222"},
+		}
+		var named int
+		for _, w := range b.Warnings() {
+			if strings.Contains(w.Message, "s3cret") {
+				t.Fatalf("an advisory prints a credential: %s: %s", w.Path, w.Message)
+			}
+			if strings.HasPrefix(w.Path, "stream.cluster.peers[") {
+				named++
+			}
+		}
+		if named != 2 {
+			t.Fatalf("want an advisory for peers[0] and peers[3], got %d: %+v", named, b.Warnings())
+		}
+	})
+}
+
+// A fleet URL as a sentence quotes it keeps its scheme, host and port and
+// none of its userinfo, whatever shape the entry has — the shape refusals
+// quote only what carriesCredential let through, so this is the one place
+// the helper's schemeless half is held, and the reason a reordering of the
+// checks could not put a credential back into a refusal.
+//
+// Mutation: keep a schemeless entry's text before its `@` → the schemeless
+// rows print s3cret, red. Take whatever precedes the first `://` as a scheme
+// → the row whose password holds `://` prints `ops:s3`, red.
+func TestAQuotedFleetURLCarriesNoUserinfo(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ raw, want string }{
+		{"nats://ops:s3cret@node-b.internal:6222", "nats://node-b.internal:6222"},
+		{" nats-leaf://s3cret@member-a.internal:7422 ", "nats-leaf://member-a.internal:7422"},
+		{"nats://ops:s3@cret@node-b.internal:6222", "nats://node-b.internal:6222"},
+		{"ops:s3cret@node-b.internal:6222", "node-b.internal:6222"},
+		{"s3cret@node-b.internal:6222", "node-b.internal:6222"},
+		{"ops:s3://cret@node-b.internal:6222", "node-b.internal:6222"},
+		{"nats://node-b.internal:6222", "nats://node-b.internal:6222"},
+		{"node-b.internal:6222", "node-b.internal:6222"},
+	} {
+		if got := withoutUserinfo(tc.raw); got != tc.want {
+			t.Errorf("withoutUserinfo(%q) = %q, want %q", tc.raw, got, tc.want)
+		}
 	}
 }
 

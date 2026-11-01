@@ -862,10 +862,12 @@ type clusterMembers struct {
 
 // discountedPeer is a peer entry not counted as another member, and why.
 type discountedPeer struct {
-	// Index is the entry's position in stream.cluster.peers, and Raw what
-	// it says.
+	// Index is the entry's position in stream.cluster.peers, and Shown
+	// what it says with any userinfo dropped ([withoutUserinfo]): every
+	// sentence that names a discounted entry quotes this, and an entry with
+	// a credential is discounted like any other before it is refused.
 	Index int
-	Raw   string
+	Shown string
 
 	// Self is set when the entry is this node's own route, and Matches
 	// names the setting it matched ("cluster.host and cluster.port" or
@@ -907,13 +909,13 @@ func (c StreamCluster) members() clusterMembers {
 		}
 		if setting, self := own[addr]; self {
 			out.Discounted = append(out.Discounted, discountedPeer{
-				Index: i, Raw: raw, Self: true, Matches: setting,
+				Index: i, Shown: withoutUserinfo(raw), Self: true, Matches: setting,
 			})
 			continue
 		}
 		if first, repeat := seen[addr]; repeat {
 			out.Discounted = append(out.Discounted, discountedPeer{
-				Index: i, Raw: raw, RepeatOf: first,
+				Index: i, Shown: withoutUserinfo(raw), RepeatOf: first,
 			})
 			continue
 		}
@@ -973,16 +975,70 @@ func routeAddress(raw string) (string, bool) {
 }
 
 // carriesCredential reports whether a fleet URL — a peer's route or a member's
-// leaf listener — carries a userinfo: `user:pass@`, or a bare `token@`.
+// leaf listener — carries a userinfo: `user:pass@`, or a bare `token@`, with
+// a scheme or without one.
 //
 // REFUSED IN A FLEET URL, because a fleet's credentials are DERIVED from
 // secrets.keys, never written (ADR-0064): the engine sets each route's
 // userinfo itself, so one written there is overwritten and is a password
 // sitting in a config file for nothing, and a leaf link presents an nkey,
 // beside which nats-server would also send a URL's userinfo, in clear.
+//
+// ANY `@` IS ONE, read off the text rather than off a parse. A route or a
+// leaf URL is a scheme, a host and a port, so a userinfo is the only thing
+// an `@` in one can be — and a parse misses the entries most likely to hold
+// one: `ops:s3cret@node-b:6222`, written without its scheme, parses as the
+// scheme `ops` with no userinfo at all, `s3cret@node-b:6222` does not parse,
+// and neither does a userinfo beside a mistyped port. Each of those fell
+// through to the shape refusal, whose sentence quoted the credential this
+// rule exists to keep out of one. An empty userinfo (`nats://@host`) is
+// refused too: it sends nothing a member could check, and is never what a
+// fleet URL means.
 func carriesCredential(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	return err == nil && u.User != nil
+	return strings.Contains(raw, "@")
+}
+
+// withoutUserinfo is a fleet URL as a sentence may quote it: as written, with
+// everything between its scheme and its last `@` dropped — or everything up
+// to that `@`, where the entry opens with no scheme.
+//
+// EVERY SENTENCE THAT QUOTES A PEER OR A LEAF URL QUOTES IT THROUGH THIS —
+// a refusal, a count's clause, an advisory — because those sentences reach
+// `crewlet validate`, a refused boot's stderr and a config_advisory log line.
+// An entry that carries a credential is refused for it ([carriesCredential])
+// BESIDE the rules that count it (its own route, a repeat), whose sentences
+// name it too; the shape refusals are reached only by an entry with no `@`,
+// and quote through this all the same, so no reordering of the checks can
+// put a credential back into one.
+//
+// A SCHEME IS ONLY WHAT RFC 3986 CALLS ONE — a letter, then letters, digits,
+// `+`, `-` or `.` — and not merely whatever precedes the first `://`: in
+// `ops:pa://ss@node-b:6222`, a schemeless entry whose password holds `://`,
+// keeping that prefix would quote `ops:pa`.
+func withoutUserinfo(raw string) string {
+	entry := strings.TrimSpace(raw)
+	at := strings.LastIndex(entry, "@")
+	if at < 0 {
+		return entry
+	}
+	if scheme := strings.Index(entry, "://"); scheme > 0 && scheme < at && isURLScheme(entry[:scheme]) {
+		return entry[:scheme+len("://")] + entry[at+1:]
+	}
+	return entry[at+1:]
+}
+
+// isURLScheme reports whether s is a URL scheme as RFC 3986 §3.1 spells one:
+// ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ).
+func isURLScheme(s string) bool {
+	for i, r := range s {
+		switch {
+		case 'a' <= r && r <= 'z', 'A' <= r && r <= 'Z':
+		case i > 0 && ('0' <= r && r <= '9' || r == '+' || r == '-' || r == '.'):
+		default:
+			return false
+		}
+	}
+	return s != ""
 }
 
 // presentsCredential answers whether an external stream's dial presents
@@ -1059,9 +1115,9 @@ func (m clusterMembers) discountedList() string {
 func (d discountedPeer) describe() string {
 	if d.Self {
 		return fmt.Sprintf("peers[%d] %q, which is this node's own route (%s)",
-			d.Index, d.Raw, d.Matches)
+			d.Index, d.Shown, d.Matches)
 	}
-	return fmt.Sprintf("peers[%d] %q, which repeats peers[%d]", d.Index, d.Raw, d.RepeatOf)
+	return fmt.Sprintf("peers[%d] %q, which repeats peers[%d]", d.Index, d.Shown, d.RepeatOf)
 }
 
 // MaxStreamReplicas is the most copies a stream may keep.
@@ -2091,7 +2147,7 @@ func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
 			if err != nil || u.Host == "" || !slices.Contains(leafSchemes, u.Scheme) {
 				p.add(at(path, fmt.Sprintf("urls[%d]", i)), ErrUnknownValue,
 					"%q is not a member's leaf listener: want %s://host:port",
-					raw, leafSchemes[0])
+					withoutUserinfo(raw), leafSchemes[0])
 			}
 		}
 		return p.err()
@@ -2340,7 +2396,7 @@ func (s *Stream) validate(path Path) error {
 				p.add(idx(at(path, "cluster.peers"), i), ErrUnknownValue,
 					"%q is not a member's route URL: want nats://host:port — "+
 						"the embedded server dials each entry's host and port, "+
-						"and one it cannot dial is never routed to", raw)
+						"and one it cannot dial is never routed to", withoutUserinfo(raw))
 			}
 		}
 	}

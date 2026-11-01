@@ -733,12 +733,12 @@ func (b *Bootstrap) Warnings() []Warning {
 						"members, and the quorum and replica rules count this node "+
 						"once. Remove it. Another name for this host that this file "+
 						"cannot recognise — a DNS alias, `localhost` — would be "+
-						"counted as a member it is not", d.Raw, d.Matches)))
+						"counted as a member it is not", d.Shown, d.Matches)))
 				continue
 			}
 			out = append(out, advisory(where, fmt.Sprintf(
 				"%q repeats peers[%d], and one member listed twice is counted "+
-					"once. Remove it", d.Raw, d.RepeatOf)))
+					"once. Remove it", d.Shown, d.RepeatOf)))
 		}
 	}
 
