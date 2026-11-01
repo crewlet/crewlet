@@ -446,7 +446,8 @@ func collectionRecorded(t *testing.T, fleet *coordmemory.Fleet) (CollectionRepor
 func TestTheCollectorRunsThePassThatIsDueAndRecordsIt(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
-	e, duty, fleet := collectorNode(t, source)
+	backend, upload := agedUploads(t)
+	e, duty, fleet := collectorNodeOn(t, source, backend)
 
 	if _, found := collectionRecorded(t, fleet); found {
 		t.Fatal("the premise: a report was recorded before any pass ran")
@@ -467,6 +468,10 @@ func TestTheCollectorRunsThePassThatIsDueAndRecordsIt(t *testing.T) {
 		t.Fatalf("the second turn recorded audit %+v, want a completed audit", r.Status.Audit)
 	}
 
+	// SOMETHING PAST THE GRACE, so a pass that ran where none is due would
+	// judge it and take a barrier: over a store holding nothing to judge, a
+	// pass takes none, and the count below could not move either way.
+	upload()
 	barriers := source.barriers
 	for range 3 {
 		e.collectorTurn(t.Context(), nil, duty)
@@ -483,7 +488,9 @@ func TestTheCollectorRunsThePassThatIsDueAndRecordsIt(t *testing.T) {
 func TestATakenDutyResumesTheScheduleItsLastHolderRecorded(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
-	e, duty, fleet := collectorNode(t, source)
+	// AN AGED UPLOAD, so a pass that wrongly ran would judge it and take the
+	// barrier this case counts.
+	e, duty, fleet := collectorNodeHolding(t, source)
 	now := time.Now()
 	raw, err := json.Marshal(collectionReport{Node: "data-b", Backend: "nats", Status: collect.Status{
 		Collect: collect.CollectionReport{Completed: true, At: now.Add(-10 * time.Minute)},
@@ -781,7 +788,10 @@ func TestATakenDutyResumesNothingFromAnotherStoresReport(t *testing.T) {
 func TestARecordThatCannotBeReadResumesNothing(t *testing.T) {
 	t.Parallel()
 	source := &namedNothing{}
-	e, duty, fleet := collectorNode(t, source)
+	// AN AGED UPLOAD, so a pass that runs judges something and takes the
+	// barrier this case reads: a pass over a store holding nothing past the
+	// grace decides nothing and takes none.
+	e, duty, fleet := collectorNodeHolding(t, source)
 	now := time.Now()
 	// A WELL-FORMED DOCUMENT with a recent collection beside an audit of the
 	// wrong type: the decoder fills the first and reports the second.
@@ -862,14 +872,20 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 		}
 	}
 	// unanswered is a node over source whose fleet withholds the record the
-	// next time it is asked.
+	// next time it is asked, over a store holding an aged upload, and the put
+	// of another: a pass judges an object past the grace and takes a barrier,
+	// so a turn that ran one where none may run moves the count [unchanged]
+	// reads. Over a store holding nothing to judge, no pass takes a barrier
+	// and the count could not move either way.
 	unanswered := func(t *testing.T, source collect.Source) (*Engine, *collectorDuty,
-		*coordmemory.Fleet, *unansweredRecord) {
+		*coordmemory.Fleet, *unansweredRecord, func()) {
 		t.Helper()
-		e, duty, fleet := collectorNode(t, source)
+		backend, upload := agedUploads(t)
+		upload()
+		e, duty, fleet := collectorNodeOn(t, source, backend)
 		record := &unansweredRecord{memFleet: fleet}
 		e.backends.Fleet = record
-		return e, duty, fleet, record
+		return e, duty, fleet, record, upload
 	}
 	mine := func(context.Context) (bool, error) { return true, nil }
 	missing := func(e *Engine) int {
@@ -909,7 +925,7 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 	t.Run("a node taking the duty", func(t *testing.T) {
 		t.Parallel()
 		source := &namedNothing{}
-		e, duty, fleet, record := unanswered(t, source)
+		e, duty, fleet, record, _ := unanswered(t, source)
 		recordLost(t, fleet, []collect.MissingFile{{Object: objstore.KeyAt(time.Now()),
 			NamedBy: "ENG/lost.md", Finding: collect.FindingMissing}})
 
@@ -929,7 +945,7 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 	t.Run("a node taking it back after an unknown claim", func(t *testing.T) {
 		t.Parallel()
 		source := &namedObject{k: objstore.KeyAt(time.Now())}
-		e, duty, fleet, record := unanswered(t, source)
+		e, duty, fleet, record, upload := unanswered(t, source)
 		e.collectorTurn(t.Context(), nil, duty) // collect
 		e.collectorTurn(t.Context(), nil, duty) // audit: the one object is lost
 		e.collectorTurn(t.Context(), func(context.Context) (bool, error) {
@@ -943,6 +959,7 @@ func TestARecordTheStoreDidNotGiveUpRunsNoPass(t *testing.T) {
 		duty.mu.Lock()
 		duty.collected = time.Time{} // a collection is due: a pass would run if one could
 		duty.mu.Unlock()
+		upload() // and one past the grace for it to judge, whatever the collection did with the first
 		barriers := source.barriers
 
 		record.fails.Store(1)
