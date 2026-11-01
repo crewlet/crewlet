@@ -193,7 +193,8 @@ func unchecked(err error) error {
 //     builder can judge a push against rules other than its own synced row's.
 //  3. BLOBS, over the push's own pack (largestBlob) — only while anything is
 //     left to decide, and refusing only what is: a refusal that came first
-//     is the one the person has to act on.
+//     is the one the person has to act on. For a coding box's push the same
+//     pass spools the pack's commits for step 8 (packCommits).
 //  4. ATOMIC: a push refused in part is refused whole.
 //  5. NOTHING LEFT: every command refused, so nothing is stored.
 //  6. THE SIZE: a bundle past code.MaxPackBytes is refused before its upload.
@@ -278,6 +279,9 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		ref *code.PackRef
 		// idx is the pack's index, whose ids the scans of the pack read.
 		idx string
+		// commits is a coding box's pack's commits, as the blob scan spools
+		// them for step 8; nil for any other push.
+		commits *packCommits
 	)
 	if hasPack {
 		// The push's ONE stored object, laid out from its scratch's three
@@ -292,7 +296,14 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		}
 	}
 	if ref != nil && undecided(cmds) {
-		oid, size, found, berr := s.largestBlob(ctx, l.Scratch, idx, ref.PackBytes(), limits.MaxBlobBytes)
+		if l.EngineCommitter != "" {
+			if commits, err = newPackCommits(l.Scratch.Dir); err != nil {
+				return landed{}, unchecked(err)
+			}
+			defer commits.remove()
+		}
+		oid, size, found, berr := s.largestBlob(ctx, l.Scratch, idx, ref.PackBytes(), limits.MaxBlobBytes,
+			commits)
 		if berr != nil {
 			return landed{}, unchecked(berr)
 		}
@@ -358,9 +369,11 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	// nothing, whatever its commands came to: the pack is stored whole or not
 	// at all, so a commit of it that only a refused update reaches, or that
 	// none does, would be the repository's as surely as one a landed update
-	// reaches.
+	// reaches. Its commits are those step 3's pass spooled: a push reaches
+	// here only where that pass read the whole index, every push it ended
+	// early having been refused whole by step 5.
 	if ref != nil && l.EngineCommitter != "" {
-		detail, refused, ferr := s.forged(ctx, &l, idx, ref.PackBytes())
+		detail, refused, ferr := s.forged(ctx, &l, commits, ref.PackBytes())
 		if ferr != nil {
 			return landed{}, unchecked(ferr)
 		}
@@ -735,10 +748,11 @@ func (e *invalidProposal) Unwrap() error { return e.err }
 
 // forged is land's step 8 for a coding box's push: the sentence its every
 // command still standing is refused forged_committer with, and refused true,
-// where the push's pack (idx, its index) holds a commit committed as the
-// engine (l.EngineCommitter, committedAs) that the repository does not
-// already hold — the first such, by the pack's index order — or more such
-// commits than one push is checked for (maxEngineCommits); refused false for a
+// where the push's pack (commits, its commits as the blob scan spooled them)
+// holds a commit committed as the engine (l.EngineCommitter, committedAs) that
+// the repository does not already hold — the first such, by the pack's index
+// order — or more such commits than one push is checked for
+// (maxEngineCommits); refused false for a
 // pack whose every such commit the repository holds, and for one holding none,
 // which asks the repository nothing.
 //
@@ -758,10 +772,10 @@ func (e *invalidProposal) Unwrap() error { return e.err }
 // commit is absent. What it holds, it holds by a landed push or an engine
 // write, never by a box's pack this step refused — so a box cannot make a
 // commit held by a push of its own first.
-func (s *Server) forged(ctx context.Context, l *landing, idx string, packBytes int64) (detail string,
+func (s *Server) forged(ctx context.Context, l *landing, commits *packCommits, packBytes int64) (detail string,
 	refused bool, err error) {
 
-	found, pastBound, err := s.committedAs(ctx, l.Scratch, idx, packBytes, l.EngineCommitter)
+	found, pastBound, err := s.committedAs(ctx, l.Scratch, commits, packBytes, l.EngineCommitter)
 	if err != nil || len(found) == 0 {
 		return "", false, err
 	}

@@ -238,9 +238,13 @@ func SpoolWaitersPerCredential(transfers int) int {
 // (code.UploadDeadline: objstore.ReadBase and the pace floor every leg is
 // held to), ProposeBudget, and the pending wait — summed, though the
 // introduced listing runs beside the put, because a bound on the two together
-// is no less than the longer of them. The put's term IS the bound the put is
-// given (code.StoreBundle), read from the one function, so the hook never
-// kills a receive-pack whose upload is still inside its own deadline.
+// is no less than the longer of them. A coding box's push scans once more,
+// its commits' committers before the put (committedAs, one more
+// gitproc.PackWorkDeadline), and fits the same sum: its listing, still beside
+// the put, is far shorter than the put's term at that size. The put's term
+// IS the bound the put is given (code.StoreBundle), read from the one
+// function, so the hook never kills a receive-pack whose upload is still
+// inside its own deadline.
 // Over code.MaxPackBytes rather than the epoch's push limit, because what the
 // landing scans and stores is the client's input COMPLETED against the
 // repository plus its indexes, which a thin push can grow past

@@ -350,12 +350,16 @@
 // stored or proposed. The pack, not the commits its updates introduce: it is
 // stored whole, with the objects of an update refused beside one that lands
 // and any a client sent that no ref reaches, each the repository's once it
-// lands (committedAs). A person's push is never read for its committers, and
-// may carry the engine's commits as git carries any. A commit the repository
-// already holds is no forgery — the engine's own commits on a branch deleted
-// since a box checked it out — so each is asked of the copy the scratch leans
-// on in one cat-file (forged), and a push may bring back maxEngineCommits of
-// them, a longer history in parts.
+// lands (committedAs). Its commits are read a commit at a time — the ids the
+// blob scan's one pass over the pack's index told apart, then one cat-file
+// printing each, its header read and its message passed over — so what the
+// read holds is one commit, never the pack's sum of commit text, which a box
+// may inflate far past the pack's bytes. A person's push is never read for its
+// committers, and may carry the engine's commits as git carries any. A commit
+// the repository already holds is no forgery — the engine's own commits on a
+// branch deleted since a box checked it out — so each is asked of the copy the
+// scratch leans on in one cat-file (forged), and a push may bring back
+// maxEngineCommits of them, a longer history in parts.
 //
 // # A check's box is admitted by its attempt's row
 //
