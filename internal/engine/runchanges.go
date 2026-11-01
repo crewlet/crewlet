@@ -201,10 +201,11 @@ func (p runPushes) openOne(ctx context.Context, reader pushReader, run sandbox.P
 
 // deliveredTitle is the title of the change a run's ask opens without naming
 // one: the subject of the commit the run delivered its branch at — what that
-// commit says it does, as a push's options title theirs (code.AsTitle) — read
-// by object id as the seat, at or past the read that found the branch; and,
-// where it cannot be read or is no title, the branch's name: an ask is never
-// left unopened for its title.
+// commit says it does, as a push's options title theirs — read by object id
+// as the seat, at or past the read that found the branch; and, where it cannot
+// be read or is no title, the branch's name and then the commit's id, each
+// made a title (code.DeliveredTitle) — never the name raw, which may hold what
+// a title may not: an ask is never left unopened for its title.
 func (p runPushes) deliveredTitle(ctx context.Context, reader pushReader, run sandbox.PendingRun,
 	r sandbox.RunRepo, head string, at statelog.Position) string {
 
@@ -214,14 +215,13 @@ func (p runPushes) deliveredTitle(ctx context.Context, reader pushReader, run sa
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_change_title_unread", "turn_id", run.TurnID, "repo", r.Repo,
 			"commit", head, "error", err.Error())
-		return r.Branch
+		return code.DeliveredTitle("", r.Branch, head)
 	}
+	subject := ""
 	if answer.Log != nil && len(answer.Log.Commits) == 1 {
-		if title := code.AsTitle(answer.Log.Commits[0].Subject); title != "" {
-			return title
-		}
+		subject = answer.Log.Commits[0].Subject
 	}
-	return r.Branch
+	return code.DeliveredTitle(subject, r.Branch, head)
 }
 
 // openOpID is the operation id of the open run's launch asks of repository

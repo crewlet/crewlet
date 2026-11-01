@@ -96,6 +96,34 @@ func TestAChangeAPushOpensIsTitledByItsHeadCommit(t *testing.T) {
 	}
 }
 
+// A PUSHED CHANGE IS TITLED WHATEVER ITS BRANCH IS NAMED: a commit with no
+// message titles its change by the branch's name, made a title — and a name
+// git accepts may hold U+0085, a C1 control character a title refuses as a
+// line break — so a push of such a commit to such a branch, asking for a
+// change, lands and opens it, never refusing the push for a title nobody
+// wrote.
+//
+// Mutation: title it by the branch's name raw (defaultTitle) — the receiver
+// refuses its own proposal and nothing of the push lands, red.
+func TestAPushedChangeIsTitledWhateverItsBranchIsNamed(t *testing.T) {
+	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	p.Git().Run(t, work, "commit", "-q", "--allow-empty", "--allow-empty-message", "-m", "")
+	const branch = "refs/heads/a\u0085b"
+	res := p.PushArgs(c.Ctx, work, []string{"-o", "change"}, c.URL(0), "HEAD:"+branch)
+	if !res.OK(branch) || !remoteSaid(res, "change "+codetest.RepoName+"!1 opened") {
+		t.Fatalf("a push of a commit with no message to a branch holding U+0085, asking for a change: %s", res)
+	}
+	got, _ := changeNumbered(t, c, 1)
+	if got == nil || got.Title != "a b" || got.SourceRef != branch {
+		t.Fatalf("the change the push opened is %+v, want one from %q titled by its name, made a title", got,
+			branch)
+	}
+}
+
 // A PUSH ANSWERED PENDING NAMES THE CHANGE IT OPENED ONCE IT LANDS: the
 // receiver waits for the push's row, and asks the push's outcome of the change
 // it opened as well, which the rows say — an answer that lost the decision's

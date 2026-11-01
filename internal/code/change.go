@@ -391,15 +391,43 @@ func OpenChangeID(opID string) string {
 // bang and its number — web!42.
 func ChangeRef(repo string, number int64) string { return fmt.Sprintf("%s!%d", repo, number) }
 
+// DeliveredTitle is the title of a change opened from branch, a branch's
+// short name, without a title of its own: subject — the subject of head, the
+// commit its branch was delivered at, "" where it could not be read — made a
+// title ([AsTitle]); where that is none (a commit with no message, a subject in
+// another encoding, one never read), the branch's name made one the same
+// way; and where even that is none, "commit" and head's abbreviated id.
+// ALWAYS A TITLE — [TitleProblem] finds nothing in it — because neither of
+// its openers is refused for its title: a push's options (internal/code/host),
+// whose change never fails its push, and a coding run's ask at its
+// collection (internal/engine), never left unopened for its title. ONE RULE
+// for both, so a change opened either way from one commit takes one title.
+//
+// THE BRANCH'S NAME IS MADE A TITLE TOO, never taken raw: a name git and
+// gitref.ValidRef accept may hold what a title may not — a C1 control
+// character such as U+0085, which both admit from U+0080 up and a title
+// refuses as a line break, or more bytes than [MaxChangeTitleBytes] — and a
+// name of nothing but such characters is no title at all, which is what the
+// commit's id is for.
+func DeliveredTitle(subject, branch, head string) string {
+	if title := AsTitle(subject); title != "" {
+		return title
+	}
+	if title := AsTitle(branch); title != "" {
+		return title
+	}
+	return "commit " + head[:min(len(head), 7)]
+}
+
 // AsTitle is s made a change's title, or "" where it cannot be one: valid
 // UTF-8 — a subject in another encoding is no title — on one line, every run
 // of spaces and control characters one space, and past [MaxChangeTitleBytes]
 // cut on a rune boundary with a marker: a title nobody wrote is a preview of
-// the subject, which its commit keeps whole. What an open that names no title
-// of its own is titled from — the subject of the commit its branch was
-// delivered at — for a push's options (internal/code/host) and for a coding
-// run's ask at its collection (internal/engine): ONE RULE for both, so a
-// change opened either way from one commit takes one title.
+// the subject, which its commit keeps whole. Exported for the one other title
+// the engine writes rather than a person, a revert_change's "Revert
+// <repo>!<n>" (internal/code/host), whose repository name has no bound of its
+// own below the title's; a change opened from a delivered branch takes
+// [DeliveredTitle], which never answers "".
 func AsTitle(s string) string {
 	if !utf8.ValidString(s) {
 		return ""

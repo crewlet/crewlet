@@ -304,7 +304,7 @@ together or not at all. More options shape it:
 |---|---|
 | `-o change` | Asks for a change. The options below do nothing without it, so a target kept in your `push.pushOption` configuration waits for a push that asks. |
 | `-o change.target=<branch>` | The branch it proposes into, by name (`main`) or in full (`refs/heads/main`): the repository's default branch unless you name one. |
-| `-o change.title=<title>` | Its title, one line of at most 256 bytes: the subject of the commit you pushed unless you name one. |
+| `-o change.title=<title>` | Its title, one line of at most 256 bytes: the subject of the commit you pushed unless you name one — or, for a commit with no message, the branch's name. |
 | `-o change.description=<text>` | Its description, at most 32 KiB — one line, since git takes no line break in a push option. |
 | `-o change.draft` | Opens it as a draft, not yet asking to be merged. |
 

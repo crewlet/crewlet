@@ -133,9 +133,10 @@ const commitHeadBytes = 64 << 10
 // one: the subject of the commit the push sets its source to — what that
 // commit says it does, which is what a change is first read by — read in the
 // push's own scratch, whose pack or alternate holds every commit a push sets
-// a ref to. Where it cannot be read, or is no title once made one (code.AsTitle),
-// the branch's name, which the push's checks have held to a ref's rules: a
-// title always, since a push's change is never refused for its title.
+// a ref to; and, where it cannot be read or is no title, the branch's name
+// and then the commit's id, each made a title (code.DeliveredTitle) — never
+// the name raw, which may hold what a title may not: a title always, since a
+// push's change is never refused for its title.
 func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Command) string {
 	branch := strings.TrimPrefix(source.Ref, "refs/heads/")
 	head := &headBytes{max: commitHeadBytes}
@@ -145,12 +146,9 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Comma
 	}); err != nil {
 		s.log.Warn("code_change_title_unread", "repo", l.Synced.Repo.Name, "push_id", l.PushID,
 			"commit", source.New, "error", err)
-		return branch
+		return code.DeliveredTitle("", branch, source.New)
 	}
-	if title := code.AsTitle(logSubject(head.buf)); title != "" {
-		return title
-	}
-	return branch
+	return code.DeliveredTitle(logSubject(head.buf), branch, source.New)
 }
 
 // logSubject is the subject of raw, a commit object as `git cat-file commit`
@@ -161,7 +159,8 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Comma
 // joined by a space (pretty.c's format_subject), or "" where raw holds no
 // message. Its headers end at the first blank line: a header's continuation
 // lines (a signature's) each start with a space. Its bytes are the commit's,
-// never re-encoded: a subject in another encoding is no title (code.AsTitle).
+// never re-encoded: a subject in another encoding is no title
+// (code.DeliveredTitle).
 //
 // NOT commitSubject's subject (message.go), which is a message's first LINE —
 // the subject a revert quotes, as the sequencer finds it — since a change is

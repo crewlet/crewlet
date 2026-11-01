@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -433,6 +434,44 @@ func TestTheGuideNamesEveryChangeOption(t *testing.T) {
 	for _, named := range regexp.MustCompile("`-o (change[^`]*)`").FindAllStringSubmatch(section, -1) {
 		if !slices.Contains(keys, named[1]) {
 			t.Errorf("the guide names `-o %s`, which is no option of a change the code host reads", named[1])
+		}
+	}
+}
+
+// A DELIVERED CHANGE IS ALWAYS TITLED: whatever the commit its branch was
+// delivered at says, and whatever that branch is named — any name git
+// accepts — the title a change opened without one takes is one an open
+// accepts (code.TitleProblem finds nothing): the subject where it can title
+// it, else the branch's name made a title, never raw — a C1 control
+// character git and gitref admit is a line break to a title — else the
+// commit's id.
+//
+// Mutations: fall back to the branch's name raw — the names holding U+0085
+// are no titles, red; answer the name made a title even where it is empty —
+// the name of nothing but U+0085 is titled by nothing, red.
+func TestADeliveredChangeIsAlwaysTitled(t *testing.T) {
+	t.Parallel()
+	head := strings.Repeat("ab", 20)
+	for _, tc := range []struct {
+		name, subject, branch, want string
+	}{
+		{"a subject", "Retry the upload", "feature", "Retry the upload"},
+		{"a subject holding a C1 control", "Retry\u0085the upload", "feature", "Retry the upload"},
+		{"no subject", "", "feature", "feature"},
+		{"a subject in another encoding", "R\xe9essayer", "feature", "feature"},
+		{"no subject, a branch holding U+0085", "", "a\u0085b", "a b"},
+		{"no subject, a branch of nothing but U+0085", "", "\u0085", "commit " + head[:7]},
+		{"no subject, a branch longer than a title", "", strings.Repeat("é", gitref.MaxBranchBytes/2), ""},
+	} {
+		if !gitref.ValidBranch(tc.branch) {
+			t.Fatalf("%s: %q is no branch git accepts, so no open is delivered from it", tc.name, tc.branch)
+		}
+		got := code.DeliveredTitle(tc.subject, tc.branch, head)
+		if why := code.TitleProblem(got); why != "" {
+			t.Errorf("%s: the title %q is no title an open accepts: %s", tc.name, got, why)
+		}
+		if tc.want != "" && got != tc.want {
+			t.Errorf("%s: titled %q, want %q", tc.name, got, tc.want)
 		}
 	}
 }

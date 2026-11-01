@@ -1236,7 +1236,11 @@ one](../guides/code.md#open-a-change-from-a-push)).
   that sets no branch, or several, opens none. Its target is the branch
   `change.target` names, or the repository's default branch; its title the
   one `change.title` names, or the subject of the commit the push set the
-  branch to.
+  branch to — else, for a commit with no message or one not in UTF-8, the
+  branch's name made one line (a name git accepts may hold a control
+  character a title may not), and for a name of nothing a title may hold,
+  `commit` and the commit's short id. A push is never refused for a title
+  nobody wrote.
 - **By its pusher, as an open is.** The pusher is the change's owner and
   first author, and the push its first revision. A seat's push names the turn
   that made it, and a push the seat's coding box made the coding run that

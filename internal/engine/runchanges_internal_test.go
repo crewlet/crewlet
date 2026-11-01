@@ -184,6 +184,34 @@ func TestARunOpensItsChangeOnceAtCollect(t *testing.T) {
 	}
 }
 
+// A RUN'S CHANGE IS TITLED WHATEVER ITS BRANCH IS NAMED: a run that delivered
+// a commit with no subject asks the open titled by its branch's name, made a
+// title as a push's change is (code.DeliveredTitle) — and a branch git accepts
+// may hold U+0085, a C1 control character an open refuses in a title as a
+// line break — so the ask is never left unopened for a title nobody wrote.
+//
+// Mutation: title it by the branch's name raw — the open carries U+0085, red.
+func TestARunsChangeIsTitledWhateverItsBranchIsNamed(t *testing.T) {
+	t.Parallel()
+	run := openingRun()
+	run.Repos[0].Branch = "seats/swe/a\u0085b"
+	branch := "refs/heads/" + run.Repos[0].Branch
+	host := newChangeHost()
+	host.subject = ""
+	pushed := []sandbox.PushedRef{{Repo: "web", Ref: branch, Old: code.ZeroOID, New: oidOf("1"), Pushes: 1}}
+	if _, opened, err := readerOf(host).Changes(t.Context(), run, pushed, true); err != nil || len(opened) != 1 ||
+		!opened[0].Opened {
+		t.Fatalf("a run that delivered a commit with no subject to a branch holding U+0085: %+v, %v", opened, err)
+	}
+	_, writes, _ := host.asked()
+	if len(writes) != 1 || writes[0].Open == nil {
+		t.Fatalf("the collection asked %+v, want one open", writes)
+	}
+	if title := writes[0].Open.Title; title != "seats/swe/a b" || code.TitleProblem(title) != "" {
+		t.Fatalf("the open is titled %q, want its branch's name made a title, %q", title, "seats/swe/a b")
+	}
+}
+
 // A DELIVERED REF NAMES ITS CHANGE (M4-decisions D33): every branch a collected
 // run pushed is named by the live change it heads — the run's own, or one
 // anybody opened — read once a repository, the first read linearizable and
