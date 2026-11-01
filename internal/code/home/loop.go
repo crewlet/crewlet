@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -300,7 +301,20 @@ func New(o Options) (*Loop, error) {
 	l.merges = &queue{estate: o.Estate, chains: o.Chains, tasks: o.Tasks, checks: l.checks, node: o.NodeID,
 		log: l.log, now: l.now}
 	l.workers = []Worker{l.changes, l.checks, l.merges}
+	l.changes.factsRecorded = func(repoID string, at statelog.Position) { l.follow(l.checks, repoID, at) }
 	return l, nil
+}
+
+// follow schedules w's work in repoID at at: one worker's record that moves
+// another's work, on a subject the watch does not see — a revision's facts,
+// on its change's subject, which a head's dispatch waits for.
+func (l *Loop) follow(w Worker, repoID string, at statelog.Position) {
+	l.mu.Lock()
+	i := slices.Index(l.workers, w)
+	l.mu.Unlock()
+	if i >= 0 {
+		l.schedule(i, repoID, at)
+	}
 }
 
 // AlarmReading fills the reading's merge-rate half from the merge queues this

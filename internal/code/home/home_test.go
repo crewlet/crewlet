@@ -54,11 +54,15 @@ type estate struct {
 	// factsRead is how many times the facts of each head were read.
 	factsRead map[string]int
 	at        statelog.Position
-	floors    []statelog.Freshness
-	asked     []code.ChangesDueQuery
-	revises   []code.Revise
-	merges    []code.Mergeability
-	landings  []code.ChangeLanded
+	// revisedAt is where a revise's record lands, e.at where it is zero;
+	// checkFloors is every floor one repository's check work was read at.
+	revisedAt   statelog.Position
+	checkFloors []statelog.Freshness
+	floors      []statelog.Freshness
+	asked       []code.ChangesDueQuery
+	revises     []code.Revise
+	merges      []code.Mergeability
+	landings    []code.ChangeLanded
 	// landRefusal and landErr are what every landing is answered while
 	// either is set — a refusal that decided nothing, or a call that failed —
 	// the change left on the list as its rows would leave it.
@@ -132,6 +136,9 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	case q.Kind == code.ReadChecksDue || q.Kind == code.ReadQueueDue:
 		// THE CHECK WORK'S AND THE QUEUE'S LISTINGS: these cases hold no
 		// change owing either.
+		if q.Kind == code.ReadChecksDue && q.ChecksDue != nil && q.ChecksDue.RepoID != "" {
+			e.checkFloors = append(e.checkFloors, q.Fresh)
+		}
 		return code.ReadAnswer{Position: e.at}, nil
 	case q.Kind != code.ReadChangesDue:
 		return code.ReadAnswer{}, errors.New("the home asked a read that is not its listing")
@@ -191,6 +198,9 @@ func (e *estate) Converse(_ context.Context, w code.ConversationWrite) (code.Con
 	case w.Revise != nil:
 		e.revises = append(e.revises, *w.Revise)
 		e.done(w.Revise.RepoID, w.Revise.ChangeID, func(d *code.ChangeDue) { d.FactsDue = false })
+		if !e.revisedAt.IsZero() {
+			return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: e.revisedAt}, nil
+		}
 	case w.Mergeability != nil:
 		// A MERGE RECORDS THE READINESS beside it, and a refresh records it
 		// alone: either leaves the change owing no refresh.
@@ -647,6 +657,47 @@ func TestANudgeOnlyShortensTheWait(t *testing.T) {
 	if revises, _ := e.wrote(); len(revises) != 2 {
 		t.Fatalf("the home recorded %d revisions' facts, want the nudged change's and the one the pass found",
 			len(revises))
+	}
+}
+
+// A REVISION'S FACTS SCHEDULE ITS CHECKS' DISPATCH: the change work's record
+// of a head revision's facts lands on the change's subject, which no watch
+// sees, and a head's checks are dispatched only once its facts are recorded —
+// so the home schedules the repository's check work at the facts' own
+// position the moment they are recorded, its listing read there, with the
+// backstop an hour away and no record on the repository told after them.
+//
+// Mutation: drop the change work's word that it recorded facts — the check
+// work is read at the nudge's position alone, and the head waits for the
+// backstop, red.
+func TestARevisionsFactsScheduleItsChecksDispatch(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	revised := statelog.Position{Stream: topics.CodeLogStream, Seq: 90}
+	e.revisedAt = revised
+	p := &placement{homes: map[string]string{repoA: "node-a"}}
+	n := newNudges()
+	loopOn(t, "node-a", e, p, n, time.Hour)
+	e.waitReads(t, 1)
+	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), PatchID: oid("e"),
+		Touched: []string{"a.go"}})
+	n.subject(t, repoA, 57)
+	e.waitDone(t, repoA, 10*time.Second)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		e.mu.Lock()
+		floors := slices.Clone(e.checkFloors)
+		e.mu.Unlock()
+		if slices.ContainsFunc(floors, func(f statelog.Freshness) bool {
+			return f.Level == statelog.ReadSession && slices.Contains(f.Floors, revised)
+		}) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the repository's check work was read at %+v, never at the facts' position %s", floors,
+				revised)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

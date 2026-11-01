@@ -145,16 +145,17 @@ func (k *checks) Work(ctx context.Context, repoID string, floor statelog.Positio
 //   - its REQUEUES, each the next attempt of a check its infrastructure ended,
 //     under the definition it ran under;
 //   - where its DISPATCH is owed: the attempts its change moved on from
-//     cancelled superseded, then every check the target's tip's checks file
-//     defines that the head holds no attempt of queued — or skipped where the
-//     change touches none of its paths — as its next attempt where an earlier
+//     cancelled superseded; then, once its head revision's facts are recorded
+//     for its target, every check the target's tip's checks file defines
+//     that the head holds no attempt of queued — or skipped where those facts
+//     touch none of its paths — as its next attempt where an earlier
 //     dispatch errored it for a file that did not run; and where the file is
 //     none that runs, every name the target's gate requires that the head
 //     holds no attempt of errored defs_invalid.
 //
 // It answers the checks file the head was dispatched under — nil where it owes
-// no dispatch, or its dispatch is not whole — which its page records once
-// every write of it was decided.
+// no dispatch, or none yet, its facts not recorded — which its page records
+// once every write of it was decided.
 //
 // A refusal saying the rows moved — the repository deleted or archived, an
 // attempt already past where this one would follow — is the rows answering,
@@ -178,13 +179,25 @@ func (k *checks) change(ctx context.Context, repoID string, due code.ChangeDue, 
 			return nil, err
 		}
 	}
+	if w.Facts == nil {
+		// NO FACTS RECORDED YET for the head revision against its target:
+		// nothing is queued, whatever the target's file defines. The facts
+		// are what a `paths` check is matched against, and the one word the
+		// home has that the head is NOT in its target — the change work lands
+		// a head its target holds rather than record its facts — so a
+		// dispatch made without them could queue checks at a head nobody
+		// will merge, or skip by paths nobody read. The change work schedules
+		// this worker where it records them ([Loop.follow]).
+		k.log.Debug("code_check_dispatch_awaits_facts", "repo", repoID, "change", due.Number,
+			"revision", due.Revision, "target", due.TargetRef)
+		return nil, nil
+	}
 	defs, err := memo.at(ctx, k.estate, repoID, due.Tip, at)
 	if err != nil {
 		return nil, fmt.Errorf("home: read the checks file of change %d's target %s at %s: %w", due.Number,
 			due.TargetRef, short(due.Tip), err)
 	}
-	whole, err := k.dispatch(ctx, repoID, due, defs, at)
-	if err != nil || !whole {
+	if err := k.dispatch(ctx, repoID, due, defs, at); err != nil {
 		return nil, err
 	}
 	return defs, nil
@@ -193,13 +206,13 @@ func (k *checks) change(ctx context.Context, repoID string, due code.ChangeDue, 
 // dispatch queues what the head owes of defs, the checks file at its target's
 // tip: every check the file defines that the head holds no attempt of for its
 // target — the NEXT attempt of one an earlier dispatch errored for a file that
-// did not run, the first of any other — queued or skipped by its paths, a
-// name its target's gate requires marked required; and where the file is none
+// did not run, the first of any other — queued, or skipped where the head's
+// recorded facts touch none of its paths, a name its target's gate requires
+// marked required; and where the file is none
 // that runs, every name the gate requires that the head holds no attempt of
-// errored. It answers whether its dispatch is whole, so the dispatch may be
-// recorded: not where the head is in its target, which the change work lands.
+// errored.
 func (k *checks) dispatch(ctx context.Context, repoID string, due code.ChangeDue, defs *checksDefs,
-	at statelog.Position) (bool, error) {
+	at statelog.Position) error {
 
 	w := due.Checks
 	about := fmt.Sprintf("change %d", due.Number)
@@ -229,12 +242,11 @@ func (k *checks) dispatch(ctx context.Context, repoID string, due code.ChangeDue
 			q := base
 			q.Name, q.Attempt, q.Required, q.Invalid = name, 1, true, defs.invalid
 			if err := k.queue(ctx, about, q, at); err != nil {
-				return false, err
+				return err
 			}
 		}
-		return true, nil
+		return nil
 	}
-	var touched *touchedPaths
 	for _, def := range defs.file.Checks {
 		attempt, owed := next(def.Name)
 		if !owed {
@@ -242,41 +254,18 @@ func (k *checks) dispatch(ctx context.Context, repoID string, due code.ChangeDue
 		}
 		q := base
 		q.Name, q.Attempt, q.Def, q.Required = def.Name, attempt, &def, slices.Contains(w.Required, def.Name)
-		if len(def.Paths) > 0 {
-			if touched == nil {
-				t, err := k.touched(ctx, repoID, due, at)
-				if err != nil {
-					return false, err
-				}
-				touched = &t
-			}
-			if touched.landed {
-				// ITS HEAD IS IN ITS TARGET: the change is landed by its
-				// home's change work, and no check of it is owed.
-				return false, nil
-			}
-			q.Skipped = !touched.matches(def)
-		}
+		q.Skipped = len(def.Paths) > 0 && !touches(*w.Facts, def)
 		if err := k.queue(ctx, about, q, at); err != nil {
-			return false, err
+			return err
 		}
 	}
-	return true, nil
+	return nil
 }
 
-// touchedPaths is what a change's head touches against its target's tip:
-// every path, or everything (all), or nothing to measure — its head in its
-// target (landed).
-type touchedPaths struct {
-	paths  []string
-	all    bool
-	landed bool
-}
-
-// matches reports whether the change touches a path one of def's globs
-// matches: every check where the change touches everything.
-func (t touchedPaths) matches(def code.CheckDef) bool {
-	if t.all {
+// touches reports whether a head whose recorded facts are f touches a path
+// one of def's globs matches: every check where it touches everything.
+func touches(f code.TouchedPaths, def code.CheckDef) bool {
+	if f.TouchesAll {
 		return true
 	}
 	for _, glob := range def.Paths {
@@ -287,32 +276,11 @@ func (t touchedPaths) matches(def code.CheckDef) bool {
 			// path rather than skip a check nobody can tell was skipped.
 			return true
 		}
-		if slices.ContainsFunc(t.paths, g.Match) {
+		if slices.ContainsFunc(f.Touched, g.Match) {
 			return true
 		}
 	}
 	return false
-}
-
-// touched reads what due's head touches against its target's tip: the
-// revision's facts, the engine's own git read (internal/code's
-// GitRevisionFacts) — the same read the change work records, which the
-// answering git node holds for the pair — asked at the listing's position, so
-// the git node answering holds both commits.
-func (k *checks) touched(ctx context.Context, repoID string, due code.ChangeDue, at statelog.Position) (
-	touchedPaths, error) {
-
-	a, err := k.estate.GitRead(ctx, code.GitQuery{Kind: code.GitRevisionFacts, RepoID: repoID, Fresh: freshAt(at),
-		RevisionFacts: &code.RevisionFactsQuery{Head: due.Head, Target: due.Tip}})
-	switch {
-	case err != nil:
-		return touchedPaths{}, fmt.Errorf("home: read what change %d's head touches: %w", due.Number, err)
-	case a.RevisionFacts == nil:
-		return touchedPaths{}, fmt.Errorf("home: what change %d's head touches was answered with no facts",
-			due.Number)
-	}
-	f := a.RevisionFacts
-	return touchedPaths{paths: f.Touched, all: f.TouchesAll, landed: f.HeadInTarget}, nil
 }
 
 // queue asks the repository's checks writer to queue q at the instant now.

@@ -20,8 +20,9 @@ import (
 // THE CHECK WORK OVER STAND-INS: one repository's changes owing their checks
 // work, its targets due a reading of their checks file and its protected
 // targets owing tip work, as the `checks_due` listing answers them
-// (checkEstate.due, .targets, .tips), the checks file each commit holds and
-// what each head touches, as a git node answers them — and every write the
+// (checkEstate.due, .targets, .tips) — each head with what its recorded facts
+// say it touches — the checks file each commit holds, as a git node answers
+// it, and no other git read: the work reads none — and every write the
 // worker asks of the repository's checks writer and of its committer, in the
 // order it asks them.
 type checkEstate struct {
@@ -30,14 +31,13 @@ type checkEstate struct {
 	targets []code.CheckTargetDue
 	tips    []code.TipDue
 	files   map[string]string
-	facts   map[string]code.RevisionFactsAnswer
 	read    []string
 	writes  []code.ChecksRequest
 	records []code.QueueProposal
 }
 
 func newCheckEstate() *checkEstate {
-	return &checkEstate{files: map[string]string{}, facts: map[string]code.RevisionFactsAnswer{}}
+	return &checkEstate{files: map[string]string{}}
 }
 
 func (e *checkEstate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
@@ -73,12 +73,6 @@ func (e *checkEstate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswe
 			a.OID, a.Type, a.Size, a.Raw = blobOf(raw), "blob", int64(len(raw)), []byte(raw)
 		}
 		return code.GitAnswer{Kind: code.GitChecksFile, RepoID: q.RepoID, ChecksFile: a}, nil
-	case code.GitRevisionFacts:
-		f, ok := e.facts[q.RevisionFacts.Head]
-		if !ok {
-			return code.GitAnswer{}, code.ErrObjectNotFound
-		}
-		return code.GitAnswer{Kind: code.GitRevisionFacts, RepoID: q.RepoID, RevisionFacts: &f}, nil
 	}
 	return code.GitAnswer{}, errors.New("the check work asked a git read that is not its own")
 }
@@ -140,8 +134,12 @@ func checkLoop(t *testing.T, e *checkEstate) *home.Loop {
 }
 
 // owing is change n of repoA, its head head and its target main at tip,
-// owing w.
+// owing w — where w owes a dispatch and names no facts, its head revision's
+// facts recorded touching README.md alone.
 func owing(n int64, head, tip string, w code.CheckWork) code.ChangeDue {
+	if w.Dispatch && w.Facts == nil {
+		w.Facts = &code.TouchedPaths{Touched: []string{"README.md"}}
+	}
 	return code.ChangeDue{ID: changeID(repoA, n), Number: n, Revision: 1, Head: head,
 		SourceRef: "refs/heads/feature-" + string(rune('a'+n)), TargetRef: "refs/heads/main", Tip: tip,
 		TipPosition: statelog.Position{Stream: topics.CodeLogStream, Seq: 30}, Checks: &w}
@@ -239,22 +237,24 @@ func TestCheckDefinitionsComeFromTheTarget(t *testing.T) {
 
 // A PATHS CHECK IS SKIPPED WHERE NOTHING MATCHES: a check naming paths is
 // queued where the change touches one its globs match and recorded SKIPPED
-// where it touches none — judged against what the head touches against the
-// target's tip — a check naming none is queued whatever the change touches,
-// and a change touching more than a list holds runs every check.
+// where it touches none — judged against what the head revision's RECORDED
+// facts say it touches, which the listing carries, with no git read of the
+// work's own — a check naming none is queued whatever the change touches, and
+// a change touching more than a list holds runs every check.
 //
-// Mutation: queue a paths check whatever the change touches — docs is queued
-// for a change to cmd/main.go, red.
+// Mutation: queue a paths check whatever the facts say — docs is queued for a
+// change to cmd/main.go, red; and match every head against facts touching
+// everything, whatever the listing carries — the same, red.
 func TestAPathsCheckIsSkippedWhereNothingMatches(t *testing.T) {
 	t.Parallel()
 	tip := oid("2")
 	narrow, wide := oid("3"), oid("4")
 	e := newCheckEstate()
 	e.files[tip] = checksFile(`docs paths: ["docs/**"]`, `go paths: ["**/*.go"]`, "all")
-	e.facts[narrow] = code.RevisionFactsAnswer{Head: narrow, Target: tip, Touched: []string{"cmd/main.go"}}
-	e.facts[wide] = code.RevisionFactsAnswer{Head: wide, Target: tip, TouchesAll: true}
-	e.due = []code.ChangeDue{owing(1, narrow, tip, code.CheckWork{Dispatch: true}),
-		owing(2, wide, tip, code.CheckWork{Dispatch: true})}
+	e.due = []code.ChangeDue{
+		owing(1, narrow, tip, code.CheckWork{Dispatch: true,
+			Facts: &code.TouchedPaths{Touched: []string{"cmd/main.go"}}}),
+		owing(2, wide, tip, code.CheckWork{Dispatch: true, Facts: &code.TouchedPaths{TouchesAll: true}})}
 	l := checkLoop(t, e)
 	if err := home.CheckWork(t.Context(), l, repoA, statelog.Position{}); err != nil {
 		t.Fatalf("the check work: %v", err)
@@ -286,6 +286,44 @@ func TestAPathsCheckIsSkippedWhereNothingMatches(t *testing.T) {
 					skip)
 			}
 		}
+	}
+}
+
+// A HEAD WAITS FOR ITS FACTS, WHATEVER ITS FILE DEFINES: a head whose
+// revision holds no recorded facts for its target — one its target holds,
+// which the change work lands rather than record facts of, or one whose facts
+// are not read yet — has nothing queued and no dispatch recorded, whether its
+// target's file defines a plain check before a `paths` one or no `paths`
+// check at all, and no git read of what it touches is made; the attempts its
+// change moved on from are still ended, which wait on no facts.
+//
+// Mutation: wait for the facts only at a file's first `paths` check — the
+// plain check defined before it is queued at a head nobody will merge, red.
+func TestAHeadWaitsForItsFactsWhateverItsFileDefines(t *testing.T) {
+	t.Parallel()
+	for name, file := range map[string]string{
+		"a plain check before a paths check": checksFile("unit", `docs paths: ["docs/**"]`),
+		"no paths check":                     checksFile("unit", "lint"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			old, head, tip := oid("1"), oid("5"), oid("2")
+			e := newCheckEstate()
+			e.files[tip] = file
+			stale := code.CheckKey{RepoID: repoA, OID: old, Target: "refs/heads/main", Name: "unit", Attempt: 1}
+			due := owing(1, head, tip, code.CheckWork{Dispatch: true, Stale: []code.CheckKey{stale}})
+			due.Checks.Facts = nil
+			e.due = []code.ChangeDue{due}
+			l := checkLoop(t, e)
+			if err := home.CheckWork(t.Context(), l, repoA, statelog.Position{}); err != nil {
+				t.Fatalf("the check work: %v", err)
+			}
+			writes, _ := e.asked()
+			if len(writes) != 1 || writes[0].Finished == nil || writes[0].Finished.CheckKey != stale {
+				t.Fatalf("a head with no facts recorded was worked into %+v, want the attempt its change moved "+
+					"on from cancelled alone", writes)
+			}
+		})
 	}
 }
 

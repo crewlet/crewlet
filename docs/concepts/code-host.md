@@ -2213,10 +2213,12 @@ What a dispatch queues:
 
 - **every check the file defines that the head holds no attempt of** for its
   target. A check with `paths` is queued where the change touches a path one
-  of its globs matches, judged against what the head touches against that
-  tip, and recorded **skipped** where it touches none; one with no `paths`,
-  or a change touching more paths than a list holds, runs. A check the
-  target's protection rule requires is queued marked required;
+  of its globs matches, judged against the paths the head revision's
+  recorded facts say it touches — the change work's own record, read with
+  the list, never a second git read — and recorded **skipped** where it
+  touches none; one with no `paths`, or a change touching more paths than a
+  list holds, runs. A check the target's protection rule requires is queued
+  marked required;
 - where the file is **none that runs** — unparsable, or something at its
   path that is no file — every name the rule requires is recorded
   **errored**, `defs_invalid`, the file's refusal its summary, and nothing
@@ -2227,6 +2229,15 @@ What a dispatch queues:
   change still queued or running at a head it moved on from, or for a target
   it was retargeted from — `cancelled`, `superseded` — unless a live change
   into that attempt's target heads its commit and shares it.
+
+A head's checks wait for its revision's **facts**, whatever its target's file
+defines: until the home's change work has recorded what the revision touches
+against its target, nothing is queued at the head. The facts are also how the
+home knows the head is not already in its target — a head its target holds
+records none, and is [landed](#the-homes-change-work) instead — so no check
+runs at a head nobody will merge. The change work schedules the check work
+the moment it records them, so a new change is dispatched as soon as its
+facts land, not at the next pass.
 
 The dispatch record is the **last**: a dispatch cut short leaves the head
 listed, and the next turn queues what is missing — every queue that landed

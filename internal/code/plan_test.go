@@ -1236,6 +1236,8 @@ func registeredStatements() map[string]statement {
 				checkTargetsKey + " (repo_id=? AND target_ref=?)",
 				"code_checks_requeue_idx (repo_id=? AND commit_oid=? AND target_ref=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"touched paths": {touchedPathsSQL, []any{"repo-1-change-000001", 1, "refs/heads/main"},
+			[]string{factsKey + " (change_id=? AND n=?)"}},
 		"head attempts": {headAttemptsSQL, []any{"repo-1", oid("c"), "refs/heads/main"},
 			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)"}},
 		"stale checks": {staleChecksSQL, []any{"repo-1-change-000001", oid("c"), "refs/heads/main", "repo-1"},

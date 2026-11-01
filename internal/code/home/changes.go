@@ -76,6 +76,13 @@ type changes struct {
 	// rechecks is each repository's share of a pass's merges of moved
 	// targets ([MergeabilityPerPass]).
 	rechecks *recheckBudget
+	// factsRecorded is told each revision's facts this worker recorded: the
+	// repository and the position their record landed at. The record is on
+	// the CHANGE's subject, which the loop's watch does not see, and a head's
+	// checks are dispatched only once its facts are recorded — so the loop
+	// schedules the repository's check work there ([Loop.follow]) rather
+	// than leave the dispatch to its backstop, a minute later.
+	factsRecorded func(repoID string, at statelog.Position)
 }
 
 // Name is [WorkerChanges].
@@ -423,6 +430,9 @@ func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue,
 		"target", due.TargetRef, "tip", due.Tip, "touched", len(f.Touched), "touches_all", f.TouchesAll,
 		"classed", len(f.Classes.WhitespaceOnly)+len(f.Classes.CommentOnly), "classes_complete", f.Classes.Complete,
 		"owners", len(matched), "position", res.Position.String())
+	if c.factsRecorded != nil {
+		c.factsRecorded(repoID, res.Position)
+	}
 	return true, nil
 }
 

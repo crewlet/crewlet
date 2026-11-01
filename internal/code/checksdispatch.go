@@ -73,10 +73,15 @@ import (
 //     checks file its target's row holds. The worker first ends the change's
 //     attempts still queued or running at a head it moved on from, or for a
 //     target it was retargeted from — cancelled, superseded — but those a
-//     live change into the attempt's target heads, which shares them; then it
-//     queues every check the file at the target's tip defines that the head
-//     holds no attempt of for its target, or records it skipped, a name the
-//     target's merge gate requires marked required; a check whose latest
+//     live change into the attempt's target heads, which shares them; then,
+//     once the change's head revision's FACTS are recorded for its target
+//     ([CheckWork.Facts]) — what a `paths` check is matched against, read in
+//     the listing's own snapshot, and the home's word that the head is not
+//     in its target, since a head its target holds records no facts and is
+//     landed instead — it queues every check the file at the target's tip
+//     defines that the head holds no attempt of for its target, or records
+//     it skipped, a name the target's merge gate requires marked required;
+//     a check whose latest
 //     attempt there was errored at an earlier dispatch for a file that did
 //     not run ([CheckReasonDefsInvalid]) is queued as its NEXT attempt, so a
 //     target whose broken file is mended reaches the heads it errored; where
@@ -277,6 +282,21 @@ type CheckWork struct {
 	// its home queues: that attempt's queue, under the definition it ran
 	// under, its reason requeue — all but the instant, which the home's is.
 	Requeue []CheckQueued `json:"requeue,omitempty"`
+	// Facts is, for a head owing its dispatch, what the change's head
+	// revision touches against its target as its facts RECORD it
+	// (code_revision_facts, the change work's own record of the revision) —
+	// nil where none are recorded for the target yet, and then the head's
+	// dispatch waits for them, whatever its checks file defines.
+	Facts *TouchedPaths `json:"facts,omitempty"`
+}
+
+// TouchedPaths is what a change's head revision touches against its target, as
+// its recorded facts say it ([Revise]'s Touched and TouchesAll): the paths a
+// `paths` check's globs are matched against — every check run where the
+// revision touches more than a list holds.
+type TouchedPaths struct {
+	Touched    []string `json:"touched,omitempty"`
+	TouchesAll bool     `json:"touches_all,omitempty"`
 }
 
 // requiredChecks is a repository's rules as a `checks_due` page judges its
@@ -365,6 +385,9 @@ func checkWorkOf(ctx context.Context, tx *sql.Tx, repoID string, h checkHead, re
 		if w.Stale, err = staleChecksIn(ctx, tx, repoID, h.due.ID, h.due.Head, h.due.TargetRef); err != nil {
 			return CheckWork{}, err
 		}
+		if w.Facts, err = touchedPathsIn(ctx, tx, h.due.ID, h.due.Revision, h.due.TargetRef); err != nil {
+			return CheckWork{}, err
+		}
 	}
 	if h.requeue {
 		if w.Requeue, err = requeuesIn(ctx, tx, repoID, h.due.Head, h.due.TargetRef); err != nil {
@@ -425,6 +448,27 @@ func headAttemptsIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string)
 	return held, invalid, nil
 }
 
+// touchedPathsIn is what revision n of changeID touches against target, as its
+// recorded facts say it — one seek of code_revision_facts' key — and nil where
+// the revision holds no facts for target: none read yet, or read against the
+// target the change was retargeted from.
+func touchedPathsIn(ctx context.Context, tx *sql.Tx, changeID string, n int64, target string) (*TouchedPaths, error) {
+	var (
+		f       TouchedPaths
+		touched string
+	)
+	switch err := tx.QueryRowContext(ctx, touchedPathsSQL, changeID, n, target).Scan(&f.TouchesAll, &touched); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("code: read the facts of revision %d of %s: %w", n, changeID, err)
+	}
+	if touched != "" {
+		f.Touched = strings.Split(touched, "\x00")
+	}
+	return &f, nil
+}
+
 // staleChecksIn is changeID's attempts still queued or running at a commit or
 // for a target other than its head's — the head it moved on from, the target
 // it was retargeted from — by code_checks_live_idx, which holds only a change
@@ -482,8 +526,10 @@ func requeuesIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) ([]
 	return out, rows.Err()
 }
 
-// The work's statements, each registered in plan_test.go. A head's attempts
-// for its target are a range of code_checks' key; the change's attempts not
+// The work's statements, each registered in plan_test.go. A head revision's
+// facts are one seek of code_revision_facts' key (change_id, n), its target
+// tested on the row; a head's attempts for its target are a range of
+// code_checks' key; the change's attempts not
 // yet ended are code_checks_live_idx's (replicated 0088), its predicate spelled
 // as the index declares it, each kept where no live change into its target
 // heads its commit — code_changes_target_idx, whose predicate liveChanges
@@ -491,6 +537,8 @@ func requeuesIn(ctx context.Context, tx *sql.Tx, repoID, oid, target string) ([]
 // predicate spelled as the index declares it (requeuedRows), then the next
 // attempt's absence by code_checks' key.
 const (
+	touchedPathsSQL = `SELECT touches_all, touched FROM code_revision_facts
+		WHERE change_id = ? AND n = ? AND target_ref = ?`
 	headAttemptsSQL = `SELECT name, attempt, state, reason FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? ORDER BY name, attempt`
 	staleChecksSQL = `SELECT k.commit_oid, k.target_ref, k.name, k.attempt
