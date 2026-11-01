@@ -203,7 +203,7 @@ providers:
     local: {}
     default_run_in: direct
 
-# 3. Sign its CLI in to your subscription, and check it end to end
+# 3. Sign its harness in to your subscription, and check it end to end
 #    (on a member of a cluster, add -api with a running member's URL
 #    and a Tier A token in CREWLET_API_TOKEN: a member alone cannot
 #    reach the fleet's store)
