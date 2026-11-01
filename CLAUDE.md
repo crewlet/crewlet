@@ -86,27 +86,29 @@ Rules:
 When in doubt, ask: "Am I calling this 'just a knob' so I don't have to decide its value?" If yes, decide it — or escalate it with a concrete recommendation — but never walk past it.
 
 ## No Deferred Work — Always Deliver the Clean Implementation
-Never defer work: no TODOs, "follow-up" tickets, stub functions, or "we'll fix this later" comments. When you start a task you finish it — completely and cleanly. A long or sprawling task is a reason to commit to the full implementation, not to ship part of it. Delivering it as a planned series of pull requests (see "Land Features as a Series of Mergeable Pull Requests" below) is how a large task gets finished, not a way to defer part of it.
+Never defer work: no TODOs, "follow-up" tickets, stub functions, or "we'll fix this later" comments. When you start a task you finish it — completely and cleanly. A long or sprawling task is a reason to commit to the full implementation, not to ship part of it. Delivering a large task as a planned series of pull requests (see "Split a Large Change into a Series of Mergeable Pull Requests" below) is how it gets finished, not a way to defer part of it.
 
 Rules:
 - **Decide and deliver** — make the call and implement it end-to-end; no half-built parallel paths, no decision left for "later".
 - **No TODOs, no stubs, no placeholders** — no `TODO`, `FIXME`, `XXX`, `raise NotImplementedError`, or empty bodies pretending to be done. If it's in the diff, it's finished, and that holds for every pull request in a series, not just the last one.
 - **No "follow-up" tickets for the current scope** — what is part of the task ships as part of the task: in this change, or in a later pull request of the series the tracking issue already lists. An issue is for what lies outside it (see "Fix the Bugs That Affect Your Work" above), never for an unplanned part of it.
-- **No "phase 1 / phase 2" hand-waving** — splitting a feature into the pull requests of a planned series is required (see below); what is not allowed is shipping part of the scope and leaving the rest without a plan. A series is planned up front, every piece is listed in the tracking issue, and the series runs until the last piece lands.
+- **No "phase 1 / phase 2" hand-waving** — splitting a large change into the pull requests of a planned series is how it lands (see below); what is not allowed is shipping part of the scope and leaving the rest without a plan. A series is planned up front, every piece is listed in the tracking issue, and the series runs until the last piece lands.
 - **No silent narrowing of scope** — deliver the full scope, or raise it with the user before cutting.
 - **Tests, docs, migrations all included** — a feature without tests or docs is not delivered.
 
 When in doubt, ask: "If I stopped right now, would a reader of this diff consider the task done?" If not, keep going.
 
-## Land Features as a Series of Mergeable Pull Requests
-A feature does not land as one large pull request. Before writing code, break it into a sequence of deliverable pieces and land them one at a time. A piece does not have to deliver working functionality by itself. It has to be something `main` can take as it is: clean, finished code that passes every gate, breaks no existing behaviour and leaves nothing half-wired for a user to trip over.
+## Split a Large Change into a Series of Mergeable Pull Requests
+A large change does not land as one large pull request when it can be split. Before writing code, judge from the planned diff whether it should be: it is large enough that one pull request would be hard to review or would sit open long enough to drift from `main`, AND it has seams where `main` can take part of it alone (a refactor the feature needs, a new package before the code that wires it in, a migration before its readers, one subsystem before the next). If both hold, break it into a sequence of deliverable pieces and land them one at a time. If either does not, because the change is small or has no such seam, it stays one pull request and none of the rules below apply: never split for the sake of splitting. Tell the user which you chose and why.
+
+A piece does not have to deliver working functionality by itself. It has to be something `main` can take as it is: clean, finished code that passes every gate, breaks no existing behaviour and leaves nothing half-wired for a user to trip over.
 
 Rules:
 - **Plan the series first** — list the pieces in order, each with what it adds and why it is safe on `main` alone (it is additive, unused until a later piece wires it in, or behind config nothing sets yet). Show the user the breakdown before starting, and update it when the plan changes.
 - **Open a tracking issue when GitHub access is available** — one issue for the feature, describing it and listing the pieces as a checklist. Every pull request in the series references it (`Part of #N`; the last one `Closes #N`), and the checklist gets each pull request's link as it opens and its tick as it merges.
 - **Each piece is a complete pull request** — its own branch, its own tests and docs for what it adds, a semantic title that reads as a release note, `make check` clean, and every other rule in this file (no stubs, no TODOs, its `crewlet-operator` companion if it needs one). Push it, open it on `.github/pull_request_template.md`, and watch CI (`gh pr checks --watch`) until it is green, fixing whatever turns it red.
 - **Wait for it to merge, then build the next piece on `main`** — do not merge it yourself unless the user has said to.
-- **When a piece is waiting on review, stack the next one rather than stall** — branch it from the previous piece's branch and open its pull request against that branch, saying in the description which pull request it builds on. When the lower one merges, rebase the stack onto `main` and retarget the next pull request to `main`. Keep every pull request in the stack green on its own base.
+- **When a piece is waiting on review, build the next one on it rather than stall** — branch it from the previous piece's branch, but open its pull request against `main`, saying `Builds on #N` in the description. Until the lower one merges, its diff shows both pieces; once it does, rebase onto `main`. Never open a pull request against another pull request's branch: GitHub then registers the pair as a native stack, its merge endpoint refuses every pull request in it (`403 Merging stacked PRs via this endpoint is not supported`), the upper one's base can no longer be changed, and closing it does not release the stack, which leaves a merge from the web UI as the only way out.
 - **The series is the task** — it is finished when the last piece is merged and the tracking issue closes, not when the first pull request opens.
 
 ## Code Conventions

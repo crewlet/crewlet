@@ -1537,10 +1537,15 @@ Small, focused PRs are much easier to review than large ones. If you are
 planning a substantial change — a new subsystem, or a reshaping of the config
 format — please open an issue first to discuss the approach.
 
-### Land a feature as a series of pull requests
+### Land a large change as a series of pull requests
 
-A feature lands as a sequence of pull requests, not as one large one. Plan the
-pieces before writing code. A piece doesn't have to deliver working
+When a change is large enough that one pull request would be hard to review,
+and it has seams where `main` can take part of it alone (a refactor the
+feature needs, a new package before the code that wires it in, a migration
+before its readers), land it as a sequence of pull requests rather than one
+large one. A small change, or one with no such seam, stays a single pull
+request; don't split it for the sake of splitting. When you do split, plan
+the pieces before writing code. A piece doesn't have to deliver working
 functionality by itself, but `main` has to be able to take it as it is: clean,
 finished code with its own tests and docs, every gate green, no existing
 behaviour broken, and nothing half-wired for a user to trip over. Code that
@@ -1552,13 +1557,13 @@ nothing sets yet, is fine. A stub or a `TODO` is not.
   says `Closes #N`. Add each pull request's link to the checklist as it opens.
 - **Land one piece, then start the next on `main`.** Each pull request is
   green in CI and titled as a release note on its own.
-- **If a piece is waiting on review, stack the next one on it.** Branch from
-  the previous piece's branch and open the pull request against that branch,
-  saying in the description which pull request it builds on. When the lower
-  one merges, rebase onto `main` and retarget. Stacking against another
-  branch needs that branch in this repository. From a fork, open the next
-  pull request against `main` and say which one it builds on; its diff
-  includes the lower piece until that one merges.
+- **If a piece is waiting on review, build the next one on it.** Branch from
+  the previous piece's branch, but open the pull request against `main` and
+  say in its description which one it builds on (`Builds on #N`). Its diff
+  includes the lower piece until that one merges; then rebase onto `main`.
+  Don't open a pull request against another pull request's branch: GitHub
+  then treats the two as a stack, which its merge API refuses to merge and
+  whose base can no longer be changed.
 - **The series is the change.** It is done when the last piece merges and
   the issue closes.
 
