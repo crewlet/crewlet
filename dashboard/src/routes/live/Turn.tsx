@@ -1559,7 +1559,7 @@ export function turnCrumbLabel(view: TurnView, ordinal: number | null): string {
  * this tab, and without this card a parked turn's Transcript held nothing live
  * and no way to the thing that was: the run's output was a Timeline span and a
  * click away. It is the SAME
- * poll that span opens (`LiveOutput`, `sandbox_tail`), and the run's own page
+ * poll that span opens (`LiveOutput`, `executor_tail`), and the run's own page
  * is one link away for its history.
  */
 function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now: number }) {

@@ -108,7 +108,7 @@ func everySeam(t *testing.T) queries.Sources {
 		Sandbox:  memorySandbox{},
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
 		// fleet record, which answers every run `not_running`.
-		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
+		ExecutorTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
 			Condition: func(err error) bool { _, ok := builtin.Condition(err); return ok }},
 		Config: surface,
 		Work:   emptyWork{},

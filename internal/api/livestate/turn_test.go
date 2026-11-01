@@ -310,7 +310,7 @@ func TestALostRunEndsItsParkedTurn(t *testing.T) {
 	s.Apply(env("agent_turn_started", turnPayload("tn-1", nil), at("2026-06-14T12:00:00Z")))
 	s.Apply(env("agent_turn_completed", turnPayload("tn-1", map[string]any{"suspended": true}),
 		at("2026-06-14T12:00:05Z")))
-	change := s.Apply(env("sandbox_run_failed", turnPayload("tn-1", map[string]any{
+	change := s.Apply(env("executor_failed", turnPayload("tn-1", map[string]any{
 		"reason": "collect_unreachable",
 	}), at("2026-06-14T12:30:00Z")))
 

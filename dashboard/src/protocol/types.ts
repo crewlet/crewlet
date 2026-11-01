@@ -32,7 +32,7 @@ import type { LogPosition } from "./session.ts";
 import type { BUDGET_WINDOWS } from "../contract/config.ts";
 import type { OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
-import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
+import type { EXECUTOR_TAIL_OUTCOMES } from "../contract/executor.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { Coverage } from "../contract/coverage.ts";
@@ -728,7 +728,7 @@ export interface AgentRow extends Overlay {
 }
 
 /** One in-flight detached coding run. */
-export interface SandboxEntry {
+export interface ExecutorEntry {
   turn_id: string;
   /** What the seat was called when the run started — display only; the run
    *  pairs with its seat's row by `agent_id`. */
@@ -781,19 +781,19 @@ export interface SandboxEntry {
  * than an omission: a run's record is DELETED once the run settles and its box
  * is reclaimed, so `sandbox.Active` is every status a record can carry and the
  * terminal pair can never reach a client. How a run ended is on the event
- * stream — the resumed turn's own events, a `sandbox_run_failed` naming the
- * reason, or a `sandbox_run_stopped` naming who stopped it — never on this row.
+ * stream — the resumed turn's own events, an `executor_failed` naming the
+ * reason, or an `executor_stopped` naming who stopped it — never on this row.
  */
-export type SandboxStatus =
+export type ExecutorStatus =
   "launching" | "running" | "awaiting_clarification" | "reseed" | "answered" | "resumed";
 
-/** One durable coding run, as the `sandbox_runs` query answers it. */
-export interface SandboxRun {
+/** One durable coding run, as the `executors` query answers it. */
+export interface ExecutorRow {
   /** The RUN this job belongs to — one execution of a turn, and this
    *  record's own key. See `adr/0017`. */
   turn_id: string;
   /** The job the row holds NOW — a turn can launch more than one — and what
-   *  `sandbox_tail` is asked by. On a parked run it names the question the
+   *  `executor_tail` is asked by. On a parked run it names the question the
    *  run waits on, which `answer_run` answers by. Empty on a run the live
    *  projection knows of before its durable row is read. */
   launch_id?: string;
@@ -802,7 +802,7 @@ export interface SandboxRun {
   work_key?: string;
   agent_handle: string;
   role: string;
-  status: SandboxStatus;
+  status: ExecutorStatus;
   coding_agent: string;
   /** The executor-chain member the job was launched on, and its model. Absent
    *  on a live entry that named none; the member is also absent for every
@@ -4798,7 +4798,7 @@ export interface TurnAnswer {
  * start 0, and an offset the engine left out at 0 once read as absent, so a
  * delta from 0 was taken for one that did not follow and thrown away.
  */
-export interface SandboxOutput {
+export interface ExecutorOutput {
   text: string;
   /** Which of the job's two accounts of itself this is. */
   source: "transcript" | "stderr" | "none";
@@ -4821,7 +4821,7 @@ export interface SandboxOutput {
 }
 
 /**
- * One `sandbox_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
+ * One `executor_tail{turn_id, launch_id}` answer (`sandbox.TailAnswer`): the
  * tail of that job while it runs, `launching` while its box is still being
  * made, `not_running` with the record's own status once it is not,
  * `box_paused` for a running record whose box is paused (never woken to be
@@ -4829,8 +4829,8 @@ export interface SandboxOutput {
  * the node that reads its box NAMED where it did not answer
  * (`owner_silent`).
  */
-export interface SandboxTailAnswer {
-  outcome: (typeof SANDBOX_TAIL_OUTCOMES)[number];
+export interface ExecutorTailAnswer {
+  outcome: (typeof EXECUTOR_TAIL_OUTCOMES)[number];
   turn_id: string;
   launch_id: string;
   /**
@@ -4842,7 +4842,7 @@ export interface SandboxTailAnswer {
   /** Why the job is not running: the record's status, `replaced`, or absent
    *  where no record is left. */
   status?: string;
-  output?: SandboxOutput;
+  output?: ExecutorOutput;
 }
 
 /** A seat's phase history, newest first, with a cursor. */
@@ -5316,7 +5316,7 @@ export interface ConfigReference {
 export interface Snapshot {
   agents?: AgentRow[];
   events?: FeedRow[];
-  sandboxes?: SandboxEntry[];
+  executors?: ExecutorEntry[];
   org?: OrgProjection;
   tools?: ToolRow[];
   health?: EngineHealth;
@@ -6215,7 +6215,7 @@ export interface DecisionItem {
   kind: "ask" | "run";
   at: string;
   ask?: WorkAskRow;
-  run?: SandboxRun;
+  run?: ExecutorRow;
 }
 
 /** `decisions`: the open asks put to a person and the coding runs parked on
@@ -7767,8 +7767,8 @@ export interface QueryMap {
   schedule_runs: ScheduleRunsAnswer;
   integrations: IntegrationsAnswer;
   link_hosts: LinkHostsAnswer;
-  sandbox_runs: { runs: SandboxRun[] };
-  sandbox_tail: SandboxTailAnswer;
+  executors: { runs: ExecutorRow[] };
+  executor_tail: ExecutorTailAnswer;
   retention: RetentionReport;
   sign_in_policy: SignInPolicyAnswer;
   limits: LimitsAnswer;

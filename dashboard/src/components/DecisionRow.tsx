@@ -50,7 +50,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, stateWord, type OrgIndex } from "~/lib/seats.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { relTime } from "~/lib/format.ts";
-import type { AgentRow, BudgetWindow, SandboxRun, WorkAskRow } from "~/protocol/index.ts";
+import type { AgentRow, BudgetWindow, ExecutorRow, WorkAskRow } from "~/protocol/index.ts";
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 import { RunQuestionLine } from "./RunQuestion.tsx";
@@ -525,7 +525,7 @@ function AnsweredLine({ answer }: { answer: AskAnswer }) {
   );
 }
 
-function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: number }) {
+function RunRow({ run, index, now }: { run: ExecutorRow; index: OrgIndex; now: number }) {
   const who = seatOf(index, run.agent_handle);
   const item = run.work_item ?? null;
   const since = run.paused_at || run.updated_at;
@@ -566,7 +566,7 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
  * the row reached this screen before its durable record was read, the
  * audience as the run wrote it. Nothing where it named no audience at all.
  */
-export function audienceOf(run: SandboxRun, index: OrgIndex): string {
+export function audienceOf(run: ExecutorRow, index: OrgIndex): string {
   const handles = run.audience_handles ?? [];
   if (handles.length > 0) {
     return `asks ${handles.map((h) => index.byHandle.get(h)?.name ?? h).join(", ")}`;
@@ -579,7 +579,7 @@ export function audienceOf(run: SandboxRun, index: OrgIndex): string {
  * box past its pause window is reclaimed and the run restarts from the
  * question. Nothing where the run is held on no timer.
  */
-export function holdLine(run: SandboxRun, now: number): string | undefined {
+export function holdLine(run: ExecutorRow, now: number): string | undefined {
   if (run.status === "reseed") return "Answering restarts the work";
   const ttl = run.pause_ttl_seconds;
   const parked = Date.parse(run.paused_at);

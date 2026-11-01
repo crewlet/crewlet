@@ -19,7 +19,7 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, fmtDuration, plural, relTime } from "~/lib/format.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { indexOrg, nameOfIn } from "~/lib/seats.ts";
-import { useEngineHealth, useEvents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useEngineHealth, useEvents, useOrg, useExecutors } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { RunStatus, mergeRuns, runTitle } from "~/routes/live/Runs.tsx";
 import { WidgetCard, WidgetQuery, defineWidgets, gapsOf } from "~/routes/home/board/kit.tsx";
@@ -30,9 +30,9 @@ function CodingRuns() {
   const now = useNow();
   const org = useOrg();
   const nameOf = useMemo(() => nameOfIn(indexOrg(org)), [org]);
-  const live = useSandboxes();
+  const live = useExecutors();
   // The Runs screen's own read: durable runs have no push behind them.
-  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
+  const { data, loading, error, refusal } = useQuery("executors", undefined, {
     pollMs: RUNS_POLL_MS,
   });
   const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);

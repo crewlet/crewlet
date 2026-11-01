@@ -29,7 +29,7 @@ import (
 // A PUBLISHED stream of it was the alternative, and it is the wrong one: an
 // event per poll per run would fill the event store with the same text over and
 // over for nobody, since almost nobody is watching almost every run. So it is a
-// QUESTION, asked only while somebody looks: `sandbox_tail{turn_id, launch_id}`,
+// QUESTION, asked only while somebody looks: `executor_tail{turn_id, launch_id}`,
 // answered from the box by the node whose incarnation the run's record names as
 // its owner ([PendingRun.Owner]) — or, for a box on an engine host, by the
 // node that launched it ([PendingRun.LaunchNode]), the one node that can reach
@@ -463,7 +463,7 @@ func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor,
 	}
 	askCtx, cancel := context.WithTimeout(ctx, r.budget())
 	defer cancel()
-	replies, err := r.Queue.Ask(askCtx, topics.ObserveSandboxTail, raw, 1)
+	replies, err := r.Queue.Ask(askCtx, topics.ObserveExecutorTail, raw, 1)
 	if err != nil {
 		return TailAnswer{}, fmt.Errorf("sandbox: %s could not be asked about run %s: %w",
 			answer.Node, run.TurnID, err)
@@ -537,7 +537,7 @@ func ServeTail(ctx context.Context, q TailServer, owner, node string, pending Pe
 		logTailFailure(ctx, req.TurnID, req.LaunchID, failure, err)
 		return failure
 	}
-	return q.Serve(ctx, topics.ObserveSandboxTail, func(ctx context.Context, raw []byte) ([]byte, error) {
+	return q.Serve(ctx, topics.ObserveExecutorTail, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req tailRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, fmt.Errorf("sandbox: a tail request this build cannot read: %w", err)

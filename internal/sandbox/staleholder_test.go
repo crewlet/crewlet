@@ -150,7 +150,7 @@ func (s *claimThen) ClaimForResume(ctx context.Context, turnID string, tail Tail
 // fence it — node-y at epoch 6, which recovered the seat and found the run
 // waiting — while this rig's node still has a reply and an answer by turn on
 // their way to it.
-func fencedBySuccessor(t *testing.T, rig *coordRig) (Reply, types.SandboxAnswerGiven, *events.Event) {
+func fencedBySuccessor(t *testing.T, rig *coordRig) (Reply, types.ExecutorAnswerGiven, *events.Event) {
 	t.Helper()
 	parkOnAQuestion(t, rig)
 	given, ev := givenAgainst(t, rig, "t1")

@@ -1205,7 +1205,7 @@ func (c *Coordinator) retryRevival(ctx context.Context, run PendingRun, launch s
 //
 // ONLY THE SERIES' OWN CLAIM — its job, its answer, its lease — and never
 // through [Coordinator.reapTail]: that is the seat's next holder reaping a claim
-// whose node stopped, and its two bounds and its ending ([types.SandboxFailureAbandoned],
+// whose node stopped, and its two bounds and its ending ([types.ExecutorFailureAbandoned],
 // "the node that owned this seat stopped mid-run") are about a node that stopped.
 // Here none did, so nothing is counted on the row and nothing ends the run: the
 // series goes on — resuming, or declining once its own attempts are spent.

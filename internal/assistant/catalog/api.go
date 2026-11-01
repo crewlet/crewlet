@@ -730,7 +730,7 @@ func queryValues(v any) (url.Values, error) {
 // answered: [decisionRows]) or names a connected knowledge base as its
 // backend.
 var outsideRoutes = []string{
-	"/agents/{id}/conversations", "/events", "/turns", "/sandbox-runs", "/query/{what}",
+	"/agents/{id}/conversations", "/events", "/turns", "/executors", "/query/{what}",
 }
 
 // decisionRows is where a decisions answer keeps a coding run's question: on

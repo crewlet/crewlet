@@ -116,7 +116,7 @@ const QUIET: Record<string, unknown> = {
     census: {},
     complete: true,
   },
-  sandbox_runs: { runs: [] },
+  executors: { runs: [] },
   work_inbox: { handle: "jane", notices: [], primary_reasons: [] },
 };
 

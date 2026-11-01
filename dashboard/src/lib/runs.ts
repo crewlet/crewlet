@@ -1,10 +1,10 @@
 import { decisionTexts } from "./work.ts";
-import type { SandboxRun } from "~/protocol/index.ts";
+import type { ExecutorRow } from "~/protocol/index.ts";
 
 /**
  * How often the durable coding-run record is asked again.
  *
- * ONE VALUE for every reader of `sandbox_runs` — the runs board, a run's own
+ * ONE VALUE for every reader of `executors` — the runs board, a run's own
  * page and rail, and the attention queue Home and the Inbox draw. It was two:
  * the board polled every 20 s and the queue every 30 s, so a run that parked
  * on a question appeared on the board and then, up to ten seconds later, as
@@ -30,7 +30,7 @@ export const RUNS_POLL_MS = 20_000;
  * Nothing is split out of the question (`components/RunQuestion.tsx`).
  */
 export function runAskTexts(
-  run: Pick<SandboxRun, "question" | "question_context" | "decision">,
+  run: Pick<ExecutorRow, "question" | "question_context" | "decision">,
 ): string[] {
   return [run.question ?? "", run.question_context, ...decisionTexts(run.decision)].filter(
     (text) => text.trim() !== "",
@@ -47,6 +47,6 @@ export function runAskTexts(
  * read before the run's durable row carries no launch yet, and an answer
  * pressed then would name nothing.
  */
-export function unanswerable(run: Pick<SandboxRun, "launch_id">): string | undefined {
+export function unanswerable(run: Pick<ExecutorRow, "launch_id">): string | undefined {
   return run.launch_id ? undefined : "Reading the run’s question first.";
 }

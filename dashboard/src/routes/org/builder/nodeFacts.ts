@@ -47,7 +47,7 @@ import type {
   DerivedSeat,
   DerivedUnit,
   OrgProjection,
-  SandboxEntry,
+  ExecutorEntry,
 } from "~/protocol/index.ts";
 import { wholeReferenceName } from "~/lib/references.ts";
 import { activityOf } from "~/lib/seats.ts";
@@ -457,10 +457,10 @@ export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[]
 export function isWorking(
   handle: string | undefined,
   agents: readonly AgentRow[],
-  sandboxes: readonly SandboxEntry[],
+  executors: readonly ExecutorEntry[],
 ): boolean {
   if (handle === undefined) return false;
-  if (sandboxes.some((run) => run.agent_handle === handle)) return true;
+  if (executors.some((run) => run.agent_handle === handle)) return true;
   const agent = agents.find((row) => row.handle === handle);
   if (!agent) return false;
   const state = activityOf(agent);

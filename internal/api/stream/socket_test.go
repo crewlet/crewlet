@@ -193,7 +193,7 @@ func TestASocketOpensAndGetsItsSnapshotImmediately(t *testing.T) {
 		t.Fatalf("first frame = %v, want a snapshot", got["kind"])
 	}
 	data, _ := got["data"].(map[string]any)
-	for _, key := range []string{"health", "agents", "events", "sandboxes", "tokens", "budget"} {
+	for _, key := range []string{"health", "agents", "events", "executors", "tokens", "budget"} {
 		if _, present := data[key]; !present {
 			t.Errorf("snapshot is missing %q", key)
 		}

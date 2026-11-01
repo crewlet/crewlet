@@ -29,7 +29,7 @@ export function useAttention(): Attention[] {
   // row says about it is how long its box is still held, which is the pause
   // window only the durable record carries. On the runs board's own poll, so
   // the queue and the board cannot disagree about a run — see RUNS_POLL_MS.
-  const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const { data: runs } = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   return useMemo(
     () =>
       attentionQueue({

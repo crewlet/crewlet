@@ -34,7 +34,7 @@ knowledge base a work item's decision is checked against.
    the option it wrote: `Chosen option: <label> (<id>).` A choice it does not
    offer is recorded as its own outcome, `unoffered`.
 4. **Its answer outlives the run.** The record of the answer
-   (`sandbox_run_answered`) carries the question, its decision, the choice and
+   (`executor_answered`) carries the question, its decision, the choice and
    the person's words, and a person's answered decisions read it back beside a
    work item's, so what they decided for a run stays theirs to read after the
    run is gone. An ask that did not land is said to the run as a failed call,

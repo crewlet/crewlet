@@ -25,7 +25,7 @@ import (
 // the person who paused the seat.
 //
 // Mutations: leave the pause watch's stop call out and the run is never ended;
-// announce the stop as a loss and a `sandbox_run_failed` is on the turn; close
+// announce the stop as a loss and an `executor_failed` is on the turn; close
 // no turn and its last turn_completed is still the park.
 func TestAStopEndsTheRunningCodingRunAndClosesItsTurnAsStopped(t *testing.T) {
 	t.Parallel()
@@ -89,11 +89,11 @@ func TestAStopEndsTheRunningCodingRunAndClosesItsTurnAsStopped(t *testing.T) {
 			}
 			_ = json.Unmarshal(ev.Payload, &rec)
 			switch ev.Type {
-			case "sandbox_run_stopped":
+			case "executor_stopped":
 				if rec.StoppedBy == "e2e" {
 					stops++
 				}
-			case "sandbox_run_failed":
+			case "executor_failed":
 				losses++
 			case "agent_turn_stopped":
 				if rec.StoppedBy == "e2e" {

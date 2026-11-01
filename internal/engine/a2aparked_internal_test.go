@@ -214,7 +214,7 @@ func (r *runRig) loseRun(t *testing.T, turnID string) {
 	if err := provider.Kill(t.Context(), row.SandboxID); err != nil {
 		t.Fatalf("killing run %s's box: %v", turnID, err)
 	}
-	completion := types.SandboxRunCompleted{
+	completion := types.ExecutorFinished{
 		Agent: row.AgentID, AgentHandle: row.AgentHandle, RoleName: row.Role,
 		TurnID: row.TurnID, WorkKey: row.WorkKey, LaunchID: row.LaunchID,
 		SandboxID: row.SandboxID, CodingAgent: row.CodingAgent,
@@ -267,7 +267,7 @@ func TestALostRunsTurnTellsItsAskerItWasLost(t *testing.T) {
 		t.Errorf("the reply is %+v, want swe's, echoing the question", msg)
 	}
 	if !strings.Contains(msg.Content, "was lost") ||
-		!strings.Contains(msg.Content, types.SandboxFailureCollect) {
+		!strings.Contains(msg.Content, types.ExecutorFailureCollect) {
 		t.Errorf("the asker was told %q, want that the coding run was lost, and why", msg.Content)
 	}
 	if got[0].ParentTurnID != "run-ask" {

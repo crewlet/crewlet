@@ -27,7 +27,7 @@ import "slices"
 // projection hands only an admin each seat's chain, and Settings, Models is
 // an admin's screen. Three live fields name entries: a CLI run's
 // `provider_key` ([LiveCall.Invocations]), the entry a coding run was
-// launched on ([SandboxEntry.ProviderKey]), which a fallback at launch makes
+// launched on ([ExecutorEntry.ProviderKey]), which a fallback at launch makes
 // other than the chain's head, and a failure's own text ([ErrorInfo.Detail]),
 // which also carries whatever a vendor or a tool wrote. All three reach only
 // a reader with [Reach.Config], whatever their reach to the seat's body: a
@@ -43,7 +43,7 @@ import "slices"
 // the answer would be two statements of the body list, and the first field
 // added to one and not the other would be a transcript on the overview. So
 // every surface goes through [MaskCall], [MaskRow], [Overlay.For] or
-// [SandboxEntry.For], and a walk over every field these types put on the wire
+// [ExecutorEntry.For], and a walk over every field these types put on the wire
 // (TestEveryLiveFieldIsClassified) fails the build on one nobody classified.
 //
 // # The masked call's versions
@@ -329,7 +329,7 @@ func maskTurn(t *LiveTurn, r Reach) *LiveTurn {
 // The work item is the tracker's, and the entry the run was launched on the
 // company's configuration, an admin's whatever else the reader may read (see
 // the package's doc); the model it runs under stays everybody's.
-func (e SandboxEntry) For(r Reach) SandboxEntry {
+func (e ExecutorEntry) For(r Reach) ExecutorEntry {
 	out := e
 	if !r.Tracker {
 		out.WorkItem = nil

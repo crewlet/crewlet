@@ -268,10 +268,10 @@ type ListQuery struct {
 	AgentID string
 
 	// AnsweredBy selects the answers ONE person gave, by the `answered_by`
-	// every record of an answer carries (sandbox_run_answered names who
+	// every record of an answer carries (executor_answered names who
 	// answered a coding run's question): the promoted column schema/0053
 	// ships, and its partial index. It is what a person's answered
-	// decisions ask ([types.SandboxRunAnswered]): the answers they gave,
+	// decisions ask ([types.ExecutorAnswered]): the answers they gave,
 	// rather than every answer in the window read and kept in memory.
 	AnsweredBy string
 

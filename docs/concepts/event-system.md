@@ -291,25 +291,25 @@ agent_spawned, agent_terminated
 #       execution of one) and a schedule firing (which creates one). There is no task
 #       lifecycle here: work's own record is the tracker's history
 task_assigned              # published to the seat's inbox by the scheduler
-sandbox_run_started        # names the providers.llm entry the launch picked
+executor_launched        # names the providers.llm entry the launch picked
                            # and its model (provider_key, model)
-sandbox_clarification_requested
-sandbox_run_completed
-sandbox_run_failed         # a run failed, once: published under an id and an
+executor_asked
+executor_finished
+executor_failed         # a run failed, once: published under an id and an
                            # instant its ending recorded on the run's row, so
                            # the node that finishes an ending another decided
                            # repeats the same event (the store keys on it)
-sandbox_run_stopped        # a run a person ended by pausing its seat with
+executor_stopped        # a run a person ended by pausing its seat with
                            # stop_running (stopped_by, stopped_by_kind,
                            # operator_id): once, under an id its ending
                            # recorded, like a loss — but never a failure
-sandbox_run_answered       # what an answer to a parked run's question became
+executor_answered       # what an answer to a parked run's question became
                            # (resumed | not_awaiting | gone | declined |
                            # unoffered), by
                            # which route
                            # (chat | operator) and from whom. The operator
                            # route travels as an inbox wake
-                           # (sandbox_answer_given), which is not stored and
+                           # (executor_answer_given), which is not stored and
                            # is never a turn
 scheduled_task_fired
 
@@ -388,7 +388,7 @@ agent_turn_completed       # full LLM reasoning cycle with tokens and tools;
 agent_turn_stopped         # a pause with stop_running ended this turn — at
                            # its next round, or at once where it was parked
                            # on its coding run, which the pause ends
-                           # (sandbox_run_stopped): stopped_by,
+                           # (executor_stopped): stopped_by,
                            # stopped_by_kind and operator_id (the pauser,
                            # from iam.ActorFor), reason. Its trigger is
                            # recorded as worked, not retried
@@ -564,8 +564,8 @@ data node that keeps a batch writes each event inside it as the row it is),
 the seat's holder: the turn is already `turn_completed`, and what reflecting on
 it did is `reflection_completed`), the two A2A inbox wakes `a2a_request` and `a2a_message` (the ask and the answer are
 already rows as `a2a_channel_opened` and `a2a_message_sent`),
-`sandbox_answer_given` (the command an answer by turn puts on the seat's control topic:
-what the answer became is `sandbox_run_answered`, and that a person gave it is
+`executor_answer_given` (the command an answer by turn puts on the seat's control topic:
+what the answer became is `executor_answered`, and that a person gave it is
 their `operator_acted` row) and `tool_skill_page_changed` (a nudge between
 nodes about an edit the webhook receiver already recorded). The cause is a
 value rather than a sentence, because the admission rule below is checked by a
@@ -586,7 +586,7 @@ it:
 
 | Author | What sets the pace | Examples |
 |---|---|---|
-| `engine` | This company's own work: a turn, a tick, a duty, a schedule | `agent_phase_completed`, `sandbox_run_started`, `reflection_completed` |
+| `engine` | This company's own work: a turn, a tick, a duty, a schedule | `agent_phase_completed`, `executor_launched`, `reflection_completed` |
 | `authenticated` | An admitted caller: an operator holding a token, a seat, a delivery whose signature or shared token verified | `external_notification`, `config_revision_activated`, `task_assigned` |
 | `anonymous` | Anybody who can reach the listener, with no credential and no identity | — none, and that is the rule |
 

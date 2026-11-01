@@ -35,7 +35,7 @@ import type {
   AgentRow,
   AnsweredRun,
   AnsweredWorkAsk,
-  SandboxRun,
+  ExecutorRow,
   WorkAskRow,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
@@ -266,7 +266,7 @@ describe("the quiet sentences", () => {
 test("a parked run's task is addressed by its id", () => {
   const run = {
     work_item: { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" },
-  } as unknown as SandboxRun;
+  } as unknown as ExecutorRow;
   const row: InboxRow = {
     kind: "decision",
     key: "run:1",
@@ -344,7 +344,7 @@ describe("what Needs you names for the assistant", () => {
       { kind: "decision", key: "d", subject: budget, notices: [] },
       { kind: "condition", key: "e", item: { id: "error-x", subject: "seat", who: "qa" } },
       { kind: "condition", key: "f", item: { id: "stopped-y", subject: "seat", who: "qa" } },
-      { kind: "condition", key: "g", item: { id: "sandbox-turn-2", subject: "run" } },
+      { kind: "condition", key: "g", item: { id: "executor-turn-2", subject: "run" } },
       { kind: "condition", key: "h", item: { id: "posture-draining", subject: "engine" } },
     ] as unknown as InboxRow[];
     expect(inboxResources(needs)).toEqual([
@@ -592,7 +592,7 @@ describe("what was answered", () => {
       subject: {
         kind: "run",
         at: "2026-09-30T10:55:00Z",
-        run: { turn_id: "turn-7", launch_id: launch } as unknown as SandboxRun,
+        run: { turn_id: "turn-7", launch_id: launch } as unknown as ExecutorRow,
       },
       notices: [],
     });
@@ -637,7 +637,7 @@ describe("what was answered", () => {
     const run: InboxRow = {
       kind: "decision",
       key: "run:turn-7",
-      subject: { kind: "run", at: "x", run: { turn_id: "turn-7" } as unknown as SandboxRun },
+      subject: { kind: "run", at: "x", run: { turn_id: "turn-7" } as unknown as ExecutorRow },
       notices: [],
     };
     const ask: InboxRow = { kind: "decision", key: "ask:c-12", subject: ASK, notices: [] };

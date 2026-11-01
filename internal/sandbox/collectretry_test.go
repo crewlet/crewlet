@@ -102,8 +102,8 @@ func TestACollectionThatKeepsFailingIsGivenUpAfterThePollsWindow(t *testing.T) {
 		t.Fatalf("a failure past the window = %v; want the run settled", err)
 	}
 	failed := rig.failures()
-	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureCollect {
-		t.Fatalf("failures = %+v; want one %q", failed, types.SandboxFailureCollect)
+	if len(failed) != 1 || failed[0].Reason != types.ExecutorFailureCollect {
+		t.Fatalf("failures = %+v; want one %q", failed, types.ExecutorFailureCollect)
 	}
 	if rig.coordinator.SeatHeldBySandbox("swe") {
 		t.Error("the seat stayed parked on a run that was given up")
@@ -240,7 +240,7 @@ func TestACollectionWhoseBoxIsGoneIsSettledAtOnce(t *testing.T) {
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted = %v; want a gone box settled, not retried", err)
 	}
-	if failed := rig.failures(); len(failed) != 1 || failed[0].Reason != types.SandboxFailureCollect {
+	if failed := rig.failures(); len(failed) != 1 || failed[0].Reason != types.ExecutorFailureCollect {
 		t.Fatalf("failures = %+v", failed)
 	}
 	rig.finished("t1")

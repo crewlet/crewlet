@@ -183,7 +183,7 @@ const QUIET: Record<string, Answer> = {
   },
   work_comments: { item: "t", key: "LEAD-12", title: "Q4 release plan", comments: [] },
   work_items: { items: [], total_hint: 0 },
-  sandbox_runs: { runs: [] },
+  executors: { runs: [] },
 };
 
 let asked: { kind: string; params: Record<string, unknown> }[];
@@ -1249,7 +1249,7 @@ describe("the pane", () => {
           at: new Date(Date.now() - 5 * 60_000).toISOString(),
           run,
         }),
-        sandbox_runs: () =>
+        executors: () =>
           Promise.resolve({
             runs: [
               posted.some((p) => p.tool === "answer_run")
@@ -1554,7 +1554,7 @@ describe("the pane", () => {
         answers: {
           decisions: decisionsOf(run),
           // THE RUN'S RECORD once the answer was sent: resumed with it.
-          sandbox_runs: () =>
+          executors: () =>
             Promise.resolve({
               runs: [
                 posted.some((p) => p.tool === "answer_run")
@@ -1807,7 +1807,7 @@ describe("the pane", () => {
       mount({
         answers: {
           decisions: () => Promise.resolve(decisionsOf(sent() ? now : first)),
-          sandbox_runs: () => Promise.resolve({ runs: [sent() ? now.run : first.run] }),
+          executors: () => Promise.resolve({ runs: [sent() ? now.run : first.run] }),
         },
       });
       await settle();
@@ -1871,7 +1871,7 @@ describe("the pane", () => {
         answers: {
           decisions: decisionsOf({ kind: "run", at: parked.paused_at, run: parked }),
           // THE RUN'S RECORD, as the engine holds it once the answer was sent.
-          sandbox_runs: () =>
+          executors: () =>
             Promise.resolve({
               runs: [
                 ...(!posted.some((p) => p.tool === "answer_run")
@@ -1888,7 +1888,7 @@ describe("the pane", () => {
       fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
         target: { value: "Yes, delete it." },
       });
-      runsAskedAtPress = asked.filter((a) => a.kind === "sandbox_runs").length;
+      runsAskedAtPress = asked.filter((a) => a.kind === "executors").length;
       fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
       await settle();
       await settle();
@@ -1975,9 +1975,7 @@ describe("the pane", () => {
       expect(when).not.toContain("UTC");
       expect(timesNamed("@miles")).toBe(1);
       // ASKED AGAIN FOR THE RECORD, by the refusal's own look-again.
-      expect(asked.filter((a) => a.kind === "sandbox_runs").length).toBeGreaterThan(
-        runsAskedAtPress,
-      );
+      expect(asked.filter((a) => a.kind === "executors").length).toBeGreaterThan(runsAskedAtPress);
       // DISMISSED, the sentence that named them is gone, and the line names
       // them instead.
       fireEvent.click(within(strip).getByRole("button", { name: "Dismiss" }));
@@ -2613,7 +2611,7 @@ describe("what was answered", () => {
             Promise.resolve(sent() ? decisionsOf(...also) : decisionsOf(parked, ...also)),
           answered_decisions: () =>
             Promise.resolve({ handle: "jane", items: sent() && listed ? [answeredRun()] : [] }),
-          sandbox_runs: () =>
+          executors: () =>
             Promise.resolve({
               runs: [
                 sent() ? { ...parked.run, status: "resumed", answer_ids: ["a1"] } : parked.run,

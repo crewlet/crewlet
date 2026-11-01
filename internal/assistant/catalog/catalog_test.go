@@ -33,7 +33,7 @@ func TestTheCatalogueHoldsTogether(t *testing.T) {
 	}
 	for _, want := range []string{"search_work", "list_tasks", "get_task", "get_task_thread",
 		"get_task_cost", "get_my_work", "list_projects", "get_workload", "list_decisions",
-		"list_agents", "get_agent", "get_org_chart", "list_turns", "list_coding_runs",
+		"list_agents", "get_agent", "get_org_chart", "list_turns", "list_executors",
 		"get_spend", "get_spend_series", "list_budgets", "search_knowledge", "list_spaces", "get_page",
 		"get_company_feed", "list_artifacts", "get_artifact", "list_integrations",
 		"get_fleet_health", "list_config_changes", "create_task", "update_task",

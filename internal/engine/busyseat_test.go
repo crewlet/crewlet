@@ -192,7 +192,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	completed := types.SandboxRunCompleted{Agent: run.AgentID, AgentHandle: "swe", RoleName: run.Role,
+	completed := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: "swe", RoleName: run.Role,
 		TurnID: "t1", LaunchID: run.LaunchID, SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
 	if err := coordinator.OnCompleted(ctx, completed, events.New(completed, events.TraceContext{})); err != nil {
 		t.Fatalf("OnCompleted: %v", err)

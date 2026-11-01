@@ -22,7 +22,7 @@ import (
 // brief carries the turn's task, whatever somebody else wrote in it fenced
 // under the turn's token for the model that reads it; the run's description
 // and label, which Live › Coding runs, Now running and Home draw as its title
-// and sandbox_run_started announces, carry what the turn was asked, as it was
+// and executor_launched announces, carry what the turn was asked, as it was
 // written, with no fence line, token or escape: a fence is a model's
 // (ADR-0040). So for every surface a seat is woken from ([wakeSurfaces]) and
 // every other kind of wake that runs a turn ([wakeTypes]). A chat message that

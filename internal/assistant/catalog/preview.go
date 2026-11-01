@@ -755,7 +755,7 @@ func runAnswerPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		a := Args(args)
-		doc, err := readGet(ctx, read, "GET /sandbox-runs", nil, nil)
+		doc, err := readGet(ctx, read, "GET /executors", nil, nil)
 		if err != nil {
 			return proposal.Preview{}, err
 		}

@@ -78,7 +78,7 @@ import {
 } from "~/lib/seats.ts";
 import { renderInline } from "~/lib/markdown.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
-import { useEngineHealth, useOrg, useSandboxes, useSchedules } from "~/lib/store-hooks.ts";
+import { useEngineHealth, useOrg, useExecutors, useSchedules } from "~/lib/store-hooks.ts";
 import { turnSteps } from "~/lib/turnsteps.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { useClipped } from "~/lib/useClipped.ts";
@@ -360,7 +360,7 @@ function CurrentTurn({
   const viewer = useViewer();
   const runs = useServicesRun();
   const ask = useServicesAsk();
-  const sandboxes = useSandboxes();
+  const executors = useExecutors();
   const phone = useScreenBelow(PHONE_BREAKPOINT);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
@@ -449,7 +449,7 @@ function CurrentTurn({
   // "Execute · round 7 of 25" left the row no room for Review, which wrapped
   // onto a line of its own behind a dangling connector.
   const { steps, current, detail } = turnSteps(agent, { inLabel: !phone });
-  const sandbox = sandboxes.find((s) => s.turn_id === turnId) ?? null;
+  const sandbox = executors.find((s) => s.turn_id === turnId) ?? null;
   const asking = !!sandbox && awaitingPerson(sandbox.status);
   const started = Date.parse(turn?.started_at ?? call?.started_at ?? "");
   const tokens = turnTokens(turnId, newest.data?.turns?.[0], !!newest.data, agent);

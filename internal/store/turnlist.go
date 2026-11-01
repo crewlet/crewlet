@@ -60,7 +60,7 @@ import (
 //
 // A parked turn resumes only when its run is collected, and a run that is LOST
 // — its box unreachable, its claim stranded, its conversation gone — is settled
-// like any other lost turn, announced by `sandbox_run_failed` and never
+// like any other lost turn, announced by `executor_failed` and never
 // resumed. Read by the completions alone that turn was parked for good: the
 // failure is therefore an end, dated when it was announced, and the newest end
 // still decides — a run that failed while still launching is followed by its
@@ -72,7 +72,7 @@ import (
 var (
 	phaseCompleted = types.AgentPhaseCompleted{}.EventType()
 	turnCompleted  = types.TurnCompleted{}.EventType()
-	runLost        = types.SandboxRunFailed{}.EventType()
+	runLost        = types.ExecutorFailed{}.EventType()
 	agentTurnEnded = types.AgentTurnCompleted{}.EventType()
 )
 
@@ -82,7 +82,7 @@ var (
 //
 // THE TAG IS ONLY HALF OF IT. The writer stamps `failed` from a payload field,
 // and the four types that ARE a failure by their very name carry no such field:
-// llm_unavailable, budget_exhausted, turn.guard_breach and sandbox_run_failed.
+// llm_unavailable, budget_exhausted, turn.guard_breach and executor_failed.
 // Those are precisely the records a turn that died BEFORE completing a phase
 // leaves behind — a seat refused at the budget gate, a chain whose every model
 // was down, a breached guard — so on the tag alone this aggregate answered "not
@@ -260,7 +260,7 @@ type Turn struct {
 	// completed still says why. The kind is the record's `error_kind`, or
 	// the failure's own event type for the four types that ARE a failure
 	// (llm_unavailable, budget_exhausted, turn.guard_breach,
-	// sandbox_run_failed).
+	// executor_failed).
 	//
 	// ON THE ROW, so whoever may read the row reads why it failed: the
 	// seat's trail, decided before the listing is read. Before this field

@@ -476,12 +476,12 @@ type LastTurn struct {
 	Outcome TurnOutcome `json:"outcome"`
 }
 
-// SandboxEntry is one in-flight detached coding run.
+// ExecutorEntry is one in-flight detached coding run.
 //
 // AgentID is what pairs a run with its seat's row. Role and AgentHandle are
 // what the seat was called when the run started, for a reader with no roster
 // row to name it from — never a key, since a name is shared and a handle moves.
-type SandboxEntry struct {
+type ExecutorEntry struct {
 	TurnID      string `json:"turn_id"`
 	Role        string `json:"role"`
 	AgentHandle string `json:"agent_handle"`
@@ -489,9 +489,9 @@ type SandboxEntry struct {
 	CodingAgent string `json:"coding_agent"`
 	// ProviderKey and Model are the executor-chain member the run was
 	// launched on and the model it runs under — see
-	// [types.SandboxRunStarted.ProviderKey]. Empty on a run whose
+	// [types.ExecutorLaunched.ProviderKey]. Empty on a run whose
 	// announcement and record named none. The key is the company's
-	// configuration and reaches an admin alone ([SandboxEntry.For]); the
+	// configuration and reaches an admin alone ([ExecutorEntry.For]); the
 	// model is everybody's.
 	ProviderKey string `json:"provider_key,omitempty"`
 	Model       string `json:"model,omitempty"`
@@ -499,8 +499,8 @@ type SandboxEntry struct {
 	Task        string `json:"task"`
 
 	// Status is the run record's own word for where the run is — see
-	// [SandboxStatus].
-	Status SandboxStatus `json:"status"`
+	// [ExecutorStatus].
+	Status ExecutorStatus `json:"status"`
 
 	StartedAt string `json:"started_at"`
 
@@ -509,7 +509,7 @@ type SandboxEntry struct {
 	// context is ALWAYS on the wire, empty where it gave none, as every
 	// reader of a run's ask sends it, so a client never reads its absence
 	// as a different kind of question. The question and both of those are
-	// the run's body, withheld together ([SandboxEntry.For]).
+	// the run's body, withheld together ([ExecutorEntry.For]).
 	Question        string             `json:"question,omitempty"`
 	QuestionContext string             `json:"question_context"`
 	Decision        *decision.Decision `json:"decision,omitempty"`
@@ -518,7 +518,7 @@ type SandboxEntry struct {
 	// AudienceHandles are the seats the parked question may be answered by
 	// ([sandbox.PendingRun.AudienceHandles]), which is who is shown the
 	// question whatever their reach to the seat that asked it
-	// ([SandboxEntry.For]). NEVER ON THE WIRE: it names people, and what a
+	// ([ExecutorEntry.For]). NEVER ON THE WIRE: it names people, and what a
 	// reader is told is only whether they were shown the question. Filled
 	// from the durable run record; an entry built from the events alone
 	// holds none until the next reconcile reads it.
@@ -526,7 +526,7 @@ type SandboxEntry struct {
 
 	// BodyWithheld is whether this entry reached its reader without what
 	// the run was asked, and the question it parked on, because neither is
-	// theirs to read — see [SandboxEntry.For].
+	// theirs to read — see [ExecutorEntry.For].
 	BodyWithheld bool `json:"body_withheld,omitempty"`
 
 	// WorkItem is the item the launching turn is charged to, absent when
@@ -545,7 +545,7 @@ type SandboxEntry struct {
 	PausedAt string `json:"paused_at,omitempty"`
 }
 
-// SandboxStatus is where a detached run is, in the RUN RECORD'S OWN WORDS.
+// ExecutorStatus is where a detached run is, in the RUN RECORD'S OWN WORDS.
 //
 // It used to be two words of this projection's own, `running` and
 // `awaiting_input`, and the second is not one the run record can write — so
@@ -553,41 +553,41 @@ type SandboxEntry struct {
 // never once saw a live run that was waiting on somebody: the state this panel
 // most needs to surface reached no screen through it. One vocabulary, held
 // against sandbox's own constants by internal/observe, which sees both.
-type SandboxStatus string
+type ExecutorStatus string
 
 const (
-	// SandboxLaunching — the job has started and the turn that started it
+	// ExecutorLaunching — the job has started and the turn that started it
 	// is still unwinding.
-	SandboxLaunching SandboxStatus = "launching"
-	// SandboxRunning — the coding agent is working in its box.
-	SandboxRunning SandboxStatus = "running"
-	// SandboxAwaiting — the agent asked a person and stopped; its box is
+	ExecutorLaunching ExecutorStatus = "launching"
+	// ExecutorRunning — the coding agent is working in its box.
+	ExecutorRunning ExecutorStatus = "running"
+	// ExecutorAwaiting — the agent asked a person and stopped; its box is
 	// held paused until the answer arrives.
-	SandboxAwaiting SandboxStatus = "awaiting_clarification"
-	// SandboxReseed — the box was reclaimed past its pause TTL while the
+	ExecutorAwaiting ExecutorStatus = "awaiting_clarification"
+	// ExecutorReseed — the box was reclaimed past its pause TTL while the
 	// run waited. The question survives and an answer relaunches it.
-	SandboxReseed SandboxStatus = "reseed"
-	// SandboxAnswered — a person's reply is recorded as the answer to the
+	ExecutorReseed ExecutorStatus = "reseed"
+	// ExecutorAnswered — a person's reply is recorded as the answer to the
 	// question, and the resume it drives is owed: the engine is working on
 	// it, and nobody is being waited on any more.
-	SandboxAnswered SandboxStatus = "answered"
+	ExecutorAnswered ExecutorStatus = "answered"
 )
 
-// SandboxStatuses is the closed set a live entry can carry. The record's
+// ExecutorStatuses is the closed set a live entry can carry. The record's
 // `resumed` is deliberately not in it: the run itself is over and the turn
 // that launched it has taken its result back, so it is not a run in flight.
-var SandboxStatuses = []SandboxStatus{
-	SandboxLaunching, SandboxRunning, SandboxAwaiting, SandboxReseed, SandboxAnswered,
+var ExecutorStatuses = []ExecutorStatus{
+	ExecutorLaunching, ExecutorRunning, ExecutorAwaiting, ExecutorReseed, ExecutorAnswered,
 }
 
 // Valid reports whether s is a status a live entry can carry.
-func (s SandboxStatus) Valid() bool { return slices.Contains(SandboxStatuses, s) }
+func (s ExecutorStatus) Valid() bool { return slices.Contains(ExecutorStatuses, s) }
 
-// SandboxRecord is one run as the DURABLE record states it, for
-// [LiveState.ReconcileSandboxes]: the entry it becomes, plus the two facts the
+// ExecutorRecord is one run as the DURABLE record states it, for
+// [LiveState.ReconcileExecutors]: the entry it becomes, plus the two facts the
 // reconcile needs to tell a run that has ended since from one that has not.
-type SandboxRecord struct {
-	Entry SandboxEntry
+type ExecutorRecord struct {
+	Entry ExecutorEntry
 
 	// LaunchID is the job the record describes. A completion names the job
 	// it finished, so a record still describing that job after its
@@ -618,7 +618,7 @@ type OrgBudget struct {
 type Change struct {
 	// Agents are the agent ids of the seats that moved.
 	Agents    map[string]struct{}
-	Sandboxes bool
+	Executors bool
 	Tokens    bool
 	Events    bool
 	Budget    bool
@@ -626,7 +626,7 @@ type Change struct {
 
 // Moved reports whether anything changed at all.
 func (c Change) Moved() bool {
-	return len(c.Agents) > 0 || c.Sandboxes || c.Tokens || c.Events || c.Budget
+	return len(c.Agents) > 0 || c.Executors || c.Tokens || c.Events || c.Budget
 }
 
 func (c *Change) agentMoved(agentID string) {

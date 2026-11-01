@@ -426,8 +426,8 @@ type CoordinatorOptions struct {
 	// hand-enumerating the ways a run stops each missed one, and a second
 	// field is a second thing a wiring can declare and never pass. A caller
 	// that needs to tell a wait from an ending reads the events that already
-	// say which — [types.SandboxClarificationRequested],
-	// [types.SandboxRunFailed] and [types.SandboxRunStopped] — rather than a
+	// say which — [types.ExecutorAsked],
+	// [types.ExecutorFailed] and [types.ExecutorStopped] — rather than a
 	// parameter nothing else needs.
 	//
 	// IT IS REPORTED WHERE THE TRANSITION IS MADE, NOT WHERE A LIST SAYS,
@@ -1126,11 +1126,11 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 		return nil
 	}
 	switch payload := ev.Data.(type) {
-	case *types.SandboxRunStarted:
+	case *types.ExecutorLaunched:
 		return c.OnStarted(ctx, *payload)
-	case *types.SandboxRunCompleted:
+	case *types.ExecutorFinished:
 		return c.lost(payload.AgentHandle, c.OnCompleted(ctx, *payload, ev))
-	case *types.SandboxAnswerGiven:
+	case *types.ExecutorAnswerGiven:
 		return c.lost(payload.AgentHandle, c.OnAnswerGiven(ctx, *payload, ev))
 	}
 	return nil
@@ -1161,7 +1161,7 @@ func (c *Coordinator) lost(handle string, err error) error {
 // Idempotent on a redelivery, which is why it consults the store rather than
 // blindly incrementing: at-least-once means this can arrive twice, and a
 // double increment would leave the seat held forever after the run settled.
-func (c *Coordinator) OnStarted(ctx context.Context, ev types.SandboxRunStarted) error {
+func (c *Coordinator) OnStarted(ctx context.Context, ev types.ExecutorLaunched) error {
 	if ev.AgentHandle == "" {
 		return nil
 	}
@@ -1248,7 +1248,7 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 const seatRecountRounds = 8
 
 // OnCompleted claims the run, collects, accounts, then resumes the loop.
-func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunCompleted, trigger *events.Event) error {
+func (c *Coordinator) OnCompleted(ctx context.Context, ev types.ExecutorFinished, trigger *events.Event) error {
 	fence, held := c.leaseOf(ev.AgentHandle)
 	if !held {
 		// NOT THIS NODE'S TO CLAIM: the seat is held elsewhere, and the
@@ -1318,7 +1318,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 // IT TAKES THE ADMISSION, NOT A CONTEXT, for the reason
 // [Coordinator.resumeOwedAdmitted] gives: everything from the claim on belongs
 // to the admitted turn and runs under the admission's own context.
-func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunCompleted,
+func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 	trigger *events.Event, fence Fence,
 ) error {
 	ctx := adm.ctx
@@ -1506,7 +1506,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		// settle the row whatever the cleanup manages: both are network
 		// calls that can fail on their own, and neither failing is a
 		// reason to leave a seat parked on a run that is finished.
-		c.settleFailed(ctx, run, types.SandboxFailureCollect,
+		c.settleFailed(ctx, run, types.ExecutorFailureCollect,
 			"the coding job finished but its box could not be read back, so its "+
 				"result is lost; the work it pushed, if any, is on its branch")
 		return nil
@@ -1955,7 +1955,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	// this instant, and a reply posted earlier is not its answer. See
 	// [PendingRun.AskedAt].
 	asked := c.now()
-	announcement := types.SandboxClarificationRequested{
+	announcement := types.ExecutorAsked{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 		Question: run.Question, QuestionContext: run.QuestionContext, Decision: run.Decision,
@@ -2238,7 +2238,7 @@ func (c *Coordinator) owes(turnID string) bool {
 // resumed it a second time with the first question's answer presented as the
 // second's.
 // So the delivery carries the question it was given against
-// ([types.SandboxAnswerGiven.LaunchID], stamped off the row the answer was
+// ([types.ExecutorAnswerGiven.LaunchID], stamped off the row the answer was
 // accepted against), and is recorded only while the run is still waiting on
 // THAT question: the launch identifies it, because every new question comes
 // with a new launch ([PendingStore.BeginLaunch] mints one) and nothing but a
@@ -2253,7 +2253,7 @@ func (c *Coordinator) owes(turnID string) bool {
 //
 // # What the caller does with each answer
 //
-// The delivery is a [types.SandboxAnswerGiven] on the seat's control topic,
+// The delivery is a [types.ExecutorAnswerGiven] on the seat's control topic,
 // and it is NEVER A TURN, so two of the three dispositions mean the same thing
 // to [Coordinator.OnAnswerGiven] (spend it) and only one hands it back:
 //
@@ -2288,7 +2288,7 @@ func (c *Coordinator) owes(turnID string) bool {
 //
 // # Who is recorded
 //
-// Every answer that reached a run publishes [types.SandboxRunAnswered], with
+// Every answer that reached a run publishes [types.ExecutorAnswered], with
 // the route `operator` and who gave it in the three halves iam.ActorFor makes
 // of a principal — the author (the seat of a principal the identity directory
 // binds to one, the login of anybody else), its kind, and the credential the
@@ -2296,7 +2296,7 @@ func (c *Coordinator) owes(turnID string) bool {
 // the chat route lacked. An answer recorded on its run publishes it once its resume has
 // become something ([Coordinator.attemptOwed]); one that was not recorded,
 // here.
-func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswerGiven, trigger *events.Event) (AnswerDisposition, error) {
+func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.ExecutorAnswerGiven, trigger *events.Event) (AnswerDisposition, error) {
 	answered := func(run PendingRun, outcome types.AnswerOutcome) {
 		c.announceAnswered(ctx, run, types.AnswerViaOperator, outcome, answerer{
 			by: given.AnsweredBy, kind: given.AnsweredByKind, operatorID: given.OperatorID,
@@ -2456,7 +2456,7 @@ const answerRecordRounds = 3
 // [AnswerDeferred], an answer the run is still owed and that could not be
 // recorded, goes back to the broker, whose backoff spaces the attempts and
 // whose dead-letter subject is the loud end of a record that never lands.
-func (c *Coordinator) OnAnswerGiven(ctx context.Context, given types.SandboxAnswerGiven, ev *events.Event) error {
+func (c *Coordinator) OnAnswerGiven(ctx context.Context, given types.ExecutorAnswerGiven, ev *events.Event) error {
 	handle := given.AgentHandle
 	if c.wasSpent != nil && ev != nil && c.wasSpent(ctx, handle, ev) {
 		log.InfoContext(ctx, "sandbox_answer_by_turn_already_spent",
@@ -2497,7 +2497,7 @@ var errRunMovedOn = errors.New("sandbox: the run moved on to another holder befo
 	"attempt could end it")
 
 // errAnswerNamesNoQuestion is an answer by turn that carries no
-// [types.SandboxAnswerGiven.LaunchID]: it is spent rather than resumed with,
+// [types.ExecutorAnswerGiven.LaunchID]: it is spent rather than resumed with,
 // because the question it answers cannot be known.
 var errAnswerNamesNoQuestion = errors.New("sandbox: the answer names no question it answers " +
 	"(no launch_id), so it is spent without resuming the run")
@@ -2520,10 +2520,10 @@ func declinedCopy(declined []string, delivery string) bool {
 // question and the person's words, [AnswerText], and who gave it as
 // iam.ActorFor named them, author, kind and credential) and the record they are
 // sealed onto ([Coordinator.record]), with the one delivery the answer arrived
-// in: the [types.SandboxAnswerGiven] event itself, carried so a copy of it can
+// in: the [types.ExecutorAnswerGiven] event itself, carried so a copy of it can
 // be handed back to the seat should the answer be let go of. An error is a
 // choice run's question does not offer.
-func answerGivenOf(run PendingRun, given types.SandboxAnswerGiven, trigger *events.Event,
+func answerGivenOf(run PendingRun, given types.ExecutorAnswerGiven, trigger *events.Event,
 	now time.Time,
 ) (AnswerWords, RecordedAnswer, error) {
 	if _, err := AnswerText(run.Decision, given.Choice, given.Answer); err != nil {
@@ -2563,7 +2563,7 @@ func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
 }
 
 // answerer is who gave an answer, in the three halves iam.ActorFor makes of a
-// principal (see [types.SandboxRunAnswered.AnsweredBy]), and what they
+// principal (see [types.ExecutorAnswered.AnsweredBy]), and what they
 // answered: the option chosen, by id, and their own words, which the answer's
 // record announces beside the question they answer.
 type answerer struct {
@@ -2590,7 +2590,7 @@ func chatAnswerer(trigger *events.Event) answerer {
 func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 	via types.AnswerVia, outcome types.AnswerOutcome, by answerer,
 ) {
-	payload := types.SandboxRunAnswered{
+	payload := types.ExecutorAnswered{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, WorkKey: run.WorkKey, WorkItem: run.WorkItem,
 		Via: via, Outcome: outcome,
@@ -2673,7 +2673,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			"turn_id", run.TurnID, "claimed_from", run.ClaimedFrom,
 			"detail", "the row carried no parked turn state; the turn "+
 				"cannot be resumed and the run is failed")
-		if !c.settleFailed(ctx, run, types.SandboxFailureNoExecuteState,
+		if !c.settleFailed(ctx, run, types.ExecutorFailureNoExecuteState,
 			"the run record carried none of its turn's parked state, so the turn that "+
 				"started it cannot be continued") {
 			return AnswerNotMine, errRunMovedOn
@@ -2711,7 +2711,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		if p := recover(); p != nil {
 			var note *failureNote
 			if !began.Load() {
-				note = &failureNote{reason: types.SandboxFailureResumeBroken, detail: resumeBrokenDetail}
+				note = &failureNote{reason: types.ExecutorFailureResumeBroken, detail: resumeBrokenDetail}
 			}
 			// DETACHED, bounded: the panic may be the cancellation's own,
 			// and an ending on a dead context would write nothing.
@@ -2780,7 +2780,7 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 					"is ended and announced rather than retried, and a person's reply that "+
 					"drove the resume goes back to the seat rather than being spent")
 			if !c.settleAbandoned(ctx, run, &failureNote{
-				reason: types.SandboxFailureResumeBroken, detail: resumeBrokenDetail,
+				reason: types.ExecutorFailureResumeBroken, detail: resumeBrokenDetail,
 			}) {
 				// NOT THIS NODE'S TO END after all: the run moved on —
 				// the seat's next holder fenced the claim and revived it,
@@ -3235,7 +3235,7 @@ func (c *Coordinator) unclaimAt(ctx context.Context, run PendingRun, counted boo
 				"landed after all")
 		ended, endErr := c.endClaim(ctx, run, ending{
 			unused: claimedAnswer(run),
-			note:   &failureNote{reason: types.SandboxFailureClaimStranded, detail: detail},
+			note:   &failureNote{reason: types.ExecutorFailureClaimStranded, detail: detail},
 		})
 		// AUTHORITATIVE, not assumed: the ending moved the row, or found
 		// it moved, and this call moved the counts, and neither knows
@@ -3431,7 +3431,7 @@ func (c *Coordinator) FailRun(ctx context.Context, turnID, reason, detail string
 // ([Coordinator.oweEnding]). The control copy is a courtesy to the node running
 // the turn and stays best effort.
 //
-// A STOP IS ANNOUNCED AS ONE ([types.SandboxRunStopped]), never as a loss: the
+// A STOP IS ANNOUNCED AS ONE ([types.ExecutorStopped]), never as a loss: the
 // row's [PendingRun.Stop], recorded with the decision, says which, so every
 // attempt at the ending announces the same kind under the same identity.
 func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error {
@@ -3441,7 +3441,7 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 	what := ending.Reason
 	if stop := run.Stop; stop != nil {
 		what = "stopped by " + stop.By
-		ev = events.New(types.SandboxRunStopped{
+		ev = events.New(types.ExecutorStopped{
 			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 			CodingAgent: run.CodingAgent, LaunchID: run.LaunchID,
@@ -3453,7 +3453,7 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 		if ending.Returned {
 			detail += replyReturnedDetail
 		}
-		ev = events.New(types.SandboxRunFailed{
+		ev = events.New(types.ExecutorFailed{
 			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
 			CodingAgent: run.CodingAgent,
@@ -4344,7 +4344,7 @@ func (c *Coordinator) reapTail(ctx context.Context, run PendingRun, owner string
 	// record that quietly left the board.
 	decided, ours := c.finish(ctx, run, ending{
 		fence: fence,
-		note:  &failureNote{reason: types.SandboxFailureAbandoned, detail: detail},
+		note:  &failureNote{reason: types.ExecutorFailureAbandoned, detail: detail},
 	})
 	if !ours {
 		return nil, reapLeft
@@ -4404,7 +4404,7 @@ const MaxAnswerRevivals = 3
 // run does; reviving a run with no box, or no branch, resumes the same turn
 // with the same answer the person gave, which is what the person asked for. NOR
 // THE PARKED STATE: a claim is only ever taken on a run that has it, and the
-// resume's own refusal of one that does not ([types.SandboxFailureNoExecuteState])
+// resume's own refusal of one that does not ([types.ExecutorFailureNoExecuteState])
 // hands the answer back through the run's ending in any case.
 func (c *Coordinator) revivable(run PendingRun) string {
 	answer := run.Answer
@@ -4596,7 +4596,7 @@ func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, ow
 		// announcement says so where it did.
 		decided, err := c.endRecord(ctx, run, ending{
 			fence: fence, whileIn: Active, launch: EveryLaunch,
-			note: &failureNote{reason: types.SandboxFailureSeatRemoved,
+			note: &failureNote{reason: types.ExecutorFailureSeatRemoved,
 				detail: "the seat left the company's agent seats — removed from the chart, or " +
 					"made a person's and not an agent's again within the retirement grace — so " +
 					"its run was ended; any work it pushed is on its branch"},

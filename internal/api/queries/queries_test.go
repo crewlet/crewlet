@@ -270,8 +270,8 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"budgets": "everybody", "schedules": "everybody",
 		"knowledge": "everybody", "colleague": "everybody",
 		// Hosts alone, so a reader can link a reference; never the repositories.
-		"link_hosts":   "everybody",
-		"sandbox_runs": "everybody", "company_feed": "everybody",
+		"link_hosts": "everybody",
+		"executors":  "everybody", "company_feed": "everybody",
 		"decisions": "everybody",
 		// The other half of `decisions`: a person's own asks need no app.
 		"answered_decisions": "everybody",
@@ -316,7 +316,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"work_item":       "decided_by:" + string(authz.ActionWorkRead),
 		"turns":           "decided_by:" + string(authz.ActionSeatTrailRead),
 		"phases":          "decided_by:" + string(authz.ActionSeatTrailRead),
-		"sandbox_tail":    "decided_by:" + string(authz.ActionSeatTrailRead),
+		"executor_tail":   "decided_by:" + string(authz.ActionSeatTrailRead),
 		"agent_memory":    "decided_by:" + string(authz.ActionSeatTrailRead),
 		"agent_episode":   "decided_by:" + string(authz.ActionSeatTrailRead),
 		"memory_overview": "decided_by:" + string(authz.ActionSeatTrailRead),

@@ -801,7 +801,7 @@ test("the dispatch's opening record heads the turn over a resumed segment's", as
         payload: {
           turn_id: TURN,
           role: "CEO",
-          trigger: { type: "sandbox_run_completed", summary: "the box finished" },
+          trigger: { type: "executor_finished", summary: "the box finished" },
           resumed: true,
         },
       }),
@@ -1073,7 +1073,7 @@ test("a watch link lands on the transcript with the running phase open", async (
 
 /**
  * Mount on a watch link over the seat's push and the turn's stored events,
- * answering `sandbox_tail` with `tail` — the page a reader lands on.
+ * answering `executor_tail` with `tail` — the page a reader lands on.
  */
 function mountWatching(seat: Record<string, unknown>, events: EventRecord[], tail?: unknown) {
   location.hash = watchHref(TURN);
@@ -1085,7 +1085,7 @@ function mountWatching(seat: Record<string, unknown>, events: EventRecord[], tai
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
       ? Promise.resolve({ turn_id: TURN, events, truncated: false, nodes: [] })
-      : what === "sandbox_tail" && tail
+      : what === "executor_tail" && tail
         ? Promise.resolve(tail)
         : Promise.resolve({});
   frame(store, socket);
@@ -1195,7 +1195,7 @@ function parkedSeat() {
 /** The run the executor launched before it parked, as the engine announces it. */
 function launched(at: string, launchId = "L1") {
   return event({
-    type: "sandbox_run_started",
+    type: "executor_launched",
     timestamp: at,
     payload: {
       turn_id: TURN,

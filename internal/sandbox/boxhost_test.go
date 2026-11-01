@@ -175,8 +175,8 @@ func TestABoxItsHostFoundGoneIsSettledAtOnce(t *testing.T) {
 	payload, ev := rig.completion("t1")
 	_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
 	rig.finished("t1")
-	if failed := rig.failures(); len(failed) != 1 || failed[0].Reason != types.SandboxFailureCollect {
-		t.Errorf("announced %+v; want one %s", failed, types.SandboxFailureCollect)
+	if failed := rig.failures(); len(failed) != 1 || failed[0].Reason != types.ExecutorFailureCollect {
+		t.Errorf("announced %+v; want one %s", failed, types.ExecutorFailureCollect)
 	}
 }
 
@@ -235,7 +235,7 @@ func TestAnEndingOnAnotherNodeLeavesTheBoxToItsHost(t *testing.T) {
 	if err := rig.pending.SetStatus(t.Context(), "t1", StatusLaunching, rigLease); err != nil {
 		t.Fatalf("SetStatus: %v", err)
 	}
-	if err := rig.coordinator.FailRun(t.Context(), "t1", types.SandboxFailureSuspensionUnrecorded,
+	if err := rig.coordinator.FailRun(t.Context(), "t1", types.ExecutorFailureSuspensionUnrecorded,
 		"the suspended conversation could not be written"); err != nil {
 		t.Fatalf("FailRun: %v", err)
 	}

@@ -83,7 +83,7 @@ import { describeFollowUp, detailItem, itemAddress, labelAfterKey } from "~/lib/
 import type {
   AnsweredDecision,
   AnsweredWorkAsk,
-  SandboxRun,
+  ExecutorRow,
   WorkAskRow,
   WorkDecisionEvidence,
   WorkItem,
@@ -842,7 +842,7 @@ function RunPane({
   answered,
   onSettled,
 }: {
-  run: SandboxRun;
+  run: ExecutorRow;
   frame: Frame;
   now: number;
   /**
@@ -873,7 +873,7 @@ function RunPane({
   // When it was answered is said beside it off the run's record, on the
   // reader's own clock.
   const [refusedAnswered, setRefusedAnswered] = useState<{ worded: boolean } | null>(null);
-  const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const runs = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   const record = runs.data?.runs.find((r) => r.turn_id === run.turn_id);
   // WHETHER THIS ANSWER WAS SEEN ON THE RUN, so a record that then goes away
   // is read as the run finishing with it rather than as the run ending.
@@ -976,7 +976,7 @@ function RunPane({
     // THE RECORD IS ASKED AGAIN by the refusal itself: already_answered and
     // conflict (the run asks another question now) are codes that look again
     // at what the press would have moved (protocol/writeOutcome.ts),
-    // sandbox_runs and decisions among it. Who answered and when arrive
+    // executors and decisions among it. Who answered and when arrive
     // without a read of this pane's own, and so does the question the run
     // asks now, which this pane then draws under the engine's sentence.
     setRefusedAnswered(
@@ -1186,7 +1186,7 @@ function RunPane({
  * already answered does (`caveat.AnsweredAlready`, which leaves the time to
  * the screen), so a person is told it once.
  */
-function answeredAt(record: SandboxRun, now: number, who: boolean): string {
+function answeredAt(record: ExecutorRow, now: number, who: boolean): string {
   const by = who && record.answered_by ? ` by @${record.answered_by}` : "";
   return `Answered${by} at ${moment(record.answered_at ?? "", now)}.`;
 }
@@ -1195,7 +1195,7 @@ function answeredAt(record: SandboxRun, now: number, who: boolean): string {
  * What a seat busy on another coding run is doing, for an answer waiting on it:
  * "The Senior Backend Engineer is busy on GP-4’s run and picks this up next."
  */
-function busyLine(busy: SandboxRun, name: string): string {
+function busyLine(busy: ExecutorRow, name: string): string {
   const who = busy.role ? `The ${busy.role}` : name;
   const on = busy.work_item?.key ? `on ${busy.work_item.key}’s run` : "on another coding run";
   return `${who} is busy ${on} and picks this up next.`;

@@ -160,7 +160,7 @@ func waitingRefusal(err error) (Refusal, bool) {
 // kept until the condition clears.
 type refusedCompletion struct {
 	cond    Condition
-	ev      types.SandboxRunCompleted
+	ev      types.ExecutorFinished
 	trigger *events.Event
 
 	// heldUntil, where set, is the instant before which this node refuses the
@@ -258,7 +258,7 @@ type refusedCompletion struct {
 // the seat host lets go of a seat before the release drops what is kept for
 // it, so a keep that finds the seat held is one the release drops, and one
 // that finds it gone is dropped now.
-func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.Event, refusal Refusal,
+func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Event, refusal Refusal,
 	held bool, seen map[signal]uint64,
 ) {
 	if refusal.Condition == "" {
@@ -300,7 +300,7 @@ const stopLanded Condition = "stop"
 // ANOTHER JOB OF THE SAME TURN IS NOT HELD: a hold is the one job's whose
 // resume met the refusal, and a turn that launched again since has a new job,
 // whose own completion is the next question. The stale keep is dropped.
-func (c *Coordinator) stillRefused(ev types.SandboxRunCompleted) (Refusal, bool) {
+func (c *Coordinator) stillRefused(ev types.ExecutorFinished) (Refusal, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	kept, ok := c.refused[ev.TurnID]

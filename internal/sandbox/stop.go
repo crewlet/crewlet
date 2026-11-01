@@ -24,7 +24,7 @@ import (
 // then finished from the row by whoever reads it next — this node, or the
 // seat's next holder after a crash. What makes it a stop rather than a loss is
 // recorded in the deciding write ([PendingRun.Stop]): who stopped it, which is
-// what its announcement ([types.SandboxRunStopped]) and the stopped turn's
+// what its announcement ([types.ExecutorStopped]) and the stopped turn's
 // record name.
 //
 // Finishing it is the ordinary ending's steps with two added for the stop
@@ -136,7 +136,7 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 					"or the pause itself holds it from here")
 			continue
 		default:
-			log.InfoContext(ctx, "sandbox_run_stopped", "turn_id", run.TurnID, "seat", handle,
+			log.InfoContext(ctx, "executor_stopped", "turn_id", run.TurnID, "seat", handle,
 				"launch_id", run.LaunchID, "status", run.Status, "by", by.By,
 				"by_kind", by.ByKind, "operator_id", by.OperatorID)
 		}

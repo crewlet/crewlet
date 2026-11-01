@@ -34,7 +34,7 @@ import type {
   ConfigWarning,
   DerivedSeat,
   DerivedUnit,
-  SandboxEntry,
+  ExecutorEntry,
 } from "~/protocol/index.ts";
 import type { KeySource, NodeKey } from "./model/keys.ts";
 import type { BuilderAction, BuilderState } from "./model/reducer.ts";
@@ -185,7 +185,7 @@ export interface BuilderApi {
   identities: ReadonlySet<string>;
   /** Live state, for the StateBadge on saved agent seats. */
   agents: AgentRow[];
-  sandboxes: SandboxEntry[];
+  executors: ExecutorEntry[];
   /**
    * Where a view or dialog that creates a node mints its key, in its own event
    * handler (see `model/keys.ts`). The Builder's own source, which is the

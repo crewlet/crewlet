@@ -80,11 +80,11 @@ func recordsOf(q *memory.Queue, turnID string) stopRecords {
 			if data.TurnID == turnID {
 				out.stops = append(out.stops, ev)
 			}
-		case *types.SandboxRunStopped:
+		case *types.ExecutorStopped:
 			if data.TurnID == turnID {
 				out.runStops = append(out.runStops, ev)
 			}
-		case *types.SandboxRunFailed:
+		case *types.ExecutorFailed:
 			if data.TurnID == turnID {
 				out.runLosses = append(out.runLosses, ev)
 			}
@@ -101,7 +101,7 @@ func closedAsStopped(t *testing.T, q *memory.Queue, turnID string) stopRecords {
 	t.Helper()
 	got := recordsOf(q, turnID)
 	if len(got.runLosses) != 0 {
-		t.Fatalf("the stopped run was announced as a loss: %d sandbox_run_failed", len(got.runLosses))
+		t.Fatalf("the stopped run was announced as a loss: %d executor_failed", len(got.runLosses))
 	}
 	if len(got.runStops) == 0 {
 		t.Fatal("the run's stop was never announced")

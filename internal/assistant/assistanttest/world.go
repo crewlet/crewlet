@@ -46,7 +46,7 @@ func World() map[string]any {
 					map[string]any{"handle": "dev", "name": "Developer", "kind": "agent"}}}}}}},
 		"/agents/pm": map[string]any{"handle": "pm", "role": "Product manager",
 			"live": map[string]any{"activity": "working"}},
-		"/sandbox-runs": map[string]any{"runs": []any{map[string]any{"turn_id": RecordID,
+		"/executors": map[string]any{"runs": []any{map[string]any{"turn_id": RecordID,
 			"launch_id": "launch-1", "agent_handle": "dev", "work_key": "ENG-42",
 			"question": "Which branch?", "question_context": "",
 			"decision": map[string]any{"question": "Which branch?", "role": "approver",

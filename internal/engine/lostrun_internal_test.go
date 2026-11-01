@@ -41,7 +41,7 @@ func TestARunLostWithItsHostCarriesItsRoundOnInAFreshRun(t *testing.T) {
 		sandbox.JobLoss{Cause: sandbox.LossEngineRestarted, Node: first.LaunchNode}); err != nil || !marked {
 		t.Fatalf("MarkLost = %v, %v", marked, err)
 	}
-	completion := types.SandboxRunCompleted{
+	completion := types.ExecutorFinished{
 		Agent: first.AgentID, AgentHandle: first.AgentHandle, RoleName: first.Role,
 		TurnID: first.TurnID, WorkKey: first.WorkKey, LaunchID: first.LaunchID,
 		SandboxID: first.SandboxID, CodingAgent: first.CodingAgent,

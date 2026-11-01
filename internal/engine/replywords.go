@@ -36,7 +36,7 @@ func replyOf(prompts notify.Prompts, parties notify.Parties, self string,
 // NEVER THE TRIGGER ([DescribeTrigger]). That is the prompt the delivery would
 // wake the seat with: the surface's triage guidance, how to reply, the ids to
 // act on, written for the seat's own turn. The answer is sealed onto the run's
-// row, announced as `sandbox_run_answered`'s `answer`, read back to the person
+// row, announced as `executor_answered`'s `answer`, read back to the person
 // who gave it among their answered decisions (ADR-0068), and handed to the run
 // as the answer to its question. Recorded as the trigger, a person was shown a
 // seat's instructions as their own reply, and the run was handed them as the

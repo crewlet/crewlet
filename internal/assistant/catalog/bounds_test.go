@@ -73,7 +73,7 @@ var readBounds = map[string]bound{
 	"get_org_chart/chart":        {kind: boundConfig, why: "the company's units and seats"},
 	"get_org_chart/seats":        {kind: boundConfig, why: "one row per human seat"},
 	"list_turns":                 {kind: boundPage},
-	"list_coding_runs":           {kind: boundConfig, why: "the runs active now, bounded by the sandboxes the company runs"},
+	"list_executors":             {kind: boundConfig, why: "the runs active now, bounded by the sandboxes the company runs"},
 	"get_spend/agent":            {kind: boundWindow},
 	"get_spend/model":            {kind: boundWindow},
 	"get_spend/phase":            {kind: boundWindow},

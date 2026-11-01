@@ -472,7 +472,7 @@ func TestACompletionRefusedOnAWaitResumesOnceItClears(t *testing.T) {
 func firedCompletions(e *Engine) <-chan struct{} {
 	fired := make(chan struct{}, 1)
 	e.backends.Queue.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
-		if ev.Type == (types.SandboxRunCompleted{}).EventType() {
+		if ev.Type == (types.ExecutorFinished{}).EventType() {
 			select {
 			case fired <- struct{}{}:
 			default:

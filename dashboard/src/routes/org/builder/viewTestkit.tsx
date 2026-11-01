@@ -28,7 +28,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider, type Viewer } from "~/lib/viewer.ts";
 import type { IntegrationTool } from "~/contract/integrations.ts";
 import { LiveSocket, Store, type QueryMap, type QueryName } from "~/protocol/index.ts";
-import type { AgentRow, ConfigProblem, ConfigWarning, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, ConfigProblem, ConfigWarning, ExecutorEntry } from "~/protocol/index.ts";
 import {
   BuilderContext,
   type BuilderApi,
@@ -84,7 +84,7 @@ export function BuilderHarness({
   principles = "write",
   identities = NO_IDENTITIES,
   agents = [],
-  sandboxes = [],
+  executors = [],
   tools = [],
   viewer = null,
   selected: initialSelection = null,
@@ -98,7 +98,7 @@ export function BuilderHarness({
   principles?: CompanyEdit;
   identities?: ReadonlySet<string>;
   agents?: AgentRow[];
-  sandboxes?: SandboxEntry[];
+  executors?: ExecutorEntry[];
   /** The tool roll-ups the `integrations` query answers. */
   tools?: IntegrationTool[];
   /** Who the `viewer` question says is reading; `null` leaves it unanswered. */
@@ -173,7 +173,7 @@ export function BuilderHarness({
       readOnly,
       identities,
       agents,
-      sandboxes,
+      executors,
       keys,
       registerView,
     }),
@@ -185,7 +185,7 @@ export function BuilderHarness({
       principles,
       identities,
       agents,
-      sandboxes,
+      executors,
       keys,
       registerView,
       spies,
@@ -252,7 +252,7 @@ export interface HarnessOptions {
   /** The running company's handles and keys (`BuilderApi.identities`); none by default. */
   readonly identities?: ReadonlySet<string>;
   readonly agents?: AgentRow[];
-  readonly sandboxes?: SandboxEntry[];
+  readonly executors?: ExecutorEntry[];
   readonly tools?: IntegrationTool[];
   /** Who the `viewer` question says is reading; unanswered by default. */
   readonly viewer?: Viewer;
@@ -278,7 +278,7 @@ export function renderInBuilder(
       readOnly={options.readOnly}
       identities={options.identities}
       agents={options.agents}
-      sandboxes={options.sandboxes}
+      executors={options.executors}
       tools={options.tools}
       viewer={options.viewer ?? null}
     >

@@ -110,7 +110,7 @@ func TestALostRunHandsItsTurnToTheEngineBeforeItsRecordGoes(t *testing.T) {
 		got.run.ColleagueAsk.Question != askedBy.Question {
 		t.Errorf("the engine was handed ask %+v, want the one the turn's row carries", got.run.ColleagueAsk)
 	}
-	if got.run.Ending == nil || got.run.Ending.Reason != types.SandboxFailureCollect ||
+	if got.run.Ending == nil || got.run.Ending.Reason != types.ExecutorFailureCollect ||
 		got.run.Ending.Detail == "" {
 		t.Errorf("the engine was handed ending %+v, want the loss with its reason and its sentence",
 			got.run.Ending)
@@ -216,7 +216,7 @@ func TestOnlyALossHandsItsTurnToTheEngine(t *testing.T) {
 				run.ColleagueAsk = &asked
 			})
 			if err := rig.coordinator.FailRun(t.Context(), "t1",
-				types.SandboxFailureSuspensionUnrecorded, "the parked turn state could not be written"); err != nil {
+				types.ExecutorFailureSuspensionUnrecorded, "the parked turn state could not be written"); err != nil {
 				t.Fatalf("FailRun: %v", err)
 			}
 		}, true},

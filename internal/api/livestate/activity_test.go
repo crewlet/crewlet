@@ -46,9 +46,9 @@ func wantState(t *testing.T, s *livestate.LiveState, seat string, activity lives
 // codingRun is one run as the durable record states it, launched by the seat
 // with this agent id. Every run carries the SAME role name, which is what a
 // record looks like for a company whose seats share one.
-func codingRun(turnID, seat string, status livestate.SandboxStatus, started time.Time) livestate.SandboxRecord {
-	return livestate.SandboxRecord{
-		Entry: livestate.SandboxEntry{
+func codingRun(turnID, seat string, status livestate.ExecutorStatus, started time.Time) livestate.ExecutorRecord {
+	return livestate.ExecutorRecord{
+		Entry: livestate.ExecutorEntry{
 			TurnID: turnID, AgentID: seat, Role: "Engineer", AgentHandle: "coder", Status: status,
 			StartedAt: started.Format(time.RFC3339Nano),
 		},
@@ -67,8 +67,8 @@ func TestARunParkedForThirteenHoursReadsNeeds(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
 	s.SetPlacement(map[string]bool{"Coder": true})
-	s.ReconcileSandboxes([]livestate.SandboxRecord{
-		codingRun("tn-old", "Coder", livestate.SandboxAwaiting, fixtureNow.Add(-13*time.Hour)),
+	s.ReconcileExecutors([]livestate.ExecutorRecord{
+		codingRun("tn-old", "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-13*time.Hour)),
 	}, fixtureNow)
 
 	wantState(t, s, "Coder", livestate.ActivityNeeds, "")
@@ -86,28 +86,28 @@ func TestNeedsIsReadFromTheRunRecordNotTheParkedTurn(t *testing.T) {
 	s.Apply(env("agent_turn_completed", map[string]any{
 		"agent_id": "Coder", "turn_id": "tn-1", "suspended": true,
 	}))
-	s.ReconcileSandboxes([]livestate.SandboxRecord{
-		codingRun("tn-1", "Coder", livestate.SandboxRunning, fixtureNow.Add(-time.Minute)),
+	s.ReconcileExecutors([]livestate.ExecutorRecord{
+		codingRun("tn-1", "Coder", livestate.ExecutorRunning, fixtureNow.Add(-time.Minute)),
 	}, fixtureNow)
 	wantState(t, s, "Coder", livestate.ActivityWorking, "")
 
-	s.ReconcileSandboxes([]livestate.SandboxRecord{
-		codingRun("tn-1", "Coder", livestate.SandboxReseed, fixtureNow.Add(-time.Minute)),
+	s.ReconcileExecutors([]livestate.ExecutorRecord{
+		codingRun("tn-1", "Coder", livestate.ExecutorReseed, fixtureNow.Add(-time.Minute)),
 	}, fixtureNow.Add(time.Second))
 	wantState(t, s, "Coder", livestate.ActivityNeeds, "")
 
 	// AN ANSWERED RUN IS WORK AGAIN: the person's reply is recorded and the
 	// engine is driving the resume it owes, so nobody is waited on — a
 	// seat still shown as needing someone would ask them to answer twice.
-	s.ReconcileSandboxes([]livestate.SandboxRecord{
-		codingRun("tn-1", "Coder", livestate.SandboxAnswered, fixtureNow.Add(-time.Minute)),
+	s.ReconcileExecutors([]livestate.ExecutorRecord{
+		codingRun("tn-1", "Coder", livestate.ExecutorAnswered, fixtureNow.Add(-time.Minute)),
 	}, fixtureNow.Add(1500*time.Millisecond))
 	wantState(t, s, "Coder", livestate.ActivityWorking, "")
 
 	// And a park whose run the record no longer holds is not work: the
 	// turn is ended only by events, and a run lost without one would
 	// otherwise keep the seat busy for good.
-	s.ReconcileSandboxes(nil, fixtureNow.Add(2*time.Second))
+	s.ReconcileExecutors(nil, fixtureNow.Add(2*time.Second))
 	wantState(t, s, "Coder", livestate.ActivityIdle, "")
 }
 
@@ -259,10 +259,10 @@ func TestAReconcileThatMovesARunPushesItsSeat(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
 	s.SetPlacement(map[string]bool{"Coder": true, "Lead": true})
-	change := s.ReconcileSandboxes([]livestate.SandboxRecord{
-		codingRun("tn-1", "Coder", livestate.SandboxAwaiting, fixtureNow.Add(-time.Hour)),
+	change := s.ReconcileExecutors([]livestate.ExecutorRecord{
+		codingRun("tn-1", "Coder", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Hour)),
 	}, fixtureNow)
-	if !change.Sandboxes {
+	if !change.Executors {
 		t.Error("the run set did not move")
 	}
 	if want := []string{"Coder"}; !slices.Equal(keys(change.Agents), want) {
@@ -346,8 +346,8 @@ func TestTwoSeatsSharingANameHaveTwoStates(t *testing.T) {
 	t.Parallel()
 	s := sandboxState(t)
 	s.SetPlacement(map[string]bool{"id-ada": true, "id-bob": false})
-	s.ReconcileSandboxes([]livestate.SandboxRecord{
-		codingRun("tn-ada", "id-ada", livestate.SandboxAwaiting, fixtureNow.Add(-time.Minute)),
+	s.ReconcileExecutors([]livestate.ExecutorRecord{
+		codingRun("tn-ada", "id-ada", livestate.ExecutorAwaiting, fixtureNow.Add(-time.Minute)),
 	}, fixtureNow)
 
 	wantState(t, s, "id-ada", livestate.ActivityNeeds, "")

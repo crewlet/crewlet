@@ -2425,7 +2425,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// owns the run. The ENGINE's reader, because the answerer
 			// it registered on every node is the other half of the same
 			// protocol, and a node serving no API may be the owner.
-			SandboxTail: sandboxTails(e),
+			ExecutorTail: executorTails(e),
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per
@@ -3577,11 +3577,11 @@ func memoryReads(e *engine.Engine) queries.SeatMemory {
 	return nil
 }
 
-// sandboxTails is this node's run-output reader, as the read surface wants it
+// executorTails is this node's run-output reader, as the read surface wants it
 // — converted for [memoryReads]'s reason: a nil *TailReader in the interface
 // would register a question whose every answer panics.
-func sandboxTails(e *engine.Engine) queries.SandboxTails {
-	if r := e.SandboxTails(); r != nil {
+func executorTails(e *engine.Engine) queries.ExecutorTails {
+	if r := e.ExecutorTails(); r != nil {
 		return r
 	}
 	return nil

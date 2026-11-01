@@ -94,7 +94,7 @@ export const WENT_WRONG: ReadonlySet<string> = new Set([
   "budget_exhausted",
   "provider_fallback",
   "phase.tool_skill_blocked",
-  "sandbox_run_failed",
+  "executor_failed",
   "skill_telemetry_write_failed",
   "agent_turn_stopped",
 ]);
@@ -107,7 +107,7 @@ export const WENT_WRONG: ReadonlySet<string> = new Set([
  * reports, so a reader counting problems must not count both. Everything else
  * in WENT_WRONG — a recovered provider fallback, a refused tool skill, a
  * failed sandbox run — is an INDEPENDENT problem that happens to share a turn
- * with the stop. `sandbox_run_failed` is deliberately not here although it is
+ * with the stop. `executor_failed` is deliberately not here although it is
  * a failure: `internal/engine/telemetry.go` does not publish it, so it never
  * describes the turn's own stop.
  */
@@ -180,11 +180,11 @@ export const LEFT_BEHIND: ReadonlySet<string> = new Set([
  * answer. That is the band working rather than a hole in it: a swept close is
  * precisely the statement that no turn finished.
  *
- * `sandbox_run_answered` is here beside the question it answers: a parked
+ * `executor_answered` is here beside the question it answers: a parked
  * run's answer is work that happened to this turn between its two segments,
  * whichever route it came by.
  *
- * `sandbox_run_stopped` is here beside the completion it stands in for, and
+ * `executor_stopped` is here beside the completion it stands in for, and
  * NOT in WENT_WRONG: a run a person stopped by pausing its seat ended because
  * somebody meant it to, and the turn's own `agent_turn_stopped` already says
  * who in that band — a second row there would count one stop twice.
@@ -201,11 +201,11 @@ export const LEFT_BEHIND: ReadonlySet<string> = new Set([
  * after.
  */
 export const DID: ReadonlySet<string> = new Set([
-  "sandbox_run_started",
-  "sandbox_clarification_requested",
-  "sandbox_run_answered",
-  "sandbox_run_completed",
-  "sandbox_run_stopped",
+  "executor_launched",
+  "executor_asked",
+  "executor_answered",
+  "executor_finished",
+  "executor_stopped",
   "subagent_batched",
   "skill_used",
   "knowledge_read",

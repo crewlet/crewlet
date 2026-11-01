@@ -51,10 +51,10 @@ describe("problemCount", () => {
   test("the flag is deduped against its own record, never against the rows", () => {
     // The case a plain `||` swallowed: a reviewer-failed turn that ALSO
     // recovered a provider hand-off has two independent problems, and only
-    // one of them is a row. `sandbox_run_failed` is a failure the engine
+    // one of them is a row. `executor_failed` is a failure the engine
     // publishes elsewhere, so it does not describe this turn's stop either.
     expect(problemCount([row("provider_fallback")], true)).toBe(2);
-    expect(problemCount([row("sandbox_run_failed")], true)).toBe(2);
+    expect(problemCount([row("executor_failed")], true)).toBe(2);
     // …and the dedupe still fires when the stop record is among several.
     expect(problemCount([row("provider_fallback"), row("turn.guard_breach")], true)).toBe(2);
   });

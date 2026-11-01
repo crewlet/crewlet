@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, test } from "vitest";
-import type { AgentRow, CompanyDocument, OrgProjection, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, CompanyDocument, OrgProjection, ExecutorEntry } from "~/protocol/index.ts";
 import type { SeatActivity } from "~/contract/wire.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { locate } from "./model/draft.ts";
@@ -288,7 +288,7 @@ describe("live state", () => {
     handle: "dev",
     activity,
   });
-  const run: SandboxEntry = {
+  const run: ExecutorEntry = {
     turn_id: "t",
     role: "Dev",
     agent_handle: "dev",

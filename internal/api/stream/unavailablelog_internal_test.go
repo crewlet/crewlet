@@ -81,15 +81,15 @@ func TestAFailureLoggedWhereItWasMetIsATraceHere(t *testing.T) {
 	t.Parallel()
 	for name, log := range map[string]func(*slog.Logger, error){
 		"unavailable": func(l *slog.Logger, err error) {
-			LogUnavailable(t.Context(), l, "api_query_unavailable", err, "what", "sandbox_tail")
+			LogUnavailable(t.Context(), l, "api_query_unavailable", err, "what", "executor_tail")
 		},
 		"failed": func(l *slog.Logger, err error) {
-			LogFailed(t.Context(), l, "api_query_failed", err, "what", "sandbox_tail")
+			LogFailed(t.Context(), l, "api_query_failed", err, "what", "executor_tail")
 		},
 	} {
 		var out bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		log(logger, fmt.Errorf("sandbox_tail: %w", tailFailed{fmt.Errorf("upload: %w",
+		log(logger, fmt.Errorf("executor_tail: %w", tailFailed{fmt.Errorf("upload: %w",
 			objstore.ErrFull)}))
 		if line := out.String(); !strings.Contains(line, "level=DEBUG") {
 			t.Errorf("%s: a failure its node logged is written %q, want DEBUG", name, line)

@@ -19,7 +19,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, ExecutorEntry } from "~/protocol/index.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { SeatView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
@@ -49,8 +49,8 @@ function seat(over: Partial<SeatView> = {}): SeatView {
 }
 
 /** Only the two fields `LiveState` reads. */
-function api(agents: AgentRow[], sandboxes: SandboxEntry[] = []): BuilderApi {
-  return { agents, sandboxes } as unknown as BuilderApi;
+function api(agents: AgentRow[], executors: ExecutorEntry[] = []): BuilderApi {
+  return { agents, executors } as unknown as BuilderApi;
 }
 
 /** A roster row: its `id` is the handle the seat runs under. */
@@ -151,7 +151,7 @@ describe("a seat's live state", () => {
   test("a seat says the engine's word, and a box beside it changes nothing", () => {
     render(
       <LiveState
-        api={api([agent({ activity: "needs" })], [{ role: "Dev" } as SandboxEntry])}
+        api={api([agent({ activity: "needs" })], [{ role: "Dev" } as ExecutorEntry])}
         view={seat()}
       />,
     );

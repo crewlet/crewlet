@@ -540,7 +540,7 @@ func TestAnUnrecordableSuspensionReclaimsTheRunsBox(t *testing.T) {
 	if killed := provider.KilledIDs(); len(killed) != 1 || killed[0] != box.ID() {
 		t.Fatalf("killed %v, want the running job's box %q reclaimed", killed, box.ID())
 	}
-	if !queue.published(types.SandboxRunFailed{}.EventType()) {
+	if !queue.published(types.ExecutorFailed{}.EventType()) {
 		t.Fatal("the lost run was not announced")
 	}
 }
@@ -624,7 +624,7 @@ func TestAWaiterIntervalBeyondTheDutyCeilingIsRefusedAtStart(t *testing.T) {
 type chargeRig struct {
 	fleet       *memory.Fleet
 	coordinator *sandbox.Coordinator
-	completion  types.SandboxRunCompleted
+	completion  types.ExecutorFinished
 }
 
 // chargeAgent is the seat the rig's run belongs to, and the id its counter is
@@ -706,7 +706,7 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 
 	return &chargeRig{
 		fleet: fleet, coordinator: coordinator,
-		completion: types.SandboxRunCompleted{
+		completion: types.ExecutorFinished{
 			TurnID: "t1", LaunchID: run.LaunchID, AgentHandle: "swe", Agent: chargeAgent,
 			RoleName: "SWE", SandboxID: box.ID(), CodingAgent: "claude-code",
 		},

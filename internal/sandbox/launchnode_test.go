@@ -94,7 +94,7 @@ func (r *hostRig) announced() []string {
 	defer r.queue.mu.Unlock()
 	var turns []string
 	for _, p := range r.queue.published {
-		c, ok := p.event.Data.(*types.SandboxRunCompleted)
+		c, ok := p.event.Data.(*types.ExecutorFinished)
 		if ok && !slices.Contains(turns, c.TurnID) {
 			turns = append(turns, c.TurnID)
 		}

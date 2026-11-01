@@ -7,12 +7,12 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { LIVE_OUTPUT_MAX_BYTES } from "~/contract/sandbox.ts";
-import type { SandboxOutput, SandboxTailAnswer } from "~/protocol/index.ts";
+import { LIVE_OUTPUT_MAX_BYTES } from "~/contract/executor.ts";
+import type { ExecutorOutput, ExecutorTailAnswer } from "~/protocol/index.ts";
 import { EMPTY_VIEW, cursorParams, foldTail, trimFront, type LiveView } from "./useLiveTail.ts";
 import { utf8Bytes } from "./format.ts";
 
-function answered(output: SandboxOutput): SandboxTailAnswer {
+function answered(output: ExecutorOutput): ExecutorTailAnswer {
   return { outcome: "tail", turn_id: "t", launch_id: "L", output };
 }
 
@@ -22,7 +22,7 @@ function cursored(
   start: number,
   reset: boolean,
   epoch = "transcript@0",
-): SandboxTailAnswer {
+): ExecutorTailAnswer {
   return answered({
     text,
     source: "transcript",
@@ -59,10 +59,10 @@ describe("a live view", () => {
   // compared as absent, and the first output a run wrote was thrown away and
   // asked for again a poll later.
   test("follows a reading from offset zero", () => {
-    const wire = (output: string): SandboxTailAnswer =>
+    const wire = (output: string): ExecutorTailAnswer =>
       JSON.parse(
         `{"outcome":"tail","turn_id":"t","launch_id":"L","node":"n2","output":${output}}`,
-      ) as SandboxTailAnswer;
+      ) as ExecutorTailAnswer;
     let view = foldTail(
       EMPTY_VIEW,
       wire(

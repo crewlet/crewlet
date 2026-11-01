@@ -375,8 +375,8 @@ func (s *Service) Ingest(env livestate.Envelope) {
 		s.hub.Broadcast(Push(KindEvent, env, now))
 	}
 	s.pushAgents(change, now)
-	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, SandboxRows(s.state.ActiveSandboxes()), now))
+	if change.Executors {
+		s.hub.Broadcast(Push(KindExecutors, ExecutorRows(s.state.ActiveExecutors()), now))
 	}
 	if change.Tokens {
 		// MARKED, NOT SENT. Aggregating here would run inside the
@@ -391,18 +391,18 @@ func (s *Service) Ingest(env livestate.Envelope) {
 	}
 }
 
-// ReconcileSandboxes lands a read of the durable run record on the projection
+// ReconcileExecutors lands a read of the durable run record on the projection
 // and pushes the sandbox set when it moved — which is what corrects every open
 // panel when an event that would have was lost.
 //
 // AND THE SEATS WHOSE STATE IT MOVED: a seat's runs are read from this record,
 // so a question found here makes its seat need somebody on every open screen at
 // the same moment the panel shows it.
-func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf time.Time) {
-	change := s.state.ReconcileSandboxes(records, asOf)
+func (s *Service) ReconcileExecutors(records []livestate.ExecutorRecord, asOf time.Time) {
+	change := s.state.ReconcileExecutors(records, asOf)
 	now := s.now()
-	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, SandboxRows(s.state.ActiveSandboxes()), now))
+	if change.Executors {
+		s.hub.Broadcast(Push(KindExecutors, ExecutorRows(s.state.ActiveExecutors()), now))
 	}
 	s.pushAgents(change, now)
 }
@@ -533,7 +533,7 @@ func (s *Service) Snapshot(audience Audience) map[string]any {
 		// true.
 		"schedules": s.currentSchedules(),
 		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
-		"sandboxes": SandboxRows(s.state.ActiveSandboxes()),
+		"executors": ExecutorRows(s.state.ActiveExecutors()),
 		"tokens":    SpendRollup(s.TokenRollup()),
 		"budget":    s.state.Budget(),
 	}
@@ -565,7 +565,7 @@ var snapshotKinds = map[string]Kind{
 	"tools":     KindTools,
 	"schedules": KindSchedules,
 	"events":    KindEvent,
-	"sandboxes": KindSandboxes,
+	"executors": KindExecutors,
 	"tokens":    KindTokens,
 	"budget":    KindBudget,
 }

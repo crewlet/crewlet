@@ -742,7 +742,7 @@ func unresolved(ctx context.Context, what string) error {
 // AT THE REGISTRY, ONCE, rather than at each answer that reads something
 // that can be unreachable or refused. It was per answer, and the answers that
 // did not call it were exactly the ones reported: an unreadable lease table
-// reached `fleet` as a plain failure and `sandbox_runs` likewise, so a
+// reached `fleet` as a plain failure and `executors` likewise, so a
 // coordination blip rendered as `query_failed` and a 500, telling a client to
 // give up on a screen that would work in a few seconds. The reference had
 // promised a 503 for both.

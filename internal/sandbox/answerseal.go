@@ -133,7 +133,7 @@ type AnswerWords struct {
 	// By, ByKind and OperatorID are who gave it, in the three halves
 	// iam.ActorFor makes of a principal — the author, what sort of author
 	// that is, and the credential the answer came through — exactly as the
-	// answer's own record states them ([types.SandboxRunAnswered]). For a
+	// answer's own record states them ([types.ExecutorAnswered]). For a
 	// chat reply, the sender as the delivery's envelope names them, a
 	// person, and no credential: the chat surface vouched for the sender and
 	// nothing of this engine's was presented ([chatAnswerer]). For an answer

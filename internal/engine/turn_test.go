@@ -2746,7 +2746,7 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	// claiming the seat seeds them — which is the point: from now on they
 	// are this process's own memory, and that is what still answers when
 	// the lookup cannot.
-	if err := coordinator.OnStarted(ctx, types.SandboxRunStarted{
+	if err := coordinator.OnStarted(ctx, types.ExecutorLaunched{
 		Agent: "a-1", AgentHandle: "swe", TurnID: "t1",
 	}); err != nil {
 		t.Fatalf("OnStarted: %v", err)

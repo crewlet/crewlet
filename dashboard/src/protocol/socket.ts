@@ -1,7 +1,7 @@
 /**
  * The dashboard's single connection to the engine.
  *
- * State arrives as pushes (`snapshot`, then `agents` / `seats` / `sandboxes` /
+ * State arrives as pushes (`snapshot`, then `agents` / `seats` / `executors` /
  * `tokens` / `budget` / `event` / `org` / `tools` / `schedules` / `health`), and
  * anything the dashboard needs on demand — a seat's phase history, one event's
  * payload, a trace, a different spend window, the configuration document — is
@@ -1173,8 +1173,8 @@ export class LiveSocket {
       case "seats":
         this.store.applySeats(msg.data);
         break;
-      case "sandboxes":
-        this.store.applySandboxes(msg.data as never);
+      case "executors":
+        this.store.applyExecutors(msg.data as never);
         break;
       case "tokens":
         this.store.applyTokens(msg.data as never);

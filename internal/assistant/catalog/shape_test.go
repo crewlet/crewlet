@@ -428,9 +428,9 @@ func TestAnAnswerIsFencedAtTheTrustItsTextEarns(t *testing.T) {
 		tool, body string
 		want       provenance.Trust
 	}{
-		{"list_coding_runs", `{"runs":[{"agent_handle":"dev","status":"waiting","question":"Which branch?"}]}`,
+		{"list_executors", `{"runs":[{"agent_handle":"dev","status":"waiting","question":"Which branch?"}]}`,
 			provenance.TrustExternal},
-		{"list_coding_runs", `{"runs":[{"agent_handle":"dev","status":"running"}]}`,
+		{"list_executors", `{"runs":[{"agent_handle":"dev","status":"running"}]}`,
 			provenance.TrustColleague},
 		{"list_decisions", `{"items":[{"kind":"run","run":{"agent_handle":"dev","question":"Merge it?"}}]}`,
 			provenance.TrustExternal},

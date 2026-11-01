@@ -128,7 +128,7 @@ import {
 import { unitPath } from "~/lib/orgchart.ts";
 import { answersAddress, itemAddress, turnItem } from "~/lib/work.ts";
 import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/types.ts";
-import { useSandboxes } from "~/lib/store-hooks.ts";
+import { useExecutors } from "~/lib/store-hooks.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
@@ -228,7 +228,7 @@ function SeatPeekBody({
   const viewer = useViewer();
   const org = useOrg();
   const health = useEngineHealth();
-  const sandboxes = useSandboxes();
+  const executors = useExecutors();
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
   const status = human ? undefined : statusOf(state);
@@ -272,7 +272,7 @@ function SeatPeekBody({
   const windows = agent?.budget?.windows ?? [];
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
-  const sandbox = seatRun(sandboxes, seat);
+  const sandbox = seatRun(executors, seat);
   const absent = resolvedAbsence(viewer);
   const place = unitPath(seat.unit);
   // WHO HOLDS A HUMAN SEAT — the directory read, see the file's doc.

@@ -65,7 +65,7 @@ import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { RunQuestion } from "./RunQuestion.tsx";
 import { TokenScope } from "./InlineToken.tsx";
-import type { SandboxRun } from "~/protocol/index.ts";
+import type { ExecutorRow } from "~/protocol/index.ts";
 import { useServicesRun } from "~/lib/services.ts";
 
 /**
@@ -977,7 +977,7 @@ export function AnswerRunButton({
  * entry, which carries no launch.
  */
 type AnsweredRun = Pick<
-  SandboxRun,
+  ExecutorRow,
   "turn_id" | "launch_id" | "question" | "question_context" | "decision"
 >;
 
@@ -1007,7 +1007,7 @@ function AnswerRunDialog({
   write: ReturnType<typeof useAct<"answer_run">>;
   onClose: () => void;
 }) {
-  const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const runs = useQuery("executors", undefined, { pollMs: RUNS_POLL_MS });
   const shown = runs.data?.runs.find((r) => r.turn_id === run.turn_id) ?? run;
   const question = (shown.question ?? "").trim();
   const context = shown.question_context.trim();
