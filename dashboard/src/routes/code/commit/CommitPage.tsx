@@ -51,6 +51,7 @@ const VIA_WORDS: Readonly<Record<string, string>> = {
   engine: "a commit the engine built from a tool's call",
   merge: "a change merged",
   expiry: "a ref expired",
+  queue: "a merge queue landed it",
 };
 
 export function CommitPage({ repo, sha }: { repo: string; sha: string }) {

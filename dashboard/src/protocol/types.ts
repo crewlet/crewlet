@@ -6720,15 +6720,16 @@ export interface CodePushRow {
   at: string;
   /** A seat's handle, or the credential an operator pushed through (`pat:…`, `session:…`). */
   actor: string;
-  actor_kind: "agent" | "operator" | (string & {});
+  actor_kind: "agent" | "operator" | "system" | (string & {});
   /** The seat: the seat itself, or the human seat an operator's credential is bound to. */
   actor_seat?: string;
   /**
    * `git` for what a client's git sent, `engine` for a commit the engine built
    * from a tool's call, `merge` for a branch a change's merge record moved,
+   * `expiry` for an idle seat branch the engine's own account deleted,
    * `queue` for a branch a merge queue's landing moved, one push a change.
    */
-  via: "git" | "engine" | "merge" | "queue" | (string & {});
+  via: "git" | "engine" | "merge" | "expiry" | "queue" | (string & {});
   /** A seat's push: the turn, its work item and its model. */
   run?: CodePushRun;
   node?: string;
