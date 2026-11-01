@@ -1573,17 +1573,24 @@ func TestALogsCensusIsPerSeat(t *testing.T) {
 // whom no seat count predicts — are a term of their own, so a small company's
 // git traffic is held to what its code log was sized for rather than to 125 a
 // day per agent seat. A negative term adds nothing, like Background.
+//
+// AT THE CODE LOG'S OWN READ MODEL, the reference company's whole rate per
+// seat (the engine's register declares it for the code domain), so the seats'
+// term is the 125 a day per seat the git clients are counted beside.
 func TestTheCensusCountsALogsClients(t *testing.T) {
 	t.Parallel()
+	read := statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay}
 	for _, tc := range []struct {
 		name   string
 		census statelog.Census
 		want   int
 	}{
 		{"five seats, the collector and a thousand git reads",
-			statelog.Census{Seats: 5, Background: 25, Clients: 1000}, 1650},
-		{"clients alone beside no seat", statelog.Census{Clients: 112_788}, 125 + 112_788},
-		{"a negative client term adds nothing", statelog.Census{Seats: 5, Clients: -40}, 625},
+			statelog.Census{Reads: read, Seats: 5, Background: 25, Clients: 1000}, 1650},
+		{"clients alone beside no seat", statelog.Census{Reads: read, Clients: 112_788}, 125 + 112_788},
+		{"a negative client term adds nothing", statelog.Census{Reads: read, Seats: 5, Clients: -40}, 625},
+		{"clients on a log no seat's read takes a barrier on",
+			statelog.Census{Seats: 5, Background: 25, Clients: 1000}, 1025},
 	} {
 		if got := tc.census.Expected(); got != tc.want {
 			t.Errorf("%s: %+v expects %d a day, want %d", tc.name, tc.census, got, tc.want)

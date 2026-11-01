@@ -334,7 +334,15 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 			t.Fatalf("resize the code log: %v", err)
 		}
 		name := code.Domain{}.Name()
-		bare := statelog.Census{Seats: r.seats(), Background: e.backgroundBarriers(name)}
+		// THE SEATS' TERM AT THE RATE THE REGISTER DECLARES for the code
+		// domain, as the report counts it: left out, the census this case
+		// expects is short the seats' reads the alarm adds, and the control
+		// below stays inside twice the report's own.
+		reads, declared := readModel(code.Domain{})
+		if !declared {
+			t.Fatal("the premise: the code domain declares no read model")
+		}
+		bare := statelog.Census{Reads: reads, Seats: r.seats(), Background: e.backgroundBarriers(name)}
 		sized := bare
 		sized.Clients = code.GitReadsPerDay(holds, r.cfg.MinAge())
 		censusDrift := func() (string, bool) {
