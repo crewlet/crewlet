@@ -116,9 +116,10 @@ var chatWakes = fmt.Sprintf("Who a message wakes: a mention (@handle) wakes the 
 	"it names, and a direct message wakes everybody in it. A person's @channel asks "+
 	"every agent in the room to answer, up to %d. A reply in a thread wakes whoever "+
 	"started it and, as news, the others in it. Members who follow every message (a "+
-	"unit's own agents in its room) are woken as news. A person's message that wakes "+
-	"nobody else wakes one agent to answer it: the unit's lead in a unit's room, "+
-	"otherwise the room's most senior agent member. An agent that is not woken never "+
+	"unit's own agents in its room) are woken as news. A person's message that names "+
+	"nobody and wakes no other agent wakes one agent to answer it: the unit's lead in a "+
+	"unit's room, otherwise the room's most senior agent member. A message that names "+
+	"a person wakes no agent: it is for that person. An agent that is not woken never "+
 	"reads the message later.", chatChannelWakes)
 
 // chatApp is the app every chat read needs: chat's questions answer a holder

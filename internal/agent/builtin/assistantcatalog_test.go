@@ -169,7 +169,8 @@ func TestTheAssistantSaysWhoAChatMessageWakes(t *testing.T) {
 			"mention (@handle) wakes the agent",
 			"@channel asks every agent in the room to answer, up to " +
 				strconv.Itoa(chatlet.MaxCollectiveRecipients),
-			"wakes nobody else wakes one agent to answer it",
+			"names nobody and wakes no other agent wakes one agent to answer it",
+			"A message that names a person wakes no agent",
 			"most senior agent member",
 			"woken as news",
 			"never reads the message later",
