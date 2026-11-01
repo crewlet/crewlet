@@ -159,7 +159,7 @@ func aRunRef() host.BoxRunRef {
 // A BOX TOKEN NAMES ITS LAUNCH: it verifies back to the run's turn and the
 // launch it was minted for, a token of another per-run domain over the same
 // keyring is a signature under another key, and a turn id that would break
-// the subject's one cut is a caller's bug, refused by name.
+// the subject's one cut is a caller's bug, answered no token at all.
 func TestABoxTokenNamesItsLaunch(t *testing.T) {
 	t.Parallel()
 	k := runtoken.KeyMaterial{ID: "k1", Material: "a fleet's key"}
@@ -175,12 +175,9 @@ func TestABoxTokenNamesItsLaunch(t *testing.T) {
 	if got, ok := tokens.Verify(bridge.Mint(ref.LaunchID+"~"+ref.TurnID, time.Hour)); ok {
 		t.Errorf("a bridge token over the same keyring was admitted as a box's: %+v", got)
 	}
-	defer func() {
-		if recover() == nil {
-			t.Error("a turn id holding the subject's separator was minted")
-		}
-	}()
-	tokens.Mint(host.BoxRunRef{TurnID: "a~b", LaunchID: uuid.NewString()})
+	if got := tokens.Mint(host.BoxRunRef{TurnID: "a~b", LaunchID: uuid.NewString()}); got != "" {
+		t.Errorf("a turn id holding the subject's separator was minted %q, want no token", got)
+	}
 }
 
 // A BOX TOKEN IS SIGNED FROM THE FLEET'S KEYRING, never a key of the process's

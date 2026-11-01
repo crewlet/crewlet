@@ -2,10 +2,8 @@ package host
 
 import (
 	"encoding/base64"
-	"fmt"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -87,18 +85,11 @@ func NewCheckTokens(m runtoken.Material, now func() time.Time) (*CheckTokens, er
 //
 // A ref no attempt has — a key code.CheckKey.Validate refuses, a name no
 // repository takes — or a timeout no check runs for (none, or past
-// code.CheckTimeoutCeiling) is the caller's bug: a test binary panics naming
-// it, and a production one answers "", which no git node admits.
+// code.CheckTimeoutCeiling) is the caller's bug, and is answered "", which no
+// git node admits and the runner ends the attempt over — in a test binary as
+// in production, for [BoxTokens.Mint]'s reason.
 func (t *CheckTokens) Mint(ref CheckRunRef, timeout time.Duration) string {
-	why := invalidCheckRef(ref)
-	if why == "" && (timeout <= 0 || timeout > code.CheckTimeoutCeiling) {
-		why = fmt.Sprintf("a timeout of %s, outside a check's 1 s to %s (code.CheckTimeoutCeiling)", timeout,
-			code.CheckTimeoutCeiling)
-	}
-	if why != "" {
-		if testing.Testing() {
-			panic("host: CheckTokens.Mint: " + why)
-		}
+	if !validCheckRef(ref) || timeout <= 0 || timeout > code.CheckTimeoutCeiling {
 		return ""
 	}
 	subject := strings.Join([]string{checkSubjectTag, ref.Attempt.RepoID, ref.Attempt.OID,
@@ -132,21 +123,16 @@ func (t *CheckTokens) Verify(token string) (CheckRunRef, bool) {
 	}
 	ref := CheckRunRef{Attempt: code.CheckKey{RepoID: parts[1], OID: parts[2], Target: string(target),
 		Name: string(name), Attempt: attempt}, Repo: string(repo)}
-	if invalidCheckRef(ref) != "" {
+	if !validCheckRef(ref) {
 		return CheckRunRef{}, false
 	}
 	return ref, true
 }
 
-// invalidCheckRef is why ref names no attempt a box could be given, or "".
-func invalidCheckRef(ref CheckRunRef) string {
-	if err := ref.Attempt.Validate(); err != nil {
-		return err.Error()
-	}
-	if !gitref.ValidRepoName(ref.Repo) {
-		return fmt.Sprintf("repository name %q is no repository's", ref.Repo)
-	}
-	return ""
+// validCheckRef reports whether ref names an attempt a box could be given: a
+// key code.CheckKey.Validate takes, and a name a repository takes.
+func validCheckRef(ref CheckRunRef) bool {
+	return ref.Attempt.Validate() == nil && gitref.ValidRepoName(ref.Repo)
 }
 
 // boxCredential is the credential a box's request presented under user, as
