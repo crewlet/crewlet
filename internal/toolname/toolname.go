@@ -44,7 +44,7 @@
 // (internal/toolname/toolnametest), so a tool built outside both sources
 // fails there rather than dropping out of the walk unread. A hook's own name
 // that no surface lists to a model, the tool bridge's `steer_take`, which a
-// coding CLI's hook calls, is no tool of a surface, and stays with its owner.
+// harness's hook calls, is no tool of a surface, and stays with its owner.
 package toolname
 
 // The discovery pair: the two meta-tools the executor reaches MCP tools

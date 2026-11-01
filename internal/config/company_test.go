@@ -77,7 +77,7 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		},
 		{
 			// A CATALOGUE IS A CHOICE, and every default is wrong in a
-			// way nobody sees: `local` runs the coding agent on this
+			// way nobody sees: `local` runs the harness on this
 			// host, and the default this replaced named a backend the
 			// engine had no code to build.
 			"a sandbox block that names no backend",

@@ -4276,7 +4276,7 @@ reported one (`cost_usd`), which the dashboard never reads
 executor's run is a row of its own, an `executor_collected`, published when it
 is collected: **no phase** — it names none, and is the work of the `execute`
 round that launched it (`iteration`) — with its tokens, its CLI's own turns
-(`cli_turns`), its `launch_id` (a round can launch twice, so the launch is part
+(`harness_turns`), its `launch_id` (a round can launch twice, so the launch is part
 of that row's identity), its report as `response` and its
 `activity_transcript` — see
 [each launch is published as its own record](../concepts/code-sandbox.md#a-run-is-bounded-by-its-rounds-each-launch-is-published-as-its-own-record).
@@ -4564,7 +4564,7 @@ shaped the same way.
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
   "executors": [ { /* an executor run in flight: turn_id, role,
-                      agent_handle, agent_id, coding_agent, provider_key
+                      agent_handle, agent_id, harness, provider_key
                       (the executor-chain member it was launched on, to an
                       admin alone) and model, sandbox_id, task, status (the
                       run record's own word), started_at, question,
@@ -9548,7 +9548,7 @@ reclaimed, work preserved on a pushed branch) is listed on both.
   "runs": [
     {
       "turn_id": "<uuid>", "launch_id": "<uuid>", "agent_handle": "eng", "role": "Engineer",
-      "status": "awaiting_clarification", "coding_agent": "claude-code",
+      "status": "awaiting_clarification", "harness": "claude-code",
       "provider_key": "default", "model": "sonnet",
       "task_description": "Add retry to the webhook client",
       "question": "Which backoff ceiling should I use?",
@@ -10359,7 +10359,7 @@ Notes:
   `skill_promotion`, `provider_probe`, `answer_knowledge`, and `condense_<kind>` for each kind of
   text a compaction rewrites. Its rows sum to that phase.
 - `calls` is PROVIDER CALLS on every bucket: a phase's model rounds, a
-  launch's own CLI turns as its CLI reported them (`cli_turns`, one for a
+  launch's own CLI turns as its CLI reported them (`harness_turns`, one for a
   launch whose CLI reports none — OpenCode reports none), an auxiliary record's
   coalesced calls. The executor's own record counts none: its run's calls are
   its launches'. It counted records once, which made a forty-turn run one call.

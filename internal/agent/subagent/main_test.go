@@ -14,7 +14,7 @@ import (
 var sessions *toolsession.Host
 
 func TestMain(m *testing.M) {
-	// FIRST, before anything else runs: a CLI told to start this binary as a
+	// FIRST, before anything else runs: a harness told to start this binary as a
 	// worker's relay starts it with `mcp-relay` and nothing else.
 	mcprelay.DispatchIfRelay()
 	host, err := toolsession.NewHost()

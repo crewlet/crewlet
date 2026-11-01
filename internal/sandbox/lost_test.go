@@ -223,7 +223,7 @@ func TestALostJobCountsTheRoundsLossesBeforeIt(t *testing.T) {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := rig.pending.AttachSandbox(ctx, "t1", BoxRef{
-		SandboxID: first.SandboxID, CommandID: "cmd-2", CodingAgent: "claude-code",
+		SandboxID: first.SandboxID, CommandID: "cmd-2", Harness: "claude-code",
 		PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, rigLease); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
@@ -244,7 +244,7 @@ func TestALostJobCountsTheRoundsLossesBeforeIt(t *testing.T) {
 }
 
 // A LOST JOB THAT HAD ASKED A PERSON IS PARKED ON ITS QUESTION, as a job that
-// finished asking is: its question was written and its CLI on its way out, and
+// finished asking is: its question was written and its harness on its way out, and
 // the answer is what carries it on — a fresh run would ask again, or guess.
 //
 // Mutation: carry every lost job's round on, and a question already put to a

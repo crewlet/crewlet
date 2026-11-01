@@ -49,7 +49,7 @@ type CellProbe struct {
 // ProbeDirect probes the direct cell: a platform the local backend runs on,
 // and a box root it can write.
 //
-// NOT THE HOST CONFINEMENT. An executor's direct box is not confined (its CLI
+// NOT THE HOST CONFINEMENT. An executor's direct box is not confined (its harness
 // runs fully permissioned, and the box is its home and working tree); only the
 // assistant's deep work runs under [ProbeConfinement]'s mechanism. Probing it
 // here would call a cell that launches fine not ready on every host without

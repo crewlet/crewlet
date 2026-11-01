@@ -54,7 +54,7 @@
 //
 // OUTBOUND HTTP. The embeddings client could take an instrumented transport;
 // the six third-party app clients each build their own. A model call is a
-// coding CLI run, spanned as `llm.run`, which is where the latency an operator
+// harness run, spanned as `llm.run`, which is where the latency an operator
 // can act on lives, and a third-party app call is made by a tool whose
 // `tool.call` span covers it. Instrumenting the transports as well would add a
 // span per HTTP request underneath spans already reporting the same wait.

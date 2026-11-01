@@ -160,7 +160,7 @@ func bytesPerDayOf(stats jetstream.LogStats, now time.Time,
 // raise it again when the next tick measured. A log that MEASURES NOTHING — one
 // in its first two days, a compacted one — reads as absent everywhere, the
 // gauge included: the gauge is withdrawn rather than left holding the last
-// stream's rate, which the report, the CLI and the screen would all show as
+// stream's rate, which the report, the harness and the screen would all show as
 // not measured.
 func (r *retention) measureRates(ctx context.Context, now time.Time) {
 	if r.state == nil {

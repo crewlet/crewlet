@@ -146,7 +146,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	}
 	// THE REFUSALS THE MODEL HEARD, from the scripted model, which hears
 	// every answer; nil for a live model, whose answers travel inside its
-	// own CLI.
+	// own harness.
 	var refusals []string
 	if scripted, ok := meter.inner.(*Model); ok {
 		for _, m := range scripted.Seen() {

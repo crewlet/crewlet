@@ -57,7 +57,7 @@ func TestARecordThatMeasuredNothingSaysSoByOmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	for _, key := range []string{`"started_at"`, `"work_item"`, `"activity_transcript"`, `"cli_turns"`} {
+	for _, key := range []string{`"started_at"`, `"work_item"`, `"activity_transcript"`, `"harness_turns"`} {
 		if strings.Contains(string(encoded), key) {
 			t.Errorf("re-encoding an untimed launch invented %s: %s", key, encoded)
 		}
@@ -117,7 +117,7 @@ func TestAPhaseRecordsTimingSurvivesTheWire(t *testing.T) {
 // A FRAME LISTS EVERY CALL IN FLIGHT, each by its own id, and a run that made
 // no request states its rounds as zero rather than leaving them out.
 //
-// A coding CLI may run a response's calls at once, so a frame carries a list,
+// A harness may run a response's calls at once, so a frame carries a list,
 // and the id is what tells two calls of one tool apart and what the call's
 // `tool_executions` row is matched to once it answers. A run's FirstRound and
 // LastRound are the join to `rounds[]`: zero is a statement — this run made no

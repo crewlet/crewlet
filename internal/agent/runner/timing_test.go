@@ -225,7 +225,7 @@ func TestACollectedRunStatesItsOwnSegmentAndLaunch(t *testing.T) {
 
 	before := time.Now().UTC()
 	collect(t, entries, buildOpts{pub: pub}, launched, nil, bridged, "the run succeeded",
-		runner.RunRecord{CodingAgent: "claude-code", SandboxID: "sbx-1", LaunchID: "launch-2"})
+		runner.RunRecord{Harness: "claude-code", SandboxID: "sbx-1", LaunchID: "launch-2"})
 
 	done := completedPhase(t, pub, "execute")
 	if done.StartedAt.Before(before) {
@@ -271,7 +271,7 @@ func TestACollectedRunStatesOneTimedRoundOverTheRun(t *testing.T) {
 	time.Sleep(ran)
 
 	collect(t, entries, buildOpts{pub: pub}, launched, nil, bridged, "shipped it",
-		runner.RunRecord{CodingAgent: "claude-code", SandboxID: "sbx-1", Model: "claude-sonnet-5"})
+		runner.RunRecord{Harness: "claude-code", SandboxID: "sbx-1", Model: "claude-sonnet-5"})
 
 	done := completedPhase(t, pub, "execute")
 	if done.RoundsUsed != 1 || len(done.Rounds) != 1 {
@@ -414,7 +414,7 @@ func TestARunsWorkersNestUnderTheRunsRound(t *testing.T) {
 
 // workerProvider plays a delegated worker that submits at once — the one
 // model a run's delegate call reaches through the engine, since the run's own
-// rounds are its CLI's. Anything else asking it is a fixture wired wrong, and
+// rounds are its harness's. Anything else asking it is a fixture wired wrong, and
 // is refused rather than handed a worker's answer.
 type workerProvider struct{}
 

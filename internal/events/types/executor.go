@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// The executor in its box. Every agent seat's executor is its coding CLI's own
+// The executor in its box. Every agent seat's executor is its harness's own
 // run in a box (ADR-0066): the turn parks as soon as the executor is launched
 // and the seat stays busy until the completion signal arrives, so these events
 // are the only trace of work that outlives the turn that launched it — the
@@ -37,9 +37,9 @@ type ExecutorLaunched struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey     string `json:"work_key,omitempty"`
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
+	WorkKey   string `json:"work_key,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
 	// ProviderKey is the providers.llm entry the run was launched on, and
 	// Model the model it runs under: the member of the seat's executor
 	// chain the launch picked, which a fallback makes other than the chain's
@@ -77,10 +77,10 @@ func (e ExecutorLaunched) Role() string { return e.RoleName }
 // AgentID is the instance that launched the run.
 func (e ExecutorLaunched) AgentID() string { return e.Agent }
 
-// SummaryFor names the coding agent, which is the one thing distinguishing two
+// SummaryFor names the harness, which is the one thing distinguishing two
 // otherwise identical launches on the same seat.
 func (e ExecutorLaunched) SummaryFor(actor string) string {
-	return lead(actor, "launched its executor ("+e.CodingAgent+")")
+	return lead(actor, "launched its executor ("+e.Harness+")")
 }
 
 // ExecutorFinished signals that an executor's run in its box finished.
@@ -107,9 +107,9 @@ type ExecutorFinished struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey     string `json:"work_key,omitempty"`
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
+	WorkKey   string `json:"work_key,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
 }
 
 // EventType is the "executor_finished" wire type.
@@ -132,7 +132,7 @@ func (e ExecutorFinished) SummaryFor(actor string) string {
 }
 
 // ExecutorCollected is ONE LAUNCH of an executor's run, as its collection read
-// it off the box: what the launch's CLI spent and reported, what it delivered,
+// it off the box: what the launch's harness spent and reported, what it delivered,
 // its account of what it did and, where it did not finish, why. Published by
 // the sandbox coordinator once per launch it collects — one that finished, one
 // that stopped to ask a person, one a person stopped, and one lost with its
@@ -159,7 +159,7 @@ func (e ExecutorFinished) SummaryFor(actor string) string {
 //
 // It is where the executor's tokens are: every reader of spend — the event
 // store's writer, the live projection's window — files it under the `execute`
-// phase, with the CLI's own turns as its calls (tokens.LaunchCalls), so the
+// phase, with the harness's own turns as its calls (tokens.LaunchCalls), so the
 // executor's band holds what its run cost however many launches the round
 // took.
 //
@@ -196,14 +196,14 @@ type ExecutorCollected struct {
 	// other than the chain's head, and which entry's plan the run spent.
 	Model       string `json:"model"`
 	ProviderKey string `json:"provider_key"`
-	// CodingAgent is the CLI the run ran as, and SandboxID the box.
-	CodingAgent string `json:"coding_agent"`
-	SandboxID   string `json:"sandbox_id"`
-	// Response is the report the launch wrote back: the words its CLI ended
+	// Harness is the harness the run ran as, and SandboxID the box.
+	Harness   string `json:"harness"`
+	SandboxID string `json:"sandbox_id"`
+	// Response is the report the launch wrote back: the words its harness ended
 	// on, secret-redacted.
 	Response string `json:"response"`
 	// ActivityTranscript is the launch's own account of what it did — what
-	// it said, its tool calls and what they ran, or its stderr where the CLI
+	// it said, its tool calls and what they ran, or its stderr where the harness
 	// streams nothing better. Secret-redacted, and held to the record's
 	// bound: a long one keeps its first 64 KiB and its last 192 KiB in whole
 	// lines, with a note line where its middle was. It is the whole
@@ -215,7 +215,7 @@ type ExecutorCollected struct {
 	// log without parsing the note. Zero on a transcript kept whole.
 	ActivityTranscriptElidedLines int `json:"activity_transcript_elided_lines,omitempty"`
 	ActivityTranscriptElidedBytes int `json:"activity_transcript_elided_bytes,omitempty"`
-	// The launch's tokens, as its CLI reported them. TotalTokens is input
+	// The launch's tokens, as its harness reported them. TotalTokens is input
 	// plus output, and CacheReadTokens and CacheWriteTokens are a BREAKDOWN
 	// of InputTokens, never an addition to it — see
 	// [AgentPhaseCompleted.CacheReadTokens].
@@ -224,14 +224,14 @@ type ExecutorCollected struct {
 	TotalTokens      int `json:"total_tokens"`
 	CacheReadTokens  int `json:"cache_read_tokens"`
 	CacheWriteTokens int `json:"cache_write_tokens"`
-	// CLITurns is how many model turns the launch's CLI says its own loop
+	// HarnessTurns is how many model turns the launch's harness says its own loop
 	// took: the launch's provider calls, which the engine neither made nor
-	// timed. Absent where the CLI reported none (OpenCode reports none) —
+	// timed. Absent where the harness reported none (OpenCode reports none) —
 	// the launch then counts as one call, the one the engine asked for. What
 	// every spend figure counts a launch's calls by is tokens.LaunchCalls.
-	CLITurns int `json:"cli_turns,omitempty"`
-	// CostUSD is what the launch's own CLI said it billed: a subscription
-	// CLI's spend never passes through the engine's token meter, so this is
+	HarnessTurns int `json:"harness_turns,omitempty"`
+	// CostUSD is what the launch's own harness said it billed: a subscription
+	// harness's spend never passes through the engine's token meter, so this is
 	// the one number that sees it.
 	CostUSD float64 `json:"cost_usd"`
 	// DeliveredRefs are the branches and pull requests the launch reported,
@@ -270,7 +270,7 @@ func (e ExecutorCollected) Role() string { return e.RoleName }
 // AgentID is the instance whose executor the launch was.
 func (e ExecutorCollected) AgentID() string { return e.Agent }
 
-// SummaryFor names the CLI and what the launch spent, or the kind of its
+// SummaryFor names the harness and what the launch spent, or the kind of its
 // failure — the two things a feed row about a collected launch is read for.
 // Possessive, as [ExecutorFinished]'s is: the engine collected the launch, and
 // the seat did not do the collecting.
@@ -279,7 +279,7 @@ func (e ExecutorCollected) SummaryFor(actor string) string {
 	if actor != "" {
 		who = actor + "'s executor"
 	}
-	agent := e.CodingAgent
+	agent := e.Harness
 	if agent == "" {
 		agent = "?"
 	}
@@ -377,10 +377,10 @@ type ExecutorFailed struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey     string `json:"work_key,omitempty"`
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
-	Reason      string `json:"reason"`
+	WorkKey   string `json:"work_key,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
+	Reason    string `json:"reason"`
 	// Detail is a human sentence naming what to do about it, never a stack
 	// or a raw provider error: it reaches an operator's board.
 	Detail string `json:"detail"`
@@ -465,7 +465,7 @@ func (e ExecutorFailed) SummaryFor(actor string) string {
 
 // ExecutorStopped records an executor's run a PERSON ended: its seat was
 // paused with `stop_running` while the run was launching or running, and the
-// run was ended there rather than left to finish — its CLI killed with its box,
+// run was ended there rather than left to finish — its harness killed with its box,
 // its tool-bridge session closed, and what it had spent by then collected and
 // charged.
 //
@@ -494,9 +494,9 @@ type ExecutorStopped struct {
 	TurnID      string `json:"turn_id"`
 	// WorkKey is the unit of work the run this belongs to was dispatched
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017.
-	WorkKey     string `json:"work_key,omitempty"`
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
+	WorkKey   string `json:"work_key,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
 	// LaunchID is the job the stop ended — see [ExecutorLaunched.LaunchID]
 	// — so a reader pairs the stop with the start it ends rather than with
 	// whichever job the turn ran last.

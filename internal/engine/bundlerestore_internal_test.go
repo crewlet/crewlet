@@ -17,8 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
 
@@ -30,12 +30,12 @@ import (
 // below hold those two call sites; this one holds the helper.
 func TestAnEpochRestoresItsBundlesOnlyWhenItIsRun(t *testing.T) {
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
-	profile, err := cliprofile.Load("claude-code", nil)
+	profile, err := harnessprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, "claude-code", name, `{"token":"configured"}`))
+	t.Setenv(harnessprofile.BundleVarName("subscription"), testBundle(t, "claude-code", name, `{"token":"configured"}`))
 
 	c, err := config.ParseCompany([]byte(`
 name: Acme
@@ -231,18 +231,18 @@ func firstCall(fn *ast.FuncDecl, name string) token.Pos {
 	return at
 }
 
-// bundledLogin points the CLI state directories at a fresh one, sets the
+// bundledLogin points the harness state directories at a fresh one, sets the
 // conventional bundle variable of the "subscription" entry to a bundle holding
 // one claude-code login, and returns where that login lands.
 func bundledLogin(t *testing.T) string {
 	t.Helper()
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
-	profile, err := cliprofile.Load("claude-code", nil)
+	profile, err := harnessprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, "claude-code", name, `{"token":"configured"}`))
+	t.Setenv(harnessprofile.BundleVarName("subscription"), testBundle(t, "claude-code", name, `{"token":"configured"}`))
 	c := parseBundled(t, bundledCompanyDoc)
 	entry := c.Providers.LLM["subscription"]
 	stateDir, err := entry.ResolvedStateDir("subscription")
@@ -314,20 +314,20 @@ roles:
 // `claude` the machine happened to have passed where one was installed and
 // failed on a runner with none.
 //
-// Mutation: treat cliagent.ErrLoggedOut as a bundle to restore anyway, and the
+// Mutation: treat harness.ErrLoggedOut as a bundle to restore anyway, and the
 // login is back here; warn it as a failed restore, and the warning is wrong.
 func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 	logs := &bundleLog{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
-	stubVendorCLI(t, "claude")
-	profile, err := cliprofile.Load("claude-code", nil)
+	stubVendorHarness(t, "claude")
+	profile, err := harnessprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	name := filepath.Base(profile.CredentialPaths[0])
-	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, "claude-code", name, `{"token":"configured"}`))
+	t.Setenv(harnessprofile.BundleVarName("subscription"), testBundle(t, "claude-code", name, `{"token":"configured"}`))
 	c, err := config.ParseCompany([]byte(bundledCompanyDoc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -337,14 +337,14 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		t.Fatalf("NewCompany: %v", err)
 	}
 	company.restoreBundles(t.Context())
-	var provider *cliagent.Provider
+	var provider *harness.Provider
 	for key, p := range company.Models.All() {
-		if cli, ok := p.(*cliagent.Provider); ok && key == "subscription" {
+		if cli, ok := p.(*harness.Provider); ok && key == "subscription" {
 			provider = cli
 		}
 	}
 	if provider == nil {
-		t.Fatal("the premise: the epoch holds no CLI provider for the entry")
+		t.Fatal("the premise: the epoch holds no harness provider for the entry")
 	}
 	if has, err := provider.Workspace().HasLogin(t.Context()); err != nil || !has {
 		t.Fatalf("the premise: the epoch restored no login (%v)", err)
@@ -362,35 +362,35 @@ func TestAnEpochDoesNotUndoALogout(t *testing.T) {
 		t.Errorf("the next epoch restored the login a logout removed: %d files (%v)", len(login), err)
 	}
 	got := logs.String()
-	for _, want := range []string{"cli_agent_bundle_withheld", "crewlet llm logout", "crewlet llm login subscription"} {
+	for _, want := range []string{"harness_bundle_withheld", "crewlet llm logout", "crewlet llm login subscription"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the epoch's warning does not carry %q:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "cli_agent_bundle_restore_failed") {
+	if strings.Contains(got, "harness_bundle_restore_failed") {
 		t.Errorf("a logout was warned as a bundle that failed to restore:\n%s", got)
 	}
 }
 
-// AN ENTRY MOVED TO ANOTHER CLI DOES NOT RESTORE THE OLD CLI'S BUNDLE, even
+// AN ENTRY MOVED TO ANOTHER HARNESS DOES NOT RESTORE THE OLD HARNESS'S BUNDLE, even
 // where the two keep their login under one file name. The bundle is keyed by
 // the entry, so the epoch after the move restores the one exported from pi
 // into codex's empty login — and pi's `auth.json` is a name codex keeps too,
 // so it was written there: a credential codex cannot read, which as a login
 // already present then kept every later restore out, the replacement bundle
-// included. The epoch warns it as a bundle that failed, naming the CLI it was
+// included. The epoch warns it as a bundle that failed, naming the harness it was
 // exported from, and writes nothing.
 //
 // NOT PARALLEL: it sets the conventional variable and swaps the process's log.
 //
 // Mutation: drop the manifest's check from the restore, and codex's login is
 // pi's file here.
-func TestAnEntryMovedToAnotherCLIDoesNotRestoreTheOldCLIsBundle(t *testing.T) {
+func TestAnEntryMovedToAnotherHarnessDoesNotRestoreTheOldHarnessesBundle(t *testing.T) {
 	logs := &bundleLog{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
 	t.Setenv(config.HarnessHomeEnv, t.TempDir())
-	t.Setenv(cliprofile.BundleVarName("subscription"), testBundle(t, "pi", "auth.json", `{"token":"pi"}`))
+	t.Setenv(harnessprofile.BundleVarName("subscription"), testBundle(t, "pi", "auth.json", `{"token":"pi"}`))
 	c := parseBundled(t, `
 name: Acme
 providers:
@@ -424,7 +424,7 @@ roles:
 		t.Errorf("the epoch restored pi's bundle into codex's login: %v", entries)
 	}
 	got := logs.String()
-	for _, want := range []string{"cli_agent_bundle_restore_failed", `it names \"pi\"`,
+	for _, want := range []string{"harness_bundle_restore_failed", `it names \"pi\"`,
 		"crewlet llm export subscription"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the epoch's warning does not carry %q:\n%s", want, got)
@@ -432,9 +432,9 @@ roles:
 	}
 }
 
-// stubVendorCLI puts an executable named name, which only exits 0, first on
+// stubVendorHarness puts an executable named name, which only exits 0, first on
 // PATH for the rest of the test.
-func stubVendorCLI(t *testing.T, name string) {
+func stubVendorHarness(t *testing.T, name string) {
 	t.Helper()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // the test's own stub
@@ -479,11 +479,11 @@ roles:
 
 // testBundle is a bundle of agent's holding one credential file, exported by
 // `crewlet llm export`'s own writer from a state directory of its own — so it
-// names the CLI it came from exactly as an export does.
+// names the harness it came from exactly as an export does.
 func testBundle(t *testing.T, agent, name, body string) string {
 	t.Helper()
-	p, err := cliagent.New(cliagent.Config{
-		Key: "export", Agent: agent, StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
+	p, err := harness.New(harness.Config{
+		Key: "export", Harness: agent, StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatalf("building the exporting %s entry: %v", agent, err)

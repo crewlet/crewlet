@@ -18,7 +18,7 @@ import (
 )
 
 // Host is this process's place for tool sessions: one directory only the
-// engine's user can open, and the executable a CLI is told to start as the
+// engine's user can open, and the executable a harness is told to start as the
 // relay into it.
 //
 // ONE PER PROCESS, made by whoever owns the process's lifetime (the engine at
@@ -58,7 +58,7 @@ const socketNameBytes = 8
 func NewHost() (*Host, error) {
 	relay, err := os.Executable()
 	if err != nil {
-		return nil, fmt.Errorf("toolsession: find this executable, which every coding CLI "+
+		return nil, fmt.Errorf("toolsession: find this executable, which every harness "+
 			"is told to start as the relay to its seat's tools: %w", err)
 	}
 	dir, err := os.MkdirTemp("", "crewlet-mcp-")
@@ -113,13 +113,13 @@ func (h *Host) Close() error {
 	return os.RemoveAll(h.dir)
 }
 
-// Session is one CLI run's connection to a dispatcher: a socket of its own in
+// Session is one harness run's connection to a dispatcher: a socket of its own in
 // the host's directory, served for as long as the run lasts.
 //
 // ONE PER RUN, never one per phase, so a run that is over cannot reach the next
-// one's calls: a CLI killed past its grace may leave a relay behind (Codex
+// one's calls: a harness killed past its grace may leave a relay behind (Codex
 // starts its servers in a process group of their own, which a signal to the
-// CLI's group does not reach), and that relay's socket is gone.
+// harness's group does not reach), and that relay's socket is gone.
 type Session struct {
 	path   string
 	server *Server
@@ -139,7 +139,7 @@ type Session struct {
 // is [Session.Retire], never a cancellation. No call runs under it — d runs
 // each under the context of the run it serves ([Dispatcher.Call]).
 //
-// name is how the CLI lists the server, and title is shown in its handshake.
+// name is how the harness lists the server, and title is shown in its handshake.
 func (h *Host) Open(ctx context.Context, name, title string, d Dispatcher) (*Session, error) {
 	path := filepath.Join(h.dir, socketName())
 	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
@@ -159,7 +159,7 @@ func (h *Host) Open(ctx context.Context, name, title string, d Dispatcher) (*Ses
 	return s, nil
 }
 
-// Command is the stdio server a CLI is told to start for this session: this
+// Command is the stdio server a harness is told to start for this session: this
 // executable as the relay, and the socket. Not a secret — see [NewHost].
 func (h *Host) Command(s *Session) (string, []string) {
 	return h.relay, []string{mcprelay.Command, s.path}
@@ -171,7 +171,7 @@ func (s *Session) Path() string { return s.path }
 // Server is the session's MCP server.
 func (s *Session) Server() *Server { return s.server }
 
-// Connected reports whether a CLI reached this session far enough to list the
+// Connected reports whether a harness reached this session far enough to list the
 // seat's tools — see [Server.Listed].
 func (s *Session) Connected() bool {
 	select {
@@ -183,8 +183,8 @@ func (s *Session) Connected() bool {
 }
 
 // accept serves every connection made to the socket until it is retired. One
-// is the norm — the CLI's relay — and more are served alike rather than
-// refused, because a CLI that restarts a failed server reconnects.
+// is the norm — the harness's relay — and more are served alike rather than
+// refused, because a harness that restarts a failed server reconnects.
 func (s *Session) accept() {
 	defer s.wg.Done()
 	for {
@@ -221,7 +221,7 @@ func (s *Session) accept() {
 // It returns when all of that has happened. Safe to call more than once.
 //
 // THE CALLS ARE WAITED FOR, not cut off: a call is a tool that may be writing,
-// and the dispatcher runs it under the phase's context, which a CLI going away
+// and the dispatcher runs it under the phase's context, which a harness going away
 // does not cancel. What bounds the wait is each call's own deadline, which the
 // dispatcher sets.
 func (s *Session) Retire() {

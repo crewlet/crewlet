@@ -59,7 +59,7 @@ const MaxRunTextBytes = 256 << 10
 // a file past it is REFUSED ([ErrFileTooLarge]) rather than read in part.
 //
 // It bounds what a box can cost the engine's memory: every file read back is
-// one the coding agent wrote, inside a box it can run any command in, and the
+// one the harness wrote, inside a box it can run any command in, and the
 // host's own process is what holds it. 32 MiB is far past any report or
 // question a run writes honestly, and is what one compaction can still be
 // asked about many times over.
@@ -98,7 +98,7 @@ type FileTooLargeError struct {
 }
 
 func (e *FileTooLargeError) Error() string {
-	return fmt.Sprintf("%v: %s is past %s, so it was not read — the coding agent wrote more "+
+	return fmt.Sprintf("%v: %s is past %s, so it was not read — the harness wrote more "+
 		"than a report, and a clipped one would read as a finished one",
 		ErrFileTooLarge, e.Path, capSize(e.Limit))
 }
@@ -145,7 +145,7 @@ func readLimit(capped int) int {
 // A REFUSAL OF THAT PIECE, NOT A BOX THAT COULD NOT BE READ. What the path
 // names is fixed by what the box holds, so a collection that retried it would
 // be refused again on every attempt until the run was settled as lost — its
-// spend uncharged and its record unpublished, which is what a coding agent
+// spend uncharged and its record unpublished, which is what a harness
 // that made a pipe at its own report path would buy. A collection describes
 // the piece, as it does one past [MaxFileBytes], and collects the rest.
 var ErrNotRegularFile = errors.New("sandbox: the path is not a regular file")
@@ -221,10 +221,10 @@ func readCapped(r io.Reader, path string, limit int) ([]byte, error) {
 type RunPart string
 
 const (
-	// PartReport is [Result.Text]: the report the coding agent wrote.
+	// PartReport is [Result.Text]: the report the harness wrote.
 	PartReport RunPart = "report"
 	// PartFailure is [Result.Error]: why the run did not finish — its exit
-	// status, its CLI's own error, and what it printed to stderr.
+	// status, its harness's own error, and what it printed to stderr.
 	PartFailure RunPart = "failure"
 )
 
@@ -257,7 +257,7 @@ const MaxDeliveredRefBytes = 16 << 10
 // coordination row beside the question ([MaxAskContextBytes]), read and written
 // whole on every status flip and every listing of active runs — and, where the
 // asking run's own session cannot be continued, the brief of the fresh run that
-// carries the work on from it, which that run's CLI re-sends with every request
+// carries the work on from it, which that run's harness re-sends with every request
 // it makes. Git keeps a branch as a path under refs/heads, every part of which
 // a filesystem holds to 255 bytes, and a work-in-progress branch is a few
 // parts at most: 1 KiB is four parts at their longest, past any name a person
@@ -299,7 +299,7 @@ const failureReserve = 1 << 10
 // MaxFailureBytes is the most a runner's failure detail ([Result.Error]) may
 // be: what one condensation reads ([MaxCondenseBytes]) less what the
 // coordinator may put in front of it ([failureReserve]). A runner composes
-// its own sentences — a piece it could not read, the exit status, the CLI's
+// its own sentences — a piece it could not read, the exit status, the harness's
 // error — and gives the error stream only what is left, so a failure built
 // around a long stderr is one a model can still be shown whole. Composed past
 // it, every such failure was a few hundred bytes over the compactor's input,
@@ -374,7 +374,7 @@ func boundBox(result Result) Result {
 // MaxRunEventBytes bounds a result's terminal event ([Result.Event]), which a
 // box's host sends back to the node that asked whole or not at all.
 //
-// SIXTEEN KIB, the bound a question a person reads is held to: a CLI's result
+// SIXTEEN KIB, the bound a question a person reads is held to: a harness's result
 // line carries its usage and cost beside its last text, and the line a spent
 // plan ends a run on carries one sentence there. A line past this is a run
 // that ended on a long text, which is no limit report, so dropping it costs
@@ -614,7 +614,7 @@ func kib(n int) string { return fmt.Sprintf("%d KiB", (n+1023)/1024) }
 //
 // A FAILURE PAST WHAT ONE CONDENSATION READS IS BROUGHT INSIDE IT FIRST. A
 // runner composes its failure to [MaxFailureBytes], but nothing outside this
-// package keeps that promise for it, and a CLI's own error can be as long as
+// package keeps that promise for it, and a harness's own error can be as long as
 // the file it was read from: handed over whole, the compactor refuses it
 // before any model is asked. So the failure keeps whole lines from both ends
 // up to [MaxCondenseBytes] — its start, where the engine speaks, and its end,
@@ -686,7 +686,7 @@ func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPar
 // is the last thing a process prints; and its start, up to an eighth of it
 // ([failureHeadShare]), because that is where the ENGINE speaks — a piece it
 // could not read, a question nobody could be asked, the exit status and the
-// CLI's own error all come before the error stream they introduce. Kept from
+// harness's own error all come before the error stream they introduce. Kept from
 // its end alone, a failure with a long error stream lost every one of them.
 //
 // The note stands where the left-out lines were and is not counted against
@@ -731,7 +731,7 @@ func keepLines(part RunPart, text string, budget int, why string) string {
 // failureHeadShare is the fraction of a failure's budget its START keeps when
 // no model could condense it: an eighth, 32 KiB of [MaxRunTextBytes]. The
 // engine's own sentences at its start are a few hundred bytes each, so this
-// holds every one of them and the opening of a long error the CLI reported;
+// holds every one of them and the opening of a long error the harness reported;
 // the other seven eighths are the end, where a process names what broke.
 const failureHeadShare = 8
 

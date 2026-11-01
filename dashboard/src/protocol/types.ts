@@ -464,7 +464,7 @@ export interface ProviderLimit {
   since: string;
   /** The CLI the limited entry drives (`claude-code`), a key of
    *  `HARNESS_PRODUCTS`; empty where the report did not say. */
-  cli: string;
+  harness: string;
   /** Whether that CLI signs in on a plan rather than a metered key. */
   subscription: boolean;
 }
@@ -735,7 +735,7 @@ export interface ExecutorEntry {
   role: string;
   agent_handle: string;
   agent_id: string;
-  coding_agent: string;
+  harness: string;
   /** The executor-chain member the run was launched on, and its model — which
    *  a fallback at launch makes other than the chain's head. The member is the
    *  company's configuration and is sent to an admin alone; the model goes to
@@ -803,7 +803,7 @@ export interface ExecutorRow {
   agent_handle: string;
   role: string;
   status: ExecutorStatus;
-  coding_agent: string;
+  harness: string;
   /** The executor-chain member the job was launched on, and its model. Absent
    *  on a live entry that named none; the member is also absent for every
    *  reader but an admin, since it is the company's configuration. */

@@ -187,10 +187,10 @@ func (o SteerOutcome) Valid() bool { return slices.Contains(SteerOutcomes, o) }
 // FIVE, because a turn reads notes in two kinds of place and they mean
 // different things. The engine's own loop reads a note at the opening of one of
 // its runs ([SteerBoundaryRound]) and an executor in its brief
-// ([SteerBoundaryBrief]): the engine sent it. Inside its run the CLI reads
+// ([SteerBoundaryBrief]): the engine sent it. Inside its run the harness reads
 // it at a step of its own loop — Claude Code after a batch of tool calls
 // ([SteerBoundaryToolBatch]) or as it was about to finish
-// ([SteerBoundaryFinish]), each where the CLI handed the note to its model;
+// ([SteerBoundaryFinish]), each where the harness handed the note to its model;
 // OpenCode at its next step ([SteerBoundaryStep]), once it reported putting the
 // note in front of the model.
 type SteerBoundary string

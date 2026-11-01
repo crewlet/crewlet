@@ -590,12 +590,12 @@ type BridgeCall struct {
 
 	// At is when the row recorded the call, on the store's clock — what the
 	// Executors board lists a run's calls by. Always set: the store stamps it.
-	// It is the order the calls FINISHED in, and a CLI making several calls
+	// It is the order the calls FINISHED in, and a harness making several calls
 	// at once finishes them in whatever order their tools take.
 	At time.Time `json:"at"`
 
 	// Seq is the call's place in the order the run's sessions admitted its
-	// calls, from 1 — the order the CLI made them in, which is the order a
+	// calls, from 1 — the order the harness made them in, which is the order a
 	// resume replays them in. One order for the round: a job opened again
 	// after a recovery, and a job continuing one that asked a person, number
 	// their calls after the ones the row already records
@@ -716,8 +716,8 @@ type PendingRun struct {
 	AgentID     string `json:"agent_id"`
 	Role        string `json:"role"`
 
-	SandboxID   string `json:"sandbox_id"`
-	CodingAgent string `json:"coding_agent"`
+	SandboxID string `json:"sandbox_id"`
+	Harness   string `json:"harness"`
 
 	// Placement is which configured backend holds this run's box.
 	//
@@ -986,7 +986,7 @@ type PendingRun struct {
 	//
 	// RESOLVED ONCE, AT THE PARK, by [CoordinatorOptions.Audience] against
 	// the chart the parking node holds, and written in the same write as the
-	// question. [PendingRun.Audience] is a free label the coding agent chose
+	// question. [PendingRun.Audience] is a free label the harness chose
 	// — "requester", "team", "manager", or a name it typed — and it was
 	// never resolved at all, so "what is waiting on me" had no answer: a
 	// person could see every parked question in the company and none of
@@ -1056,7 +1056,7 @@ type PendingRun struct {
 	// BridgeCalls is what a run made through the MCP bridge, in order.
 	//
 	// DURABLE, because this is the one tool log that has nowhere else to
-	// live. Every run's calls are made by its coding CLI, a process outside
+	// live. Every run's calls are made by its harness, a process outside
 	// the engine, over the bridge — minutes or hours apart, and possibly
 	// across a restart. Without this the reviewer of a resumed run judges a
 	// turn whose entire tool log is gone — and "it called nothing" is
@@ -1282,12 +1282,12 @@ type PendingRun struct {
 	// Prior is TRANSIENT as well: on the row a relaunch's
 	// [PendingStore.BeginLaunch] answers, the box the row named before the
 	// reset moved it onto the new job — its id, the cell that holds it, the
-	// CLI it was installed for and the status the row held. Zero on a row
+	// harness it was installed for and the status the row held. Zero on a row
 	// the launch created, and on one whose previous job never got a box.
 	//
 	// HANDED TO THE LAUNCH rather than kept on the row, because the launch is
 	// the one party that knows what becomes of that box: continued in, when
-	// the new job runs the same CLI in the same cell, or reclaimed through its
+	// the new job runs the same harness in the same cell, or reclaimed through its
 	// own cell before a fresh one is acquired ([Coordinator.Launch]). Until the
 	// launch attaches a box of its own the row goes on naming this one, with
 	// its own cell, so a node that dies in between leaves a box recovery can
@@ -1452,11 +1452,11 @@ type PendingStore interface {
 	// THE TURN'S NOTES ([PendingRun.Steer]) ARE KEPT by a reset — every note,
 	// read or waiting, with its numbering and the seat anchor — and created
 	// with the row: the anchor the launch sealed ([RunSteer.Seat]), written
-	// on a reset only where the row has none. Whether a job's CLI asked for
+	// on a reset only where the row has none. Whether a job's harness asked for
 	// them ([RunSteer.Pulled]) is the job's, and starts empty. The notes the
 	// job's brief carries ([PendingRun.BriefNotes]) are recorded READ BY THE
 	// JOB THIS WRITE OPENS, in the same write — a note the row holds and one
-	// it has never held alike — so the job's own CLI can never take them
+	// it has never held alike — so the job's own harness can never take them
 	// again. And the notes the turn's box still held
 	// ([PendingRun.HandedNotes]) are filed WAITING in the same write, after
 	// them: from the write that creates the record, nothing a person files on
@@ -1725,7 +1725,7 @@ type PendingStore interface {
 	// PINNED TO ONE JOB. Every append names the job its session serves
 	// ([BridgeAppend.Launch]), and is recorded only while the row holds that
 	// job. A call still in flight when its job was REPLACED — a worker that
-	// outlived a killed CLI, finishing after the reviewer relaunched — is not
+	// outlived a killed harness, finishing after the reviewer relaunched — is not
 	// recorded: it would land its call and its spend on the next job's
 	// record, and that job's resume would pay for it as its own. One that
 	// finishes after its job's resume CLAIMED it, and before any relaunch, is
@@ -1745,7 +1745,7 @@ type PendingStore interface {
 	// bridge (ADR-0068) onto the fields a parked question is read from
 	// ([PendingRun.Question], [PendingRun.QuestionContext],
 	// [PendingRun.Decision], [PendingRun.Audience], [PendingRun.Branch]),
-	// as [Ask.Redacted] has it. The run is parked on it when its CLI ends
+	// as [Ask.Redacted] has it. The run is parked on it when its harness ends
 	// and the job is collected.
 	//
 	// PINNED TO THE JOB AND TO ITS RUNNING, like a bridged call: recorded
@@ -2263,7 +2263,7 @@ type BoxRef struct {
 	// keeps the node the row already names.
 	Node string
 
-	CodingAgent string
+	Harness     string
 	SessionID   string
 	PauseTTLSec float64
 }
@@ -2271,9 +2271,9 @@ type BoxRef struct {
 // PriorBox is the box a relaunch found on its run's row — see
 // [PendingRun.Prior].
 type PriorBox struct {
-	SandboxID   string
-	Placement   string
-	CodingAgent string
+	SandboxID string
+	Placement string
+	Harness   string
 	// Status is the status the row held before the reset: whether the job
 	// that used the box is over ([StatusResumed], the resumed turn that is
 	// relaunching) or may still be running in it.
@@ -2287,15 +2287,15 @@ type PriorBox struct {
 // ContinuesIn reports whether a launch of spec may continue in this box
 // rather than in a fresh one.
 //
-// ONLY THE SAME CLI IN THE SAME CELL, and only once the job that used it is
-// over. A box is installed for one CLI and lives in one cell's backend, so a
-// job of another CLI could not run in it and one in another cell could not
+// ONLY THE SAME HARNESS IN THE SAME CELL, and only once the job that used it is
+// over. A box is installed for one harness and lives in one cell's backend, so a
+// job of another harness could not run in it and one in another cell could not
 // reach it. And a box whose job may still be running — a row reset from any
 // status but the claim of the resumed turn that relaunches — is reclaimed, not
 // shared: two jobs in one checkout would each overwrite the other's work.
 func (p PriorBox) ContinuesIn(spec Spec) bool {
 	return p.SandboxID != "" && p.Status == StatusResumed &&
-		p.Placement == string(spec.Placement) && p.CodingAgent == spec.CodingAgent
+		p.Placement == string(spec.Placement) && p.Harness == spec.Harness
 }
 
 // Fence is the ownership token a mutation carries.
@@ -2353,7 +2353,7 @@ type LaunchRecord struct {
 	// written by [PendingStore.BeginLaunch], the moment the launch exists.
 	StartedAt time.Time `json:"started_at,omitzero"`
 
-	// Started is whether the job's CLI was started in its box: written by
+	// Started is whether the job's harness was started in its box: written by
 	// the attach that names the job's command ([PendingStore.AttachSandbox]),
 	// the write a launch makes once its job exists and before it returns.
 	// What tells a brief's notes a job ran with from ones read into the
@@ -2368,8 +2368,8 @@ type LaunchRecord struct {
 	// expired, after its runner had recorded them delivered.
 	Started bool `json:"started,omitempty"`
 
-	// Model is the model the coding agent was pointed at, empty when the
-	// launch named none and the CLI chose its own.
+	// Model is the model the harness was pointed at, empty when the
+	// launch named none and the harness chose its own.
 	Model string `json:"model,omitempty"`
 
 	// ProviderKey is the providers.llm entry the job was launched on — the
@@ -2378,8 +2378,8 @@ type LaunchRecord struct {
 	// spend by provider names the entry that ran rather than nobody.
 	ProviderKey string `json:"provider_key,omitempty"`
 
-	// SignInID is the sign-in identity the job's CLI was handed at its
-	// launch: the entry's cliagent SignInID, a keyed digest of its
+	// SignInID is the sign-in identity the job's harness was handed at its
+	// launch: the entry's harness SignInID, a keyed digest of its
 	// credentials that names no credential. Empty where the launch had none
 	// to name.
 	//
@@ -2452,7 +2452,7 @@ type LaunchRecord struct {
 
 	// CollectedAt is when the collection that FIRST read this job's box back
 	// read it, by that node's clock: what the job's ending is read against
-	// by every later collection of it ([RunEnding.At]), so a reset its CLI
+	// by every later collection of it ([RunEnding.At]), so a reset its harness
 	// named as a time of day ("resets 4:30pm") is the instant it was then,
 	// not the next 4:30pm after a resume that was held for hours. Written by
 	// the release with Collected ([Release.CollectedAt]) and never moved for
@@ -2460,7 +2460,7 @@ type LaunchRecord struct {
 	CollectedAt time.Time `json:"collected_at,omitzero"`
 
 	// Bridged is what this job's BRIDGED calls cost the engine — the
-	// auxiliary calls the seat's tools made for the coding agent and the
+	// auxiliary calls the seat's tools made for the harness and the
 	// workers it delegated to — as the newest of the totals the bridge
 	// wrote with its calls ([PendingStore.AppendBridgeCall]). The segment
 	// that resumes from this job pays it to the turn's work item
@@ -2520,7 +2520,7 @@ func (a AuxTokens) newest(b AuxTokens) AuxTokens {
 // EngineSpend is what the ENGINE spent on a job outside every segment of the
 // turn it belongs to: its own auxiliary calls, and the workers it ran for the
 // job. The executor's OWN tokens are not here — they are the job's, reported
-// by its CLI ([Result.InputTokens]).
+// by its harness ([Result.InputTokens]).
 //
 // Two things put it there, and both happen while no segment is running to
 // tally them: a run's calls through the tool bridge, which keep

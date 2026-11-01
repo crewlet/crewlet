@@ -161,7 +161,7 @@ func (w *spentWorld) parked(t *testing.T, h *spentHolder) sandbox.PendingRun {
 	if _, err := h.coordinator.Launch(ctx, w.manager, sandbox.LaunchRequest{
 		Turn:  sandbox.TurnRef{TurnID: "t1", AgentID: fixtureSeat("swe").String(), AgentHandle: "swe", Role: "SWE"},
 		Brief: "fix the flaky test", Task: "get CI green",
-		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+		Spec: sandbox.Spec{Harness: "claude-code", PauseTTLSec: 1800},
 	}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestACompletionRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 	if _, err := first.coordinator.Launch(t.Context(), w.manager, sandbox.LaunchRequest{
 		Turn:  sandbox.TurnRef{TurnID: "t1", AgentID: fixtureSeat("swe").String(), AgentHandle: "swe", Role: "SWE"},
 		Brief: "fix the flaky test", Task: "get CI green",
-		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+		Spec: sandbox.Spec{Harness: "claude-code", PauseTTLSec: 1800},
 	}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestACompletionRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 	w.runner.Finish(sandbox.Result{Success: true, Text: "done"})
 	run := mustRun(t, w.store, "t1")
 	done := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		TurnID: "t1", LaunchID: run.LaunchID, SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+		TurnID: "t1", LaunchID: run.LaunchID, SandboxID: run.SandboxID, Harness: run.Harness}
 	completion := events.New(done, events.TraceContext{})
 
 	stale := w.leasedBy(t, func(string) (sandbox.Fence, bool) { return sandbox.Fence{}, false }, &takingResumer{})

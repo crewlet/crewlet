@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/envref"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // harnessEntry is a company with one providers.llm entry, "sub", whose body is the
@@ -312,8 +312,8 @@ func TestAHarnessProfileThatCannotLoadIsRefusedAtItsOverrides(t *testing.T) {
 // the operator never wrote, and its token could never be stored.
 func TestEveryShippedProfileNamesItsCredentialsInTheGrammar(t *testing.T) {
 	t.Parallel()
-	for _, name := range cliprofile.BuiltinNames() {
-		profile, ok := cliprofile.Builtin(name)
+	for _, name := range harnessprofile.BuiltinNames() {
+		profile, ok := harnessprofile.Builtin(name)
 		if !ok {
 			t.Fatalf("%s is listed and not built in", name)
 		}

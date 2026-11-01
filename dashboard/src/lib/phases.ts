@@ -287,7 +287,7 @@ export interface PhaseRecord {
   /** The CLI an executor ran as, on the record that collected its run and on
    *  each launch's; empty on every phase that ran on the engine host. Where a
    *  phase ran is which phase it is, so nothing else says so. */
-  codingAgent: string;
+  harness: string;
   /** The box that ran this phase, when a coding agent did. Links a transcript
    *  to the detached run it suspended into. */
   sandboxId: string;
@@ -312,7 +312,7 @@ export interface PhaseRecord {
    * which the engine neither made nor timed — and 0 where it reported none,
    * and on every phase.
    */
-  cliTurns: number;
+  harnessTurns: number;
   /**
    * A launch's own account of what it did — what the agent said, one line per
    * tool call, the calls that failed — on a launch only. Redacted by the
@@ -770,14 +770,14 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    codingAgent: "",
+    harness: "",
     // A RUNNING phase has neither yet: the box id is stamped when the run is
     // registered, and the refs are what it REPORTS back.
     sandboxId: "",
     deliveredRefs: [],
     deliveredRefsElided: 0,
     launchId: "",
-    cliTurns: 0,
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,
@@ -868,7 +868,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     taskId,
     hostPhase: String(p.host_phase ?? ""),
     hostIteration: num(p.host_iteration),
-    codingAgent: String(p.coding_agent ?? ""),
+    harness: String(p.harness ?? ""),
     // WHAT A COLLECTED RUN LEAVES ON THE EXECUTOR'S RECORD: which box ran it
     // (so the badge naming the coding agent can reach the run) and the
     // branches and pull requests the phase produced. What the run did and
@@ -879,7 +879,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // reads as nothing left out, which is what such a record is.
     deliveredRefsElided: num(p.delivered_refs_elided),
     launchId,
-    cliTurns: 0,
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,
@@ -976,12 +976,12 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    codingAgent: String(p.coding_agent ?? ""),
+    harness: String(p.harness ?? ""),
     sandboxId: String(p.sandbox_id ?? ""),
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
     deliveredRefsElided: num(p.delivered_refs_elided),
     launchId,
-    cliTurns: num(p.cli_turns),
+    harnessTurns: num(p.harness_turns),
     transcript: String(p.activity_transcript ?? ""),
     transcriptElidedLines: num(p.activity_transcript_elided_lines),
     transcriptElidedBytes: num(p.activity_transcript_elided_bytes),

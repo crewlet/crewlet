@@ -274,7 +274,7 @@ func (r *Resolver) Value(value string) string {
 //
 // This is the presence check a caller makes before it commits to something
 // that would act with a credential — spawning a seat's MCP child, offering a
-// coding agent a server — and it NAMES what it finds, because the one thing
+// harness a server — and it NAMES what it finds, because the one thing
 // the caller does next is tell somebody which variable to set. It
 // deliberately differs from [Resolver.Expand] in two ways.
 //

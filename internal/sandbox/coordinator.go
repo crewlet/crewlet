@@ -161,7 +161,7 @@ type ResumeRequest struct {
 	// THE TURN CARRIES THE RUN ON WITH IT, and never files it as the run's
 	// report. The run stopped mid-round because it could not go on without
 	// the answer, so the round is not over: the resumed turn relaunches its
-	// executor, continuing the CLI's own session in the box the run asked
+	// executor, continuing the harness's own session in the box the run asked
 	// from, with the answer as its next prompt — or, where that box is
 	// gone, a fresh run told the question, the answer and the branch
 	// ([Continuation]). Filed as the report, the answer reached the turn
@@ -266,7 +266,7 @@ type ResumeRequest struct {
 	// turn, never past it.
 	Engine EngineSpend
 
-	// Ended is how the collected run's CLI said it ended — its answer and
+	// Ended is how the collected run's harness said it ended — its answer and
 	// its error as the runner read them, and whether it succeeded — VERBATIM,
 	// beside Answer's account of it. The vendor's report of a spent plan or
 	// a rate limit is in there, and only the resuming node can act on it: it
@@ -280,7 +280,7 @@ type ResumeRequest struct {
 type RunEnding struct {
 	Text  string
 	Error string
-	// Event is the CLI's own terminal event — see [Result.Event].
+	// Event is the harness's own terminal event — see [Result.Event].
 	Event   string
 	Success bool
 	// At is when the run's ending was first read back from its box
@@ -315,7 +315,7 @@ type Accountant interface {
 	Charge(ctx context.Context, agentID, handle string, tokens int, companyCharged bool) (refused bool, err error)
 }
 
-// AudienceResolver resolves the audience a coding agent named for its question
+// AudienceResolver resolves the audience a harness named for its question
 // — "requester", "manager", "team", or a name it typed — to the seats it means,
 // for the run that asked.
 //
@@ -391,7 +391,7 @@ type CoordinatorOptions struct {
 	// It exists, as Ended does, for what a run's box REACHES on the engine
 	// rather than for the run's own state, which this package drives
 	// itself. A run's box calls the seat's tools over the bridge
-	// for as long as its CLI runs, and the session it calls lived in the
+	// for as long as its harness runs, and the session it calls lived in the
 	// process that launched it: a node that restarted, or took the seat
 	// over, serves that session again from here (internal/api/mcpbridge).
 	// A run parked on a question has a paused box that calls nothing, and
@@ -1571,7 +1571,7 @@ func parkedEngineSpend(run PendingRun) EngineSpend {
 //
 // THE BOX OUTLIVES ITS JOB for three readers. The resumed turn relaunches its
 // executor whenever its reviewer sends the work back, and the relaunch
-// continues in this box — the same checkout, the CLI's own session — rather
+// continues in this box — the same checkout, the harness's own session — rather
 // than re-provisioning and throwing the working tree away
 // ([Coordinator.Launch]). A run that parks waits in it for its answer. And a
 // resume that fails and is retried collects again, from a box still there to
@@ -1604,23 +1604,23 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 	return c.fitText(ctx, run, result), ended, nil
 }
 
-// noteReader is a [Runner] whose CLI takes a person's notes to its run's turn
-// between its own steps (internal/sandbox/codingagent's Runner, for a CLI it
-// has taught to). Optional, as a runner that reads none — a CLI not yet taught,
+// noteReader is a [Runner] whose harness takes a person's notes to its run's turn
+// between its own steps (internal/sandbox/executor's Runner, for a harness it
+// has taught to). Optional, as a runner that reads none — a harness not yet taught,
 // a test's — says nothing about notes at all.
 type noteReader interface{ ReadsNotes() bool }
 
 // warnNotesUnasked says, as steer_reader_never_ran, that a run which succeeded
 // never once asked for its turn's notes ([RunSteer.Pulled]) — what tells a run
-// whose CLI's reading was switched off from one that had nothing to read.
+// whose harness's reading was switched off from one that had nothing to read.
 //
-// A RELIABLE SIGNAL, for a CLI that reads notes: a Claude Code run that
+// A RELIABLE SIGNAL, for a harness that reads notes: a Claude Code run that
 // finishes reaches its Stop hook, which asks whatever waits, and an OpenCode
 // run's plugin asks as soon as the run's session starts working. So a run that
 // succeeded without asking is one whose reading never ran — for Claude Code, a
 // managed policy that allows only managed hooks or disables them all, or a
 // release older than 2.1.163, which its script starts without the hooks
-// (codingagent, claudeNotesFloor); for OpenCode, a managed policy that denies
+// (executor, claudeNotesFloor); for OpenCode, a managed policy that denies
 // the plugin, or a plugin that failed to load — and every note sent while it
 // worked waited for its review, which a person sending one is told reads at its
 // next step.
@@ -1636,7 +1636,7 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 	if manager == nil {
 		return
 	}
-	runner, err := manager.RunnerFor(run.CodingAgent)
+	runner, err := manager.RunnerFor(run.Harness)
 	if err != nil {
 		return
 	}
@@ -1644,10 +1644,10 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 		return
 	}
 	log.WarnContext(ctx, "steer_reader_never_ran", "turn_id", run.TurnID,
-		"launch_id", run.LaunchID, "agent", run.CodingAgent,
-		"detail", "the run succeeded and its coding CLI never asked for its turn's notes, so a "+
+		"launch_id", run.LaunchID, "agent", run.Harness,
+		"detail", "the run succeeded and its harness never asked for its turn's notes, so a "+
 			"note sent while it worked waited for its review instead of reaching it between its "+
-			"steps. Something in the box switched the CLI's reading off: for Claude Code, a "+
+			"steps. Something in the box switched the harness's reading off: for Claude Code, a "+
 			"managed policy that allows only managed hooks (allowManagedHooksOnly, "+
 			"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a "+
 			"release older than 2.1.163, the oldest whose Stop hook's answer reaches the model, "+
@@ -1667,7 +1667,7 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // box next, and a pause would only be one more call to a box about to go.
 func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	manager := c.mgr()
-	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.CodingAgent)
+	box, runner, err := manager.Reconnect(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		return Result{}, false, err
 	}
@@ -1845,7 +1845,7 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 
 // collectedRecord is a collected launch's own record.
 //
-// Everything on it is the LAUNCH's: its tokens and cache share, what its CLI
+// Everything on it is the LAUNCH's: its tokens and cache share, what its harness
 // said it cost, the report it wrote, what it delivered, its transcript and,
 // when it did not finish, why. Nothing on it is the executor's — that is on
 // the resumed executor's own phase record, which is why the two never sum to
@@ -1881,11 +1881,11 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		TotalTokens:                   result.InputTokens + result.OutputTokens,
 		CacheReadTokens:               result.CacheReadTokens,
 		CacheWriteTokens:              result.CacheWriteTokens,
-		// The launch's own model turns, as its CLI reported them: the calls
+		// The launch's own model turns, as its harness reported them: the calls
 		// every spend figure counts this record as (tokens.LaunchCalls).
-		CLITurns:      result.Turns,
+		HarnessTurns:  result.Turns,
 		WorkItem:      run.WorkItem,
-		CodingAgent:   run.CodingAgent,
+		Harness:       run.Harness,
 		SandboxID:     run.SandboxID,
 		CostUSD:       result.CostUSD,
 		DeliveredRefs: result.DeliveredRefs,
@@ -1998,7 +1998,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// And what condensing this collection cost, paid by the same resume.
 		Condensed: result.Condensed,
 		// WHO IT IS PUT TO, resolved now and written with the question:
-		// the label is the coding agent's own words, and "what is waiting
+		// the label is the harness's own words, and "what is waiting
 		// on me" is a question nobody could answer while it was all the
 		// row said. See [PendingRun.AudienceHandles].
 		Answerers: c.audience.ResolveAudience(run, run.Audience),
@@ -2540,7 +2540,7 @@ func answerGivenOf(run PendingRun, given types.ExecutorAnswerGiven, trigger *eve
 	}
 	words := AnswerWords{
 		// Redacted HERE, as a chat reply is: it is sealed onto the run's
-		// row and handed as it is to the run's coding CLI, whose box and
+		// row and handed as it is to the run's harness, whose box and
 		// session keep it.
 		Text: redact.Secrets(strings.TrimSpace(given.Answer)), Choice: given.Choice,
 		Via: types.AnswerViaOperator,
@@ -3453,7 +3453,7 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 		ev = events.New(types.ExecutorStopped{
 			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
-			CodingAgent: run.CodingAgent, LaunchID: run.LaunchID,
+			Harness: run.Harness, LaunchID: run.LaunchID,
 			StoppedBy: stop.By, StoppedByKind: stop.ByKind,
 			OperatorID: stop.OperatorID, Reason: stop.Reason,
 		}, trace)
@@ -3465,8 +3465,8 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 		ev = events.New(types.ExecutorFailed{
 			Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 			TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
-			CodingAgent: run.CodingAgent,
-			Reason:      ending.Reason, Detail: redact.Secrets(detail),
+			Harness: run.Harness,
+			Reason:  ending.Reason, Detail: redact.Secrets(detail),
 		}, trace)
 	}
 	ev.ID, ev.Timestamp = endingEventID(run), ending.At.UTC()
@@ -4710,7 +4710,7 @@ func runReport(result Result) string {
 		lines = append(lines, "\n"+result.Text)
 		// WHY, BESIDE WHAT IT SAID. A run that wrote a report and still did
 		// not succeed — it crashed after writing it, its question or its
-		// result could not be read, its CLI reported an error after an
+		// result could not be read, its harness reported an error after an
 		// answer — used to be filed with its report alone under "did NOT
 		// fully succeed", with the reason nowhere a reader could find it.
 		if !result.Success && result.Error != "" && result.Error != result.Text {
@@ -4724,7 +4724,7 @@ func runReport(result Result) string {
 
 // AskedRun is what a person's answer resumes a parked run with — see
 // [ResumeRequest.Asked]. Redacted, as everything a resume hands the turn is:
-// the turn hands it as it is to the run it carries on, whose box and CLI
+// the turn hands it as it is to the run it carries on, whose box and harness
 // session keep it.
 type AskedRun struct {
 	// Question is what the run asked and Answer the reply; By is who gave
@@ -4738,7 +4738,7 @@ type AskedRun struct {
 	// run carrying on on a fresh machine starts from.
 	Branch string
 
-	// SessionID is the asking job's CLI session, which the relaunch
+	// SessionID is the asking job's harness session, which the relaunch
 	// continues where it runs in the asking job's box ([Continuation]).
 	SessionID string
 

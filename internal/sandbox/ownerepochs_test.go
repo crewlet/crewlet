@@ -26,7 +26,7 @@ func TestOwnerEpochsIsTheHighestEachSeatsRunsCarry(t *testing.T) {
 		{"t5", "not-a-seat", Fence{Owner: "n1", Epoch: 9}},
 	} {
 		if _, err := store.BeginLaunch(t.Context(), PendingRun{TurnID: row.turn, AgentID: row.agent,
-			AgentHandle: "h", CodingAgent: "claude-code"}, row.fence); err != nil {
+			AgentHandle: "h", Harness: "claude-code"}, row.fence); err != nil {
 			t.Fatalf("BeginLaunch(%s): %v", row.turn, err)
 		}
 	}
@@ -47,7 +47,7 @@ func TestOwnerEpochsSkipsARecordItCannotDecode(t *testing.T) {
 	store := NewCoordStore(fleet)
 	swe := uuid.New()
 	if _, err := store.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentID: swe.String(),
-		AgentHandle: "h", CodingAgent: "claude-code"}, Fence{Owner: "n1", Epoch: 4}); err != nil {
+		AgentHandle: "h", Harness: "claude-code"}, Fence{Owner: "n1", Epoch: 4}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if _, err := fleet.CreateSandboxRun(t.Context(), "t-garbled", []byte("{not json")); err != nil {

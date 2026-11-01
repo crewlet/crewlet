@@ -552,7 +552,7 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 			}
 			env := sandbox.RunEnvFor(manager, sandbox.LaunchRequest{
 				Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
-				Spec: sandbox.Spec{Placement: tc.cell, CodingAgent: "claude-code", TimeoutSec: 900},
+				Spec: sandbox.Spec{Placement: tc.cell, Harness: "claude-code", TimeoutSec: 900},
 			}, tc.box)
 			endpoint, set := env["OTEL_EXPORTER_OTLP_ENDPOINT"]
 			switch {
@@ -568,7 +568,7 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 // THE OPERATOR'S OWN ENVIRONMENT WINS.
 //
 // role.sandbox.env is where an operator declares what a box gets, and a
-// deployment that points its coding agents at its own collector directly has
+// deployment that points its harnesses at its own collector directly has
 // said so deliberately. Overriding that silently would be the engine choosing
 // where somebody else's telemetry goes — and the failure is invisible: the
 // spans arrive somewhere, just not where the config said.
@@ -598,8 +598,8 @@ func TestTheOperatorsTelemetryEnvironmentWins(t *testing.T) {
 			TurnID: "turn-1", AgentHandle: "engineer",
 		},
 		Spec: sandbox.Spec{
-			CodingAgent: "claude-code",
-			TimeoutSec:  900,
+			Harness:    "claude-code",
+			TimeoutSec: 900,
 			Env: map[string]string{
 				"OTEL_EXPORTER_OTLP_ENDPOINT": "https://our-own-collector.example",
 				"ANTHROPIC_API_KEY":           "sk-test",
@@ -652,7 +652,7 @@ func TestTheRunsEndpointIsTheReceiverAsTheBoxDialsIt(t *testing.T) {
 	}
 	req := sandbox.LaunchRequest{
 		Turn: sandbox.TurnRef{TraceID: "trace-abc", SpanID: "span-def", TurnID: "turn-1", AgentHandle: "engineer"},
-		Spec: sandbox.Spec{CodingAgent: "claude-code", TimeoutSec: 900},
+		Spec: sandbox.Spec{Harness: "claude-code", TimeoutSec: 900},
 	}
 	container := aliasedBox{FakeSandbox: sandbox.NewFakeSandbox("c"), alias: "host.docker.internal"}
 

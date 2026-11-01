@@ -206,7 +206,7 @@ const (
 	// KindOutcome is what a turn concluded — its final answer, or the
 	// reviewer's account of what landed — condensed for a one-glance card.
 	KindOutcome Kind = "outcome"
-	// KindReport is a coding agent's report on the run it finished.
+	// KindReport is a harness's report on the run it finished.
 	KindReport Kind = "report"
 )
 

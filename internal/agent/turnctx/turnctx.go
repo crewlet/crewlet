@@ -390,14 +390,14 @@ func (t *Turn) InPhase(phase types.Phase) *Turn {
 // one, its auxiliary calls tallied on spend rather than on [Turn.AuxSpend].
 //
 // One caller, and the shape of the problem it solves is the reason it exists:
-// every executor hands its tool surface to its coding CLI over the bridge, and
-// the CLI goes on calling those tools after the segment that launched it has
+// every executor hands its tool surface to its harness over the bridge, and
+// the harness goes on calling those tools after the segment that launched it has
 // ended and charged what it spent. Tallied on that segment's
 // tally, every one of those calls was added to a number nothing read again.
 // A copy, for [Turn.InPhase]'s reason; nil in, nil out.
 //
 // [Turn.Budget] is KEPT: the counters are the seat's and the company's
-// whichever segment pays, and the workers the CLI delegates to already charge
+// whichever segment pays, and the workers the harness delegates to already charge
 // the launching segment's meter, so its auxiliary calls are judged by the same
 // meter rather than by none.
 func (t *Turn) WithAuxSpend(spend *auxspend.Tally) *Turn {
@@ -499,7 +499,7 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 // MaxWritten is how many distinct work items [Written] lists before it stops
 // listing them and records only that there were more.
 //
-// PAST THE DEFAULT RUN CAP (96 CLI turns, providers.sandbox's
+// PAST THE DEFAULT RUN CAP (96 harness turns, providers.sandbox's
 // default_max_turns), which is the bound on how many steps one executor run
 // takes: a turn whose run wrote a different item on every one of its turns is
 // still listed in full, with room left for what the onboarding pass wrote

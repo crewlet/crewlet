@@ -129,9 +129,9 @@ type TurnRef struct {
 
 // LaunchRequest is everything one executor run needs.
 //
-// TWO TEXTS, KEPT APART to the end: what the coding agent is asked to do
+// TWO TEXTS, KEPT APART to the end: what the harness is asked to do
 // (Brief) and how it is to work (System). The runner hands the first to its
-// CLI as the prompt and the second on the CLI's channel for adding to its own
+// harness as the prompt and the second on the harness's channel for adding to its own
 // system prompt ([RunRequest.System]), so the vendor's harness prompt stays in
 // force and the standing instructions sit beneath it rather than in front of
 // the task as a message the model reads as part of the request.
@@ -144,7 +144,7 @@ type LaunchRequest struct {
 	System string
 
 	// Brief is the task: the turn's ask, as the executor's prompt renders
-	// it, and the whole of what the CLI is prompted with.
+	// it, and the whole of what the harness is prompted with.
 	Brief string
 
 	// Task is what the launching turn's work is read by, in a person's
@@ -164,7 +164,7 @@ type LaunchRequest struct {
 	// line.
 	Label string
 
-	// Ask is the addendum telling the coding agent how to get a person's
+	// Ask is the addendum telling the harness how to get a person's
 	// answer (asked with its tools when it can go on without it, or parked
 	// through `ask_and_wait` when it cannot, ADR-0068) with the names it may
 	// address. The ENGINE composes it, because the tools and the names are
@@ -179,7 +179,7 @@ type LaunchRequest struct {
 	MCPServers map[string]MCPServer
 
 	// Model is the model the run works under — see [RunRequest.Model].
-	// Empty names none, and the CLI chooses its own.
+	// Empty names none, and the harness chooses its own.
 	Model string
 
 	// ProviderKey is the providers.llm entry the run was launched on: the
@@ -189,7 +189,7 @@ type LaunchRequest struct {
 	// entry that served them, on whichever node collects the run.
 	ProviderKey string
 
-	// SignInID is the sign-in identity the run's CLI is handed, written onto
+	// SignInID is the sign-in identity the run's harness is handed, written onto
 	// the job's record ([LaunchRecord.SignInID]).
 	SignInID string
 
@@ -198,11 +198,11 @@ type LaunchRequest struct {
 	// with its host ([PendingRun.Lost]) — and so is the same round of the
 	// turn, carried on rather than begun again. Nil for every other launch.
 	//
-	// The job continues the asking job's own CLI session where it runs in
+	// The job continues the asking job's own harness session where it runs in
 	// that job's box — the session lives there — with Continue.Brief, the
 	// answer, as its next prompt ([RunRequest.Resume]). Where it
 	// does not — the box was reclaimed while the question waited, or this
-	// launch runs another CLI or cell, or the job before it was lost, whose
+	// launch runs another harness or cell, or the job before it was lost, whose
 	// session names none — it starts fresh with Brief, which then carries
 	// the question and the answer, or how the job before it was cut off, and
 	// where its work is; the decision is the launch's, made once it knows
@@ -264,7 +264,7 @@ type LaunchRequest struct {
 	// takes the run over can serve the job's session again under the token
 	// the box already holds and a relaunch's box cannot reach its
 	// predecessor's; a name it answers that MCPServers also has replaces
-	// it — and where the job's CLI asks for its turn's notes, which is the
+	// it — and where the job's harness asks for its turn's notes, which is the
 	// same bridge. An error abandons the launch, before any box exists. Nil
 	// tells nobody and adds nothing.
 	Opened func(job OpenedJob) (Opening, error)
@@ -299,7 +299,7 @@ type Opening struct {
 	// Servers join the box's MCP servers.
 	Servers map[string]MCPServer
 
-	// Steer is where the job's CLI asks for its turn's notes
+	// Steer is where the job's harness asks for its turn's notes
 	// ([RunRequest.Steer]); the zero value takes none inside the run.
 	Steer SteerWiring
 }
@@ -307,8 +307,8 @@ type Opening struct {
 // Continuation is how a job continues the job before it — see
 // [LaunchRequest.Continue].
 type Continuation struct {
-	// SessionID is the asking job's CLI session ([PendingRun.SessionID]).
-	// Empty where its CLI named none, or the job before was lost, which
+	// SessionID is the asking job's harness session ([PendingRun.SessionID]).
+	// Empty where its harness named none, or the job before was lost, which
 	// continues nothing: the job starts fresh with the launch's Brief.
 	SessionID string
 	// Brief is the prompt the continued session is given: the answer, and
@@ -325,16 +325,16 @@ type LaunchResult struct {
 	// ([PendingRun.LaunchID]).
 	LaunchID string
 
-	SandboxID   string
-	CommandID   string
-	CodingAgent string
+	SandboxID string
+	CommandID string
+	Harness   string
 
 	// Reused is whether the job continues in the box the turn's previous
 	// job used, rather than in a fresh one — see [PriorBox.ContinuesIn].
 	Reused bool
 }
 
-// Launch provisions a box, starts the coding agent detached, and persists the
+// Launch provisions a box, starts the harness detached, and persists the
 // row that outlives the turn — and HOLDS THE SEAT from the moment that row is
 // written.
 //
@@ -382,12 +382,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if strings.TrimSpace(req.Brief) == "" {
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs a brief")
 	}
-	// THE RUNNER IS THE LAUNCH'S OWN, never a default: it is the CLI of the
+	// THE RUNNER IS THE LAUNCH'S OWN, never a default: it is the harness of the
 	// entry whose login and model the run carries, and a box running any
-	// other CLI could read neither. Refused before the row, so a request
+	// other harness could read neither. Refused before the row, so a request
 	// built without one costs nothing.
-	if req.Spec.CodingAgent == "" {
-		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs the coding agent it runs")
+	if req.Spec.Harness == "" {
+		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs the harness it runs")
 	}
 	// THE SEAT'S LEASE, which the row is stamped with and every write below
 	// carries — see [CoordinatorOptions.Lease]. A seat this node does not
@@ -413,7 +413,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// process that collects this run may not be this one, nor reading
 		// the configuration that chose the cell.
 		Placement:       string(req.Spec.Placement),
-		CodingAgent:     req.Spec.CodingAgent,
+		Harness:         req.Spec.Harness,
 		TaskDescription: req.Task,
 		Label:           req.label(),
 		PartitionKey:    req.Turn.PartitionKey,
@@ -519,7 +519,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// before it, and the row is how every later reader reaches the box.
 	if err = store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), Placement: string(req.Spec.Placement), Node: c.node,
-		CodingAgent: req.Spec.CodingAgent, PauseTTLSec: req.Spec.PauseTTLSec,
+		Harness: req.Spec.Harness, PauseTTLSec: req.Spec.PauseTTLSec,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
@@ -534,7 +534,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// continues in it starts: it ran no setup, so they hold what the last
 	// poll of the job before wrote, which a pause may have outlived — see
 	// [CoordinatorOptions.Refresh]. Handed the row as this launch opened
-	// it, which already names this box, its cell, its CLI and its host: a
+	// it, which already names this box, its cell, its harness and its host: a
 	// kept box is the previous job's, continued only where all four match
 	// ([PriorBox.ContinuesIn], [Coordinator.hostsPrior]).
 	if reused && c.refresh != nil {
@@ -561,7 +561,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
 		Model:      req.Model,
 		MCPServers: req.MCPServers,
-		// WHERE THE JOB'S CLI ASKS FOR ITS TURN'S NOTES, as the job's own
+		// WHERE THE JOB'S HARNESS ASKS FOR ITS TURN'S NOTES, as the job's own
 		// opening answered it — see [Opening.Steer].
 		Steer: steer,
 		// THE CREDIT ON THE JOB'S OWN COMMITS, naming the turn: the run's
@@ -571,7 +571,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	})
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
-		return LaunchResult{}, fmt.Errorf("sandbox: starting the coding agent: %w", err)
+		return LaunchResult{}, fmt.Errorf("sandbox: starting the harness: %w", err)
 	}
 
 	// The command id is written SECOND, once the job exists: a row naming a
@@ -580,7 +580,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if err := store.AttachSandbox(ctx, req.Turn.TurnID, BoxRef{
 		SandboxID: box.ID(), CommandID: handle.CommandID,
 		Placement: string(req.Spec.Placement), Node: c.node,
-		CodingAgent: req.Spec.CodingAgent, SessionID: handle.SessionID,
+		Harness: req.Spec.Harness, SessionID: handle.SessionID,
 		PauseTTLSec: req.Spec.PauseTTLSec,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
@@ -596,7 +596,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		LaunchID: opened.LaunchID, StartedAt: opened.Launch.StartedAt,
 		Agent: req.Turn.AgentID, AgentHandle: req.Turn.AgentHandle,
 		RoleName: req.Turn.Role, TurnID: req.Turn.TurnID, WorkKey: req.Turn.WorkKey,
-		SandboxID: box.ID(), CodingAgent: req.Spec.CodingAgent,
+		SandboxID: box.ID(), Harness: req.Spec.Harness,
 		// THE MEMBER THAT TOOK IT — see [types.ExecutorLaunched.ProviderKey].
 		ProviderKey: req.ProviderKey, Model: req.Model,
 		// THE IDENTITY on the announcement: this event is read for
@@ -633,12 +633,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	log.InfoContext(ctx, "executor_launched",
 		"turn_id", req.Turn.TurnID, "agent", req.Turn.AgentHandle,
 		"sandbox_id", box.ID(), "placement", string(req.Spec.Placement),
-		"coding_agent", req.Spec.CodingAgent, "provider_key", req.ProviderKey,
+		"harness", req.Spec.Harness, "provider_key", req.ProviderKey,
 		"reused", reused, "continues_session", session != "")
 
 	return LaunchResult{
 		LaunchID: opened.LaunchID, SandboxID: box.ID(), CommandID: handle.CommandID,
-		CodingAgent: req.Spec.CodingAgent, Reused: reused,
+		Harness: req.Spec.Harness, Reused: reused,
 	}, nil
 }
 
@@ -649,7 +649,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // CONTINUING KEEPS THE CHECKOUT, which is the expensive half of a run: a turn
 // its reviewer sent back relaunches its executor on the same work, and a job
 // that continues where the last one stopped need not clone, install and set up
-// again. Only the same CLI in the same cell, once the last job is over
+// again. Only the same harness in the same cell, once the last job is over
 // ([PriorBox.ContinuesIn]).
 //
 // EVERY OTHER PRIOR BOX IS RECLAIMED HERE, THROUGH ITS OWN CELL, before the
@@ -681,7 +681,7 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 	}
 	if prior.SandboxID != "" {
 		if prior.ContinuesIn(req.Spec) {
-			box, runner, err := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.CodingAgent)
+			box, runner, err := m.Reconnect(ctx, req.Spec.Placement, prior.SandboxID, req.Spec.Harness)
 			if err == nil {
 				return box, runner, true, nil
 			}
@@ -750,8 +750,8 @@ func (c *Coordinator) reclaimPrior(ctx context.Context, m *Manager, req LaunchRe
 	}
 	log.InfoContext(ctx, "sandbox_prior_reclaimed",
 		"turn_id", req.Turn.TurnID, "sandbox_id", prior.SandboxID,
-		"placement", prior.Placement, "coding_agent", prior.CodingAgent,
-		"next_placement", string(req.Spec.Placement), "next_coding_agent", req.Spec.CodingAgent)
+		"placement", prior.Placement, "harness", prior.Harness,
+		"next_placement", string(req.Spec.Placement), "next_harness", req.Spec.Harness)
 }
 
 // abandon closes out a launch that could not finish: the box is reclaimed, then
@@ -845,7 +845,7 @@ func summarise(brief string) string {
 	return strings.TrimSpace(line)
 }
 
-// buildSystem assembles the run's standing instructions: what its CLI adds to
+// buildSystem assembles the run's standing instructions: what its harness adds to
 // its own system prompt ([RunRequest.System]).
 //
 // THREE PARTS, each present only where it says something: the run's own
@@ -877,17 +877,17 @@ func buildSystem(req LaunchRequest) string {
 }
 
 // agentRunNote opens a run's own instructions — the seat's executor prompt —
-// where they follow the coding CLI's system prompt.
+// where they follow the harness's system prompt.
 //
 // The vendor's prompt says what the model is, and says it first: Claude Code
-// opens with "You are Claude Code, Anthropic's official CLI for Claude", and
+// opens with "You are Claude Code, Anthropic's official harness for Claude", and
 // no flag removes it. A seat prompt that only implies who it is loses to that,
 // so this says outright which of the two prompts is the role. The engine's own
-// runs on this host open with the same note (internal/providers/llm/cliagent
+// runs on this host open with the same note (internal/providers/llm/harness
 // harnessNote), less the sentence it adds on a call that offers tools — act
-// through the `crewlet` server's tools, never the CLI's own: here the run's
+// through the `crewlet` server's tools, never the harness's own: here the run's
 // shell and editor are what the box is for, and the seat's tools are called
-// the way its CLI calls any tool. Constant, so it stays part of the prefix a
+// the way its harness calls any tool. Constant, so it stays part of the prefix a
 // vendor caches.
 const agentRunNote = "You are running inside a command-line coding tool as one seat of a " +
 	"Crewlet company, and Crewlet — not a person at a terminal — reads what you " +
@@ -903,7 +903,7 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 // against a token that expired while the run was parked.
 //
 // THE OPERATOR'S OWN VALUES WIN. role.sandbox.env is where an operator
-// declares what a box gets, and a deployment that points its coding agents at
+// declares what a box gets, and a deployment that points its harnesses at
 // its own collector directly has said so deliberately — silently overriding
 // it would be the engine choosing where somebody else's telemetry goes.
 //

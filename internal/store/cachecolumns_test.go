@@ -223,9 +223,9 @@ func TestACollectedLaunchIsCountedAsTheExecutorsSpend(t *testing.T) {
 	payload, err := json.Marshal(types.ExecutorCollected{
 		Agent: "a-1", RoleName: "Lead", TurnID: "run-1", WorkKey: "wk-1",
 		Iteration: 2, LaunchID: "job-1",
-		CodingAgent: "claude-code", Model: "claude-sonnet-5", ProviderKey: "plan",
+		Harness: "claude-code", Model: "claude-sonnet-5", ProviderKey: "plan",
 		InputTokens: 9000, OutputTokens: 700, TotalTokens: 9700,
-		CacheReadTokens: 6000, CacheWriteTokens: 1500, CostUSD: 0.42, CLITurns: 31,
+		CacheReadTokens: 6000, CacheWriteTokens: 1500, CostUSD: 0.42, HarnessTurns: 31,
 		ActivityTranscript: "[tool] bash: go test ./...",
 	})
 	if err != nil {
@@ -258,7 +258,7 @@ func TestACollectedLaunchIsCountedAsTheExecutorsSpend(t *testing.T) {
 		if execute.TotalTokens != 9700 || execute.CacheReadTokens != 6000 ||
 			execute.CostUSD != 0.42 || execute.Calls != 31 {
 			t.Errorf("%s: the executor's row holds %+v, want the launch's 9700 tokens, 6000 cached, "+
-				"$0.42 over its CLI's 31 turns", name, execute.Bucket)
+				"$0.42 over its harness's 31 turns", name, execute.Bucket)
 		}
 		if len(roll.ByModel) != 1 || roll.ByModel[0].Model != "claude-sonnet-5" {
 			t.Errorf("%s: models = %+v, want the launch's own", name, roll.ByModel)

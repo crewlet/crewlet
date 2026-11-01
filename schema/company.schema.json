@@ -1477,7 +1477,7 @@
           ]
         },
         "network": {
-          "description": "Container network; setting it to none also cuts off the coding agent's LLM.",
+          "description": "Container network; setting it to none also cuts off the harness's LLM.",
           "type": [
             "string",
             "number",
@@ -3139,7 +3139,7 @@
       "additionalProperties": false,
       "properties": {
         "brief": {
-          "description": "What this step made true about the box, told to the coding agent.",
+          "description": "What this step made true about the box, told to the harness.",
           "type": [
             "string",
             "number",

@@ -146,7 +146,7 @@ func BuildPhaseUserMessage(m UserMessage) Prompt {
 //
 // RUNTIME-NEUTRAL AND FACTUAL, because the same text is read in every place a
 // note lands: as a user message at the opening of a run of the engine's loop,
-// in an executor's brief, and inside its run where its CLI places what a hook
+// in an executor's brief, and inside its run where its harness places what a hook
 // hands it — after tool results, or as it is about to finish
 // (internal/agent/steer). So it says nothing about WHERE it arrived, which would
 // be false in all but one of them, and states only what holds everywhere — and

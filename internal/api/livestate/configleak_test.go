@@ -16,20 +16,20 @@ const entryKey = "plan-secretkey"
 const rawFailure = "llm chain exhausted after 1 providers (" + entryKey + "): usage limit"
 
 // leakyState is a seat whose live state has met every field that can carry the
-// company's configuration: a fallback off the entry, a CLI run it served, a
+// company's configuration: a fallback off the entry, a harness run it served, a
 // phase that failed naming it, the chain's exhaustion, and an executor
 // launched on it.
 func leakyState() *livestate.LiveState {
 	s := livestate.New()
 	call := map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
 	s.Apply(env("executor_launched", map[string]any{"agent_id": "Lead", "turn_id": "tn-0",
-		"role": "Lead", "agent_handle": "lead", "coding_agent": "claude-code",
+		"role": "Lead", "agent_handle": "lead", "harness": "claude-code",
 		"provider_key": entryKey, "model": "opus", "sandbox_id": "sb-1", "task": "fix it",
 	}, at("2026-10-27T23:15:00Z"), id("sr")))
 	s.Apply(env("agent_phase_started", call, at("2026-10-27T23:16:00Z"), id("ps")))
 	s.Apply(env("provider_fallback", with(call, map[string]any{
 		"from_provider_key": entryKey, "to_provider_key": "metered-" + entryKey,
-		"error_kind": "rate_limit", "from_cli": "claude-code", "from_subscription": true,
+		"error_kind": "rate_limit", "from_harness": "claude-code", "from_subscription": true,
 	}), at("2026-10-27T23:16:01Z"), id("fb")))
 	s.Apply(env("agent_phase_completed", with(call, map[string]any{
 		"failed": true, "error_kind": "rate_limit", "error": rawFailure, "provider_key": entryKey,
@@ -58,7 +58,7 @@ func wireOf(t *testing.T, v any) string {
 // dashboard words for a person, and so does the model an executor runs
 // under; an admin is sent the text and the run's entry.
 //
-// Mutation: leave the failure's text, a CLI run's entry or an executor's in
+// Mutation: leave the failure's text, a harness run's entry or an executor's in
 // any one of the masks, or broadcast it as status, and the lead's copy names
 // the entry.
 func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {

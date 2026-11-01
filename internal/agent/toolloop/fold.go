@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// The fold: what a CLI run did, turned into the loop's own record — the
+// The fold: what a harness run did, turned into the loop's own record — the
 // conversation, the executions, the narration and the rounds — in the shape
 // the loop kept when it drove each round itself.
 //
@@ -17,7 +17,7 @@ import (
 // dashboard the rounds with their calls and their prose beside them. A run is
 // folded as the rounds it was made of, each model request one round with the
 // calls it asked for and their results after it, so a reader cannot tell a
-// phase the CLI drove from one the loop drove, except by the [Invocation]
+// phase the harness drove from one the loop drove, except by the [Invocation]
 // entries that say so.
 
 // folded is one fold's yield.
@@ -36,7 +36,7 @@ type folded struct {
 	lastText string
 }
 
-// group is one round of a fold: the response the CLI's record showed, where it
+// group is one round of a fold: the response the harness's record showed, where it
 // showed one, and the calls placed on it.
 type group struct {
 	round int
@@ -60,7 +60,7 @@ func (d *dispatcher) fold(comp *llm.Completion, model string) folded {
 	}
 	if r := d.currentRunLocked(); comp != nil && r != nil && r.synthetic == 0 &&
 		len(d.turns) == d.foldedTurns {
-		// A RUN WHOSE RECORD SHOWED NO REQUEST — a CLI that records none, or
+		// A RUN WHOSE RECORD SHOWED NO REQUEST — a harness that records none, or
 		// one that answered without calling anything — is one round, whose
 		// prose is its answer: the round its calls were placed on, or a new
 		// one.
@@ -144,7 +144,7 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 		call   llm.ToolCall
 		record *callRec
 		// offered is false for a call naming a tool the phase did not
-		// offer, which the CLI refused itself.
+		// offer, which the harness refused itself.
 		offered bool
 	}
 	var entries []entry
@@ -202,7 +202,7 @@ func (d *dispatcher) foldGroup(g *group, comp *llm.Completion, model string, liv
 		switch {
 		case rec == nil:
 			// A call the model asked for that never reached the phase:
-			// one the CLI refused itself, or the run ended before it.
+			// one the harness refused itself, or the run ended before it.
 			why := notRun(e.call.Name)
 			if !e.offered {
 				why = notOffered(e.call.Name)
@@ -301,7 +301,7 @@ func (d *dispatcher) reopen() {
 	d.invRounds = d.rounds
 }
 
-// finish closes the run: its CLI has exited, and an end it decided and was
+// finish closes the run: its harness has exited, and an end it decided and was
 // still waiting to take — the rest of the deciding response never came — is
 // taken now.
 func (d *dispatcher) finish() {
@@ -312,7 +312,7 @@ func (d *dispatcher) finish() {
 }
 
 // inFlight is the round a live frame names and when it started: while a run
-// is out, the request its CLI is making — the round after the last one read,
+// is out, the request its harness is making — the round after the last one read,
 // once every call of that one has been answered — or the round whose calls are
 // running or still to come; between runs, the last round read.
 func (d *dispatcher) inFlight(now time.Time) (int, time.Time) {

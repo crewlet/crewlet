@@ -165,8 +165,8 @@ func (r artifactRequesters) Requester(ctx context.Context, handle string) (iam.P
 // publish reading its build.
 //
 // THE RUN READS ITS OWN BOX, WHILE IT WORKS. A seat's executor is its coding
-// CLI's own run in that box, and every call that names a box source reaches
-// here from its CLI over the tool bridge — a worker it delegates to holds no
+// harness's own run in that box, and every call that names a box source reaches
+// here from its harness over the tool bridge — a worker it delegates to holds no
 // artifact write — while the run's record reads running: a collected run's
 // resumed segment calls no artifact tool (its reviewer holds one submission
 // tool, and the delivery check none). So a running record is the one a box is
@@ -209,7 +209,7 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 	// timer to its own, under the waiter that keeps it — where a reader
 	// changes nothing. A box paused under a running record is a collection
 	// that has not moved the record on yet: its run is over.
-	box, _, err := manager.Attach(ctx, sandbox.Placement(row.Placement), row.SandboxID, row.CodingAgent)
+	box, _, err := manager.Attach(ctx, sandbox.Placement(row.Placement), row.SandboxID, row.Harness)
 	switch {
 	case errors.Is(err, sandbox.ErrBoxGone), errors.Is(err, sandbox.ErrBoxPaused):
 		return nil, fmt.Errorf("%w: %w", builtin.ErrNoBox, err)

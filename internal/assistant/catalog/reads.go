@@ -556,7 +556,7 @@ func readTools() []Tool {
 			Description: "Seats' executors in flight and recent, including any parked on a question.",
 			schema:      object(nil, map[string]*schema{}),
 			Routes:      []string{"GET /executors"}, Fence: true,
-			// AN EXECUTOR'S QUESTION IS THE CODING CLI'S, a third party's model
+			// AN EXECUTOR'S QUESTION IS THE HARNESS'S, a third party's model
 			// working from a brief that may be an outside chat message or a
 			// webhook's payload, read by the one rule for an executor's
 			// words (provenance.Executor) wherever it is read.
@@ -572,7 +572,7 @@ func readTools() []Tool {
 					// (internal/workkey), which no person reads as a task.
 					col("status", "Status", "status", tLabel),
 					col("task", "Task", "work_item.key", tText),
-					col("coding_agent", "Agent", "coding_agent", tText),
+					col("harness", "Harness", "harness", tText),
 					col("started", "Started", "started_at", tDatetime),
 					col("updated", "Updated", "updated_at", tDatetime),
 					prose("question", "Question", "question"), col("turn", "Turn", "turn_id", tText)},

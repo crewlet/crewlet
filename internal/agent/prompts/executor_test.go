@@ -52,7 +52,7 @@ func TestExecutorPromptCarriesTheToolsToDiscoverAndIdentity(t *testing.T) {
 	}).Text
 	contains(t, p, "## Your turn", "\n## Tools to discover\n- MCP server `github`",
 		"Engineer", "Acme")
-	// NOT "Available tools": the tools the seat holds reach its CLI as its
+	// NOT "Available tools": the tools the seat holds reach its harness as its
 	// MCP server's, and a section headed as though it listed them tells the
 	// model it may call what it first has to discover.
 	excludes(t, p, "## Available tools")

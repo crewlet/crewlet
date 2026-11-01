@@ -184,7 +184,7 @@ func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingR
 		// the kick-off arrived in. Different here on purpose — equal ones
 		// would let a path that read the wrong field pass every case
 		// below.
-		CodingAgent: "claude-code", PartitionKey: "chat:D1:root-1",
+		Harness: "claude-code", PartitionKey: "chat:D1:root-1",
 		ConversationKey: "chat:D1",
 		TraceID:         "tr-1", SpanID: "sp-1", CreatedAt: r.now,
 		// The item the launching turn was on, so every case runs over a
@@ -201,7 +201,7 @@ func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingR
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1",
-		CodingAgent: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
+		Harness: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, lease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
 	if run.LaunchID == "" || payload.LaunchID != run.LaunchID {
 		t.Fatalf("launch = %q, want the job the tick saw finish, %q", payload.LaunchID, run.LaunchID)
 	}
-	if payload.AgentHandle != "swe" || payload.CodingAgent != "claude-code" {
+	if payload.AgentHandle != "swe" || payload.Harness != "claude-code" {
 		t.Fatalf("payload = %+v", payload)
 	}
 }
@@ -551,7 +551,7 @@ func TestARunNamingAnUnknownRunnerIsFreedRatherThanPolledForever(t *testing.T) {
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
-		SandboxID: rig.get("t1").SandboxID, CodingAgent: "retired-agent",
+		SandboxID: rig.get("t1").SandboxID, Harness: "retired-agent",
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -829,7 +829,7 @@ func TestAZeroPauseTtlIsNotADeadlineForTheReaper(t *testing.T) {
 	rig := newWaiterRig(t)
 	rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
-		SandboxID: rig.get("t1").SandboxID, CodingAgent: "claude-code", PauseTTLSec: 0,
+		SandboxID: rig.get("t1").SandboxID, Harness: "claude-code", PauseTTLSec: 0,
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -1189,12 +1189,12 @@ func (r *waiterRig) seedRunning(turnID, sandboxID string) {
 	ctx := r.t.Context()
 	if _, err := r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: r.now,
+		Harness: "claude-code", CreatedAt: r.now,
 	}, Fence{}); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
-		SandboxID: sandboxID, CommandID: "cmd-1", CodingAgent: "claude-code",
+		SandboxID: sandboxID, CommandID: "cmd-1", Harness: "claude-code",
 	}, Fence{}); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}

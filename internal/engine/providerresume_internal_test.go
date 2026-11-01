@@ -29,8 +29,8 @@ import (
 // the turn was reverted, and the control topic NAKed the completion, which the
 // broker redelivered into the same limit 25 times in about ten minutes.
 
-// spentEntry is a model whose CLI already reported its usage limit, as
-// cliagent's entry knows it ([chain.Unready]), until the case lifts it. calls
+// spentEntry is a model whose harness already reported its usage limit, as
+// harness's entry knows it ([chain.Unready]), until the case lifts it. calls
 // counts what reached it, which a limit its entry knows should keep out.
 type spentEntry struct {
 	limited atomic.Bool
@@ -73,7 +73,7 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	r := newDrainRig(t)
 	e := r.start(t)
 	e.providerParks.after = (&fakeAlarms{}).after
-	spent := cliProvider(t, chainMember{key: "default", agent: "claude-code", model: "opus", spent: true})
+	spent := harnessProvider(t, chainMember{key: "default", agent: "claude-code", model: "opus", spent: true})
 	retry, _, limited := llm.LimitedUntil(spent.SittingOut())
 	if !limited {
 		t.Fatalf("the premise: the spent entry sits out nothing (%v)", spent.SittingOut())
@@ -239,7 +239,7 @@ func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	run := r.run(t, e, "t1")
 	payload := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: run.AgentHandle,
 		RoleName: run.Role, TurnID: run.TurnID, WorkKey: run.WorkKey, LaunchID: run.LaunchID,
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+		SandboxID: run.SandboxID, Harness: run.Harness}
 	err = e.sandbox.Load().coordinator.OnCompleted(t.Context(), payload,
 		events.New(payload, events.TraceContext{}))
 	var refused *sandbox.TurnRefused
@@ -404,7 +404,7 @@ func (lr *limitedResume) announce(t *testing.T) error {
 	run := lr.r.run(t, lr.e, "t1")
 	payload := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: run.AgentHandle,
 		RoleName: run.Role, TurnID: run.TurnID, WorkKey: run.WorkKey, LaunchID: run.LaunchID,
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+		SandboxID: run.SandboxID, Harness: run.Harness}
 	return lr.e.sandbox.Load().coordinator.OnCompleted(t.Context(), payload,
 		events.New(payload, events.TraceContext{}))
 }
@@ -568,7 +568,7 @@ func (m *countedLimit) Complete(ctx context.Context, req llm.Request) (*llm.Comp
 // AGAIN AT ONCE. The seat's resume met the limit mid-turn and parked it, and its
 // node holds the job. A published company releases every park decided under the
 // models it replaces and re-fires the job; its entry, left unchanged by the
-// apply, keeps the sit-out its sign-in is serving (cliagent.Plans), so the job
+// apply, keeps the sit-out its sign-in is serving (harness.Plans), so the job
 // is collected again and its resume refused on that limit before its turn runs,
 // and the seat is parked on it once more, its probe armed: no review, no model
 // call, and no job collected and reviewed into the vendor's window once the

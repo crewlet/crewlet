@@ -54,7 +54,7 @@ type RunAskDeps struct {
 //
 // # Why a tool, and why only on the run's surface
 //
-// An executor cannot wait on a person inside its CLI: a headless run goes on
+// An executor cannot wait on a person inside its harness: a headless run goes on
 // until it ends. So a question the work cannot go on without PARKS the
 // executor: the ask is recorded on its row, the launch ends, a person
 // answers, and the answer resumes the same executor. Asking through a tool
@@ -292,8 +292,8 @@ func (t *AskAndWait) readAsk(ctx context.Context, args map[string]any) (sandbox.
 // the run on with that answer rather than reporting it, and the work the run
 // goes on to do is what its round submits. A `submit_work` made after the
 // question is a run that did not stop when it was told to, and accepted, it
-// read as success to the CLI that made it, which then ended believing its work
-// was delivered while the turn waited on a person. Refused, the CLI is told
+// read as success to the harness that made it, which then ended believing its work
+// was delivered while the turn waited on a person. Refused, the harness is told
 // what is true: the run is parked, and its next prompt is the answer.
 //
 // The collection never replays such a call either (the replay keeps only the

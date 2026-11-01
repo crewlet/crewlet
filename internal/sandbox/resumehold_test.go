@@ -612,11 +612,11 @@ func TestALimitHeldForASeatLetGoMeanwhileIsForgotten(t *testing.T) {
 
 // A JOB COLLECTED AGAIN IS READ AS IT WAS WHEN IT WAS FIRST COLLECTED. Its
 // ending is handed to the resume with the instant it was first read back
-// ([RunEnding.At]), because a CLI names a reset as a time of day: a resume held
+// ([RunEnding.At]), because a harness names a reset as a time of day: a resume held
 // for hours and collected again, its ending read against that later instant,
 // took a 4:30pm already past for the next day's, and sat the entry out for
 // nothing. The first collection's instant rides the job's record through the
-// hold ([LaunchRecord.CollectedAt]), and so does the CLI's own terminal event.
+// hold ([LaunchRecord.CollectedAt]), and so does the harness's own terminal event.
 //
 // Mutation: date the ending by the collection that reads it, and the second
 // resume's ending carries the later instant.
@@ -652,6 +652,6 @@ func TestARecollectedJobsEndingIsDatedByItsFirstCollection(t *testing.T) {
 	}
 	if ended := calls[0].Ended; !ended.At.Equal(first) || ended.Event != event {
 		t.Fatalf("the second collection hands the resume an ending read at %v carrying %q, "+
-			"want the first collection's %v and the CLI's own event", ended.At, ended.Event, first)
+			"want the first collection's %v and the harness's own event", ended.At, ended.Event, first)
 	}
 }

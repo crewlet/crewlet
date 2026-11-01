@@ -88,7 +88,7 @@ type Band string
 // The four bands, in the order a chart stacks them.
 const (
 	// BandExecute is the seat's own turn doing its work: the executor, which
-	// is its coding CLI's own run in a box. Both records of that run are
+	// is its harness's own run in a box. Both records of that run are
 	// filed under `execute` — the engine's record of the phase, which states
 	// the run as one round and carries no tokens, and each launch's own
 	// `executor_collected` record of what it did and spent, which carries no

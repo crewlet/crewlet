@@ -260,7 +260,7 @@ type Spend struct {
 
 	// Rounds is the provider rounds the turn's completed phases ran, as
 	// each phase record states them — one for each executor run collected,
-	// whose turns are its CLI's own.
+	// whose turns are its harness's own.
 	Rounds int
 
 	// SentBack is how many reviews returned the work for another pass: the
@@ -563,9 +563,9 @@ func (e emitter) workItem() *types.WorkItem {
 // and neither caller of started holds that lock.
 //
 // THE ARRAY IS COUNTED FOR EVERY PHASE, although none puts it in the prompt
-// text: a phase on this host has its CLI list the definitions from its
+// text: a phase on this host has its harness list the definitions from its
 // session, and the executor's run from the MCP bridge in its box, and the
-// CLI's own model is billed for every one of them either way, so leaving them
+// harness's own model is billed for every one of them either way, so leaving them
 // out would report the most tool-heavy phase as the slimmest.
 //
 // The token figure is approximate by construction and says so in its field
@@ -671,7 +671,7 @@ func measurePrompt(system, user string, defs []llm.ToolDef) (promptMeasure, erro
 // exists for.
 //
 // WHICH MAKES IT A FLOOR, stated on [types.PromptSize.ToolBytes] where a
-// reader of the row will find it: the model is sent MORE than this. Its CLI
+// reader of the row will find it: the model is sent MORE than this. Its harness
 // reads the definitions over MCP, annotations and all, and hands them to its
 // model in its own vendor's wrapping.
 func toolDefBytes(defs []llm.ToolDef) (int, error) {
@@ -741,7 +741,7 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		}
 		var failure *llm.Error
 		if errors.As(f.Err, &failure) {
-			fromCLI, fromSubscription = failure.Agent, failure.Subscription
+			fromCLI, fromSubscription = failure.Harness, failure.Subscription
 		}
 	}
 	e.publish(ctx, events.New(types.ProviderFallback{
@@ -759,7 +759,7 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		ErrorKind:       f.Kind.String(),
 		ResetsAt:        resets,
 
-		FromCLI:          fromCLI,
+		FromHarness:      fromCLI,
 		FromSubscription: fromSubscription,
 	}, e.traceFor(ctx)))
 }
@@ -1142,11 +1142,11 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		Failed:            rec.Failed,
 	}
 	// THE RUN AN EXECUTOR WAS, named on the record that collected it: the
-	// CLI, the box, what it delivered and which launch it was. Nothing else
+	// harness, the box, what it delivered and which launch it was. Nothing else
 	// says where the phase ran — the phase does (see
-	// [types.AgentPhaseCompleted.CodingAgent]).
+	// [types.AgentPhaseCompleted.Harness]).
 	if rec.Run.Sandboxed() {
-		ev.CodingAgent = rec.Run.CodingAgent
+		ev.Harness = rec.Run.Harness
 		ev.SandboxID = rec.Run.SandboxID
 		ev.DeliveredRefs = rec.Run.DeliveredRefs
 		ev.DeliveredRefsElided = rec.Run.RefsElided
@@ -1189,7 +1189,7 @@ const StoppedKind = "stopped"
 // specific-looking constant.
 //
 // A CODING SANDBOX'S CLASS is one of them, as `sandbox_<class>`
-// ([sandbox.WhyOf]): every executor is its coding CLI's run in a box, and a
+// ([sandbox.WhyOf]): every executor is its harness's run in a box, and a
 // box that could not be started — its provider not answering, refusing the
 // key, a setup somebody has to fix — failed the phase as `error`, while the
 // backend that met it had said what it was. Read before a deadline its chain
@@ -1276,7 +1276,7 @@ func toolExecutions(execs []toolloop.Execution) []types.ToolExecution {
 			row["duration_ms"] = int(ex.Duration / time.Millisecond)
 		}
 		// The call's own id, which tells two calls of one response apart
-		// — a CLI may run them side by side — and is what a live row's
+		// — a harness may run them side by side — and is what a live row's
 		// running call is matched to once it settles.
 		if ex.CallID != "" {
 			row["call_id"] = ex.CallID
@@ -1374,7 +1374,7 @@ func runningCalls(calls []toolloop.RunningCall) []types.RunningCall {
 	return out
 }
 
-// phaseInvocations renders a phase's CLI runs in their wire shape.
+// phaseInvocations renders a phase's harness runs in their wire shape.
 func phaseInvocations(runs []toolloop.Invocation) []types.PhaseInvocation {
 	if len(runs) == 0 {
 		return nil

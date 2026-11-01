@@ -83,7 +83,7 @@ func containerUserArgs(ctx context.Context, cli containerCLI) []string {
 // and there is no format string that reads both — so the query is chosen by
 // which binary [ResolveContainerRuntime] picked, using a plain single-value
 // template rather than a whole-document dump, which is what every version of
-// both CLIs supports.
+// both harnesses supports.
 //
 // Anything else — a daemon that is down, an answer this build does not
 // recognise — is not an answer, and the caller's default covers it.

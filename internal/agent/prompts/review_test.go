@@ -83,7 +83,7 @@ func TestTheReviewRulesAboutAToolFollowTheSeatsSurface(t *testing.T) {
 }
 
 // THE RUN'S OWN WORK IS IN NO LOG, and every review is told so, because every
-// executor is a coding CLI's own run: its edits, commands, tests and commits
+// executor is a harness's own run: its edits, commands, tests and commits
 // happen in its box, and `## What the agent did` holds only the calls it made
 // to the seat's tools. A reviewer that read the log as everything the agent
 // did called a run that pushed its fix a fabrication and sent a delivered turn
@@ -95,7 +95,7 @@ func TestTheReviewRulesAboutAToolFollowTheSeatsSurface(t *testing.T) {
 func TestEveryReviewIsToldTheRunsLocalWorkIsInNoLog(t *testing.T) {
 	t.Parallel()
 	plain := BuildReview(engineer(), ReviewInput{}).Text
-	contains(t, plain, "ran as a coding CLI with its own shell",
+	contains(t, plain, "ran as a harness with its own shell",
 		"is not in `## What the agent did`", "is not fabrication",
 		"`## What the agent delivered`")
 }

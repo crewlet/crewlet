@@ -2733,7 +2733,7 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 	}
 	run := sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", AgentID: "a-1", Role: "SWE",
-		CodingAgent: "claude-code", ConversationKey: "chat:C1", PartitionKey: "chat:C1",
+		Harness: "claude-code", ConversationKey: "chat:C1", PartitionKey: "chat:C1",
 	}
 	if _, err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

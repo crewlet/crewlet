@@ -19,7 +19,7 @@ package livestate
 //   - a phase that completes through the limited entry, or, for a parked seat,
 //     through any entry: a call answered, so the limit is over as far as this
 //     seat knows — and a launch of the executor's run collected the same way,
-//     which is its CLI's calls answered through the entry the launch picked.
+//     which is its harness's calls answered through the entry the launch picked.
 //     As is a phase answered by an entry other than the fallback it was
 //     running on, which is the seat's chain having changed;
 //   - `seat_provider_released`, a park lifted (its probe answered, its chain
@@ -29,7 +29,7 @@ package livestate
 // # What it says, and what it does not
 //
 // Livestate reaches EVERY reader of the dashboard, so the condition carries
-// what a person is told and nothing else: what the limit is OF (the CLI's
+// what a person is told and nothing else: what the limit is OF (the harness's
 // product and whether it signs in on a plan), when the vendor said it lifts,
 // since when it holds, and whether the seat waits for it or runs on a fallback
 // meanwhile. Which `providers.llm` entries are limited and which one carries
@@ -49,10 +49,10 @@ type ProviderLimit struct {
 	// Since is when the condition began, RFC 3339 in UTC: the instant of the
 	// event that first reported it, which a renewal keeps.
 	Since string `json:"since"`
-	// CLI is the CLI the limited entry drives (`claude-code`), and
+	// Harness is the harness the limited entry drives (`claude-code`), and
 	// Subscription whether it signs in on a plan: what the limit is called
-	// where a person reads it. CLI is empty where the report did not say.
-	CLI          string `json:"cli"`
+	// where a person reads it. Harness is empty where the report did not say.
+	Harness      string `json:"harness"`
 	Subscription bool   `json:"subscription"`
 
 	// entry is the providers.llm key of the limited entry (the chain's head
@@ -81,7 +81,7 @@ func sameLimit(a, b *ProviderLimit) bool {
 		return a == b
 	}
 	return a.Parked == b.Parked && samePtr(a.ResetsAt, b.ResetsAt) && a.Since == b.Since &&
-		a.CLI == b.CLI && a.Subscription == b.Subscription &&
+		a.Harness == b.Harness && a.Subscription == b.Subscription &&
 		a.entry == b.entry && a.runningOn == b.runningOn
 }
 
@@ -127,7 +127,7 @@ func (s *LiveState) nextLimit(was *ProviderLimit, env Envelope, payload map[stri
 		}
 		return &ProviderLimit{
 			Parked: true, ResetsAt: optional(str(payload, "resets_at")), Since: since,
-			CLI: str(payload, "cli"), Subscription: flag(payload, "subscription"), entry: head,
+			Harness: str(payload, "harness"), Subscription: flag(payload, "subscription"), entry: head,
 		}, true
 
 	case "provider_fallback":
@@ -146,7 +146,7 @@ func (s *LiveState) nextLimit(was *ProviderLimit, env Envelope, payload map[stri
 		}
 		return &ProviderLimit{
 			ResetsAt: optional(str(payload, "resets_at")), Since: since,
-			CLI: str(payload, "from_cli"), Subscription: flag(payload, "from_subscription"),
+			Harness: str(payload, "from_harness"), Subscription: flag(payload, "from_subscription"),
 			entry: from, runningOn: to,
 		}, true
 

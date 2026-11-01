@@ -20,7 +20,7 @@ import (
 // refuses a tool's Call or CallForTurn invoked anywhere else (a tool
 // delegating to its own variant, and a wrapper forwarding to the tool it
 // wraps, excepted). A seat's executor run is a phase's surface too: every call
-// its CLI makes over the tool bridge (internal/api/mcpbridge) is admitted to
+// its harness makes over the tool bridge (internal/api/mcpbridge) is admitted to
 // the run's surface and comes here, with no check of the bridge's own.
 
 // Invocation is one call of a tool, as its caller makes it.

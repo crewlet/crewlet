@@ -417,7 +417,7 @@ func TestACutReadTellsTheModelOnlyWhatTheEngineKnows(t *testing.T) {
 }
 
 // AN ANSWER IS FENCED AT THE TRUST ITS TEXT EARNS: an executor's question
-// (a third-party coding CLI's, from a brief that may come from outside the
+// (a third-party harness's, from a brief that may come from outside the
 // company) and a connected knowledge base's pages are external, and the same
 // tools answering only the company's own text are colleague. Mutation: label
 // every read colleague again, or ignore TrustOf, and the external rows fail.

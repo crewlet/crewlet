@@ -12,7 +12,7 @@ import "strings"
 // has a space in it), or a revision rather than a branch (`main~1`, `@{u}`),
 // and passed on it sends the next run looking for something that does not
 // exist. Spelled out here rather than asked of a git binary, because the
-// engine host need not have one and the box's own is the coding agent's.
+// engine host need not have one and the box's own is the harness's.
 //
 // THE RULES, each git's own: no control character, space, `~`, `^`, `:`,
 // `?`, `*`, `[` or `\` anywhere; no `..`, no `@{` and no `//`; no `/` at

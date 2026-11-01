@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // THE MODELS SCREEN READS AN ENTRY AS THE ENGINE DOES: the auth modes its
@@ -84,7 +84,7 @@ func TestEveryBuiltInHarnessHasAProductName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := slices.DeleteFunc(cliprofile.BuiltinNames(), func(name string) bool {
+	want := slices.DeleteFunc(harnessprofile.BuiltinNames(), func(name string) bool {
 		return name == string(config.HarnessCustom)
 	})
 	if !slices.Equal(slices.Sorted(slices.Values(got)), want) {
