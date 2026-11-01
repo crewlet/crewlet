@@ -124,8 +124,10 @@ func TestOverBudgetTextIsRewrittenFromTheWhole(t *testing.T) {
 	}
 }
 
-// THE LIMIT REACHES THE MODEL, as a number: the prompt is the one channel a
-// harness reads, so it is the only place a budget can be stated.
+// THE LIMIT REACHES THE MODEL, as numbers it can keep to: the prompt is the one
+// channel a model reads, so it is the only place a length can be stated, and
+// it states one BELOW the budget (sixty percent of it, in characters and in
+// words), because a model asked for a length answers longer than it.
 func TestTheBudgetIsStatedToTheModel(t *testing.T) {
 	t.Parallel()
 	m := &model{answer: short}
@@ -138,8 +140,8 @@ func TestTheBudgetIsStatedToTheModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	system := m.asked[0].Messages[0].Content
-	if !strings.Contains(system, "at most 300 characters") {
-		t.Fatalf("the budget is not in the instructions:\n%s", system)
+	if !strings.Contains(system, "at most 30 words and at most 180 characters") {
+		t.Fatalf("the length asked for is not in the instructions:\n%s", system)
 	}
 	if !strings.Contains(system, "how do I rotate the signing key?") {
 		t.Fatalf("a source's question is not in the instructions:\n%s", system)
@@ -156,8 +158,10 @@ func TestTheBudgetIsStatedToTheModel(t *testing.T) {
 	}
 }
 
-// A MISS IS RETRIED ONCE, FROM THE ANSWER: the second call is shown the first
-// rewrite, not the original, and told by how much it missed.
+// A MISS IS RETRIED FROM THE ANSWER: the second call is shown the first
+// rewrite, not the original, told how long it was, and asked for less by the
+// ratio it overshot: asked for 60 characters it answered 150, so it is asked
+// next for 60 x 60 / 150 = 24.
 func TestAnOverlongRewriteIsAskedAgainFromItself(t *testing.T) {
 	t.Parallel()
 	first := strings.Repeat("y", 150)
@@ -180,8 +184,10 @@ func TestAnOverlongRewriteIsAskedAgainFromItself(t *testing.T) {
 	if m.shown[1] != first {
 		t.Fatal("the retry must start from the over-long rewrite")
 	}
-	if !strings.Contains(m.asked[1].Messages[1].Content, "150 characters and the limit is 100") {
-		t.Fatalf("the retry does not say by how much it missed:\n%s", m.asked[1].Messages[1].Content)
+	retry := m.asked[1].Messages[1].Content
+	if !strings.Contains(retry, "was 1 word and 150 characters") ||
+		!strings.Contains(retry, "at most 4 words and at most 24 characters") {
+		t.Fatalf("the retry does not say how long it was and what it is asked for now:\n%s", retry)
 	}
 }
 
