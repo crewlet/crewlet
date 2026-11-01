@@ -338,3 +338,19 @@ func TestARunsRequestsInFlightAreTwiceItsRepositories(t *testing.T) {
 			sandbox.MaxRunRepos)
 	}
 }
+
+// A RUN'S RE-SYNC BURST IS TWICE ITS REPOSITORIES: a run given its most
+// repositories may meet each one's floor short twice on a node before its
+// seat's bucket there paces it. code.ResyncBurst is derived from
+// code.MaxRunRepos; this holds it to the bound a run's repositories are
+// granted under, which internal/code does not import.
+//
+// Mutation: code.ResyncBurst as MaxRunRepos — red.
+func TestARunsResyncBurstIsTwiceItsRepositories(t *testing.T) {
+	t.Parallel()
+	if code.ResyncBurst < 2*sandbox.MaxRunRepos {
+		t.Errorf("code.ResyncBurst = %d, want at least twice sandbox.MaxRunRepos (%d): a run given its "+
+			"most repositories would spend its seat's burst before meeting each floor twice",
+			code.ResyncBurst, sandbox.MaxRunRepos)
+	}
+}

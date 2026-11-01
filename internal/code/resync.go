@@ -53,17 +53,26 @@ import (
 // at once on one node, and its seat on that node, before the census's refill
 // paces them.
 //
-// SIXTEEN, twice MaxRunRepos' eight repositories: a coding run given its
-// eight repositories may meet each one's floor short twice — a fetch whose
-// wants a lagging cache lacks, and a request past the bound its admitted row
-// set — before any of it waits on the refill; and a turn's tools meet at most
-// one re-sync a call (the git node's one second look, the write's one
-// re-judgement), so sixteen is sixteen calls in a burst each naming what its
-// copy lacks, which no turn that reads what it was shown comes near. The
-// refill is the census's, statelog.LinearizableReadsPerSeatDay a day (125: one
-// re-sync every 11.5 minutes), BORROWED rather than copied, so a census
-// re-derived moves the bucket with it.
-const ResyncBurst = 16
+// TWICE MaxRunRepos, sixteen at its eight: a coding run given its most
+// repositories may meet each one's floor short twice — a fetch whose wants a
+// lagging cache lacks, and a request past the bound its admitted row set —
+// before any of it waits on the refill; and a turn's tools meet at most one
+// re-sync a call (the git node's one second look, the write's one
+// re-judgement), so the burst is as many calls each naming what its copy
+// lacks, which no turn that reads what it was shown comes near. DERIVED rather
+// than written as a figure, because the run bound is what sizes it: a burst
+// left behind a raised bound has a run given its most repositories spend its
+// seat's burst on the node part way through them, and every later re-sync is
+// answered at its stale floor, so a fetch a lagging cache cannot serve fails
+// at the box instead of re-syncing. MaxRunRepos is held to at least
+// sandbox.MaxRunRepos, the bound a run's repositories are granted under
+// (internal/engine), so raising that bound raises this burst with it, and
+// internal/code/host's TestARunsResyncBurstIsTwiceItsRepositories holds the
+// burst to it directly. The refill is the census's,
+// statelog.LinearizableReadsPerSeatDay a day (125: one re-sync every 11.5
+// minutes), BORROWED rather than copied, so a census re-derived moves the
+// bucket with it.
+const ResyncBurst = 2 * MaxRunRepos
 
 // resyncsPerSecond is the census's seat term as a bucket's rate.
 var resyncsPerSecond = float64(statelog.LinearizableReadsPerSeatDay) / (24 * time.Hour).Seconds()
