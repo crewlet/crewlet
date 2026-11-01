@@ -230,7 +230,7 @@ func TestASessionNobodyCanReadIsNoSession(t *testing.T) {
 }
 
 // AN ARCHIVE PAST ITS BOUND IS REFUSED WHOLE, never stored cut: a cut archive
-// is a session no CLI resumes.
+// is a session no harness resumes.
 //
 // Mutation: drop the limit from SessionStore.seal and the oversized archive is
 // stored.

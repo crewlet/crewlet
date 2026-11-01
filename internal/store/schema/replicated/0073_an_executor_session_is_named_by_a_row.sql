@@ -9,7 +9,7 @@
 --
 -- ## A row names an object; the bytes are in the object store
 --
--- One row per (seat handle, turn) whose executor captured its coding CLI's
+-- One row per (seat handle, turn) whose executor captured its harness's
 -- session, naming the sealed object in the fleet's object store that holds it
 -- (ADR-0026). `object` is the column internal/objstore/references declares,
 -- so the collector keeps every object a row names and deletes it a day after
@@ -42,8 +42,8 @@ CREATE TABLE executor_sessions (
     turn_id          TEXT    NOT NULL,
     conversation_key TEXT    NOT NULL DEFAULT '',
     work_key         TEXT    NOT NULL DEFAULT '',
-    cli              TEXT    NOT NULL DEFAULT '',
-    cli_version      TEXT    NOT NULL DEFAULT '',
+    harness          TEXT    NOT NULL DEFAULT '',
+    harness_version  TEXT    NOT NULL DEFAULT '',
     session_id       TEXT    NOT NULL DEFAULT '',
     object           TEXT,
     object_hash      TEXT    NOT NULL DEFAULT '',

@@ -215,7 +215,7 @@ internal/
 │                         #   a message sequenced on its room's subject
 ├── executordomain/       # Each seat's executor sessions, statelog's tenth
 │                         #   domain: a row per turn naming the sealed object
-│                         #   its coding CLI's session is kept in
+│                         #   its harness's session is kept in
 ├── eventfan/             # The fleet's turn-level history, read from every
 │                         #   data node at query time, with coverage on every
 │                         #   answer

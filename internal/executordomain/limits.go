@@ -15,12 +15,12 @@ import (
 // after the turn already ended.
 const (
 	// SessionMaxBytes bounds one captured session's ARCHIVE, before it is
-	// sealed: a coding CLI's transcript and its sidecars, packed.
+	// sealed: a harness's transcript and its sidecars, packed.
 	//
 	// THIRTY-TWO MEBIBYTES. A Claude Code or OpenCode session of a day's
 	// work compresses to one or two mebibytes, and the long ones that read
 	// whole files into their context reach the low tens; past thirty-two a
-	// transcript is a context the CLI could not resume within its own
+	// transcript is a context the harness could not resume within its own
 	// window anyway. The bound is also what one capture or restore costs a
 	// node while it streams (one chunk, [secrets.StreamChunkBytes]) and the
 	// object store at rest ([SealedMaxBytes]), and it is pinned against
@@ -43,12 +43,12 @@ const (
 	// bytes, and the bound refuses anything that is plainly not one.
 	TurnIDMaxBytes = 64
 
-	// CLIMaxBytes and CLIVersionMaxBytes bound the CLI's name and its
+	// HarnessMaxBytes and HarnessVersionMaxBytes bound the harness's name and its
 	// version as the box reported it.
-	CLIMaxBytes        = 32
-	CLIVersionMaxBytes = 64
+	HarnessMaxBytes        = 32
+	HarnessVersionMaxBytes = 64
 
-	// SessionIDMaxBytes bounds the CLI's own session id: Claude Code's is a
+	// SessionIDMaxBytes bounds the harness's own session id: Claude Code's is a
 	// UUID, OpenCode's a `ses_` prefix and twenty-six characters.
 	SessionIDMaxBytes = 128
 

@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// THE ENDING: the engine's account of how a turn ended, which a coding CLI's
+// THE ENDING: the engine's account of how a turn ended, which a harness's
 // transcript cannot know — the reviewer's verdict, whether a reply reached
 // anybody, who stopped the turn and why, what guard or loss ended it. The next
 // turn on the conversation is told it beside the session it continues, so a

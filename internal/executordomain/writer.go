@@ -213,9 +213,9 @@ type NewCapture struct {
 	ConversationKey string
 	WorkKey         string
 
-	CLI        string
-	CLIVersion string
-	SessionID  string
+	Harness        string
+	HarnessVersion string
+	SessionID      string
 
 	// Object is the sealed object, ContentKey the keyring key that sealed
 	// it, and ArchiveFormat the layout of the archive inside.
@@ -250,7 +250,7 @@ func (n NewCapture) validate() error {
 		field, value string
 		max          int
 	}{
-		{"the CLI", n.CLI, CLIMaxBytes}, {"the CLI's version", n.CLIVersion, CLIVersionMaxBytes},
+		{"the harness", n.Harness, HarnessMaxBytes}, {"the harness's version", n.HarnessVersion, HarnessVersionMaxBytes},
 		{"the session id", n.SessionID, SessionIDMaxBytes},
 		{"the content key", n.ContentKey, maxContentKeyBytes},
 		{"the home path", n.Home, PathMaxBytes}, {"the workspace path", n.Workspace, PathMaxBytes},
@@ -260,8 +260,8 @@ func (n NewCapture) validate() error {
 		}
 	}
 	switch {
-	case strings.TrimSpace(n.CLI) == "":
-		return invalid("the capture names no CLI")
+	case strings.TrimSpace(n.Harness) == "":
+		return invalid("the capture names no harness")
 	case strings.TrimSpace(n.SessionID) == "":
 		return invalid("the capture names no session id: a session nobody can name " +
 			"is one no launch can resume")
@@ -356,7 +356,7 @@ func (w *Writer) Capture(ctx context.Context, c Call, n NewCapture) (CaptureResu
 	p := Capture{
 		V: baseRecordVersion, Handle: n.Handle, Turn: n.Turn,
 		ConversationKey: n.ConversationKey, WorkKey: n.WorkKey,
-		CLI: n.CLI, CLIVersion: n.CLIVersion, SessionID: n.SessionID,
+		Harness: n.Harness, HarnessVersion: n.HarnessVersion, SessionID: n.SessionID,
 		Object: n.Object.Key.String(), ObjectHash: string(n.Object.Hash),
 		ObjectSize: n.Object.Size, ContentKey: n.ContentKey, ArchiveFormat: n.ArchiveFormat,
 		LaunchSeq: n.LaunchSeq, CaptureSeq: n.CaptureSeq,

@@ -95,7 +95,7 @@ import (
 //     seat's next turn on a conversation continues, and the grace that keeps a
 //     departed seat's mail for a seat made an agent's again within it keeps
 //     its sessions for the same seat; past it no turn of the seat runs again,
-//     and what its sessions hold (a coding CLI's whole transcript, sealed in
+//     and what its sessions hold (a harness's whole transcript, sealed in
 //     the fleet's object store) would otherwise wait out the company's whole
 //     conversation retention with nobody able to continue it. A retirement
 //     whose node cannot tell which sessions are the seat's is undone and

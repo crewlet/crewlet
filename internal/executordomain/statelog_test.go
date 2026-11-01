@@ -107,7 +107,7 @@ var suiteObject = objstore.KeyAt(suiteStamped).String()
 func captureOf(id string, seq int64) executordomain.Capture {
 	return executordomain.Capture{
 		V: 1, Handle: id, Turn: suiteTurn(id), ConversationKey: suiteConversation,
-		CLI: "claude-code", SessionID: "session-" + id, Object: suiteObject,
+		Harness: "claude-code", SessionID: "session-" + id, Object: suiteObject,
 		ObjectHash: string(objstore.HashOf([]byte(id))), ObjectSize: 1024,
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: seq,
 		SeatBudget: executordomain.SealedMaxBytes,

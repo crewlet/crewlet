@@ -1218,7 +1218,7 @@ stream:
                                     #   the executor log, where every seat's
                                     #   executor sessions are NAMED: a row per
                                     #   turn naming the sealed object its
-                                    #   coding CLI's session is kept in, in the
+                                    #   harness's session is kept in, in the
                                     #   object store (64 MiB..64 GiB). UNSET
                                     #   TAKES 512 MiB, sized by the turns the
                                     #   seats run rather than by the disk, and

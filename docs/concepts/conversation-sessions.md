@@ -296,7 +296,7 @@ process start, and it is floored at the sweep interval so a hostile value
 cannot undercut the worker's own invariant.
 
 The same two settings bound each seat's captured **executor sessions**: the
-coding CLI's own transcript of a turn, sealed into the
+harness's own transcript of a turn, sealed into the
 [object store](object-store.md) and named by the turn's row of the `executor`
 log
 ([ADR-0072](https://github.com/crewlet/crewlet/blob/main/adr/0072-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)),

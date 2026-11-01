@@ -1998,7 +1998,7 @@ purged by the trash reaper through a record every data node applies (see
 The chat transcript is the third, and its horizon is the company's to set: see
 [the chat transcript's horizon](#the-chat-transcripts-horizon) below.
 The seats' **executor sessions** are the fourth: one row per turn, naming the
-sealed object its coding CLI's session is kept in, and every way a row goes is
+sealed object its harness's session is kept in, and every way a row goes is
 a record every data node applies. A turn's end deletes exactly the ended turns
 of its conversation that its first launch was handed — the session it
 continued, the endings it was told and the sessions it was offered beside it

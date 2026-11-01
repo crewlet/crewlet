@@ -19,7 +19,7 @@ import (
 // # Sealed, and bound to where it belongs
 //
 // Neither the estate nor the object store is encrypted at rest, and a session
-// is a coding CLI's whole transcript: every file it read, every command's
+// is a harness's whole transcript: every file it read, every command's
 // output. So the archive is sealed under the fleet keyring before a byte of it
 // reaches the store ([secrets.StreamSealer]), with associated data naming the
 // seat, the turn and the object's own key ([AAD]): an object copied under

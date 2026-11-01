@@ -68,9 +68,9 @@ type Session struct {
 	ConversationKey string
 	WorkKey         string
 
-	CLI        string
-	CLIVersion string
-	SessionID  string
+	Harness        string
+	HarnessVersion string
+	SessionID      string
 
 	// Object is the sealed session, its Key zero on a row that names none:
 	// an ending-only row, or one whose session the seat's budget released.
@@ -116,8 +116,8 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 // sessionColumns is every column a [Session] is read from, in [scanSession]'s
 // order.
-const sessionColumns = `agent_handle, turn_id, conversation_key, work_key, cli,
-	cli_version, session_id, object, object_hash, object_size, content_key,
+const sessionColumns = `agent_handle, turn_id, conversation_key, work_key, harness,
+	harness_version, session_id, object, object_hash, object_size, content_key,
 	archive_format, launch_seq, capture_seq, home, workspace, captured_at,
 	read_through, absorbs, ended_at, end_seq, outcome, delivered, ending, ask_excerpt`
 
@@ -134,8 +134,8 @@ func scanSession(row rowScanner) (Session, error) {
 		absorbs               string
 		delivered             int
 	)
-	if err := row.Scan(&s.Handle, &s.Turn, &s.ConversationKey, &s.WorkKey, &s.CLI,
-		&s.CLIVersion, &s.SessionID, &object, &hash, &size, &s.ContentKey,
+	if err := row.Scan(&s.Handle, &s.Turn, &s.ConversationKey, &s.WorkKey, &s.Harness,
+		&s.HarnessVersion, &s.SessionID, &object, &hash, &size, &s.ContentKey,
 		&s.ArchiveFormat, &s.LaunchSeq, &s.CaptureSeq, &s.Home, &s.Workspace, &captured,
 		&readThrough, &absorbs, &endedAt, &endSeq, &outcome, &delivered, &ending,
 		&s.AskExcerpt); err != nil {

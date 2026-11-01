@@ -202,7 +202,7 @@ func keyAt(at time.Time) objstore.Key { return objstore.KeyAt(at) }
 func capturing(seat, conversation, turn string, launch, seq, size, budget int64) Capture {
 	return Capture{
 		V: 1, Handle: seat, Turn: turn, ConversationKey: conversation,
-		CLI: "claude-code", CLIVersion: "2.1.304", SessionID: uuid.NewString(),
+		Harness: "claude-code", HarnessVersion: "2.1.304", SessionID: uuid.NewString(),
 		Object: keyAt(monday).String(), ObjectHash: string(objstore.HashOf([]byte(turn))),
 		ObjectSize: size, ContentKey: "k1", ArchiveFormat: 1,
 		LaunchSeq: launch, CaptureSeq: seq, Home: "/home/agent", Workspace: "/work",

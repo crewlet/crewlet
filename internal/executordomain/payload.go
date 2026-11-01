@@ -35,12 +35,12 @@ type Capture struct {
 	ConversationKey string `json:"conversation_key,omitempty"`
 	WorkKey         string `json:"work_key,omitempty"`
 
-	// CLI is the coding CLI that wrote the session (`claude-code`,
-	// `opencode`), CLIVersion the version it reported, and SessionID its
+	// Harness is the harness that wrote the session (`claude-code`,
+	// `opencode`), HarnessVersion the version it reported, and SessionID its
 	// own id for the session.
-	CLI        string `json:"cli"`
-	CLIVersion string `json:"cli_version,omitempty"`
-	SessionID  string `json:"session_id"`
+	Harness        string `json:"harness"`
+	HarnessVersion string `json:"harness_version,omitempty"`
+	SessionID      string `json:"session_id"`
 
 	// Object, ObjectHash and ObjectSize name the sealed object the session
 	// was uploaded into before this record was decided; ContentKey is the

@@ -294,7 +294,7 @@ That makes the rotation a runbook with no window in it:
      `turn_engine.conversation_session.retention_days`. A key dropped while
      sessions are still sealed under it costs no data a person wrote: each of
      those sessions reads as none, and its conversation's next turn starts its
-     coding CLI fresh.
+     harness fresh.
    - **The company document** — `POST /config/reload` to a node that is up
      stores the fleet's document again, sealed under that node's active key,
      and activates it. On a stopped node, [`crewlet config rekey`](../reference/cli.md#crewlet-config-rekey)

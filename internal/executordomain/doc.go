@@ -1,6 +1,6 @@
 // Package executordomain is the state log's record of each seat's EXECUTOR
 // SESSIONS (ADR-0072): one row per (seat handle, turn) whose executor captured
-// its coding CLI's session, naming the sealed object in the fleet's object
+// its harness's session, naming the sealed object in the fleet's object
 // store that holds it (ADR-0026), on the `CREWLET_EXECUTOR_LOG` stream and
 // applied into every data node's replicated estate.
 //
@@ -101,7 +101,7 @@
 //
 // # Sealed, bounded, and gone with the conversation
 //
-// A session's bytes are a coding CLI's transcript: whatever the run read and
+// A session's bytes are a harness's transcript: whatever the run read and
 // wrote. So the object is sealed under the fleet keyring with the streaming
 // format internal/secrets keeps for values too large to hold
 // ([secrets.StreamSealer]), its associated data binding it to

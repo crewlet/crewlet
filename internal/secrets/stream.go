@@ -24,8 +24,8 @@ import (
 // plaintext, its string copy, the GCM output and two base64 strings at once,
 // about five times the value, and opening one holds as much again; and a value
 // that only exists to be streamed between a box and an object store (a coding
-// CLI's captured session, internal/executordomain) would be read whole into an
-// engine process whose memory is sized for the CLIs it runs. So this format is
+// harness's captured session, internal/executordomain) would be read whole into an
+// engine process whose memory is sized for the harnesses it runs. So this format is
 // ONLINE: a writer seals while it streams and a reader opens while it streams,
 // each holding a chunk's buffers rather than the value.
 //

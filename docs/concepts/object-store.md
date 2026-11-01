@@ -37,7 +37,7 @@ every file of every [artifact](artifacts.md) version and asset, the files an
 [Ask Crewlet](../guides/assistant.md#retention-and-erasure) conversation
 keeps (the images a person attaches and the files a deep-work run delivers,
 each sealed under the fleet keyring before it is stored, so the bucket holds
-none of them in the clear), and each seat's executor sessions: the coding CLI's
+none of them in the clear), and each seat's executor sessions: the harness's
 own transcript of a turn, kept so a later turn on the same conversation, in any
 box on any node, continues it, sealed the same way as it streams in and named
 by the turn's row of the `executor` log

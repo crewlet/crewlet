@@ -316,7 +316,7 @@ func newTurnID() string { return statelog.NewOpID(time.Now(), "") }
 func newCaptureOf(seat, conversation, turn string, capture, size, budget int64) executordomain.NewCapture {
 	return executordomain.NewCapture{
 		Handle: seat, Turn: turn, ConversationKey: conversation,
-		CLI: "claude-code", CLIVersion: "2.1.304", SessionID: "session-" + turn,
+		Harness: "claude-code", HarnessVersion: "2.1.304", SessionID: "session-" + turn,
 		Object: objstore.Object{Key: objstore.KeyAt(writerClock),
 			Hash: objstore.HashOf([]byte(turn)), Size: size},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: 1, CaptureSeq: capture,

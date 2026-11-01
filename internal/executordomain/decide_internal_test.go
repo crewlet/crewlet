@@ -18,7 +18,7 @@ import (
 func newCapture(seat, conversation, turn string, launch, seq, size int64, minted time.Time) NewCapture {
 	return NewCapture{
 		Handle: seat, Turn: turn, ConversationKey: conversation,
-		CLI: "claude-code", CLIVersion: "2.1.304", SessionID: uuid.NewString(),
+		Harness: "claude-code", HarnessVersion: "2.1.304", SessionID: uuid.NewString(),
 		Object: objstore.Object{Key: objstore.KeyAt(minted),
 			Hash: objstore.HashOf([]byte(turn)), Size: size},
 		ContentKey: "k1", ArchiveFormat: 1, LaunchSeq: launch, CaptureSeq: seq,
