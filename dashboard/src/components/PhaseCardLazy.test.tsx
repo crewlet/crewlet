@@ -80,7 +80,6 @@ function record() {
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    backend: "",
     codingAgent: "",
     sandboxId: "",
     launchId: "",

@@ -270,7 +270,9 @@ export interface PhaseRecord {
   hostPhase: string;
   /** The iteration of that host phase. */
   hostIteration: number;
-  backend: string;
+  /** The CLI an executor ran as, on the record that collected its run and on
+   *  the run's own record; empty on every phase that ran on the engine host.
+   *  Where a phase ran is which phase it is, so nothing else says so. */
   codingAgent: string;
   /** The box that ran this phase, when a coding agent did. Links a transcript
    *  to the detached run it suspended into. */
@@ -744,7 +746,6 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    backend: "",
     codingAgent: "",
     // A RUNNING phase has neither yet: the box id is stamped when the run is
     // registered, and the refs are what it REPORTS back.
@@ -837,7 +838,6 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     taskId,
     hostPhase: String(p.host_phase ?? ""),
     hostIteration: num(p.host_iteration),
-    backend: String(p.backend ?? ""),
     codingAgent: String(p.coding_agent ?? ""),
     // WHAT A SANDBOX RUN LEAVES ON `AgentPhaseCompleted`: which box ran it (so
     // the badge naming the coding agent can reach the run) and the branches

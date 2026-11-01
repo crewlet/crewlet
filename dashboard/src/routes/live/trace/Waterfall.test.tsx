@@ -434,7 +434,6 @@ describe("a collected coding run's span", () => {
     const run = phaseRecord({
       key: "turn-1|sandbox|1|L1",
       phase: "sandbox",
-      backend: "sandbox",
       codingAgent: "claude-code",
       launchId: "L1",
       at: iso(31_000),

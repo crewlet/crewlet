@@ -62,7 +62,6 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     taskId: "",
     hostPhase: "",
     hostIteration: 0,
-    backend: "",
     codingAgent: "",
     sandboxId: "",
     launchId: "",
@@ -520,7 +519,6 @@ describe("a coding run's card", () => {
   const RUN = phase({
     key: "turn-1|sandbox|1|job-1",
     phase: "sandbox",
-    backend: "sandbox",
     codingAgent: "claude-code",
     launchId: "job-1",
     response: "Fixed the flake and opened the pull request.",
@@ -534,6 +532,25 @@ describe("a coding run's card", () => {
     const activity = screen.getByRole("button", { name: /^Activity/ });
     fireEvent.click(activity);
     expect(screen.getByText(/go test \.\/\.\.\./)).toBeDefined();
+  });
+
+  // THE BADGE IS THE RUN'S OWN FACT: the card names the CLI wherever the
+  // record names a run — its CLI, or the box it ran in — and badges nothing
+  // that ran on the engine host. No field says where a phase ran.
+  //
+  // Mutation: badge only a `sandbox` phase, and the executor that collected a
+  // run loses its badge; drop the box half, and a record naming only its box
+  // does.
+  test("badges the run a record names, and nothing that ran on the host", () => {
+    render(<PhaseCard record={phase({ codingAgent: "claude-code", sandboxId: "box-7" })} />);
+    expect(screen.getByText("claude-code")).toBeDefined();
+    cleanup();
+    render(<PhaseCard record={phase({ sandboxId: "box-7" })} />);
+    expect(screen.getByText("sandbox")).toBeDefined();
+    cleanup();
+    render(<PhaseCard record={phase({ key: "turn-1|review|1", phase: "review" })} />);
+    expect(screen.queryByText("sandbox")).toBeNull();
+    expect(screen.queryByText("claude-code")).toBeNull();
   });
 
   // THE COUNT IS NOT THE KEPT PART PRESENTED AS THE WHOLE. A long run's
@@ -768,7 +785,6 @@ describe("a model's words", () => {
         record={phase({
           key: "turn-1|sandbox|1|job-1",
           phase: "sandbox",
-          backend: "sandbox",
           launchId: "job-1",
           response: "Opened **the pull request**.",
         })}

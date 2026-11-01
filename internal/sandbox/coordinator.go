@@ -1876,7 +1876,6 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		CLITurns:      result.Turns,
 		WorkItem:      run.WorkItem,
 		LaunchID:      run.LaunchID,
-		Backend:       types.BackendSandbox,
 		CodingAgent:   run.CodingAgent,
 		SandboxID:     run.SandboxID,
 		CostUSD:       result.CostUSD,

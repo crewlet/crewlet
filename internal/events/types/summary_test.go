@@ -115,9 +115,13 @@ func TestSummaries(t *testing.T) {
 		},
 		want: "2 messages from alice: Thread",
 	}, {
-		name:    "a sandbox phase is badged with its coding agent",
-		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, Backend: BackendSandbox, CodingAgent: "claude-code"},
+		name:    "a phase that ran in a box is badged with its coding agent",
+		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, CodingAgent: "claude-code"},
 		want:    "Dev execute [sandbox:claude-code]",
+	}, {
+		name:    "a phase that names its box and no CLI is still badged",
+		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, SandboxID: "sb-1"},
+		want:    "Dev execute [sandbox:?]",
 	}, {
 		name:    "a phase reports its structured decision",
 		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseReview, Decision: "self_iterate", Model: "gpt-4o", TotalTokens: 12},

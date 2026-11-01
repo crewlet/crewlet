@@ -208,7 +208,7 @@ func TestASandboxPhaseIsCountedInTheRollup(t *testing.T) {
 	payload, err := json.Marshal(types.AgentPhaseCompleted{
 		Agent: "a-1", RoleName: "Lead", TurnID: "run-1", WorkKey: "wk-1",
 		Phase: types.PhaseSandbox, Iteration: 2, LaunchID: "job-1",
-		Backend: types.BackendSandbox, CodingAgent: "claude-code", Model: "claude-sonnet-5",
+		CodingAgent: "claude-code", Model: "claude-sonnet-5",
 		InputTokens: 9000, OutputTokens: 700, TotalTokens: 9700,
 		CacheReadTokens: 6000, CacheWriteTokens: 1500, CostUSD: 0.42,
 		ActivityTranscript: "[tool] bash: go test ./...",

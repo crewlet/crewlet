@@ -308,7 +308,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 			if json.Unmarshal(row.Payload, &rec) != nil {
 				continue
 			}
-			if rec["phase"] == "execute" && rec["backend"] == "sandbox" {
+			if rec["phase"] == "execute" && collectedARun(rec) {
 				launch, _ = rec["launch_id"].(string)
 				return true
 			}
@@ -709,6 +709,15 @@ func countOf(list []string, want string) int {
 	return n
 }
 
+// collectedARun reports whether a phase record names the run it collected —
+// the CLI that did the work or the box it ran in — which only the executor's
+// record that collected one does.
+func collectedARun(rec map[string]any) bool {
+	agent, _ := rec["coding_agent"].(string)
+	box, _ := rec["sandbox_id"].(string)
+	return agent != "" || box != ""
+}
+
 // The board an operator looks at when a run needs somebody.
 //
 // The DURABLE record, over the same query channel every other read uses: a run
@@ -882,7 +891,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 		for _, row := range rows {
 			var rec map[string]any
 			if json.Unmarshal(row.Payload, &rec) == nil && rec["phase"] == "execute" &&
-				rec["backend"] == "sandbox" {
+				collectedARun(rec) {
 				collected, _ = rec["launch_id"].(string)
 				return true
 			}

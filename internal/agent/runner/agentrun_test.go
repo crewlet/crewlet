@@ -740,11 +740,8 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	if done.RoundNarration[0]["content"] == "" {
 		t.Error("the round carries no content, so its tool rows have nothing above them")
 	}
-	// AND WHICH BOX. `native` on a detached coding run is what made a
-	// twenty-minute remote job and three local rounds indistinguishable.
-	if done.Backend != types.BackendSandbox {
-		t.Errorf("backend = %q, want sandbox", done.Backend)
-	}
+	// AND WHICH BOX: the CLI that did the work and the box it ran in, which
+	// only the run knows and nothing on the resuming side could re-derive.
 	if done.CodingAgent != "claude-code" || done.SandboxID != "box-7" {
 		t.Errorf("the box is unnamed: agent=%q id=%q", done.CodingAgent, done.SandboxID)
 	}
@@ -822,10 +819,10 @@ func TestACollectedRunListsTheToolsItActivated(t *testing.T) {
 	}
 }
 
-// A PHASE THAT RAN HERE IS NATIVE. The backend is a fact about where a phase
-// ran, not a flag the collection sets for everything it touches: the reviewer
-// runs in this process's own loop.
-func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
+// A PHASE THAT RAN HERE NAMES NO BOX. The CLI and the box are facts about the
+// run an executor collected, not something the collection stamps on every
+// record it touches: the reviewer runs in this process's own loop.
+func TestAPhaseThatRanHereNamesNoBox(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	prov := &scriptedProvider{review: []llmtest.Response{
@@ -837,10 +834,7 @@ func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
 		t.Fatalf("Review: %v", err)
 	}
 	done := completedPhase(t, pub, "review")
-	if done.Backend != types.BackendNative {
-		t.Errorf("backend = %q, want native", done.Backend)
-	}
 	if done.CodingAgent != "" || done.SandboxID != "" {
-		t.Errorf("a native phase named a box: agent=%q id=%q", done.CodingAgent, done.SandboxID)
+		t.Errorf("a phase that ran here named a box: agent=%q id=%q", done.CodingAgent, done.SandboxID)
 	}
 }

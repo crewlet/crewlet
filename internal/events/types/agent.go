@@ -68,18 +68,6 @@ const (
 	PhaseSandbox Phase = "sandbox"
 )
 
-// ExecuteBackend names where an Execute phase actually ran.
-type ExecuteBackend string
-
-// The two places an Execute phase can run. BackendNative is the engine's own
-// tool loop; BackendSandbox is a detached coding run. Neither is Go's zero
-// value, so a publisher states which one — see the Backend field on
-// AgentPhaseCompleted.
-const (
-	BackendNative  ExecuteBackend = "native"
-	BackendSandbox ExecuteBackend = "sandbox"
-)
-
 // PromptMessage is one message of the conversation a phase sent to the model.
 type PromptMessage struct {
 	Role    string `json:"role"`
@@ -881,14 +869,16 @@ type AgentPhaseCompleted struct {
 	// prompt names only by server. Disjoint from ToolsAvailable. Empty for
 	// every phase other than execute.
 	ToolCatalogue []string `json:"tool_catalogue,omitempty"`
-	// Backend is BackendSandbox on a PhaseSandbox record and on the resumed
-	// Execute phase that collected one, so the dashboard renders the sandbox
-	// badge precisely where it applies. Note
-	// BackendNative is the wire default and NOT the Go zero value —
-	// publishers set it explicitly.
-	Backend     ExecuteBackend `json:"backend"`
-	CodingAgent string         `json:"coding_agent"`
-	SandboxID   string         `json:"sandbox_id"`
+	// CodingAgent is the CLI an executor ran as, and SandboxID the box it ran
+	// in: on the execute record that collected a run and on that run's own
+	// record, and empty on every other — a phase that ran on this host, and
+	// an executor whose launch never opened a box.
+	//
+	// NO FIELD SAYS WHERE A PHASE RAN, because the phase already does: every
+	// executor runs in a box and no other phase ever does. A `backend` field
+	// once restated it, and was one more value for a publisher to get wrong.
+	CodingAgent string `json:"coding_agent"`
+	SandboxID   string `json:"sandbox_id"`
 	// CostUSD is what the coding run's own CLI said it billed, on the
 	// PhaseSandbox record only: a subscription CLI's spend never passes
 	// through the engine's token meter, so this is the one number that sees
@@ -962,7 +952,7 @@ func (e AgentPhaseCompleted) SummaryFor(actor string) string {
 	if head := upperFirst(subject(actor, e.Phase)); head != "" {
 		parts = append(parts, head)
 	}
-	if e.Backend == BackendSandbox {
+	if e.CodingAgent != "" || e.SandboxID != "" {
 		agent := e.CodingAgent
 		if agent == "" {
 			agent = "?"

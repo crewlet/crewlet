@@ -841,7 +841,10 @@ export function PhaseCard({
             rescued
           </Tag>
         )}
-        {record.backend === "sandbox" && (
+        {/* THE BOX A RUN RAN IN, named by the CLI that ran there — on the
+            executor that collected a run and on the run's own record. A phase
+            that ran on the engine host names neither, so it has no badge. */}
+        {(record.codingAgent !== "" || record.sandboxId !== "") && (
           <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
             {record.codingAgent || "sandbox"}
           </Tag>
