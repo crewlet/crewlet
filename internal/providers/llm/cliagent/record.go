@@ -511,6 +511,7 @@ func (r *recordReader) callOf(doc map[string]any, paths *cliprofile.CallPaths) l
 		call.ID, _ = stringAt(doc, paths.ID)
 	}
 	name, _ := stringAt(doc, paths.Name)
+	name = strings.TrimPrefix(name, paths.NamePrefix)
 	namespace := ""
 	if len(paths.Namespace) > 0 {
 		namespace, _ = stringAt(doc, paths.Namespace)

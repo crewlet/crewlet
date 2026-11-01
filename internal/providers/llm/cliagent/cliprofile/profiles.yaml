@@ -3090,11 +3090,13 @@ muse-code:
   # call id>`. The CLI sends that key with the call, in `_meta`
   # (`idempotencyKey`, beside `callId`, the bare id), so a call is joined by
   # it; the record names no arguments. It carries no counts per request: the
-  # run's are its run.usage event (see usage).
+  # run's are its run.usage event (see usage). The operation's `tool:` is the
+  # record's and not the name's (name_prefix), so host_prefix is the
+  # `mcp__crewlet__` the model sees.
   requests:
     source: stdout
     call_id_meta: idempotencyKey
-    host_prefix: "tool:mcp__crewlet__"
+    host_prefix: "mcp__crewlet__"
     events:
       - match: [{path: ["payload_type"], equals: "task.lifecycle.proposed"}, {path: ["payload", "event", "task_kind"], equals: "model.meta.response"}]
         opens: true
@@ -3102,7 +3104,7 @@ muse-code:
       - match: [{path: ["payload_type"], equals: "run.output.delta"}]
         delta: ["payload", "text"]
       - match: [{path: ["payload_type"], equals: "task.lifecycle.side_effect_intent"}, {path: ["payload", "event", "operation"], prefix: "tool:"}]
-        call: {id: ["payload", "event", "idempotency_key"], name: ["payload", "event", "operation"]}
+        call: {id: ["payload", "event", "idempotency_key"], name: ["payload", "event", "operation"], name_prefix: "tool:"}
   # No config_env: this CLI is XDG-native and has no relocation variable of
   # its own. buildEnv already points XDG_CONFIG_HOME and XDG_DATA_HOME inside
   # the seat's home, and the binary honours both. (MUSE_AUTH_PATH looks like
