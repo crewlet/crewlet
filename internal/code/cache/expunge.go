@@ -47,10 +47,11 @@ var ErrInputsLeaving = errors.New("cache: the copy's objects/ still holds the in
 // StageExpunge makes the scratch an expunge's BUILD writes into: scratch/
 // expunge-<id>.git, whose own objects/pack holds the inputs — every pack of
 // inputs, git checksums each live in objects/pack, named once — and whose one
-// alternate is a merge's store of EVERY OTHER pack the incarnation s pins
-// holds live, both as hard links of the incarnation's files, with the
-// incarnation's packed-refs linked beside them: the refs the scan keeps what
-// they reach of ([Scratch.RefTips]). It pins s's incarnation until Remove.
+// alternate is a merge's store of EVERY OTHER pack the incarnation serving s
+// holds live (newRewriteScratch: s's own, unless a swap has replaced it),
+// both as hard links of that incarnation's files, with its packed-refs linked
+// beside them: the refs the scan keeps what they reach of
+// ([Scratch.RefTips]). It pins that incarnation until Remove.
 // id names it — the expunge's own id, a canonical lowercase UUID, since it is
 // a path component — once.
 //
@@ -103,11 +104,12 @@ func (c *Cache) StageExpunge(ctx context.Context, s Synced, id string, inputs []
 
 // StageRescue makes the scratch an expunge's RESCUE writes into:
 // scratch/rescue-<id>.git, whose own objects/pack holds every pack the
-// incarnation s pins keeps in its dropping view — linked from there — and
-// whose one alternate is the incarnation's objects/, its live packs and never
+// incarnation serving s keeps in its dropping view (newRewriteScratch) —
+// linked from there — and whose one alternate is that incarnation's
+// objects/, its live packs and never
 // its dropping view, with the incarnation's packed-refs linked beside them:
 // the refs at the rescue's sync ([Scratch.RefTips]). A copy holding no
-// dropping pack makes a scratch holding none. It pins s's incarnation until
+// dropping pack makes a scratch holding none. It pins that incarnation until
 // Remove. id names it — the commit's own id, a canonical lowercase UUID — once.
 //
 // Refused [ErrInputsLeaving] where the copy's objects/ still holds a begin's

@@ -519,7 +519,7 @@ var cacheWriters = []writerRow{
 			"inputs less what it kept and less the rest, in the expunge's own SCRATCH, whose objects/pack holds " +
 			"links of the inputs beside a store of every other live pack (cache.StageExpunge); and its rescue's " +
 			"`--revs --local`, in a scratch holding links of the dropping packs and leaning on the incarnation " +
-			"(cache.StageRescue) — never an incarnation: the kept packs and the rescue enter the " +
+			"serving its sync (cache.StageRescue) — never an incarnation: the kept packs and the rescue enter the " +
 			"cache only by Adopt, the dropping packs only by AdoptDropping on the node that built them or by a " +
 			"round's install, once their rows have applied", nil},
 	{"internal/code/compact/expunge.go", kindRuntime,

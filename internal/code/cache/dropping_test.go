@@ -485,6 +485,45 @@ func TestAnAdoptedDroppingPackIsNeverDownloaded(t *testing.T) {
 	}
 }
 
+// A REWRITE'S SCRATCH IS MADE OVER THE COPY SERVING ITS SYNC NOW: an
+// expunge's build is made over the Synced its scan took, and a merge landed
+// beside it on its maintainer swaps that copy for the next — the live set
+// carried over, none left in the copy it replaced — before the build's
+// scratch is made (after the scan's walk) or before the rebuild its bundle
+// rule asks for. The scratch is made over the copy serving now: its inputs,
+// live there, are its own packs, and its store holds every other pack live
+// there, the merge's output among them — never refused for inputs the old
+// copy's emptied live set no longer names.
+//
+// Mutation: pick over the Synced's own incarnation in newRewriteScratch, and
+// the scratch is refused: its input is no pack live there.
+func TestARewritesScratchIsMadeOverTheCopyServingItsSync(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	_, first := w.push(t, repo, "refs/heads/main", nil)
+	_, second := w.push(t, repo, "refs/heads/main", nil)
+	_, third := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	scan := w.sync(t, c, repo)
+	merged := w.compacted(t, repo, second, third)
+	if after := w.sync(t, c, repo); after.Dir == scan.Dir {
+		t.Fatalf("the premise: the merge's round left the copy at %s, want it swapped", after.Dir)
+	}
+	sc, err := c.StageExpunge(t.Context(), scan, uuid.Must(uuid.NewV7()).String(), []string{first.GitChecksum})
+	if err != nil {
+		t.Fatalf("an expunge's scratch over a copy a merge's swap replaced: %v", err)
+	}
+	defer sc.Remove()
+	if got, want := packFiles(t, sc.Dir), rowFiles(first); !slices.Equal(got, want) {
+		t.Errorf("the scratch's own packs are %v, want the input's %v", got, want)
+	}
+	if got, want := packFiles(t, sc.Alternate), rowFiles(merged); !slices.Equal(got, want) {
+		t.Errorf("the scratch's store holds %v, want every other pack live in the copy serving now, the "+
+			"merge's output %v", got, want)
+	}
+}
+
 // ONLY SERVING READS NAME THE DROPPING VIEW (M6-D3): every git process under
 // internal/code that names a copy's dropping view (gitproc.Cmd.Dropping) is
 // a read — a subcommand of gitReaders — that SERVES the copy, a row of
