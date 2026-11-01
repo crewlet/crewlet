@@ -16,7 +16,7 @@ import (
 // concerns nobody, which writes no row) down as
 // ONE ROW PER (record, change, recipient) it reached — every handle each
 // change's routing precedence keeps ([Concerns]) but that routing's own actor
-// — in code_notifications (replicated 0081, keyed so by 0104), as the tracker
+// — in code_notifications (replicated 0081, keyed so by 0105), as the tracker
 // writes tracker_notifications from its records. The change is in the key
 // because one record can tell one handle about several: a batched push that
 // opens two changes mentioning them, a landing that merges two of their
