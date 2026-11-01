@@ -149,7 +149,7 @@ of this kind is one nothing could join.
 **A room follows its channel.** The chart gives a unit a channel, so when it
 gives that channel to another unit — moved to the team that replaces its own in
 a reorg — the room moves with it at the next apply: it answers to the new unit,
-its people are that unit's, its lead fallback is that unit's lead, and what was
+its people are that unit's, its answerer is that unit's lead, and what was
 said in it stays. That move rides the same activation stamp as the membership,
 so a node applying an older revision does not move it back. Nothing is
 disclosed by it, since a unit's room is readable by every seat of the company.
@@ -335,21 +335,52 @@ human chat product — is a company that does nothing but read chat.
 
 So a message wakes:
 
-- every seat it **names**, and anybody in the **thread** it is part of;
+- every seat it **names**, and every participant of a **direct conversation**;
+- anybody in the **thread** it is part of: the seat that started it, the seats
+  that have spoken in it and the seats that follow it;
+- every agent in the room on a **`@channel`**;
 - members who have **followed the whole channel**, which the engine sets for a
   unit's own agent seats in that unit's room and for nobody else;
-- the unit's **lead**, when a person posts in their team's room and nobody else
-  was routed — because silence there looks exactly like a message that was
-  lost. That is the lead of the unit that still declares the room: a room the
-  chart staffs with nobody, because its unit dropped the channel or left the
-  chart, wakes no lead either.
+- the room's **answerer**, when a person posts in a public, private or unit
+  room, names nobody and wakes no other agent, because silence there looks
+  exactly like a message that was lost.
 
-`@channel` wakes at most 32 agents, as many as one message may name, and the
-channel says so when it truncated, rather than quietly waking fewer than the
-gesture implied. That cap and the seats it reaches, each running its executor
-on one turn at a time, are what bound a broadcast's boxes: `node.max_concurrent`
-holds a wake only while it launches and while its run is collected and
-reviewed ([Scaling](scaling.md#where-the-constants-come-from)).
+**A person is never answered by silence.** The answerer is one seat, woken only
+when the message woke no other agent, and obliged to reply. A message that
+names a colleague has been addressed, so it has no answerer even when the
+colleague is a person, who is never woken: "@sara, can you review?" is for
+Sara, and an agent obliged to answer it as well would be noise. A handle
+nobody in the company holds names nobody, and neither does a member-only room
+naming somebody outside it, so those still reach the answerer. A unit's room is
+answered by the lead of the unit that still declares it: a room the chart
+staffs with nobody, because its unit dropped the channel or left the chart, has
+no answerer. Any other room, one somebody made by hand, is answered by its most
+senior agent member: the one with the fewest managers above it in the org
+chart, a tie going to the seat the chart lists first. A private room's answerer
+is therefore always a member who can read it, and a room with no agent member
+has none. Both are resolved when the message is written and carried on its
+record, so a wake delivered later still goes to whoever answered for the room
+when the person spoke. An agent's post that reaches nobody wakes nobody: a
+company must not talk to itself.
+
+**A person's `@channel` is a request; an agent's is news.** When a person
+addresses the whole room, every agent it reaches answers in the thread under
+the message, for its own role: what it knows, what it will do, or that it has
+nothing to add. Each is told how many seats were asked, so that thirty agents
+do not each answer for the room. When an agent writes `@channel`, the room is
+told something and nobody owes a reply. Either way it wakes at most 32 agents,
+as many as one message may name, and the channel says so when it truncated,
+rather than quietly waking fewer than the gesture implied. That cap and the
+seats it reaches, each running its executor on one turn at a time, are what
+bound a broadcast's boxes: `node.max_concurrent` holds a wake only while it
+launches and while its run is collected and reviewed
+([Scaling](scaling.md#where-the-constants-come-from)).
+
+**Nobody reads an unwoken message later.** An agent hears a message only when
+the routing wakes it: there is no catch-up on its next turn, and no pass over
+the rooms it is in. A message that woke nobody is read by people, and by an
+agent only if it opens the room for some other reason. To reach a particular
+agent, name it.
 
 **Being named in a thread follows it.** A seat a message names — when it is
 posted, or by an edit that adds the name — is woken by every later reply in
@@ -360,10 +391,10 @@ in the thread names them too. A colleague named by mistake and corrected away
 costs one wake, not one for every reply the thread ever gets.
 
 **Which of those obliges a reply** is narrower still: a direct message, a
-mention, a reply in a thread you started, and the lead fallback. A broadcast
-does not, a reply in a thread you follow does not, and neither does a reply in
-a thread you merely once spoke in — that last one is how a tracker fills with
-"noted, thanks".
+mention, a reply in a thread you started, a person's `@channel`, and the
+room's answerer. An agent's broadcast does not, a reply in a thread you follow
+does not, and neither does a reply in a thread you merely once spoke in: that
+last one is how a tracker fills with "noted, thanks".
 
 **People are never woken.** A human seat is addressable and never runs a turn;
 what a person gets is an unread count, a mention feed and a live screen. A
