@@ -62,21 +62,23 @@ func ServerURL(endpoint, server string) string {
 	return endpoint + serverSegment + url.PathEscape(server)
 }
 
-// Servers names the MCP servers an opening of a seat's surface serves under
-// their own names, sorted: the server of every tool the surface offers that an
-// MCP server serves. A surface that is not a seat's holds no MCP server's
-// tools, and its opening serves every tool as the engine's own.
+// Servers names the MCP servers an opening of surface serves under their own
+// names, sorted: the server of every tool a seat's surface offers that an MCP
+// server serves. A surface that is not a seat's — Ask Crewlet's deep work —
+// holds no MCP server's tools, and its opening serves every tool as the
+// engine's own.
 //
 // ONE RULE FOR BOTH ENDS: the engine reads it to hand the run's harness a URL
 // per server ([ServerURL]), and an opening to decide which servers it serves,
 // so the box and the bridge cannot disagree about one.
-func Servers(surface *tools.Surface) []string {
-	if surface == nil {
+func Servers(surface Surface) []string {
+	seat := seatOf(surface)
+	if seat == nil {
 		return nil
 	}
-	universe := surface.Universe()
+	universe := seat.Universe()
 	var out []string
-	for _, name := range surface.Active() {
+	for _, name := range seat.Active() {
 		entry, ok := universe.Lookup(name)
 		if !ok {
 			continue
@@ -87,6 +89,13 @@ func Servers(surface *tools.Surface) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// seatOf is surface where it is a seat's, or nil: the one surface a seat's
+// MCP servers reach an opening through.
+func seatOf(surface Surface) *tools.Surface {
+	seat, _ := surface.(*tools.Surface)
+	return seat
 }
 
 // endpoint is one MCP server an opening serves: the engine's own tools under

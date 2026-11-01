@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
-	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -626,7 +625,7 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor int
 // keeping a large tool list out of each request. The names are the bridge's own
 // reading of the surface ([mcpbridge.Servers]), so a box is handed exactly the
 // servers its opening serves.
-func bridgeServers(endpoint string, surface *tools.Surface) map[string]sandbox.MCPServer {
+func bridgeServers(endpoint string, surface mcpbridge.Surface) map[string]sandbox.MCPServer {
 	out := map[string]sandbox.MCPServer{config.ToolServerName: {
 		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
 		AlwaysLoaded: true,

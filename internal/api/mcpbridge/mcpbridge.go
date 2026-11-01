@@ -338,10 +338,7 @@ func (s *Session) caller() Caller {
 // seat is the session's surface where it is a seat's, or nil: Ask Crewlet's
 // deep work hands the bridge a surface of its own, which acts for a person and
 // holds no MCP server's tools.
-func (s *Session) seat() *tools.Surface {
-	surface, _ := s.Surface.(*tools.Surface)
-	return surface
-}
+func (s *Session) seat() *tools.Surface { return seatOf(s.Surface) }
 
 // Ledger is the durable record of a bridged run's calls.
 //
@@ -1296,7 +1293,7 @@ func newBinding(ctx context.Context, s *Session, where route) *binding {
 	// tools as it is built, and which endpoint lists a tool is read off the
 	// map — a server built before its siblings were filed would list theirs,
 	// and keep listing them until the surface next changed.
-	names := Servers(s.seat())
+	names := Servers(s.Surface)
 	opened.servers = make(map[string]*endpoint, 1+len(names))
 	for _, name := range append([]string{""}, names...) {
 		ep := &endpoint{opening: opened, name: name}
