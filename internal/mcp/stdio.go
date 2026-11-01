@@ -34,6 +34,12 @@ type childProcess struct {
 	waitErr error
 	ownExit bool
 
+	// startErr is why the process could not be started at all, nil until
+	// a start failed: the command not found, or not executable. Atomic,
+	// since the transport's Connect writes it on whatever goroutine the SDK
+	// runs it on, and the client reads it once the handshake has failed.
+	startErr atomic.Pointer[error]
+
 	// stdinClosed is set by the shutdown ladder just before it closes the
 	// child's stdin, which is what ownExit is judged against.
 	stdinClosed atomic.Bool
@@ -181,6 +187,7 @@ func (t *stdioTransport) Connect(ctx context.Context) (sdk.Connection, error) {
 	cmd.Stdin, cmd.Stdout = inR, outW
 	if err := cmd.Start(); err != nil {
 		closeFiles(inR, inW, outR, outW)
+		t.child.startErr.Store(&err)
 		return nil, err
 	}
 	// The child holds its own copies now, so the parent's go at once. The

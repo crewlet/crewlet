@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/backoff"
@@ -146,6 +147,31 @@ type Health struct {
 	// "its process exited (exit status 1)", "would not start: …" — because
 	// that is the part a reader of a clipped copy needs.
 	Down string
+
+	// Class is why the server is down ([FailureClass]): empty while it
+	// serves, where no class fits, and while a restart somebody asked for
+	// takes it down and brings it back, which is nobody's failure.
+	Class FailureClass
+
+	// Since is when the server's current state began: when the session
+	// serving it started, or when it went down. Zero for a server stopped.
+	Since time.Time
+
+	// Restarts is how many times the bridge brought the server back since
+	// its owner started it from this spec: a session that ended and a start
+	// that came up on a later attempt each count once.
+	Restarts int
+
+	// LastFailure is the server's latest failure, KEPT AFTER IT COMES BACK,
+	// since "it is up now" and "it went down an hour ago" are both true and
+	// a person needs the second to see a server that flaps. Nil when it has
+	// had none since its owner started it. A copy: changing it changes
+	// nothing in the bridge.
+	LastFailure *Failure
+
+	// LastAnswer is when the server last answered: a start or restart that
+	// listed its tools, or a tool call that came back. Zero before either.
+	LastAnswer time.Time
 }
 
 // server is one server a bridge supervises: the spec it runs from, the tools
@@ -167,6 +193,12 @@ type server struct {
 	// listing and guarded by the same mu.
 	refused []RefusedTool
 
+	// answered is when the server last answered, in Unix nanoseconds: a
+	// start that listed its tools, or a tool call that came back. ATOMIC,
+	// because every tool call writes it and a lock on that path would put
+	// every call behind every other.
+	answered atomic.Int64
+
 	mu sync.RWMutex
 	// client is the session serving the server now, nil while it is down.
 	client *client
@@ -182,6 +214,18 @@ type server struct {
 	attempt int
 	// upSince is when the current session started.
 	upSince time.Time
+	// restarts is how many sessions after the first have come up
+	// ([Health.Restarts]).
+	restarts int
+	// failure is the latest failure, kept after the server comes back
+	// ([Health.LastFailure]).
+	failure *Failure
+	// requested is the cause of a restart somebody asked for
+	// ([Bridge.RestartBefore]), set from the moment it ends the session
+	// until the supervisor has taken it down: the end is theirs, so it is
+	// neither logged nor recorded as the server's failure, and the restart
+	// waits nothing.
+	requested string
 
 	// cancel ends the supervision, whose context it was made with; Stop
 	// calls it and waits on done.
@@ -200,6 +244,9 @@ type outage struct {
 	failed string
 	// heldBack is set when the latest attempt was refused by MayStart.
 	heldBack bool
+	// class is why it is down ([FailureClass]), empty where no class fits
+	// or a restart somebody asked for took it down.
+	class FailureClass
 	// since is when it went down.
 	since time.Time
 	// next is when the next attempt is due, zero while one is running.
@@ -262,17 +309,82 @@ func (s *server) lastClient() *client {
 func (s *server) health(tools int) Health {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	h := Health{Tools: tools, Restarts: s.restarts}
+	if s.failure != nil {
+		failure := *s.failure
+		h.LastFailure = &failure
+	}
+	if at := s.answered.Load(); at != 0 {
+		h.LastAnswer = time.Unix(0, at)
+	}
 	switch {
 	case s.client != nil && !s.client.gone():
-		return Health{Serving: true, Tools: tools}
+		h.Serving, h.Since = true, s.upSince
 	case s.down != nil:
-		return Health{Tools: tools, Down: s.down.describe()}
+		h.Down, h.Class, h.Since = s.down.describe(), s.down.class, s.down.since
 	case s.client != nil:
 		// Dead, and the supervisor has not got to it yet.
-		return Health{Tools: tools, Down: s.client.deathStory() + "; the engine is restarting it"}
+		h.Down, h.Since = s.client.deathStory()+"; the engine is restarting it", s.upSince
+		if s.requested == "" {
+			h.Class = s.client.deathClass()
+		}
 	default:
-		return Health{Tools: tools, Down: "stopped"}
+		h.Down = "stopped"
 	}
+	return h
+}
+
+// noteAnswer records that the server answered now.
+func (s *server) noteAnswer() { s.answered.Store(time.Now().UnixNano()) }
+
+// RestartOutcome is what a restart request did to one server.
+type RestartOutcome string
+
+const (
+	// RestartedNow is a serving server whose session began before the
+	// request: the session was ended and a fresh one is starting, at once.
+	RestartedNow RestartOutcome = "restarted"
+	// RetriedNow is a server that was down since before the request: its
+	// supervisor was asked for an attempt now, its schedule started again.
+	RetriedNow RestartOutcome = "retried"
+	// RestartCurrent is a server whose session began, or which went down, at
+	// or after the request: it is already what the request asked for.
+	RestartCurrent RestartOutcome = "current"
+	// RestartAbsent is a name the bridge does not supervise, or one being
+	// stopped.
+	RestartAbsent RestartOutcome = "absent"
+)
+
+// restartBefore restarts the server if its current state began before
+// before: a serving server's session is ended so its supervisor starts a
+// fresh one at once, and a down server's supervisor is asked to try now. The
+// schedule starts again either way. cause is what the end is told as.
+func (s *server) restartBefore(before time.Time, cause string) RestartOutcome {
+	s.mu.Lock()
+	switch {
+	case s.stopped:
+		s.mu.Unlock()
+		return RestartAbsent
+	case s.client != nil && !s.client.gone():
+		if !s.upSince.Before(before) {
+			s.mu.Unlock()
+			return RestartCurrent
+		}
+		c := s.client
+		s.attempt, s.requested = 0, cause
+		s.mu.Unlock()
+		// ENDED THE WAY A DEATH IS, so the one supervisor that owns the
+		// server takes it down and brings it back: a restart made here
+		// beside it would be a second loop over one child.
+		c.markEnded(cause)
+		return RestartedNow
+	case s.down != nil && !s.down.since.Before(before):
+		s.mu.Unlock()
+		return RestartCurrent
+	}
+	s.mu.Unlock()
+	s.nudge()
+	return RetriedNow
 }
 
 // nudge asks the supervisor of a server that is down for an attempt now. It
@@ -321,9 +433,13 @@ func (s *server) died(ctx context.Context, c *client) {
 	now := time.Now()
 	s.mu.Lock()
 	lived := now.Sub(s.upSince)
-	if lived >= s.b.sup.ceiling() {
+	requested := s.requested
+	s.requested = ""
+	if lived >= s.b.sup.ceiling() || requested != "" {
 		// A child that had been up this long was healthy: its death begins a
-		// new series, and the first attempt of a series waits nothing.
+		// new series, and the first attempt of a series waits nothing. So
+		// does a restart somebody asked for, which is a fresh start by
+		// definition.
 		s.attempt = 0
 	}
 	s.client = nil
@@ -338,7 +454,18 @@ func (s *server) died(ctx context.Context, c *client) {
 	cause := c.deathStory()
 	s.mu.Lock()
 	s.down.cause = cause
+	if requested == "" {
+		s.down.class = c.deathClass()
+		s.failure = &Failure{Class: s.down.class, Said: cause, At: now}
+	}
 	s.mu.Unlock()
+	if requested != "" {
+		s.b.log.Info("server_restart_requested", "server", s.spec.Name, "cause", cause,
+			"up_seconds", lived.Seconds(),
+			"detail", "its session was ended on request and a fresh one starts now; its "+
+				"tools stay in the catalogue and refuse until it is back")
+		return
+	}
 	s.b.log.Error("server_exited", "server", s.spec.Name, "cause", cause,
 		"up_seconds", lived.Seconds(), "stable_after_seconds", s.b.sup.ceiling().Seconds(),
 		"stderr_tail", c.stderrTail(),
@@ -392,7 +519,8 @@ func (s *server) revive(ctx context.Context) bool {
 			}
 			delay = s.b.sup.wait(attempt)
 			s.mu.Lock()
-			s.down.failed = err.Error()
+			s.down.failed, s.down.class = err.Error(), ClassOf(err)
+			s.failure = &Failure{Class: s.down.class, Said: err.Error(), At: time.Now()}
 			s.mu.Unlock()
 			s.b.log.Error("server_restart_failed", "server", s.spec.Name, "attempt", attempt,
 				"error", err.Error(), "retry_in_seconds", delay.Seconds())
@@ -457,7 +585,15 @@ func (s *server) up(c *client) {
 		// is its first either way.
 		s.attempt = 0
 	}
-	s.client, s.last, s.down, s.upSince = c, c, nil, time.Now()
+	if s.last != nil || s.failure != nil {
+		// BROUGHT BACK: a session after the first, or a first one that
+		// came up on a later attempt than the start that failed.
+		s.restarts++
+	}
+	now := time.Now()
+	s.client, s.last, s.down, s.upSince = c, c, nil, now
+	// It listed its tools to come up: an answer.
+	s.answered.Store(now.UnixNano())
 	// A request for "now" that arrived while this start was running has
 	// been answered by it.
 	select {
