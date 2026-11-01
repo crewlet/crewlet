@@ -50,7 +50,31 @@ func webCheckout(outcome sandbox.GrantOutcome) builtin.Checkout {
 		Repo: sandbox.RunRepo{Repo: "web", RepoID: "0190d8f0-0000-7000-8000-00000000000a",
 			Base: "0123456789abcdef0123456789abcdef01234567", Branch: "seats/swe/ENG-7",
 			Access: sandbox.RepoWrite},
-		Steps: []sandbox.SetupStep{{Commands: []string{"git clone --filter=blob:none \"$CREWLET_GIT_URL/web.git\" web"}}}}
+		Steps: []sandbox.SetupStep{{Commands: []string{"git clone --filter=blob:none \"$CREWLET_GIT_URL/web.git\" web"},
+			Brief: webCheckoutBrief}}}
+}
+
+// webCheckoutBrief is what webCheckout's clone step says it made true.
+const webCheckoutBrief = "Repository `web` is checked out at `./web` on branch `seats/swe/ENG-7`."
+
+// A CHECKOUT'S ANSWER SAYS WHAT ITS COMMANDS MAKE TRUE: each step's own brief,
+// after the commands — where the checkout is, how another branch is fetched
+// and how it pushes. A run is given no repository at launch, so its
+// environment block names none, and this answer is the one place the run is
+// told.
+//
+// Mutation: answer the commands alone — the brief is missing, red.
+func TestACheckoutSaysWhatItsCommandsMakeTrue(t *testing.T) {
+	t.Parallel()
+	got := checkoutCall(t, &checkoutDesk{got: webCheckout(sandbox.GrantAdded)}, map[string]any{"repo": "web"})
+	if got.Failed {
+		t.Fatalf("code_checkout = %+v, want the checkout", got)
+	}
+	commands := strings.Index(got.Output, "git clone --filter=blob:none")
+	brief := strings.Index(got.Output, webCheckoutBrief)
+	if commands < 0 || brief < commands {
+		t.Fatalf("the answer does not say what its commands make true after them:\n%s", got.Output)
+	}
 }
 
 // A CHECKOUT ASKS FOR ONE REPOSITORY, READ STRICTLY: the desk is asked exactly

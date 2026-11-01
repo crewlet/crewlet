@@ -217,6 +217,19 @@ func checkoutAnswer(req RepoRequest, got Checkout) tools.Result {
 		}
 	}
 	b.WriteString("```")
+	// WHAT THE COMMANDS MAKE TRUE, each step's own brief: where the checkout
+	// is, that its clone holds the default branch alone and how another
+	// branch is fetched, and how it pushes — or that a push of a repository
+	// given to read is refused. A run is given no repository at launch, so
+	// no environment block names its checkouts; the answer that gives it one
+	// is the one place it can be told, and without it the run spends rounds
+	// rediscovering how its git reaches the code host.
+	for _, step := range got.Steps {
+		if brief := strings.TrimSpace(step.Brief); brief != "" {
+			b.WriteString("\n\n")
+			b.WriteString(brief)
+		}
+	}
 	return tools.Result{Output: b.String()}
 }
 
