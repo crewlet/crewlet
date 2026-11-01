@@ -180,8 +180,9 @@ func TestALaunchRecordsTheItemItsTurnIsOn(t *testing.T) {
 }
 
 // THE ANNOUNCEMENT NAMES ITS JOB: the launch id the store minted and when it
-// recorded the launch — what pairs the start with the job's own phase record,
-// and what a request for the running job's live output names. A turn can
+// recorded the launch — what pairs the start with the job's own record
+// (`executor_collected`), and what a request for the running job's live
+// output names. A turn can
 // launch more than one job, so without it a watcher could not say which of
 // them is still running.
 func TestTheStartedEventNamesTheJobItAnnounces(t *testing.T) {
@@ -401,7 +402,7 @@ func TestALaunchThatNamesNoCodingAgentIsRefused(t *testing.T) {
 
 // THE ENTRY THE RUN WAS LAUNCHED ON IS THE JOB'S, on its record: the member of
 // the seat's executor chain that took it, which a fallback makes other than
-// the head. The phase record its collection publishes is filed under it, so
+// the head. The launch's record its collection publishes is filed under it, so
 // spend by provider names the entry that ran — and a relaunch on another entry
 // files the next job under that one rather than carrying the first.
 func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
@@ -415,9 +416,9 @@ func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
 	if got := rig.get("t1").Launch; got.ProviderKey != "fallback" || got.Model != "sonnet" {
 		t.Fatalf("the job's record = %+v, want the entry and model it was launched on", got)
 	}
-	rec := runPhase(rig.get("t1"), rig.get("t1").Launch, Result{Success: true}, time.Now())
+	rec := collectedRecord(rig.get("t1"), rig.get("t1").Launch, Result{Success: true}, time.Now())
 	if rec.ProviderKey != "fallback" || rec.Model != "sonnet" {
-		t.Errorf("the job's phase record is filed under %q/%q, want fallback/sonnet",
+		t.Errorf("the job's launch record is filed under %q/%q, want fallback/sonnet",
 			rec.ProviderKey, rec.Model)
 	}
 

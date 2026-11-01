@@ -167,7 +167,8 @@ type EventRecord struct {
 	// into history.
 	Failed bool `json:"failed"`
 
-	// Spend is what one LLM call cost, present only on a phase completion.
+	// Spend is what one LLM call cost, present only on a spend record: a
+	// phase completion, a collected launch or an auxiliary record.
 	//
 	// Promoted out of the payload and into columns because the rollup that
 	// reads it is an AGGREGATION: it wants a dozen small values from every
@@ -194,7 +195,7 @@ type Spend struct {
 	// TurnID and WorkKey are IDENTITY rather than cost, and they are here
 	// because this type is the carrier for every promoted column — see
 	// [EventLog.Append], which fills them for any event that names one and
-	// not only for the phase completions [SpendFor] reads. TurnID names one
+	// not only for the spend records [SpendFor] reads. TurnID names one
 	// RUN of a turn; WorkKey names the unit of work it was dispatched for,
 	// which a re-run repeats and a run id does not. See ADR-0017.
 	TurnID    string `json:"turn_id,omitempty"`
@@ -1733,17 +1734,24 @@ const (
 )
 
 // The price is the one value here still read out of the PAYLOAD, and
-// deliberately: it is set by a single backend on a minority of phases, so
+// deliberately: it is set by a single backend on a minority of records, so
 // promoting it would be a migration and a column that is NULL on almost every
 // row of the table. The extraction is free of a scan cost the filter does not
 // already pay — the event_type and event_time predicates are what choose the
 // rows, and json_extract runs only on the ones they keep.
 //
-// BOTH SPEND TYPES — a phase's record and an auxiliary record — and one more
-// payload read on the second alone: a PERSON's auxiliary spend names no agent
-// and no agent role, since a person is not an agent seat, and carries the role
-// of the person's seat as `actor_role`, which the per-seat breakdown names it
-// by. The person themselves is the envelope's ACTOR, a column already.
+// EVERY SPEND TYPE ([spendTypes]) — a phase's record, a collected launch's and
+// an auxiliary record — and one more payload read on the last alone: a
+// PERSON's auxiliary spend names no agent and no agent role, since a person is
+// not an agent seat, and carries the role of the person's seat as
+// `actor_role`, which the per-seat breakdown names it by. The person
+// themselves is the envelope's ACTOR, a column already.
+//
+// ONE TYPE PER STATEMENT, `event_type = ?` beside the window's edges, which is
+// a range of the type's index: an `event_type IN (…)` seeks the type alone and
+// reads every row of it the log holds, applying the window afterwards (see
+// [OutcomeQuery.countSQL]) — a month of spend rows for a day's rollup.
+// [EventLog.PhaseTokens] runs it once per type, in one snapshot.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id,
        CASE WHEN agent_role = '' AND event_type = 'auxiliary_spend'
@@ -1756,7 +1764,7 @@ SELECT event_time, event_id, agent_id,
        COALESCE(json_extract(payload, '$.cost_usd'), 0),
        calls, spend_stage
 FROM crewlet_events
-WHERE event_type IN ('agent_phase_completed', 'auxiliary_spend') AND event_time >= ?`
+WHERE event_type = ? AND event_time >= ?`
 
 // AgentPhaseLimit bounds a seat's phase history.
 //
@@ -1766,13 +1774,23 @@ WHERE event_type IN ('agent_phase_completed', 'auxiliary_spend') AND event_time 
 // a list nobody scrolls to the end of. The dashboard keeps its own cap at the
 // same number, so the page and the answer agree about where history stops.
 //
-// PHASES ONLY, and an auxiliary record is deliberately not one: it is a SUM of
-// calls with no prompt and no response, so it has nothing this list renders,
-// and a compaction's burst would push a seat's real model calls off its first
-// page. What the auxiliary model spent is in every spend figure and on the
-// turn's own page.
+// A PHASE'S RECORD AND A LAUNCH'S ([phaseRecordTypes]), and an auxiliary record
+// is deliberately neither: it is a SUM of calls with no prompt and no
+// response, so it has nothing this list renders, and a compaction's burst
+// would push a seat's real model calls off its first page. What the auxiliary
+// model spent is in every spend figure and on the turn's own page.
 const AgentPhaseLimit = 50
 
+// phaseRecordTypes are what a phase list answers with: each phase's own
+// record, and each launch of an executor's run as its collection read it — the
+// executor round's work, which carries what the run spent and the report it
+// wrote, and which a reader draws inside that round. A launch is no phase, so
+// it is named here rather than found by a phase word.
+var phaseRecordTypes = []string{phaseCompleted, launchSpendType}
+
+// phaseListSQL is one record type's rows of a phase list, the seat's or the
+// company's — see [EventLog.phaseList].
+//
 // The event_time floor is EventHistory, the same one every other read of this
 // table applies — and it was the one read without it. The floor is the hard
 // bottom of paging, so a read that does not apply it answers below it: the
@@ -1780,20 +1798,20 @@ const AgentPhaseLimit = 50
 // singleton is not sweeping, rows of any age. A seat's own page then showed
 // turns the company-wide Phases read excludes, which is the one comparison an
 // operator makes to decide whether a seat has gone quiet.
-const agentPhaseSQL = `
+const phaseListSQL = `
 SELECT ` + listColumns + `, payload
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
+WHERE event_type = ? AND event_time >= ?`
 
-// agentPhaseCursorSQL is the same read, one page older.
+// phaseListCursorSQL is the same read, one page older.
 //
 // Keyset on (event_time, event_id) rather than OFFSET, for the reason every
 // other paged read here gives: the pair is the primary key, so it is unique and
 // already in index order — no sort node, and no drift as new phases land at the
 // head while a reader pages backwards.
-const agentPhaseCursorSQL = ` AND (event_time, event_id) < (?, ?)`
+const phaseListCursorSQL = ` AND (event_time, event_id) < (?, ?)`
 
-const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
+const phaseListOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 
 // AgentPhases returns one seat's durable per-phase records, newest first,
 // PAYLOAD INCLUDED.
@@ -1809,9 +1827,10 @@ const agentPhaseOrderSQL = ` ORDER BY event_time DESC, event_id DESC LIMIT ?`
 // once keyed seats by name — and a name is prose two seats may share, so a
 // seat's page listed its namesake's calls among its own.
 //
-// agent_phase_completed only. That is the durable record — the prompts, the
-// response, the tools, the tokens — while agent_turn_progress is stream-only
-// by design, so history here is exactly the calls that finished.
+// The durable records ([phaseRecordTypes]) — the prompts, the response, the
+// tools, the tokens, and what each launch of the executor's run spent and
+// reported — while agent_turn_progress is stream-only by design, so history
+// here is exactly the calls that finished.
 //
 // more reports that the seat holds phases past this page — see [pastPage].
 func (l *EventLog) AgentPhases(ctx context.Context, agentID string, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
@@ -1820,27 +1839,8 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID string, before *Curs
 	if agentID == "" {
 		return nil, false, nil
 	}
-	query := agentPhaseSQL + ` AND agent_id = ?`
-	args := []any{EncodeTime(askedAt(at).Add(-EventHistory)), agentID}
-	if before != nil && before.ID != "" {
-		query += agentPhaseCursorSQL
-		args = append(args, EncodeTime(before.Time), before.ID)
-	}
-	query += agentPhaseOrderSQL
-	args = append(args, AgentPhaseLimit+1)
-	rows, err = l.scanPayloads(ctx, query, args...)
-	if err != nil {
-		return nil, false, err
-	}
-	rows, more = pastPage(rows, AgentPhaseLimit)
-	return rows, more, nil
+	return l.phaseList(ctx, agentID, AgentPhaseLimit, before, at)
 }
-
-// phasesSQL is AgentPhases without the seat filter.
-const phasesSQL = `
-SELECT ` + listColumns + `, payload
-FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 
 // Phases returns the COMPANY's durable per-phase records, newest first,
 // PAYLOAD INCLUDED.
@@ -1865,26 +1865,64 @@ WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 // history keeps the old one. more reports that records exist past this page —
 // see [pastPage].
 func (l *EventLog) Phases(ctx context.Context, agentID string, limit int, before *Cursor, at time.Time) (rows []EventRecord, more bool, err error) {
-	query := phasesSQL
-	args := []any{EncodeTime(askedAt(at).Add(-EventHistory))}
-	if agentID != "" {
-		query += ` AND agent_id = ?`
-		args = append(args, agentID)
-	}
-	if before != nil && before.ID != "" {
-		query += agentPhaseCursorSQL
-		args = append(args, EncodeTime(before.Time), before.ID)
-	}
-	query += agentPhaseOrderSQL
 	if limit <= 0 || limit > MaxPhasePage {
 		limit = MaxPhasePage
 	}
-	args = append(args, limit+1)
-	rows, err = l.scanPayloads(ctx, query, args...)
+	return l.phaseList(ctx, agentID, limit, before, at)
+}
+
+// phaseList is a page of `limit` phase records ([phaseRecordTypes]), newest
+// first, payload included: one seat's where agentID names it and the
+// company's where it is empty, below `before`, over the history at `at`.
+//
+// ONE STATEMENT PER RECORD TYPE, in ONE SNAPSHOT, merged here. Each is the
+// single-type read the type's index answers in its own order — the type, then
+// (event_time, event_id) newest first — stopped one row past the page, so a
+// page costs at most a page and a row of each type however long the history
+// is. Spelled as one `event_type IN (…)`, the planner seeks each type alone
+// and has to sort every row of both the log holds, payloads and all, to hand
+// back the newest sixty. One snapshot, so the page and the row past it that
+// says whether there is more are one reading of the log, as one statement's
+// would be.
+func (l *EventLog) phaseList(ctx context.Context, agentID string, limit int, before *Cursor, at time.Time) ([]EventRecord, bool, error) {
+	floor := EncodeTime(askedAt(at).Add(-EventHistory))
+	var rows []EventRecord
+	err := l.Snapshot(ctx, func(s EventSnapshot) error {
+		// AFRESH ON EVERY ATTEMPT: a snapshot that met a conflict runs
+		// this again, and a page kept from the attempt it abandoned would
+		// be counted twice.
+		rows = rows[:0]
+		for _, kind := range phaseRecordTypes {
+			query := phaseListSQL
+			args := []any{kind, floor}
+			if agentID != "" {
+				query += ` AND agent_id = ?`
+				args = append(args, agentID)
+			}
+			if before != nil && before.ID != "" {
+				query += phaseListCursorSQL
+				args = append(args, EncodeTime(before.Time), before.ID)
+			}
+			query += phaseListOrderSQL
+			args = append(args, limit+1)
+			page, err := s.scanPayloads(ctx, query, args...)
+			if err != nil {
+				return err
+			}
+			rows = append(rows, page...)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, false, err
 	}
-	rows, more = pastPage(rows, limit)
+	// THE ORDER EACH STATEMENT READ IN, across all of them: the instant as
+	// the column holds it, then the id, both descending — the primary key's
+	// own order, which the cursor a later page resumes from is cut in.
+	slices.SortFunc(rows, func(a, b EventRecord) int {
+		return cmp.Or(cmp.Compare(EncodeTime(b.Time), EncodeTime(a.Time)), cmp.Compare(b.ID, a.ID))
+	})
+	rows, more := pastPage(rows, limit)
 	return rows, more, nil
 }
 
@@ -1915,7 +1953,9 @@ func pastPage[T any](rows []T, limit int) ([]T, bool) {
 // than by how many a screen can show.
 const MaxPhasePage = 60
 
-// PhaseTokens returns the per-phase spend records inside a window.
+// PhaseTokens returns the spend records inside a window: every phase's, every
+// collected launch's (filed under the executor's phase) and every auxiliary
+// record's.
 //
 // The rows the dashboard's spend breakdown is folded from — see
 // internal/tokens, which does the folding for BOTH this and the live window,
@@ -1952,46 +1992,57 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	// reports that as now and the rows have to be the rows the label
 	// claims: a phase stamped in the future by a skewed clock inside a
 	// window headed "counted through now" is a number with no window.
-	sql := phaseTokenSQL + " AND event_time < ?"
+	tail := " AND event_time < ?"
 	args := []any{EncodeTime(since), EncodeTime(until)}
 	if q.AgentID != "" {
-		sql += " AND agent_id = ?"
+		tail += " AND agent_id = ?"
 		args = append(args, q.AgentID)
 	}
 	if q.Before != nil {
-		sql += " AND (event_time, event_id) < (?, ?)"
+		tail += " AND (event_time, event_id) < (?, ?)"
 		args = append(args, EncodeTime(q.Before.Time), q.Before.ID)
 	}
 	// Newest first, which is the order the breakdown renders in, and the
 	// order a Limit keeps the head of. No LIMIT unless the caller asked for
-	// a tail: see the note where the rollup's cap used to be.
-	sql += " ORDER BY event_time DESC, event_id DESC"
+	// a tail: see the note where the rollup's cap used to be. A tail of each
+	// type is enough for a tail of all of them: the newest Limit records of
+	// the window are among the newest Limit of whichever type each is.
+	tail += " ORDER BY event_time DESC, event_id DESC"
 	if q.Limit > 0 {
-		sql += " LIMIT ?"
+		tail += " LIMIT ?"
 		args = append(args, q.Limit)
 	}
 
-	rows, err := l.db.sql.QueryContext(ctx, sql, args...)
-	if err != nil {
-		return nil, fmt.Errorf("store: phase tokens: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := []tokens.Record{}
-	for rows.Next() {
-		var (
-			at  int64
-			rec tokens.Record
-		)
-		if err := rows.Scan(&at, &rec.EventID, &rec.AgentID, &rec.AgentRole, &rec.Person,
-			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
-			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
-			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
-			&rec.CacheReadTokens, &rec.CacheWriteTokens, &rec.ProviderKey,
-			&rec.CostUSD, &rec.Calls, &rec.Stage,
-		); err != nil {
-			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
+	// ONE STATEMENT PER SPEND TYPE, in one snapshot — see [phaseTokenSQL] —
+	// so the rollup is one reading of the log, as one statement's would be.
+	kinds := spendTypes()
+	var held []stampedSpend
+	err := l.Snapshot(ctx, func(s EventSnapshot) error {
+		// AFRESH ON EVERY ATTEMPT: a snapshot that met a conflict runs this
+		// again, and records kept from the attempt it abandoned would be
+		// counted twice.
+		held = held[:0]
+		for _, kind := range kinds {
+			got, err := scanSpend(ctx, s.q, phaseTokenSQL+tail, append([]any{kind}, args...))
+			if err != nil {
+				return err
+			}
+			held = append(held, got...)
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(held, func(a, b stampedSpend) int {
+		return cmp.Or(cmp.Compare(b.at, a.at), cmp.Compare(b.rec.EventID, a.rec.EventID))
+	})
+	if q.Limit > 0 && len(held) > q.Limit {
+		held = held[:q.Limit]
+	}
+
+	out := make([]tokens.Record, 0, len(held))
+	for _, h := range held {
 		// RFC3339Nano, the same encoding the live window carries, so the
 		// two orderings cannot disagree about which record is newer.
 		//
@@ -2001,8 +2052,41 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		// digit, and 'Z' sorts after '.' — which put 03:04:05Z ahead of
 		// 03:04:05.9Z. The encoding is still what matters here; it is the
 		// one both sides agree to parse.
-		rec.Timestamp = DecodeTime(at).Format(time.RFC3339Nano)
-		out = append(out, rec)
+		h.rec.Timestamp = DecodeTime(h.at).Format(time.RFC3339Nano)
+		out = append(out, h.rec)
+	}
+	return out, nil
+}
+
+// stampedSpend is one spend record as [phaseTokenSQL] read it, beside the
+// instant it was read at in the column's own encoding — what the merge of the
+// spend types orders by before the instant is rendered for the rollup.
+type stampedSpend struct {
+	at  int64
+	rec tokens.Record
+}
+
+// scanSpend runs one spend type's [phaseTokenSQL] on q and reads its rows.
+func scanSpend(ctx context.Context, q querier, query string, args []any) ([]stampedSpend, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: phase tokens: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []stampedSpend
+	for rows.Next() {
+		var h stampedSpend
+		rec := &h.rec
+		if err := rows.Scan(&h.at, &rec.EventID, &rec.AgentID, &rec.AgentRole, &rec.Person,
+			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
+			&rec.TurnID, &rec.WorkKey, &rec.Iteration,
+			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
+			&rec.CacheReadTokens, &rec.CacheWriteTokens, &rec.ProviderKey,
+			&rec.CostUSD, &rec.Calls, &rec.Stage,
+		); err != nil {
+			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
+		}
+		out = append(out, h)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: phase tokens: %w", err)

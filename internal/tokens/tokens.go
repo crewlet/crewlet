@@ -78,9 +78,9 @@ const DefaultRecentTurns = 50
 // turns is a request to aggregate the whole window into one frame.
 const MaxRecentTurns = 500
 
-// Record is one spend record — a completed phase's, or an auxiliary record's
-// coalesced calls — the aggregator's input, and the shape both producers hand
-// it.
+// Record is one spend record — a completed phase's, one launch of an
+// executor's run, or an auxiliary record's coalesced calls — the aggregator's
+// input, and the shape both producers hand it.
 type Record struct {
 	EventID   string `json:"event_id"`
 	Timestamp string `json:"timestamp"`
@@ -97,9 +97,11 @@ type Record struct {
 	// than under an empty id every person would share.
 	Person string `json:"person,omitempty"`
 
-	// Phase is the phase that ran, and [PhaseAuxiliary] on an auxiliary
-	// record — the `auxiliary_spend` event, which carries no phase of its
-	// own because it is none.
+	// Phase is the phase that ran; [PhaseExecute] on a launch's record —
+	// the `executor_collected` event, which carries no phase of its own
+	// because it is none, and whose spend is the executor's — and
+	// [PhaseAuxiliary] on an auxiliary record, the `auxiliary_spend` event,
+	// for the same reason.
 	Phase string `json:"phase"`
 	// HostPhase is the phase a nested call ran under: a delegated worker,
 	// or the round-cap extension judge.
@@ -129,19 +131,20 @@ type Record struct {
 	Iteration int    `json:"iteration"`
 
 	// Stage is WHOSE COST an auxiliary record is — `turn`, `reflection`,
-	// `background` or `operator` — and empty on a phase's record, which is
-	// always its turn's. It decides one thing here: whether the record is
-	// part of its turn's cost ([Record.InTurn]).
+	// `background` or `operator` — and empty on a phase's record and a
+	// launch's, which are always their turn's. It decides one thing here:
+	// whether the record is part of its turn's cost ([Record.InTurn]).
 	Stage string `json:"stage,omitempty"`
 
 	// Calls is how many provider calls the record covers: a phase's model
-	// rounds, a coding run's own CLI turns, an auxiliary record's coalesced
-	// calls. ONE UNIT under one label everywhere a bucket says "N calls" —
-	// it counted RECORDS once, so a forty-turn coding run was one call
+	// rounds, an executor launch's own CLI turns, an auxiliary record's
+	// coalesced calls. ONE UNIT under one label everywhere a bucket says "N
+	// calls" — it counted RECORDS once, so a forty-turn run was one call
 	// beside a coalesced record of seventy rewrites. A phase's count is
 	// [PhaseCalls] — none for an executor's own record, whose run's calls
-	// are on the run's record — and an auxiliary record coalesces at least
-	// the call that produced it, so a bucket sums what each record states.
+	// are on its launches' records — a launch's is [LaunchCalls], and an
+	// auxiliary record coalesces at least the call that produced it, so a
+	// bucket sums what each record states.
 	Calls int `json:"calls,omitempty"`
 
 	InputTokens  int `json:"input_tokens"`
@@ -172,7 +175,8 @@ type Record struct {
 const StageTurn = "turn"
 
 // InTurn reports whether a record is part of its turn's cost: every phase's,
-// and an auxiliary record of the [StageTurn] stage. A TURN'S COST IS DEFINED
+// every launch of its executor's run, and an auxiliary record of the
+// [StageTurn] stage. A TURN'S COST IS DEFINED
 // HERE, ONCE — the turn list, the live window's per-turn rows and the Turn
 // screen all count what this admits — and the reflection after a turn is not in
 // it: it carries the turn's id so the turn's page can draw it, and it is the
@@ -188,9 +192,6 @@ type PhaseCounts struct {
 	// call it timed — and RoundsUsed its `rounds_used`.
 	Rounds     int
 	RoundsUsed int
-	// CLITurns is its `cli_turns`: a coding run's own model turns, as its
-	// CLI reported them.
-	CLITurns int
 }
 
 // PhaseCalls is a phase record's provider calls.
@@ -199,28 +200,23 @@ type PhaseCounts struct {
 //     coding CLI's own run: the engine's record of the phase states the run
 //     as one round — the launch and its answer — but the engine made no
 //     provider call for it, whether the run was collected or its launch was
-//     refused. The run's calls are its CLI's, counted on the run's own
-//     record; counting the round as well put two calls on every turn that
-//     nobody made.
-//   - A coding run's record (`sandbox`) covers its CLI's own turns, as the
-//     CLI reported them (`cli_turns`), and one where it reported none — the
-//     one run the engine asked for, which is the most it can say.
+//     refused. The run's calls are its CLI's, counted on each launch's own
+//     record ([LaunchCalls]); counting the round as well put two calls on
+//     every turn that nobody made.
 //   - Every other phase covers its rounds: its `rounds` list's length where
 //     it recorded one, its `rounds_used` where it counted rounds without
 //     listing them, and one where neither says (a judge's single call).
 //
 // ONE RULE FOR BOTH PRODUCERS — the event store's writer and the live
 // projection — so a phase counts the same calls on either side of the live
-// edge. The two phase names are the event catalogue's (events/types), spelled
-// here so this package stays a leaf; a test holds both spellings to the
-// catalogue's constants, so a renamed phase cannot fall silently to the
-// rounds rule.
+// edge. The executor's phase name is the event catalogue's (events/types),
+// spelled here so this package stays a leaf; a test holds the spelling to the
+// catalogue's constant, so a renamed phase cannot fall silently to the rounds
+// rule.
 func PhaseCalls(c PhaseCounts) int {
 	switch {
-	case c.Phase == "execute":
+	case c.Phase == PhaseExecute:
 		return 0
-	case c.Phase == "sandbox":
-		return max(c.CLITurns, 1)
 	case c.Rounds > 0:
 		return c.Rounds
 	case c.RoundsUsed > 0:
@@ -228,6 +224,19 @@ func PhaseCalls(c PhaseCounts) int {
 	}
 	return 1
 }
+
+// LaunchCalls is the provider calls one launch of an executor's run covers,
+// off its own record (`executor_collected`): the model turns its CLI's own
+// loop took, as the CLI reported them (`cli_turns`), and one where it reported
+// none — the one run the engine asked for, which is the most it can say.
+//
+// ITS OWN RULE BESIDE [PhaseCalls], not a phase word folded into that one: a
+// launch is no phase, and its record carries no `phase` to switch on. ONE RULE
+// FOR BOTH PRODUCERS all the same — the event store's writer and the live
+// projection count a launch by it — so the executor's calls are the same on
+// either side of the live edge. A negative count is none reported, as the
+// collection that floors a launch's usage reads it.
+func LaunchCalls(cliTurns int) int { return max(cliTurns, 1) }
 
 // Bucket is an accumulated total. Embedded rather than nested, because the
 // wire shape spreads it into each row: {"phase": "execute", "total_tokens":
@@ -958,6 +967,12 @@ func agentTie(r AgentRow) string {
 // whose records carry a worker. Named here rather than imported from the event
 // catalogue so this package stays a leaf.
 const PhaseAuxiliary = "auxiliary"
+
+// PhaseExecute is the phase an executor launch's record is filed under — the
+// executor's own, since a launch is the executor's run doing its round's work.
+// Named here for [PhaseAuxiliary]'s reason, and held to the event catalogue's
+// constant by a test.
+const PhaseExecute = "execute"
 
 func bucketFor(m map[string]*Bucket, key string) *Bucket {
 	b := m[key]

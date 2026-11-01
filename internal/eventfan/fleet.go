@@ -588,8 +588,10 @@ func turnNodes(g gathered[turnPart]) []string {
 	return slices.Compact(nodes)
 }
 
-// Phases answers the company's phase records, newest first, payload included —
-// or one seat's, named by the id every node derives for its handle.
+// Phases answers the company's phase records — every phase's own, and every
+// collected launch of an executor's run ([store.EventLog.Phases]) — newest
+// first, payload included, or one seat's, named by the id every node derives
+// for its handle.
 func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
 	limit = phaseLimit(limit)

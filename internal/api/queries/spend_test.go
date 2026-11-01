@@ -150,7 +150,7 @@ func TestANamedWindowAnswersEveryNodesSpend(t *testing.T) {
 	f := newSpendFixture(t)
 	f.day("node-a", "2026-09-24", "lead", 2, 1, spent("execute", "sonnet", 100))
 	f.day("node-b", "2026-09-24", "lead", 1, 0, spent("review", "haiku", 30))
-	f.day("node-a", "2026-09-25", "sre", 1, 0, spent("sandbox", "cli", 7))
+	f.day("node-a", "2026-09-25", "sre", 1, 0, spent("execute", "cli", 7))
 
 	got := rollupOf(t, registryOver(t, f.sources()), map[string]any{"days": 7})
 	if got.Totals.TotalTokens != 137 || got.Totals.Calls != 3 {
@@ -310,12 +310,13 @@ func TestOneSeatCanBeAskedForByHandleEvenAfterItLeft(t *testing.T) {
 	}
 }
 
-// ISO WEEKS ON THE COMPANY'S CLOCK, and a coding run inside Execute.
+// ISO WEEKS ON THE COMPANY'S CLOCK, and every phase folded into its band — the
+// executor's run in Execute, which is where its launches' spend is filed.
 func TestTheSeriesIsCutInCompanyWeeksAndFoldsPhasesIntoFourBands(t *testing.T) {
 	t.Parallel()
 	f := newSpendFixture(t)
 	f.day("node-a", "2026-09-20", "lead", 1, 0, spent("execute", "sonnet", 5)) // Sunday, W38
-	f.day("node-a", "2026-09-21", "lead", 1, 0, spent("sandbox", "cli", 7))    // Monday, W39
+	f.day("node-a", "2026-09-21", "lead", 1, 0, spent("execute", "cli", 7))    // Monday, W39
 	f.day("node-b", "2026-09-25", "sre", 1, 0, spent("subagent", "haiku", 3))
 
 	got := seriesOf(t, registryOver(t, f.sources()),
@@ -331,7 +332,7 @@ func TestTheSeriesIsCutInCompanyWeeksAndFoldsPhasesIntoFourBands(t *testing.T) {
 		t.Errorf("W39 starts %s, want Tokyo's Monday midnight", at)
 	}
 	if w := got.Points[2]; w.Groups["execute"].TotalTokens != 7 || w.Groups["workers"].TotalTokens != 3 {
-		t.Errorf("W39 = %+v, want the coding run in execute and the worker in workers", w.Groups)
+		t.Errorf("W39 = %+v, want the executor's run in execute and the worker in workers", w.Groups)
 	}
 	var bands []string
 	for _, b := range got.ByGroup {

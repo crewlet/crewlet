@@ -432,8 +432,8 @@ describe("a running coding run's live output", () => {
 describe("a collected coding run's span", () => {
   test("names the refs its record does not list", async () => {
     const run = phaseRecord({
-      key: "turn-1|sandbox|1|L1",
-      phase: "sandbox",
+      key: "turn-1|execute|1|L1",
+      launch: true,
       codingAgent: "claude-code",
       launchId: "L1",
       at: iso(31_000),

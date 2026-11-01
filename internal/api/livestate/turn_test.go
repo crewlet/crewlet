@@ -188,21 +188,21 @@ func TestAWorkerItsRunDelegatedToLeavesItsTurnParked(t *testing.T) {
 	}
 }
 
-// THE RUN'S OWN RECORD LEAVES ITS TURN PARKED, and the turn's own segment is
-// what moves it on. The collection publishes the run's `sandbox` record before
-// it resumes the turn, and a resume can wait — on another node, behind the
-// seat's budget, on a retry — so the turn is parked on its collected run until
-// the resumed segment says otherwise. Read as a phase, it showed a phase
-// running that nothing was running.
+// A COLLECTED LAUNCH LEAVES ITS TURN PARKED, and the turn's own segment is
+// what moves it on. The collection publishes the launch's own record
+// (`executor_collected`) before it resumes the turn, and a resume can wait — on
+// another node, behind the seat's budget, on a retry — so the turn is parked
+// on its collected run until the resumed segment says otherwise. Read as a
+// step of the turn, it showed a phase running that nothing was running.
 //
-// Mutation: stage the run's record as `phase`, and the turn reads phase; let
-// no phase record move a parked turn, and the resumed execute record leaves
-// it parked.
-func TestTheRunsOwnRecordLeavesItsTurnParked(t *testing.T) {
+// Mutation: stage the launch's record as `phase`, and the turn reads phase;
+// let no phase record move a parked turn, and the resumed execute record
+// leaves it parked.
+func TestACollectedLaunchLeavesItsTurnParked(t *testing.T) {
 	t.Parallel()
 	s := parked(t)
-	s.Apply(env("agent_phase_completed", turnPayload("tn-1", map[string]any{
-		"phase": "sandbox", "iteration": 1, "launch_id": "job-1",
+	s.Apply(env("executor_collected", turnPayload("tn-1", map[string]any{
+		"iteration": 1, "launch_id": "job-1", "total_tokens": 900,
 	}), at("2026-06-14T12:30:00Z")))
 	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StageParked {
 		t.Fatalf("turn = %+v, want tn-1 parked on its collected run", turn)
@@ -215,6 +215,62 @@ func TestTheRunsOwnRecordLeavesItsTurnParked(t *testing.T) {
 	}), at("2026-06-14T12:30:02Z")))
 	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StagePhase {
 		t.Fatalf("turn = %+v, want tn-1 in a phase once its own segment ran one", turn)
+	}
+}
+
+// A COLLECTED LAUNCH OPENS ITS TURN, PARKED, on a seat that holds none: a
+// projection that missed the park — it started after it, and its seed read no
+// parked turn — learns of the turn from the launch, and learns it parked, since
+// a launch is collected only while its turn waits on it.
+//
+// Mutation: route the launch's record nowhere in the turn, and the seat holds
+// no turn; open it in a phase, and it reads phase.
+func TestACollectedLaunchOpensItsTurnParked(t *testing.T) {
+	t.Parallel()
+	s := livestate.New()
+	s.Apply(env("executor_collected", turnPayload("tn-1", map[string]any{
+		"iteration": 1, "launch_id": "job-1",
+	}), at("2026-06-14T12:30:00Z")))
+	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.TurnID != "tn-1" ||
+		turn.Stage != livestate.StageParked {
+		t.Fatalf("turn = %+v, want tn-1 opened parked on its collected run", turn)
+	}
+}
+
+// A LAUNCH THAT FAILED IS THE SEAT'S LAST ERROR, as a failed phase is — in the
+// executor's phase, whose run it was — and the turn it belongs to is failed
+// when it ends. A launch that stopped to ask is no failure, and says nothing
+// about the seat's errors.
+//
+// Mutation: read the launch's record as no state event, and the seat has no
+// last error; take its notes for a failure, and the asking launch has one.
+func TestAFailedLaunchIsTheSeatsLastError(t *testing.T) {
+	t.Parallel()
+	s := parked(t)
+	s.Apply(env("executor_collected", turnPayload("tn-1", map[string]any{
+		"iteration": 1, "launch_id": "job-1", "notes": "stopped to ask: which branch?",
+	}), id("asked"), at("2026-06-14T12:30:00Z")))
+	if got := overlayOf(t, s, "Lead").LastError; got != nil {
+		t.Fatalf("last error = %+v after a launch that stopped to ask, want none", got)
+	}
+
+	s.Apply(env("executor_collected", turnPayload("tn-1", map[string]any{
+		"iteration": 1, "launch_id": "job-2", "failed": true,
+		"error": "the coding agent exited with status 1", "error_kind": "coding_run_failed",
+	}), id("broke"), at("2026-06-14T12:40:00Z")))
+	got := overlayOf(t, s, "Lead").LastError
+	if got == nil || got.Kind != "coding_run_failed" || got.Phase != "execute" ||
+		got.TurnID != "tn-1" || got.EventID != "broke" {
+		t.Fatalf("last error = %+v, want the failed launch's kind, in execute, on its turn", got)
+	}
+	if turn := overlayOf(t, s, "Lead").Turn; turn == nil || turn.Stage != livestate.StageParked {
+		t.Fatalf("turn = %+v, want tn-1 still parked: a failed launch's round is resumed", turn)
+	}
+	s.Apply(env("agent_turn_started", turnPayload("tn-1", map[string]any{"resumed": true}),
+		at("2026-06-14T13:00:00Z")))
+	s.Apply(env("agent_turn_completed", turnPayload("tn-1", nil), at("2026-06-14T13:00:09Z")))
+	if last := overlayOf(t, s, "Lead").LastTurn; last == nil || last.Outcome != livestate.OutcomeFailed {
+		t.Errorf("last turn = %+v, want tn-1 failed for its failed launch", last)
 	}
 }
 

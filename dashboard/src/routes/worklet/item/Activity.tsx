@@ -715,7 +715,6 @@ function CommentRow({
 const PHASE_WORD: Record<string, string> = {
   execute: "Execute",
   review: "Review",
-  sandbox: "Coding run",
   subagent: "Workers",
   judge: "Judge",
   onboarding: "Onboarding",

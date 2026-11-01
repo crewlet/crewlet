@@ -60,27 +60,27 @@ func TestANodesDayIsDerivedFromItsOwnRecords(t *testing.T) {
 	local := func(h, m int) time.Time { return time.Date(2026, 9, 23, h, m, 0, 0, santiago) }
 	ev := &events{t: t, db: db}
 
-	// Turn t1: its executor's coding run collected (the run's own `sandbox`
-	// record, where an executor's spend is), reviewed, sent back once, run
-	// again and accepted.
-	ev.phase(local(9, 0), "seat-1", "t1", "sandbox", "", 1000, 200)
+	// Turn t1: its executor's run collected (the launch's own record, where
+	// an executor's spend is), reviewed, sent back once, run again and
+	// accepted.
+	ev.launch(local(9, 0), "seat-1", "t1", 1000, 200)
 	ev.phase(local(9, 1), "seat-1", "t1", "review", "self_iterate", 300, 50)
-	ev.phase(local(9, 2), "seat-1", "t1", "sandbox", "", 800, 100)
+	ev.launch(local(9, 2), "seat-1", "t1", 800, 100)
 	ev.phase(local(9, 3), "seat-1", "t1", "review", "done", 200, 40)
 	ev.turn(local(9, 4), "seat-1", "dev", "t1", false, 4*time.Minute, "self_iterate", "done")
 	// Turn t2: accepted by its first review — a first pass.
-	ev.phase(local(10, 0), "seat-1", "t2", "sandbox", "", 500, 50)
+	ev.launch(local(10, 0), "seat-1", "t2", 500, 50)
 	ev.phase(local(10, 1), "seat-1", "t2", "review", "done", 100, 20)
 	ev.turn(local(10, 2), "seat-1", "dev", "t2", false, 2*time.Minute, "done")
 	// Turn t3: failed, never reviewed.
-	ev.phase(local(11, 0), "seat-1", "t3", "sandbox", "", 50, 0)
+	ev.launch(local(11, 0), "seat-1", "t3", 50, 0)
 	ev.turn(local(11, 1), "seat-1", "dev", "t3", true, 30*time.Second)
 	// Reads: one search that reached two pages, one page read twice.
 	ev.read(local(9, 30), "seat-1", "t1", "search", "deploy rollback", "p-deploy", "p-runbook")
 	ev.read(local(9, 40), "seat-1", "t1", "get_page", "", "p-deploy")
 	ev.read(local(10, 30), "seat-1", "t2", "get_page", "", "p-deploy")
 	// 23:30 local is 02:30 UTC the NEXT day — the company's day, not UTC's.
-	ev.phase(local(23, 30), "seat-1", "t4", "sandbox", "", 7, 3)
+	ev.launch(local(23, 30), "seat-1", "t4", 7, 3)
 	// And a fire, dispatched to dev at 08:00.
 	if _, err := sqlledger.New(db.SQL()).Claim(t.Context(), schedule.Run{
 		FireKey: schedule.FireKey{Scope: "role", ScopeID: "Dev",

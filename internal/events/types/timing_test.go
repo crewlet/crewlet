@@ -7,20 +7,21 @@ import (
 	"time"
 )
 
-// A PHASE RECORD THAT MEASURED NOTHING SAYS SO BY OMISSION.
+// A RECORD THAT MEASURED NOTHING SAYS SO BY OMISSION.
 //
-// A coding run's own `sandbox` record can have no start this build measured,
-// and has no rounds of its own and no round cap; a call whose arguments did
-// not parse is one nothing timed.
+// A phase record can have no start this build measured, and a phase that ran
+// no loop here has no rounds of its own and no round cap; a call whose
+// arguments did not parse is one nothing timed; and a launch's own record
+// (`executor_collected`) can name no start where its row held none.
 // Decoded and re-encoded (the store keeps the payload, a socket forwards it)
 // such a record must stay that way: a zero time.Time marshals as the year 1,
 // and a record reading "started 0001-01-01" is a timeline bar two thousand
 // years long rather than an honest "not recorded".
-func TestAPhaseRecordThatMeasuredNothingSaysSoByOmission(t *testing.T) {
+func TestARecordThatMeasuredNothingSaysSoByOmission(t *testing.T) {
 	t.Parallel()
-	untimed := `{"agent_id":"a1","role":"CTO","turn_id":"t1","iteration":1,"phase":"sandbox",` +
-		`"launch_id":"launch-1","model":"m","input_tokens":100,"output_tokens":10,` +
-		`"total_tokens":110,"cache_read_tokens":0,"cache_write_tokens":0,"duration_ms":4200,` +
+	untimed := `{"agent_id":"a1","role":"CTO","turn_id":"t1","iteration":1,"phase":"execute",` +
+		`"launch_id":"launch-1","model":"m","input_tokens":0,"output_tokens":0,` +
+		`"total_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"duration_ms":4200,` +
 		`"tool_executions":[{"name":"read_file","round":1,"success":true}]}`
 
 	var rec AgentPhaseCompleted
@@ -39,6 +40,26 @@ func TestAPhaseRecordThatMeasuredNothingSaysSoByOmission(t *testing.T) {
 		`"max_rounds"`, `"round_ceiling"`, `"host_round"`} {
 		if strings.Contains(string(again), key) {
 			t.Errorf("re-encoding an untimed record invented %s: %s", key, again)
+		}
+	}
+
+	// A launch's own record keeps the same promise for its start.
+	var launch ExecutorCollected
+	if err := json.Unmarshal([]byte(`{"agent_id":"a1","role":"CTO","turn_id":"t1",`+
+		`"iteration":1,"launch_id":"launch-1","model":"m","input_tokens":100,`+
+		`"output_tokens":10,"total_tokens":110,"duration_ms":4200}`), &launch); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !launch.StartedAt.IsZero() || launch.WorkItem != nil {
+		t.Errorf("an untimed launch decoded with a start or an item it never carried: %+v", launch)
+	}
+	encoded, err := json.Marshal(launch)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, key := range []string{`"started_at"`, `"work_item"`, `"activity_transcript"`, `"cli_turns"`} {
+		if strings.Contains(string(encoded), key) {
+			t.Errorf("re-encoding an untimed launch invented %s: %s", key, encoded)
 		}
 	}
 

@@ -18,8 +18,10 @@ package livestate
 //     head is limited and the seat runs on its fallback, so it is NOT stopped;
 //   - a phase that completes through the limited entry, or, for a parked seat,
 //     through any entry: a call answered, so the limit is over as far as this
-//     seat knows. As is a phase answered by an entry other than the fallback
-//     it was running on, which is the seat's chain having changed;
+//     seat knows — and a launch of the executor's run collected the same way,
+//     which is its CLI's calls answered through the entry the launch picked.
+//     As is a phase answered by an entry other than the fallback it was
+//     running on, which is the seat's chain having changed;
 //   - `seat_provider_released`, a park lifted (its probe answered, its chain
 //     changed, or the node gave the seat up), and `agent_spawned`, a new
 //     instance of the seat.
@@ -148,7 +150,7 @@ func (s *LiveState) nextLimit(was *ProviderLimit, env Envelope, payload map[stri
 			entry: from, runningOn: to,
 		}, true
 
-	case "agent_phase_completed":
+	case "agent_phase_completed", launchType:
 		if was == nil || flag(payload, "failed") {
 			return was, false
 		}

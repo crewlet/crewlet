@@ -198,7 +198,11 @@ func (s Sources) attemptsOf(ctx context.Context, id string,
 	return key, rows
 }
 
-// phases answers what the models have been doing, company-wide.
+// phases answers what the models have been doing, company-wide: every phase's
+// own record, and every launch of an executor's run as its collection read it
+// (`executor_collected`) — what the run spent and reported, which is the work
+// of the executor round that launched it and no phase of its own
+// ([store.EventLog.Phases]).
 //
 // The question the previous dashboard could not ask at all: its only phase
 // history was per-seat, capped at fifty rows, with no pager and no filter — so

@@ -214,13 +214,13 @@ func TestAStoppedRunsSpendIsChargedAndPublishedBeforeItsBoxGoes(t *testing.T) {
 	if rig.accountant.charged != 10_000 {
 		t.Fatalf("charged %d tokens, want the 10000 the run had spent", rig.accountant.charged)
 	}
-	phases := rig.phases()
-	if len(phases) != 1 {
-		t.Fatalf("published %d phase records for the stopped run, want one", len(phases))
+	launches := rig.collected()
+	if len(launches) != 1 {
+		t.Fatalf("published %d launch records for the stopped run, want one", len(launches))
 	}
-	if rec := phases[0]; rec.Failed || rec.Notes != "stopped by founder before it finished" ||
+	if rec := launches[0]; rec.Failed || rec.Notes != "stopped by founder before it finished" ||
 		rec.InputTokens != 9000 || rec.OutputTokens != 1000 {
-		t.Fatalf("the stopped run's phase is %+v, want its tokens, noted as stopped and not failed", rec)
+		t.Fatalf("the stopped run's launch record is %+v, want its tokens, noted as stopped and not failed", rec)
 	}
 	// AND THE FIGURES REACH THE TURN'S CLOSE, which charges the work item.
 	closed := spies.closedTurns()
@@ -248,7 +248,7 @@ func TestAStopWhoseBoxCannotBeReadStillEndsTheRun(t *testing.T) {
 	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
 		t.Fatal("a stop whose box could not be read left its run in place")
 	}
-	if rig.accountant.asked() != 0 || len(rig.phases()) != 0 {
+	if rig.accountant.asked() != 0 || len(rig.collected()) != 0 {
 		t.Fatal("charged or published a spend nobody read")
 	}
 	if len(rig.stopAnnouncements()) != 1 || len(spies.closedTurns()) != 1 {
@@ -586,7 +586,7 @@ func TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost(t *testi
 	if got := asks.reads(); len(got) != 0 {
 		t.Fatalf("the stop asked the box's host %v, for a job the relaunch has not started", got)
 	}
-	if rig.accountant.asked() != 0 || len(rig.phases()) != 0 {
+	if rig.accountant.asked() != 0 || len(rig.collected()) != 0 {
 		t.Fatal("the stop charged or published the previous job's spend again")
 	}
 	if slices.Contains(rig.provider.KilledIDs(), prior.SandboxID) {

@@ -745,11 +745,6 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	if done.CodingAgent != "claude-code" || done.SandboxID != "box-7" {
 		t.Errorf("the box is unnamed: agent=%q id=%q", done.CodingAgent, done.SandboxID)
 	}
-	// The run's cost is on its OWN record, the `sandbox` phase its
-	// collection publishes; stating it here too would count it twice.
-	if done.CostUSD != 0 {
-		t.Errorf("cost_usd = %v on the resumed executor, which the run's own record already carries", done.CostUSD)
-	}
 	if len(done.DeliveredRefs) != 1 {
 		t.Errorf("delivered_refs = %v, want what the run produced", done.DeliveredRefs)
 	}

@@ -259,6 +259,17 @@ func (e *events) phase(at time.Time, agent, turn, ph, decision string, input, ou
 	})
 }
 
+// launch records one collected launch of the executor's run — the record an
+// executor's spend is on, which names no phase of its own.
+func (e *events) launch(at time.Time, agent, turn string, input, output int) {
+	e.add("executor_collected", at, agent, "Dev", map[string]any{
+		"agent_id": agent, "role": "Dev", "turn_id": turn, "iteration": 1,
+		"launch_id": fmt.Sprintf("job-%04d", e.seq+1), "model": "m-1", "provider_key": "primary",
+		"input_tokens": input, "output_tokens": output,
+		"total_tokens": input + output, "cache_read_tokens": input / 2,
+	})
+}
+
 // turn records a turn's two completion records, the second stating the whole
 // turn as the record that ends one does (types.TurnTally): its span, whether
 // it failed, and what each of its reviews decided.

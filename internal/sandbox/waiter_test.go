@@ -191,8 +191,8 @@ func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingR
 		// row that carries one — and a write that dropped it would show.
 		// The unit of work likewise.
 		WorkItem: &rigItem, WorkKey: rigWorkKey,
-		// The model the launch pointed its agent at, which the run's own
-		// phase record is filed under.
+		// The model the launch pointed its agent at, which the launch's
+		// own record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
 	shape(&run)

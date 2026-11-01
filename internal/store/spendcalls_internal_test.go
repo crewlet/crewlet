@@ -3,11 +3,12 @@ package store
 import "testing"
 
 // A SPEND ROW COUNTS ITS PROVIDER CALLS: a phase its rounds where it lists
-// them, its rounds_used where it does not, and one where neither says; a coding
-// run its CLI's own turns as reported, and one where the CLI reported none; an
-// executor's own record NONE, since its run's calls are the run's — and an
-// auxiliary record counts the calls it coalesced, filed as the auxiliary phase
-// with its purpose as the worker and its stage beside it.
+// them, its rounds_used where it does not, and one where neither says; an
+// executor's own record NONE, since its run's calls are its launches'; a
+// collected launch its CLI's own turns as reported, and one where the CLI
+// reported none, filed as the executor's phase under the round that launched
+// it — and an auxiliary record counts the calls it coalesced, filed as the
+// auxiliary phase with its purpose as the worker and its stage beside it.
 func TestASpendRowCountsItsProviderCalls(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -26,13 +27,17 @@ func TestASpendRowCountsItsProviderCalls(t *testing.T) {
 		payload: `{"phase":"execute","rounds":[{}],"rounds_used":1,"cli_turns":4}`,
 		want:    Spend{Phase: "execute", Calls: 0},
 	}, {
-		name: "a coding run's own turns", eventType: "agent_phase_completed",
-		payload: `{"phase":"sandbox","cli_turns":12,"total_tokens":40}`,
-		want:    Spend{Phase: "sandbox", TotalTokens: 40, Calls: 12},
+		name: "a collected launch's own turns", eventType: "executor_collected",
+		payload: `{"turn_id":"t-1","iteration":2,"launch_id":"job-1","model":"sonnet",` +
+			`"provider_key":"plan","cli_turns":12,"input_tokens":30,"output_tokens":10,` +
+			`"total_tokens":40,"cache_read_tokens":20,"cost_usd":0.4}`,
+		want: Spend{Phase: "execute", TurnID: "t-1", Iteration: 2, Model: "sonnet",
+			ProviderKey: "plan", InputTokens: 30, OutputTokens: 10, TotalTokens: 40,
+			CacheReadTokens: 20, Calls: 12},
 	}, {
-		name: "a coding run whose CLI reported no turns", eventType: "agent_phase_completed",
-		payload: `{"phase":"sandbox","total_tokens":40}`,
-		want:    Spend{Phase: "sandbox", TotalTokens: 40, Calls: 1},
+		name: "a launch whose CLI reported no turns", eventType: "executor_collected",
+		payload: `{"total_tokens":40}`,
+		want:    Spend{Phase: "execute", TotalTokens: 40, Calls: 1},
 	}, {
 		name: "a judge's single call", eventType: "agent_phase_completed",
 		payload: `{"phase":"judge","host_phase":"execute"}`,

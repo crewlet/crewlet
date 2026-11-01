@@ -844,8 +844,9 @@ type resumeInput struct {
 
 	// DeliveredRefs are what the collected run reported, for the resumed
 	// phase's own event. Empty when a person's answer resumed a parked
-	// clarification: nothing was collected. The run's cost is on its own
-	// `sandbox` phase record — see [sandbox.ResumeRequest.DeliveredRefs].
+	// clarification: nothing was collected. The run's cost is on its
+	// launch's own `executor_collected` record — see
+	// [sandbox.ResumeRequest.DeliveredRefs].
 	DeliveredRefs []string
 
 	// RefsElided is how many more the run reported than DeliveredRefs
@@ -1641,8 +1642,8 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 			"the parked turn state could not be serialized", err)
 		return false, nil
 	}
-	// The iteration rides BESIDE the blob: the coordinator files the run's
-	// own phase record under it and never decodes the state.
+	// The iteration rides BESIDE the blob: the coordinator files each
+	// launch's own record under it and never decodes the state.
 	suspended, err := rt.pending.MarkSuspended(ctx, turnID, sandbox.Suspension{
 		State: blob, Iteration: suspension.State.Round,
 	})

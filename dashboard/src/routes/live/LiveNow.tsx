@@ -138,13 +138,19 @@ const SEAT_EVENTS_POLL_MS = 15_000;
  *
  * NOT `auxiliary`: no phase record carries it. The auxiliary model's spend is
  * an `auxiliary_spend` record, which is no phase and runs nothing live, so a
- * filter offering it matched no row and read as a quiet model.
+ * filter offering it matched no row and read as a quiet model. Nor is a launch
+ * of the executor's run a phase of its own: it is its round's work, filed and
+ * filtered as `execute`.
  */
-const PHASES = ["execute", "review", "onboarding", "sandbox", "subagent", "judge"] as const;
+const PHASES = ["execute", "review", "onboarding", "subagent", "judge"] as const;
 
-/** The phase a running turn is in, in the vocabulary the phase filter uses. */
+/**
+ * The phase a running turn is in, in the vocabulary the phase filter uses. A
+ * PARKED turn is in its executor's round — its run is that round's work, out
+ * in its box — so the filter that keeps `execute` keeps it.
+ */
 function runningPhase(row: AgentRow): string {
-  if (row.turn?.stage === "parked") return "sandbox";
+  if (row.turn?.stage === "parked") return "execute";
   return row.live_call?.phase ?? row.current_phase ?? "context";
 }
 
@@ -301,7 +307,7 @@ export function LiveNow() {
             placeholder="Every seat"
             active={seat !== ""}
           />
-          {/* A PICKER, like the seat beside it: seven phase chips wrapped to
+          {/* A PICKER, like the seat beside it: six phase chips wrapped to
               three rows on a phone, and this toolbar is sticky. */}
           <Select
             width="auto"

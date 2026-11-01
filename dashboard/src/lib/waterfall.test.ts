@@ -578,8 +578,8 @@ describe("buildWaterfall", () => {
       ],
     });
     const run = phaseRecord({
-      key: "turn-1|sandbox|1|L1",
-      phase: "sandbox",
+      key: "turn-1|execute|1|L1",
+      launch: true,
       launchId: "L1",
       codingAgent: "claude-code",
       clockStart: iso(3_000),
@@ -616,8 +616,8 @@ describe("buildWaterfall", () => {
 
   test("two launches are two spans, and only the one still out is open", () => {
     const first = phaseRecord({
-      key: "turn-1|sandbox|1|L1",
-      phase: "sandbox",
+      key: "turn-1|execute|1|L1",
+      launch: true,
       launchId: "L1",
       clockStart: iso(1_000),
       durationMs: 4_000,

@@ -676,8 +676,9 @@ function liveOutput(text: string) {
 }
 
 // A SETTLED RUN STILL HAS A PAGE: its record is gone from the board, and what
-// it did is the `sandbox` phase its turn published, with the transcript on it.
-// It used to answer "no coding run" to a link to a run that had finished.
+// it did is its launch's own `executor_collected` record, with the transcript
+// on it. It used to answer "no coding run" to a link to a run that had
+// finished.
 //
 // Mutation: drop the collected records, and the page claims there is no run.
 test("a collected run's page shows what its job did, off its turn", async () => {
@@ -702,25 +703,47 @@ test("a collected run's page shows what its job did, off its turn", async () => 
         },
         {
           id: "p-1",
-          type: "agent_phase_completed",
+          type: "executor_collected",
           timestamp: "2026-06-15T12:10:00Z",
           source: "SWE",
           actor: "SWE",
           summary: "",
-          category: "llm",
+          category: "system",
           trace_id: "tr-1",
           span_id: "",
           parent_span_id: "",
           topic: "",
           payload: {
             turn_id: "turn-1",
-            phase: "sandbox",
             iteration: 1,
             role: "SWE",
             coding_agent: "claude",
             launch_id: "job-1",
             activity_transcript: "edited retry.go; tests pass",
             delivered_refs: ["crewlet/ada/retry"],
+          },
+        },
+        // THE ROUND'S OWN RECORD names the launch it collected too, and is no
+        // job of the run's: the page lists the launch once.
+        {
+          id: "p-2",
+          type: "agent_phase_completed",
+          timestamp: "2026-06-15T12:10:05Z",
+          source: "SWE",
+          actor: "SWE",
+          summary: "",
+          category: "system",
+          trace_id: "tr-1",
+          span_id: "",
+          parent_span_id: "",
+          topic: "",
+          payload: {
+            turn_id: "turn-1",
+            phase: "execute",
+            iteration: 1,
+            role: "SWE",
+            coding_agent: "claude",
+            launch_id: "job-1",
           },
         },
       ],
@@ -733,6 +756,8 @@ test("a collected run's page shows what its job did, off its turn", async () => 
   expect(screen.getByRole("heading", { name: /Add retry to the webhook client/ })).toBeTruthy();
   expect(screen.getByText("collected")).toBeTruthy();
   expect(screen.getByText("crewlet/ada/retry")).toBeTruthy();
+  // ONE JOB: the round's own record is not a second one.
+  expect(screen.queryByText(/What job \d+ of/)).toBeNull();
   expect(screen.queryByText("No coding run for this turn")).toBeNull();
 });
 
@@ -750,19 +775,18 @@ test("a collected run's delivered refs say how many the record does not list", a
       events: [
         {
           id: "p-1",
-          type: "agent_phase_completed",
+          type: "executor_collected",
           timestamp: "2026-06-15T12:10:00Z",
           source: "SWE",
           actor: "SWE",
           summary: "",
-          category: "llm",
+          category: "system",
           trace_id: "tr-1",
           span_id: "",
           parent_span_id: "",
           topic: "",
           payload: {
             turn_id: "turn-1",
-            phase: "sandbox",
             iteration: 1,
             role: "SWE",
             coding_agent: "claude",

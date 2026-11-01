@@ -22,7 +22,7 @@ func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
 	secret := "ghp_" + strings.Repeat("c", 36)
 	got := (&Coordinator{}).fitResult(t.Context(), PendingRun{},
 		Result{Success: true, DeliveredRefs: []string{"wip/t1", secret}})
-	rec := runPhase(PendingRun{}, LaunchRecord{}, got, time.Now())
+	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now())
 	for where, refs := range map[string][]string{
 		"the result": got.DeliveredRefs, "the record": rec.DeliveredRefs,
 		"the run's report": {runReport(got)},
@@ -71,16 +71,16 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 	if !strings.Contains(text, fmt.Sprintf("(and %d more its report names", got.DeliveredRefsElided)) {
 		t.Errorf("the run's report does not say the list is short: %.300q", text)
 	}
-	rec := runPhase(PendingRun{}, LaunchRecord{}, got, time.Now())
+	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now())
 	if rec.DeliveredRefsElided != got.DeliveredRefsElided || len(rec.DeliveredRefs) != len(got.DeliveredRefs) {
 		t.Errorf("the record lists %d and counts %d", len(rec.DeliveredRefs), rec.DeliveredRefsElided)
 	}
 }
 
-// THE WHOLE RECORD FITS. Every piece of text a box wrote that rides the run's
-// phase record is at its bound, in the worst bytes JSON can be handed — each
-// one escaped six-fold — and the record still clears the queue's ceiling, so
-// the run's only spend record is never refused for what its run wrote.
+// THE WHOLE RECORD FITS. Every piece of text a box wrote that rides the
+// launch's own record is at its bound, in the worst bytes JSON can be handed —
+// each one escaped six-fold — and the record still clears the queue's ceiling,
+// so the launch's only spend record is never refused for what its run wrote.
 func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 	t.Parallel()
 	// LINES of control bytes, so the whole-line fallback keeps each piece
@@ -112,7 +112,7 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 		"a run that asks": {asking, Result{Text: twice, Transcript: twice, DeliveredRefs: refs}},
 	} {
 		fitted := c.fitResult(t.Context(), tc.run, tc.result)
-		raw, err := json.Marshal(runPhase(tc.run, LaunchRecord{}, fitted, time.Now()))
+		raw, err := json.Marshal(collectedRecord(tc.run, LaunchRecord{}, fitted, time.Now()))
 		if err != nil {
 			t.Fatal(err)
 		}

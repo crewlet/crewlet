@@ -129,10 +129,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	run.LaunchID = uuid.NewString()
 	run.UpdatedAt = now
 	// And the job's own record starts here: the instant the launch exists
-	// is the instant its phase began, and a previous job's record — its
-	// start, its iteration, whether its phase was published — is not this
-	// one's. Only the model, the entry it runs on, the sign-in it was handed
-	// and why it follows the job before it are the caller's.
+	// is the instant it began, and a previous job's record — its start, its
+	// iteration, whether its record was published — is not this one's. Only
+	// the model, the entry it runs on, the sign-in it was handed and why it
+	// follows the job before it are the caller's.
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model,
 		ProviderKey: run.Launch.ProviderKey, SignInID: run.Launch.SignInID,
 		FollowUp: run.Launch.FollowUp}

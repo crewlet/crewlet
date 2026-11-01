@@ -185,7 +185,7 @@ type LaunchRequest struct {
 	// ProviderKey is the providers.llm entry the run was launched on: the
 	// member of the seat's executor chain that took it, which is not always
 	// the chain's head. Written onto the job's record ([LaunchRecord]) so
-	// the run's phase record and the resumed executor's are charged to the
+	// the launch's own record and the resumed executor's are charged to the
 	// entry that served them, on whichever node collects the run.
 	ProviderKey string
 
@@ -441,7 +441,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// The round carried on, whose earlier calls the row keeps — see
 		// [PendingRun.Continues].
 		Continues: req.Continue != nil,
-		// The model and the entry the run's phase record is filed under;
+		// The model and the entry the launch's own record is filed under;
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
 			SignInID: req.SignInID, FollowUp: followUpOf(req.Continue)},

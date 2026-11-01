@@ -149,8 +149,9 @@ type ResumeRequest struct {
 
 	// Answer is what the resumed turn files as its executor's report: the
 	// collected run's own account of itself ([runReport]). Already redacted
-	// — it is published as a phase record. Empty on a person's answer, which
-	// is no report of anything the run did ([ResumeRequest.Asked]).
+	// — it is published on the executor's phase record. Empty on a person's
+	// answer, which is no report of anything the run did
+	// ([ResumeRequest.Asked]).
 	Answer string
 
 	// Asked is set when a PERSON'S ANSWER drives the resume of a run that
@@ -197,11 +198,12 @@ type ResumeRequest struct {
 	// on them ([Result.DeliveredRefs]). Empty when a PERSON's answer resumes
 	// a parked clarification: no new run finished.
 	//
-	// The run's COST is deliberately not here. It is the run's own fact and
-	// rides the run's own record ([Coordinator.OnCompleted] publishes it as
-	// the `sandbox` phase), which every collected run gets — a run that
-	// parked on a question included, whose resume is an answer and carries
-	// no run at all, so on this request its cost was reported nowhere.
+	// The run's COST is deliberately not here. It is each launch's own fact
+	// and rides that launch's own record (the collection publishes it as
+	// `executor_collected`, [Coordinator.publishCollected]), which every
+	// collected launch gets — one that parked on a question included, whose
+	// resume is an answer and carries no run at all, so on this request its
+	// cost was reported nowhere.
 	DeliveredRefs []string
 
 	// DeliveredRefsElided is how many more refs the run reported than
@@ -702,9 +704,9 @@ type CoordinatorOptions struct {
 //     that is still going.
 //   - COMPLETION → RESUME. A completion is claimed AT MOST ONCE, and only
 //     for the job it reports, the result collected with the box paused for
-//     reuse, tokens post-accounted and the run published as a phase of its
-//     own once per launch however often the tail is retried, and the parked
-//     turn re-entered with the run's record to judge.
+//     reuse, tokens post-accounted and the launch published as a record of
+//     its own (`executor_collected`) once however often the tail is retried,
+//     and the parked turn re-entered with the run's record to judge.
 //     The seat stays held through all of it and is freed only at the last
 //     moment before the resume, because freeing it earlier lets a queued
 //     event take the slot, the resume fail, and the redelivery find the claim
@@ -1393,7 +1395,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 		run.Launch.CollectedAt = c.now().UTC()
 	}
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
-	run.Launch = c.publishPhase(ctx, run, result)
+	run.Launch = c.publishCollected(ctx, run, result)
 
 	if run.asked() {
 		return c.park(ctx, run, result)
@@ -1428,13 +1430,14 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.ExecutorFinished,
 // within a bound, and then the run is given up.
 //
 // IT IS SAFE TO ASK AGAIN, which the claim protocol is what proves. Nothing
-// the tail writes happens before a collection succeeds — the charge, the phase
-// record, the park and the resume all follow it — so a failed collection has
-// changed nothing but the claim, and handing that back ([Coordinator.unclaim])
-// leaves the run exactly as the completion found it: running, its box kept
-// alive by the poll, its turn suspended. The completion is then NAK'd and
-// comes back on the queue's backoff, here or on the seat's next owner, and the
-// poll fires a fresh one on its next tick; whichever claims first collects.
+// the tail writes happens before a collection succeeds — the charge, the
+// launch's record, the park and the resume all follow it — so a failed
+// collection has changed nothing but the claim, and handing that back
+// ([Coordinator.unclaim]) leaves the run exactly as the completion found it:
+// running, its box kept alive by the poll, its turn suspended. The completion
+// is then NAK'd and comes back on the queue's backoff, here or on the seat's
+// next owner, and the poll fires a fresh one on its next tick; whichever
+// claims first collects.
 // Settling on the first failure used to destroy the turn — and its charge and
 // its record — over one transport blip, or over the drain whose cancellation
 // was the failure.
@@ -1596,7 +1599,8 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 	}
 	c.warnNotesUnasked(ctx, run, result)
 	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
-	// so the phase record, the park and the resumed executor carry one text.
+	// so the launch's record, the park and the resumed executor carry one
+	// text.
 	return c.fitText(ctx, run, result), ended, nil
 }
 
@@ -1790,19 +1794,23 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 	return true, true
 }
 
-// publishPhase publishes the collected run as a phase of its turn, ONCE per
-// launch, and returns the job's record as it now stands.
+// publishCollected publishes the collected launch's own record
+// (`executor_collected`), ONCE per launch, and returns the job's record as it
+// now stands.
 //
-// THE RUN IS A PHASE OF ITS OWN. Until this existed a detached coding run left
-// no phase record at all: the executor that launched it publishes nothing when
-// it suspends, and its resumed record is the EXECUTOR's — its own rounds and
-// its own tokens. So every token a coding run spent was missing from the spend
-// rollup and from each data node's daily usage (the budget counter was charged,
-// and nothing a person reads agreed with it), and the activity transcript the
-// runner reconstructs — the only account of what an agent with no telemetry
-// did — was collected, redacted and thrown away. It is published here, where
-// the result is in hand, for every collected run: one that finished and one
+// THE LAUNCH IS THE EXECUTOR'S SPEND. The executor that launched it publishes
+// nothing when it suspends, and its resumed record is the executor's phase —
+// the launch and the answer as one round, with no tokens of its own. So this
+// is where every token a launch spent reaches the spend rollup and each data
+// node's daily usage (the budget counter is charged beside it), and where the
+// activity transcript the runner reconstructs — the only account of what an
+// agent with no telemetry did — is kept. It is published here, where the
+// result is in hand, for every collected launch: one that finished and one
 // that stopped to ask a question alike, because both spent what they spent.
+//
+// A RECORD OF ITS OWN, NOT A PHASE: see [types.ExecutorCollected]. It was an
+// `agent_phase_completed` once, and every reader of a phase had to know to
+// fold it back into the executor that launched it.
 //
 // ONCE, for the reason the charge is once, and recorded the same way: the
 // publish sits inside the part of the tail that is retried, every reader of
@@ -1815,19 +1823,19 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 //
 // Telemetry never fails the tail: a record that could not be published is
 // logged, and the run is resumed exactly as it would have been.
-func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result Result) LaunchRecord {
+func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, result Result) LaunchRecord {
 	facts := run.Launch
 	if facts.Published {
-		log.InfoContext(ctx, "sandbox_phase_already_published",
+		log.InfoContext(ctx, "sandbox_collected_already_published",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID)
 		return run.Launch
 	}
-	ev := events.New(runPhase(run, facts, result, c.now()), events.TraceContext{
+	ev := events.New(collectedRecord(run, facts, result, c.now()), events.TraceContext{
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
 	})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		log.WarnContext(ctx, "sandbox_phase_publish_failed",
+		log.WarnContext(ctx, "sandbox_collected_publish_failed",
 			"turn_id", run.TurnID, "launch_id", run.LaunchID, "error", err.Error())
 		return run.Launch
 	}
@@ -1835,22 +1843,24 @@ func (c *Coordinator) publishPhase(ctx context.Context, run PendingRun, result R
 	return facts
 }
 
-// runPhase is a collected run's own phase record.
+// collectedRecord is a collected launch's own record.
 //
-// Everything on it is the RUN's: its tokens and cache share, what its CLI said
-// it cost, the report it wrote, what it delivered, its transcript and, when it
-// did not finish, why. Nothing on it is the executor's — that is on the
-// resumed executor's own record, which is why the two never sum to more than
-// the turn spent.
+// Everything on it is the LAUNCH's: its tokens and cache share, what its CLI
+// said it cost, the report it wrote, what it delivered, its transcript and,
+// when it did not finish, why. Nothing on it is the executor's — that is on
+// the resumed executor's own phase record, which is why the two never sum to
+// more than the turn spent.
 //
 // Its clock is the store's instant for the launch and this node's for the
 // collection, so DURATION covers launch to collection: the waiter's poll
 // interval is inside it, and the coding itself is the rest.
-func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.AgentPhaseCompleted {
-	rec := types.AgentPhaseCompleted{
+func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.ExecutorCollected {
+	rec := types.ExecutorCollected{
 		Agent: run.AgentID, RoleName: run.Role,
 		TurnID: run.TurnID, WorkKey: run.WorkKey,
-		Iteration: facts.Iteration, Phase: types.PhaseSandbox,
+		// The executor round that launched it, which the record is filed
+		// under beside the job: a round can launch more than once.
+		Iteration: facts.Iteration, LaunchID: run.LaunchID,
 		// The entry and the model the job was launched on, as the launch
 		// recorded them: the member of the executor chain that took the
 		// run, which a fallback makes other than the head.
@@ -1871,11 +1881,10 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		TotalTokens:                   result.InputTokens + result.OutputTokens,
 		CacheReadTokens:               result.CacheReadTokens,
 		CacheWriteTokens:              result.CacheWriteTokens,
-		// The run's own model turns, as its CLI reported them: the calls
-		// every spend figure counts this record as (tokens.PhaseCalls).
+		// The launch's own model turns, as its CLI reported them: the calls
+		// every spend figure counts this record as (tokens.LaunchCalls).
 		CLITurns:      result.Turns,
 		WorkItem:      run.WorkItem,
-		LaunchID:      run.LaunchID,
 		CodingAgent:   run.CodingAgent,
 		SandboxID:     run.SandboxID,
 		CostUSD:       result.CostUSD,
@@ -4679,7 +4688,7 @@ func fenceOf(run PendingRun) Fence {
 // tools, and ended — so there is no later executor for this text to instruct.
 // An instruction here is read by the reviewer as something the executor said,
 // and filed on the work item as what the turn did. Secret-redacted, because it
-// is published as a phase record.
+// is published on the executor's phase record.
 func runReport(result Result) string {
 	status := "did NOT fully succeed"
 	if result.Success {

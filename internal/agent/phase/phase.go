@@ -18,10 +18,11 @@ type Phase string
 // `execute` names the phase although it now decides as well as acts:
 // deciding is part of the seat doing its own work, which is what every
 // dashboard and rollup that reads the value means by it. The executor runs
-// as its coding CLI's own run, in a box, so the box's own record of that run
-// is a phase of the event vocabulary (events/types.PhaseSandbox) and not of
-// this one: no provider chain is resolved for it, because the run IS the
-// Execute chain's member that launched it.
+// as its coding CLI's own run, in a box, and what each launch of that run
+// spent is a record of the event vocabulary (events/types.ExecutorCollected)
+// filed under Execute — no phase of either vocabulary, and no provider chain
+// resolved for it, because the run IS the Execute chain's member that
+// launched it.
 const (
 	Execute   Phase = "execute"
 	Review    Phase = "review"

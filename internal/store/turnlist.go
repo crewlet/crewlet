@@ -236,7 +236,9 @@ type Turn struct {
 
 	// Phases counts the phase completions, and Iterations is the highest
 	// iteration any of them reached: SELF-ITERATE rounds, the executor →
-	// reviewer → executor loop.
+	// reviewer → executor loop. A launch of the executor's run is no phase
+	// and is not counted: it is the work of the executor round that
+	// launched it, which is.
 	//
 	// NOT the tool rounds a phase used — that is `rounds_used`, on each
 	// phase's own record, and it is a per-phase figure this aggregate has
@@ -409,7 +411,7 @@ func (q TurnQuery) Window(now time.Time) (since, until time.Time) {
 		since = now.Add(-time.Duration(days) * 24 * time.Hour)
 	}
 	// THE FLOOR IS THE HISTORY WINDOW as well as the caller's, for the
-	// reason `agentPhaseSQL`'s own comment gives: a read without it answers
+	// reason [phaseListSQL]'s own comment gives: a read without it answers
 	// below the retention horizon on a node whose sweep is behind, and a
 	// turns list showing turns the spend rollup excludes is the exact
 	// comparison an operator makes to decide whether a seat went quiet.
@@ -495,14 +497,14 @@ func (c TurnCursor) Before(start time.Time, id string) bool {
 }
 
 // inTurnCost is true of a row that is part of its turn's COST: every row but an
-// auxiliary record of a stage other than `turn`. A TURN'S COST IS ITS PHASES
-// AND ITS IN-TURN AUXILIARY SPEND (tokens.Record.InTurn states it for the live
-// window, and the Turn screen adds the same parts): the reflection after a
-// turn files its spend under the turn's id so the turn's page can draw it, and
-// it is the seat's learning rather than what the work cost — counted here, a
-// turn would grow dearer the more its seat had to remember, and the list's
-// `sort=-tokens` would rank turns by it. Rows that carry no spend have an empty
-// stage and zero tokens, so they change no sum.
+// auxiliary record of a stage other than `turn`. A TURN'S COST IS ITS PHASES,
+// ITS EXECUTOR'S LAUNCHES AND ITS IN-TURN AUXILIARY SPEND (tokens.Record.InTurn
+// states it for the live window, and the Turn screen adds the same parts): the
+// reflection after a turn files its spend under the turn's id so the turn's
+// page can draw it, and it is the seat's learning rather than what the work
+// cost — counted here, a turn would grow dearer the more its seat had to
+// remember, and the list's `sort=-tokens` would rank turns by it. Rows that
+// carry no spend have an empty stage and zero tokens, so they change no sum.
 const inTurnCost = "spend_stage IN ('', 'turn')"
 
 // turnCost sums one spend column over the rows of a turn's cost.
@@ -1042,14 +1044,15 @@ func (q TurnQuery) partialsSQL(at time.Time, read turnRead, probe int) (string, 
 	args = append(args, probe)
 
 	// NULLIF ON THE MODEL, because `model` is `TEXT NOT NULL DEFAULT ''`
-	// and only a phase record carries one. Every turn's group also holds
+	// and only a spend record carries one. Every turn's group also holds
 	// its `turn_completed` row, so GROUP_CONCAT — which skips NULLs but
 	// not empty strings — joined one model as ",claude-opus-5" and handed
 	// every consumer splitting on the comma a nameless band in its legend
 	// and a nameless row in its breakdown.
 	//
 	// THE SPEND AND THE MODELS ARE THE TURN'S COST ([inTurnCost]): its
-	// phases and its in-turn auxiliary calls, never the reflection after it.
+	// phases, its executor's launches and its in-turn auxiliary calls, never
+	// the reflection after it.
 	query := `
 		SELECT turn_id,
 		       MAX(work_key),

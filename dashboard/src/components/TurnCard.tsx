@@ -203,6 +203,7 @@ export function TurnCard({
               key={p.key}
               record={p}
               nested={group.nested.get(p.key)}
+              launches={group.launches.get(p.key)}
               // A TURN OF ONE PHASE OPENS IT, and a running turn opens the
               // phase it is on — "Running now" on a seat's Turns tab is where
               // a reader comes to watch, and the phase that is moving is the

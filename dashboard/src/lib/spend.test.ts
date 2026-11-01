@@ -115,12 +115,12 @@ describe("the legend", () => {
   // A PHASE IS DRAWN IN ITS BAND'S HUE. The design system removed its phase
   // family, so inside a figure a phase is a series — and the only series that
   // keeps one phase one colour on every chart is the band the engine already
-  // folds it into: a coding run is Execute on the Spend chart and in the live
-  // list alike, and a newer peer's phase is Auxiliary, where the engine counts
-  // it. Four hues, and nothing outside the ramp.
+  // folds it into: the executor's run is Execute on the Spend chart and in the
+  // live list alike, and a newer peer's phase is Auxiliary, where the engine
+  // counts it. Four hues, and nothing outside the ramp.
   it("draws a phase in the hue of the band it folds into", () => {
     expect(phaseColor("execute")).toBe(dataColor(0));
-    expect(phaseColor("Sandbox")).toBe(dataColor(0));
+    expect(phaseColor("Execute")).toBe(dataColor(0));
     expect(phaseColor("review")).toBe(dataColor(1));
     expect(phaseColor("subagent")).toBe(dataColor(2));
     for (const aux of ["auxiliary", "judge", "onboarding", "", "a-phase-from-a-newer-peer"]) {

@@ -614,8 +614,8 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	// started_at: a start read off neither segment would put the record at
 	// the epoch, a day before the turn existed. Its DURATION is the
 	// phase's — both segments, the launch's carried on the park — and
-	// never the run between them, which is the run's own fact, on the
-	// record of the box it ran in. See types.AgentPhaseCompleted.
+	// never the run between them, which is each launch's own fact, on its
+	// types.ExecutorCollected. See types.AgentPhaseCompleted.
 	began := time.Now()
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	logged := bridgedLedger(bridged)
@@ -695,8 +695,9 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 // bridged call inside it at the instant the bridge measured. Two clocks when
 // the launch and the collection ran on different nodes, which is why a skew
 // that would make the span negative states none. It carries NO TOKENS: what
-// the run spent is the run's own fact, on the `sandbox` record its collection
-// publishes, and repeating it here would charge every rollup twice.
+// the run spent is each launch's own fact, on the `executor_collected` record
+// its collection publishes, and repeating it here would charge every rollup
+// twice.
 //
 // EACH CALL WITH ITS TIMING AND WHO ANSWERED IT, as the bridge recorded them,
 // in the order the run made them: the bridge is where a run's calls are

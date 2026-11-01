@@ -636,8 +636,10 @@ export function buildWaterfall(input: WaterfallInput): Waterfall {
   const top: Node[] = [];
 
   const workers = phases.filter((p) => p.hostPhase);
-  const runs = phases.filter((p) => p.phase === "sandbox" && !p.hostPhase);
-  const own = phases.filter((p) => !p.hostPhase && p.phase !== "sandbox");
+  // THE RUNS ARE THE LAUNCHES: each launch of an executor's run is a record of
+  // its own, collected off its box, and the phases are everything else.
+  const runs = phases.filter((p) => p.launch);
+  const own = phases.filter((p) => !p.hostPhase && !p.launch);
   // THE REFLECTION WORKERS ARE THEIR SPEND RECORDS. No phase record ever
   // carried a reflection worker — the `auxiliary` phase this lane was drawn
   // from had no producer, so the lane only ever held its sentinel — and what

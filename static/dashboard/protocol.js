@@ -286,6 +286,15 @@ function domainOf(kind) {
 }
 /** This tab's floors. */
 var session = new SessionFloors();
+/**
+* The durable records a tab keeps WITH THEIR PAYLOAD, in `phases`: a phase's
+* own record, and one launch of an executor's run as its collection read it
+* (`executor_collected`) — no phase, but the work of the `execute` round that
+* launched it, which the screens draw inside that round's card
+* (`lib/phases.ts`). A launch lands while its turn is still parked, so a tab
+* watching the turn has the run's report the moment it is collected.
+*/
+var PHASE_RECORD_TYPES = /* @__PURE__ */ new Set(["agent_phase_completed", "executor_collected"]);
 /** What a heavy field reads as while nothing of it is held. */
 var NOTHING_HELD = {
 	prompt: "",
@@ -918,7 +927,7 @@ var Store = class {
 			this.state.events = [ev, ...this.state.events].slice(0, 400);
 			this.emit("events");
 		}
-		if (ev.type === "agent_phase_completed" && ev.payload) {
+		if (PHASE_RECORD_TYPES.has(ev.type) && ev.payload) {
 			if (!this.state.phases.some((p) => p.id === ev.id)) {
 				this.state.phases = [ev, ...this.state.phases].slice(0, 200);
 				this.emit("phases");
@@ -4644,4 +4653,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, DETAILED_QUERY_ERRORS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, pathSegment, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, DETAILED_QUERY_ERRORS, LiveSocket, PHASE_RECORD_TYPES, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, pathSegment, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, setTabReader, stepUpAsked, unavailableRetryMs, whenRequestsSettle };

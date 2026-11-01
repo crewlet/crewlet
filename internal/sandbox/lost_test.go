@@ -187,11 +187,11 @@ func TestALostJobsRoundIsCarriedOnNotCollected(t *testing.T) {
 	if charged := rig.accountant.total(); charged != 1000 {
 		t.Errorf("charged %d tokens for the lost job, want its 1000", charged)
 	}
-	phases := rig.phases()
-	if len(phases) != 1 {
-		t.Fatalf("published %d records for the lost job, want its own one", len(phases))
+	launches := rig.collected()
+	if len(launches) != 1 {
+		t.Fatalf("published %d records for the lost job, want its own one", len(launches))
 	}
-	if rec := phases[0]; rec.Failed || !strings.Contains(rec.Notes, "cut off") {
+	if rec := launches[0]; rec.Failed || !strings.Contains(rec.Notes, "cut off") {
 		t.Errorf("the lost job's record is failed=%v with notes %q; want it noted cut off, not failed",
 			rec.Failed, rec.Notes)
 	}

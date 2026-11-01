@@ -308,18 +308,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 // instead it is stamped failed and kept, carrying whatever the phase managed —
 // prompt, partial response, tool calls — with the error attached.
 func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload map[string]any) {
-	kind := str(payload, "error_kind")
-	if kind == "" {
-		kind = "error"
-	}
-	failure := &ErrorInfo{
-		Kind:    kind,
-		Detail:  str(payload, "error"),
-		Phase:   str(payload, "phase"),
-		TurnID:  str(payload, "turn_id"),
-		At:      env.Timestamp,
-		EventID: env.ID,
-	}
+	failure := failureOf(env, payload, str(payload, "phase"))
 	agent.lastError = failure
 
 	call := agent.liveCall
@@ -365,6 +354,23 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	call.RunningCalls = nil
 	call.RoundStartedAt = ""
 	call.RunStartedAt = ""
+}
+
+// failureOf is the seat's last error as a failed record of `phase` states it:
+// its kind (`error` where it named none), its words, its turn and itself.
+func failureOf(env Envelope, payload map[string]any, phase string) *ErrorInfo {
+	kind := str(payload, "error_kind")
+	if kind == "" {
+		kind = "error"
+	}
+	return &ErrorInfo{
+		Kind:    kind,
+		Detail:  str(payload, "error"),
+		Phase:   phase,
+		TurnID:  str(payload, "turn_id"),
+		At:      env.Timestamp,
+		EventID: env.ID,
+	}
 }
 
 // clearCall drops a seat's live call and advances its overlay sequence, so the
