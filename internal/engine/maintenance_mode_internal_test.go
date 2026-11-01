@@ -112,11 +112,18 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 // company whose logs it runs.
 func aNodeInMode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, natsjs.JetStream) {
 	t.Helper()
+	return aNodeOf(t, nativeCleanupCompany, mode)
+}
+
+// aNodeOf is a node of [testBootstrap] booted in mode on the company doc
+// spells, over a real embedded broker, and that broker's JetStream.
+func aNodeOf(t *testing.T, doc string, mode statelog.MaintenanceMode) (*Engine, natsjs.JetStream) {
+	t.Helper()
 	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
 	SeedStore(t, &b)
-	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse the company: %v", err)
 	}
