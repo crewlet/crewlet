@@ -76,6 +76,12 @@ type TaskClose struct {
 //
 // A post_land target is no train's: its queue lands no candidate.
 //
+// A candidate and a landing state the repository's DROP EPOCH (M6-D4): the
+// candidate the epoch of the copy its chain was built from (code.ChainResult),
+// the landing the epoch its snapshot read (code.QueueDue) — so a train built
+// before an expunge began is refused `expunging` and built again, never
+// recorded over objects the expunge retires.
+//
 // Every write is a record decided where it lands — a candidate, an eject and
 // a land by the repository's committer (code.queue), a check by its checks
 // writer — each refusing what its own snapshot does not prove, so a step
@@ -258,7 +264,11 @@ func (w *queue) build(ctx context.Context, repoID string, d code.QueueDue, at st
 		}
 		cand.Candidates = append(cand.Candidates, tc)
 	}
-	res, err := w.estate.Queue(ctx, code.QueueProposal{OpID: opID, Seen: at, Candidate: &cand})
+	// THE EPOCH OF THE COPY THE CHAIN WAS BUILT FROM: a train built over
+	// objects an expunge begun since left dropping is refused `expunging`,
+	// and the next turn builds it again from a copy past the begin.
+	res, err := w.estate.Queue(ctx, code.QueueProposal{OpID: opID, Seen: at, DropEpoch: built.DropEpoch,
+		Candidate: &cand})
 	if err != nil {
 		return fmt.Errorf("home: record the train of %s: %w", about, err)
 	}
@@ -410,7 +420,11 @@ func (w *queue) land(ctx context.Context, repoID string, d code.QueueDue, green 
 			landed = append(landed, e)
 		}
 	}
-	res, err := w.estate.Queue(ctx, code.QueueProposal{OpID: opID, Seen: at, Land: &l})
+	// THE EPOCH THE TRAIN WAS READ AT (code.QueueDue.DropEpoch): its
+	// candidates were recorded at their chain's, and an expunge begun since
+	// holds their tips live, so only one begun after this read refuses the
+	// landing `expunging`, for the next turn to read the train again.
+	res, err := w.estate.Queue(ctx, code.QueueProposal{OpID: opID, Seen: at, DropEpoch: d.DropEpoch, Land: &l})
 	switch {
 	case err != nil:
 		return fmt.Errorf("home: land %s: %w", about, err)

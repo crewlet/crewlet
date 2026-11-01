@@ -50,6 +50,10 @@ type queueRows struct {
 	// refuse, where set, answers a land instead of the rows: the decide's
 	// refusal of entries it would not land.
 	refuse func(code.Land) *code.QueueResult
+	// epoch is the repository's drop epoch as the rows hold it: a candidate
+	// or a landing stating another is refused expunging, as the decide
+	// refuses it.
+	epoch int64
 }
 
 func newQueueRows(tip string, depth, batch int) *queueRows {
@@ -135,7 +139,7 @@ func (r *queueRows) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, 
 		return code.ReadAnswer{Position: r.position()}, nil
 	}
 	d := &code.QueueDue{TargetRef: queueMain, Tip: r.tip, Policy: code.LandingPreLand, Depth: r.depth,
-		Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries)}
+		Batch: r.batch, Required: slices.Clone(r.required), Entries: slices.Clone(r.entries), DropEpoch: r.epoch}
 	for _, c := range r.train {
 		c.Commits = slices.Clone(c.Commits)
 		for i := range c.Commits {
@@ -196,6 +200,9 @@ func (r *queueRows) Queue(_ context.Context, p code.QueueProposal) (code.QueueRe
 	defer r.mu.Unlock()
 	r.records = append(r.records, p)
 	switch {
+	case (p.Candidate != nil || p.Land != nil) && p.DropEpoch != r.epoch:
+		return code.QueueResult{Refusal: code.MergeRefusalExpunging,
+			Detail: code.ExpungingBuiltDetail("web", "train", "its home", p.DropEpoch, r.epoch)}, nil
 	case p.Candidate != nil:
 		c := p.Candidate
 		if c.BaseOID != r.tip {
@@ -270,6 +277,8 @@ type queueChains struct {
 	conflicts map[string]string
 	builds    []code.ChainBuild
 	settled   []bool
+	// epoch is the drop epoch of the copy every chain is built from.
+	epoch int64
 }
 
 func (c *queueChains) BuildChain(_ context.Context, b code.ChainBuild) (code.ChainResult, error) {
@@ -279,7 +288,7 @@ func (c *queueChains) BuildChain(_ context.Context, b code.ChainBuild) (code.Cha
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.builds = append(c.builds, b)
-	res := code.ChainResult{Tip: b.Base}
+	res := code.ChainResult{Tip: b.Base, DropEpoch: c.epoch}
 	for _, e := range b.Entries {
 		if path, ok := c.conflicts[e.EntryID]; ok {
 			res.Commits = append(res.Commits, code.ChainCommit{EntryID: e.EntryID, Skipped: code.WriteConflict,
@@ -581,6 +590,59 @@ func TestANewHomeResumesTheQueueFromRows(t *testing.T) {
 		train[0].Train == standing[0].Train {
 		t.Fatalf("a train whose target moved is %+v after the turn (%d builds), want a new train onto the new "+
 			"tip", train, next.built()-built)
+	}
+}
+
+// THE QUEUE STATES THE DROP EPOCH IT BUILT AND READ AT (M6-D4): on a
+// repository an expunge has begun on (epoch 1), a chain built from a copy
+// still at the epoch before is recorded at that epoch and refused expunging,
+// so no train stands; built again from a copy past the begin, its candidate
+// states the copy's epoch and is recorded. And the landing of that train
+// states the epoch its snapshot read: with another expunge begun after the
+// train stood (epoch 2) — which holds a candidate's tip live — the landing
+// decided from the read at epoch 2 states it and lands main.
+//
+// Mutation: propose the candidate at the snapshot's epoch rather than its
+// chain's → the train built from the stale copy is recorded, red; propose the
+// landing at no epoch → it is refused, and main stays, red.
+func TestTheQueueStatesTheDropEpochItBuiltAndReadAt(t *testing.T) {
+	t.Parallel()
+	base := oid("e")
+	rows := newQueueRows(base, 1, 1)
+	rows.epoch = 1
+	rows.enqueue(t, 1)
+	chains := &queueChains{}
+	l := queueLoop(t, rows, chains, &queueTasks{})
+
+	turn(t, l, rows)
+	records, _ := rows.asked()
+	if train, _ := rows.snapshot(); len(train) != 0 || len(records) != 1 || records[0].Candidate == nil ||
+		records[0].DropEpoch != 0 {
+		t.Fatalf("a chain built from a copy before the begin recorded %+v and stands %+v, want its candidate "+
+			"proposed at the copy's epoch 0 and refused", records, train)
+	}
+
+	chains.mu.Lock()
+	chains.epoch = 1
+	chains.mu.Unlock()
+	turn(t, l, rows)
+	records, _ = rows.asked()
+	train, _ := rows.snapshot()
+	if len(train) != 1 || records[len(records)-1].Candidate == nil || records[len(records)-1].DropEpoch != 1 {
+		t.Fatalf("the chain built again from a copy past the begin recorded %+v, want its candidate at "+
+			"epoch 1 standing", records[len(records)-1])
+	}
+
+	rows.ended(train[0].TipOID, "unit", code.CheckStatePassed)
+	rows.mu.Lock()
+	rows.epoch = 2
+	rows.mu.Unlock()
+	turn(t, l, rows)
+	records, _ = rows.asked()
+	land := records[len(records)-1]
+	if land.Land == nil || land.DropEpoch != 2 || rows.tip != train[0].TipOID {
+		t.Fatalf("the landing recorded %+v with main at %s, want the train landed at the epoch its "+
+			"snapshot read, 2, and main on its tip", land, rows.tip)
 	}
 }
 

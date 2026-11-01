@@ -126,6 +126,10 @@ func (s *Server) BuildChain(ctx context.Context, b code.ChainBuild) (code.ChainR
 		return code.ChainResult{}, err
 	}
 	pack := res.Pack
+	// THE EPOCH OF THE COPY the chain was built from, which the candidate
+	// record naming its pack states (code.QueueProposal.DropEpoch): its
+	// committer refuses it `expunging` once an expunge has begun since.
+	res.DropEpoch = wr.synced.DropEpoch
 	res.Settle = func(ctx context.Context, applied bool) error {
 		if !applied || pack == nil {
 			return settle(ctx, nil)

@@ -158,13 +158,20 @@ type ChainCommit struct {
 // the building node's cache first. It is never nil on a chain that answers no
 // error, and its every call after the first does nothing. A chain never
 // settled holds its scratch until the node's next boot empties scratch/.
+//
+// DropEpoch is the repository's drop epoch as the copy the chain was built
+// from held it (internal/code/cache's Synced.DropEpoch): the epoch the
+// candidate record naming its pack states ([QueueProposal.DropEpoch]), so
+// a chain built over objects an expunge begun since left dropping is refused
+// `expunging` and built again.
 type ChainResult struct {
-	Commits []ChainCommit
-	Pack    *PackRef
-	Tip     string
-	Refusal WriteRefusal
-	Detail  string
-	Settle  func(ctx context.Context, applied bool) error
+	Commits   []ChainCommit
+	Pack      *PackRef
+	Tip       string
+	DropEpoch int64
+	Refusal   WriteRefusal
+	Detail    string
+	Settle    func(ctx context.Context, applied bool) error
 }
 
 // Validate refuses a chain no git node may build ([ErrInvalid], naming the

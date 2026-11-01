@@ -18,7 +18,8 @@ import (
 // queue order — as many as one train can take, each with the change its chain
 // commit is written from and who enqueued it — and its live train, each
 // candidate's commits with the latest attempt of each required check on each,
-// for the target.
+// for the target — and the repository's drop epoch, which a landing decided
+// from the snapshot carries ([QueueProposal.DropEpoch]).
 //
 // ONE TARGET A PAGE, its cursor the target: a target's entries carry their
 // changes' descriptions (a squash's commit message is written from one), so a
@@ -52,6 +53,15 @@ type QueueDue struct {
 	// Train is the target's live train's candidates in ordinal order, none
 	// where it holds no train.
 	Train []QueueWorkCandidate `json:"train,omitempty"`
+	// DropEpoch is the repository's drop epoch as the snapshot holds it: the
+	// epoch a landing decided from this snapshot states
+	// ([QueueProposal.DropEpoch]). A standing train's candidates were each
+	// recorded at the epoch of the copy their chain was built from, and an
+	// expunge begun since holds every candidate's tip live (its
+	// `expunge_tips`), so a landing of one is judged at the epoch its home
+	// read the train at: one begun between the read and the decide is
+	// refused `expunging`, and the next turn reads the train again.
+	DropEpoch int64 `json:"drop_epoch,omitempty"`
 }
 
 // QueueWorkEntry is one live entry as the home's queue reads it: its row, who
@@ -137,6 +147,16 @@ func dueQueue(ctx context.Context, tx *sql.Tx, repoID, cursor string, out *ReadA
 	due.Policy, due.Depth, due.Batch, due.Required = gate.Landing, gate.QueueDepth, gate.QueueBatch, gate.Checks
 	if due.Tip, err = targetTip(ctx, tx, repoID, target); err != nil {
 		return err
+	}
+	// THE DROP EPOCH, by the decide's own read of the repository's row
+	// (decideRepoSQL, a seek of its key), so the epoch the home states is
+	// the one its committer compares.
+	repo, ok, err := pushRepoIn(ctx, tx, repoID)
+	switch {
+	case err != nil:
+		return err
+	case ok:
+		due.DropEpoch = repo.dropEpoch
 	}
 	for _, e := range scanned {
 		w, err := workEntryOf(ctx, tx, e)

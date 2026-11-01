@@ -89,3 +89,40 @@ func TestTheHomesQueueWorkIsOneSnapshotOfOneTarget(t *testing.T) {
 		t.Fatalf("the page after main reads %+v (next %q, %v), want none", after.DueQueue, after.Next, err)
 	}
 }
+
+// THE HOME'S QUEUE WORK READS THE REPOSITORY'S DROP EPOCH (M6-D4): the
+// landing its home decides from the snapshot states it, so the snapshot
+// answers the epoch the repository's row holds in the same transaction — 0
+// before any expunge, the begin's once one has begun.
+//
+// Mutation: leave the epoch out of the queue work → 0 after the begin, red.
+func TestTheHomesQueueWorkReadsTheDropEpoch(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	res, err := c.ProposeQueue(t.Context(), enqueueing(repo, change, ada, oidOf("B")))
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+
+	q := code.ReadQuery{Kind: code.ReadQueueDue, QueueDue: &code.QueueDueQuery{RepoID: repo}}
+	read := func() int64 {
+		t.Helper()
+		answer, err := n.reader.Read(t.Context(), q)
+		if err != nil || answer.DueQueue == nil {
+			t.Fatalf("the home's queue work of web reads %+v (%v), want main's", answer.DueQueue, err)
+		}
+		return answer.DueQueue.DropEpoch
+	}
+	if epoch := read(); epoch != 0 {
+		t.Fatalf("the queue work of a repository never expunged reads drop epoch %d, want 0", epoch)
+	}
+	b := beginFor(n, repo, 1, n.livePacks(repo), 1, 0)
+	began, err := c.ProposeExpunge(t.Context(), code.ExpungeProposal{Begin: &b})
+	requireExpunged(t, began, err)
+	if epoch := read(); epoch != 1 {
+		t.Fatalf("the queue work after an expunge's begin reads drop epoch %d, want the begin's, 1", epoch)
+	}
+}

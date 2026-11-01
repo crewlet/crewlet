@@ -5424,7 +5424,7 @@ change as whoever enqueued it.
 | Refusal | Why |
 |---|---|
 | `repo_importing`, `repo_mirrored` | The repository is being imported from another host, which takes none of these records, or is a pull mirror, which takes no candidate and no landing: an eject, a green and a broken still land on a mirror, moving no ref, so a repository that became one sheds its queue. |
-| `expunging` | The train or the landing was built from a copy of the repository taken before an expunge of its unreachable objects began: the home builds it again. |
+| `expunging` | The train was built from a copy of the repository taken before an expunge of its unreachable objects began, or the landing decided from a read taken before one: the home builds the train again, or reads it again to land it. |
 | `target_moved` | The branch is no longer at the tip the train or the landing was built onto: the home builds it again. |
 | `not_queued` | An entry is not live in the branch's queue — ended since, or another branch's. |
 | `stale` | What the record names is not what the rows hold: a commit its entry's method does not make, a pack it does not need or lacks, a landing that is no prefix of the branch's train, a policy the branch does not land by. |
@@ -5485,10 +5485,14 @@ lands no candidate.
   that keeps up tests each change alone and lands it at once, and a queue
   falling behind takes up to `batch` changes a candidate. The whole train is
   ONE chain of merges built in one scratch, its objects one pack, recorded by
-  one `candidate` record that abandons the branch's earlier train. An entry
-  whose merge conflicts — or one past its build's budget — is **ejected**
-  `conflict`, naming the paths; a fast-forward that is none,
-  `not_fast_forward`.
+  one `candidate` record that abandons the branch's earlier train. The
+  record states the drop epoch of the copy the chain was built from, so a
+  train built before an expunge of the repository's unreachable objects
+  began is refused `expunging` and built again from a copy past it; a
+  landing states the epoch the home read the train at, since an expunge
+  holds every candidate's tip live. An entry whose merge conflicts — or one
+  past its build's budget — is **ejected** `conflict`, naming the paths; a
+  fast-forward that is none, `not_fast_forward`.
 - **Test.** Each candidate's tip is queued the branch's required checks it
   holds no attempt of — **defined by the checks file at the train's base**,
   the branch's tip, never by a candidate's own, so a change cannot narrow
