@@ -35,6 +35,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -1049,7 +1050,12 @@ func verifyOne(ctx context.Context, client *nodeClient, name string, floor codeP
 				"git keeps a cache to check. Point -api at one", client.base)
 		case errors.As(err, &refusal) && refusal.Status == http.StatusServiceUnavailable &&
 			refusal.RetryAfter > 0 && time.Now().Add(refusal.RetryAfter).Before(refusedUntil):
-			fmt.Fprintf(stderr, "%s: %v\n  asking again in %s\n", name, err, refusal.RetryAfter)
+			// A WAIT, said as one (statelog.SpokenWait, rounded up): the
+			// Duration's own String would print a Retry-After of 1.5s as
+			// "1.5s" and a longer one as "1m30s", where every other wait the
+			// engine tells a person reads "2s" or "2m".
+			fmt.Fprintf(stderr, "%s: %v\n  asking again in %s\n", name, err,
+				statelog.SpokenWait(refusal.RetryAfter))
 			if !sleepFor(ctx, refusal.RetryAfter) {
 				fmt.Fprintf(stderr, "%s: %v\n", name, ctx.Err())
 				return false, nil
