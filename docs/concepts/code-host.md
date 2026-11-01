@@ -1903,6 +1903,19 @@ agent ids, and a seat's day of usage counts the changes it opened, the reviews
 it gave, and the findings reviews raised on the changes it owns — see
 [Budgets and spend § A seat's changes and reviews](../guides/budgets-and-spend.md#a-seats-changes-and-reviews).
 
+No write of a repository waits on these announcements. A committer hands what
+its records announce — the changes they opened, a merge, a merge queue's
+ejections and broken landings — to one announcer of its own, which publishes
+them in the order they landed, each stamped when its record landed and given
+five seconds. The repository's next push goes on meanwhile. An announcement the
+stream does not take in time, or one that would put more than 1 088 waiting
+behind the announcer, is logged (`change_opened_unpublished`,
+`change_merged_unpublished`, `code_queue_ejected_unpublished`,
+`code_target_broken_unpublished`): the day it counts on is one short and the
+feed misses one line, while the rows on the code log keep all of it. A
+stopping node publishes what it landed before it exits, for as long as its
+drain allows.
+
 ### Findings
 
 A **finding** points at lines of one revision — a file, a side of the

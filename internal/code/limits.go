@@ -1051,6 +1051,23 @@ const (
 	// with the refusal said rather than the wait left unseen.
 	CommitterNodeProposals = CommitterInbox + MaxPushesPerRecord
 
+	// CommitterAnnouncements is the most landed records' announcements one
+	// node's committer holds unpublished — handed to its announcer and not
+	// yet read and published (announce.go): CommitterNodeProposals, 1 088.
+	// Every record the committer lands answers at least one proposal it
+	// held, so the announcer drops one only once it has fallen a whole
+	// node's held work behind the stream — a push batch hands over at most
+	// two (its openings and the queue entries its moved heads ejected), any
+	// other record at most one. A stream acknowledging in milliseconds
+	// drains it in seconds; one that acknowledges nothing spends
+	// checkEventBudget on each, and past this many the rest are dropped and
+	// logged rather than held — the cost an announcement the stream refused
+	// already had: its day one count short, its rows on the code log whole,
+	// and never a wait in front of the repository's next push. Each
+	// holds what its record named — change and entry ids, a merge's event —
+	// never the rows it reads.
+	CommitterAnnouncements = CommitterNodeProposals
+
 	// MaxChangeWritesWaiting is the most writes of ONE change's conversation
 	// one node's change writer holds at once — the one publishing and those
 	// waiting for its turn ([ChangeWriter]): SIXTY-FOUR. A change's widest
