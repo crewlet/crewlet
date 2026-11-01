@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -125,9 +126,11 @@ func newNotices(t *testing.T, base time.Duration) (*parkNotices, *syncBuffer) {
 // asked six thousand times.
 func TestABrokerOutageCostsOneAttemptPerStepAndOneLineEachWay(t *testing.T) {
 	t.Parallel()
-	n, logs := newNotices(t, 5*time.Millisecond)
+	const base = 5 * time.Millisecond
+	n, logs := newNotices(t, base)
 	b := &broker{down: true}
 	at := time.Date(2026, 11, 1, 0, 49, 0, 0, time.UTC)
+	began := time.Now()
 
 	// THE STORM: three parked seats renewed two thousand times each, as the
 	// probe that was re-armed for an instant already past renewed them.
@@ -140,11 +143,12 @@ func TestABrokerOutageCostsOneAttemptPerStepAndOneLineEachWay(t *testing.T) {
 	}
 	time.Sleep(60 * time.Millisecond)
 	// AT MOST ONE ATTEMPT PER STEP: the first post's own, and one per step
-	// of a 5ms schedule in the time slept (5, 10, 20, 40ms), with room for
-	// a step's spread. A loaded machine fires fewer, never more.
-	if got := b.tried(); got > 8 {
-		t.Errorf("the broker was asked %d times for %d notices during the outage, want "+
-			"one attempt per step of the backoff", got, renewals*len(seats))
+	// of the schedule that could have ended in the time the case took,
+	// however long posting six thousand notices took on this machine.
+	tried := b.tried()
+	if most := attemptsWithin(base, time.Since(began)); tried > most {
+		t.Errorf("the broker was asked %d times for %d notices during the outage, want at "+
+			"most %d, one attempt per step of the backoff", tried, renewals*len(seats), most)
 	}
 	if got := logLines(logs, "seat_provider_park_notices_held"); got != 1 {
 		t.Errorf("the outage was said %d times, want once:\n%s", got, logs)
@@ -167,6 +171,21 @@ func TestABrokerOutageCostsOneAttemptPerStepAndOneLineEachWay(t *testing.T) {
 	n.post(t.Context(), b.publish, "pm", releasedNotice("pm", "its models answered"))
 	if got := b.taken(); len(got) != 4 || got[3] != "pm released: its models answered" {
 		t.Errorf("a notice after the outage was not published by its caller: %q", got)
+	}
+}
+
+// attemptsWithin is the most attempts a held publisher on a schedule of base
+// can make in d: the first, on the spot, and one per step whose shortest
+// spread wait has ended by then.
+func attemptsWithin(base, d time.Duration) int {
+	attempts, spent := 1, time.Duration(0)
+	for step := 1; ; step++ {
+		wait := backoff.Doubling(step, base, base*parkNoticeRatio)
+		spent += time.Duration(float64(wait) * (1 - parkNoticeJitter))
+		if spent > d {
+			return attempts
+		}
+		attempts++
 	}
 }
 
