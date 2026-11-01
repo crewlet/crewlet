@@ -413,6 +413,17 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  set_channel_members: {
+    // A MEMBER'S "GETS EVERY MESSAGE" SWITCH in the room's Members tab: the
+    // whole membership with one agent's `follow_all` moved, stated against
+    // the membership the tab read (`expected_members`), so a change somebody
+    // made meanwhile is refused rather than written back over.
+    args: ["channel", "members", "expected_members"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
   mark_chat_read: {
     // HOW FAR THE READER HAS READ, flushed on a timer and on the way out
     // (`routes/chatlet/cursor.ts`), and a room's MUTE. A person's attention is a

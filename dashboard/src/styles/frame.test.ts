@@ -1351,21 +1351,11 @@ describe("the Spend overview's rows", () => {
     );
   });
 
-  // A ROOM'S NAME WRAPS IN BROWSE ROOMS AND SEARCH'S ROOMS: one unbroken name
-  // ran over its own tag and into Join or Open on a narrow view.
-  test("a room's name in a Browse row wraps rather than running into its action", () => {
-    expect(block(sheet("chatlet-panes.css"), ".chat-browse-row__name")).toMatch(
-      /overflow-wrap:\s*anywhere;/,
-    );
-  });
-
-  // A BROWSE ROW'S GLYPH STANDS ON THE SIDE LINE, under the search field: the
-  // link pads itself by the first step for its hover fill, and inset by that
-  // pad as well the glyph stood 8px inside the line (28px against 20px).
-  test("a Browse row's glyph starts on the view's side line", () => {
-    const main = block(sheet("chatlet-panes.css"), ".chat-browse-row__main");
-    expect(main).toMatch(/margin-inline-start:\s*calc\(var\(--spacing-2\) \* -1\);/);
-    expect(main).toMatch(/padding:\s*var\(--spacing-2\);/);
+  // A ROOM IN BROWSE ROOMS AND SEARCH'S ROOMS IS THE KIT'S ROW: the name that
+  // wraps rather than running into Join or Open is RoomRow's own rule, held by
+  // its suite in uilet, and no dashboard rule draws a Browse row any more.
+  test("Browse rows are the kit's RoomRow, with no local row styles", () => {
+    expect(sheet("chatlet-panes.css")).not.toMatch(/\.chat-browse-/);
   });
 
   // THE SEAT PAGE IS ON THE SHELL'S GUTTER, the one the page bar's trail

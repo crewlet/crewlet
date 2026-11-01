@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ADA, actEngine, applied, type Pressed } from "~/test/chat.tsx";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
-import { DetailsPane, keptFor } from "./Details.tsx";
+import { DetailsPane, keptFor, withFollowing } from "./Details.tsx";
 import { ChatDialogHost } from "./Dialogs.tsx";
 import { mountInFrame } from "./frameKit.tsx";
 import { useChatNav, type DetailsTab } from "./nav.tsx";
@@ -163,6 +163,85 @@ describe("Members", () => {
     open("members", { room: detail({ kind: "unit", unit: "Platform" }) });
     await screen.findByText("Bo Chen");
     expect(screen.queryByRole("button", { name: /add people/i })).toBeNull();
+  });
+
+  test("an agent says how it follows the room, and its switch states the membership against the read", async () => {
+    open("members", {
+      room: detail(
+        {},
+        {
+          members: [
+            { handle: "ops", follow_all: false, joined_at: "2026-10-01T00:00:00Z" },
+            { handle: "bo", joined_at: "2026-10-01T00:00:00Z" },
+            { handle: "ada", joined_at: "2026-10-01T00:00:00Z" },
+          ],
+        },
+      ),
+    });
+    const toggle = await screen.findByRole("switch", { name: "Ops Agent gets every message" });
+    expect(screen.getByText(/Answers when named/)).toBeTruthy();
+    // A PERSON IS NEVER WOKEN by a message, so a person's row has no switch.
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    // HELD UNTIL THE ROOM'S OWN ANSWER SAYS IT TAKES THE CHANGE.
+    await waitFor(() => expect(toggle.getAttribute("aria-disabled")).toBeNull());
+    fireEvent.click(toggle);
+    await waitFor(() => expect(presses.map((p) => p.tool)).toContain("set_channel_members"));
+    const sent = presses.find((p) => p.tool === "set_channel_members")!.args;
+    const read = [
+      { handle: "ops", follow_all: false },
+      { handle: "bo", follow_all: false },
+      { handle: "ada", follow_all: false },
+    ];
+    expect(sent).toEqual({
+      channel: ROOM,
+      members: [{ handle: "ops", follow_all: true }, read[1], read[2]],
+      expected_members: read,
+    });
+  });
+
+  test("a team room's agents follow it as the org chart says: the switch shows it, stays put and says why", async () => {
+    open("members", {
+      room: detail(
+        { kind: "unit", unit: "Platform" },
+        {
+          members: [
+            { handle: "ops", source: "org", follow_all: true, joined_at: "2026-10-01T00:00:00Z" },
+            { handle: "ada", source: "org", joined_at: "2026-10-01T00:00:00Z" },
+          ],
+        },
+      ),
+    });
+    const toggle = (await screen.findByRole("switch", {
+      name: "Ops Agent gets every message",
+    })) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    const reason = document.getElementById(toggle.getAttribute("aria-describedby") ?? "");
+    expect(reason?.textContent).toMatch(/The org chart sets this/);
+    fireEvent.click(toggle);
+    expect(presses.map((p) => p.tool)).not.toContain("set_channel_members");
+  });
+
+  test.each(WRITE_READERS)("an agent's switch is drawn for $who, held with why", async (reader) => {
+    open("members", { viewer: reader.viewer });
+    const toggle = await screen.findByRole("switch", { name: "Ops Agent gets every message" });
+    const reason = document.getElementById(toggle.getAttribute("aria-describedby") ?? "");
+    await waitFor(() => expect(reason?.textContent).toBe(reader.reason));
+  });
+
+  test("a following switch restates every member as read, and moves only the one", () => {
+    expect(
+      withFollowing([{ handle: "pm", follow_all: true }, { handle: "qa" }], "qa", true),
+    ).toEqual({
+      members: [
+        { handle: "pm", follow_all: true },
+        { handle: "qa", follow_all: true },
+      ],
+      expected_members: [
+        { handle: "pm", follow_all: true },
+        { handle: "qa", follow_all: false },
+      ],
+    });
   });
 
   test("finding a member narrows the list, and says so when nobody matches", async () => {

@@ -23,6 +23,18 @@
  * offers to add nobody there; a direct conversation IS its people, so adding
  * somebody would name a different conversation, and it offers nothing either.
  *
+ * # Which agents get every message
+ *
+ * An agent member either gets every message in the room (`follow_all`) or
+ * answers when a message names it, and its row says which. Its switch moves
+ * that through `set_channel_members`, stated against the membership the pane
+ * read, so a change somebody made meanwhile is refused rather than written
+ * back over. Where the room does not take the change (a team's room, whose
+ * following is the org chart's), the switch shows the state, stays put and
+ * says why. A person is never woken by a message, so a person's row has no
+ * switch; neither does a direct conversation, where every message is for
+ * everybody in it.
+ *
  * # A tab is the pane's own, and the address only opens it
  *
  * The pane's address names the tab it opened on (More, then Shared in this
@@ -33,7 +45,18 @@
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 
-import { Button, EmptyState, Input, Skeleton, TabPanel, Tabs, Tag, useToast } from "@crewlethq/ui";
+import {
+  Button,
+  EmptyState,
+  Input,
+  Skeleton,
+  Switch,
+  TabPanel,
+  Tabs,
+  Tag,
+  Tooltip,
+  useToast,
+} from "@crewlethq/ui";
 import { PersonRow } from "@crewlethq/ui";
 import { IconTile } from "@crewlethq/ui";
 import { LogOutGlyph, NetworkGlyph, SearchGlyph, UserPlusGlyph } from "@crewlethq/icons/glyphs";
@@ -336,19 +359,63 @@ function AboutRow({
 
 /* Members ---------------------------------------------------------------- */
 
+/** How an agent member follows a room, as its row says it. */
+export function followingWords(followsAll: boolean): string {
+  return followsAll ? "Gets every message" : "Answers when named";
+}
+
+/**
+ * The membership a following switch states: the room's members as the pane
+ * read them, every one's following said, with `handle`'s set to `on`. The
+ * read itself is the expectation it is stated against.
+ */
+export function withFollowing(
+  members: readonly Pick<ChatMember, "handle" | "follow_all">[],
+  handle: string,
+  on: boolean,
+): {
+  members: { handle: string; follow_all: boolean }[];
+  expected_members: { handle: string; follow_all: boolean }[];
+} {
+  const read = members.map((m) => ({ handle: m.handle, follow_all: m.follow_all === true }));
+  return {
+    members: read.map((m) => (m.handle === handle ? { ...m, follow_all: on } : m)),
+    expected_members: read,
+  };
+}
+
 function Members({ answer }: { answer: ChatChannelDetail }) {
   const nav = useChatNav();
   const frame = useChatFrame();
   const scope = useRoomScope();
   const people = useChatPeople();
+  const follow = useAct("set_channel_members");
   const [filter, setFilter] = useState("");
+  const [report, setReport] = useState<StartReport | null>(null);
   const channel = answer.channel;
   const direct = isDirect(channel.kind);
+  const where = roomWhere(channel.kind, channel.name ?? channel.id);
   const q = filter.trim().toLowerCase();
   const rows = membersOf(answer.members ?? [], people.person).filter(
     ({ person }) => q === "" || person.name.toLowerCase().includes(q),
   );
   const canAdd = scope.rules.members === "" && knownKind(channel.kind);
+
+  async function setFollowing(member: ChatMember, person: ChatPerson, on: boolean) {
+    if (!pressable(follow, scope.rules.following || undefined)) return;
+    setReport(null);
+    const result = await follow.run(
+      { channel: channel.id, ...withFollowing(answer.members ?? [], member.handle, on) },
+      {
+        done: on
+          ? `${person.name} gets every message in ${where}`
+          : `${person.name} answers when named in ${where}`,
+      },
+    );
+    if (result === null) return;
+    const answered = reportFor("following", result);
+    if (answered.tone !== "success") setReport(answered);
+  }
 
   return (
     <div className="chat-pane-section">
@@ -378,27 +445,46 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
               />
             </li>
           )}
-          {rows.map(({ member, person }) => (
-            <li key={member.handle}>
-              <PersonRow
-                avatar={<ChatFace person={person} size={32} />}
-                name={
-                  <>
-                    {person.name}
-                    {person.handle === frame.viewer && (
-                      <span className="chat-muted-text"> (you)</span>
-                    )}
-                  </>
-                }
-                detail={person.team || (person.kind === "agent" ? "Agent" : "Person")}
-                meta={person.status ? stateWord(person.state) : undefined}
-                tag={channel.created_by === person.handle ? <Tag size="xs">Owner</Tag> : undefined}
-                onSelect={() => nav.openPane({ kind: "profile", handle: person.handle })}
-              />
-            </li>
-          ))}
+          {rows.map(({ member, person }) => {
+            const follows = !direct && person.kind === "agent";
+            const on = member.follow_all === true;
+            const who = person.team || (person.kind === "agent" ? "Agent" : "Person");
+            return (
+              <li key={member.handle}>
+                <PersonRow
+                  avatar={<ChatFace person={person} size={32} />}
+                  name={
+                    <>
+                      {person.name}
+                      {person.handle === frame.viewer && (
+                        <span className="chat-muted-text"> (you)</span>
+                      )}
+                    </>
+                  }
+                  detail={follows ? `${who} · ${followingWords(on)}` : who}
+                  meta={person.status ? stateWord(person.state) : undefined}
+                  tag={
+                    channel.created_by === person.handle ? <Tag size="xs">Owner</Tag> : undefined
+                  }
+                  onSelect={() => nav.openPane({ kind: "profile", handle: person.handle })}
+                  action={
+                    follows ? (
+                      <FollowSwitch
+                        name={person.name}
+                        on={on}
+                        rule={scope.rules.following}
+                        busy={follow.busy}
+                        onChange={(next) => void setFollowing(member, person, next)}
+                      />
+                    ) : undefined
+                  }
+                />
+              </li>
+            );
+          })}
         </ul>
       )}
+      <StartNote report={report} />
       {rows.length === 0 && q !== "" && (
         <EmptyState
           size="compact"
@@ -410,6 +496,46 @@ function Members({ answer }: { answer: ChatChannelDetail }) {
         <Skeleton variant="text" rows={2} label="Reading the members" />
       )}
     </div>
+  );
+}
+
+/**
+ * Whether every message in the room reaches one agent member, at the end of
+ * its row. Where the room does not take the change, it shows the state, stays
+ * put and says why, in a tooltip and after its name; while a change is on its
+ * way it holds still too, so a second press cannot be stated against a read
+ * the first is about to replace.
+ */
+function FollowSwitch({
+  name,
+  on,
+  rule,
+  busy,
+  onChange,
+}: {
+  name: string;
+  on: boolean;
+  /** Why the room does not take the change from this reader, or "". */
+  rule: string;
+  busy: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  const label = `${name} gets every message`;
+  if (rule) {
+    return (
+      <Tooltip content={rule}>
+        <Switch label={label} labelHidden checked={on} disabledReason={rule} />
+      </Tooltip>
+    );
+  }
+  return (
+    <Switch
+      label={label}
+      labelHidden
+      checked={on}
+      disabledReason={busy ? "Saving the last change." : undefined}
+      onCheckedChange={onChange}
+    />
   );
 }
 

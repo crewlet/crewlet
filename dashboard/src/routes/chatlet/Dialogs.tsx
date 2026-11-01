@@ -41,6 +41,7 @@ import {
   useToast,
 } from "@crewlethq/ui";
 import {
+  AtSignGlyph,
   CalendarClockGlyph,
   EyeGlyph,
   FolderKanbanGlyph,
@@ -53,6 +54,7 @@ import {
   TrashGlyph,
   TriangleAlertGlyph,
   UserPlusGlyph,
+  UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 
@@ -229,6 +231,13 @@ export function DeleteDialog({
  * membership is the only way into it: one made with nobody in it is a room
  * only its author can reach. The visibility opens on the company's own
  * default (`default_private`), so the choice shows what will happen.
+ *
+ * AND HOW ITS AGENTS FOLLOW IT. An agent added here answers when a message
+ * names it, unless the room is made a team room, where every message reaches
+ * the agents added (`follow_all`), as a team's own room does for the team's
+ * agents. Each message is then a turn for each of them, which the choice says.
+ * A person is never woken by a message, so the choice moves agents alone; it
+ * can be changed per agent afterwards, in the room's Members tab.
  */
 export function NewRoomDialog({ onClose }: { onClose: () => void }) {
   const nav = useChatNav();
@@ -242,6 +251,7 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
   );
   const [topic, setTopic] = useState("");
   const [members, setMembers] = useState<string[]>([]);
+  const [following, setFollowing] = useState<RoomFollowing>("named");
   const [report, setReport] = useState<StartReport | null>(null);
 
   const name = normalizeName(typed);
@@ -264,7 +274,9 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
         channel: name,
         kind,
         ...(topic.trim() ? { topic: topic.trim() } : {}),
-        ...(members.length ? { members: handlesOf(members) } : {}),
+        ...(members.length
+          ? { members: foundingMembers(handlesOf(members), following, people.person) }
+          : {}),
       },
       { done: `Created ${roomWhere(kind, name)}`, quiet: true },
     );
@@ -408,9 +420,52 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
             </div>
           )}
         </FormField>
+        <ChoiceCards
+          label="How agents follow it"
+          density="compact"
+          value={following}
+          onChange={(value) => setFollowing(value as RoomFollowing)}
+          options={[
+            {
+              value: "named",
+              label: "Agents answer when named",
+              media: <AtSignGlyph size="md" />,
+              description:
+                "An agent you add is woken by a message that names it, a thread it is in, or @channel.",
+            },
+            {
+              value: "every",
+              label: "Agents get every message",
+              media: <UsersGlyph size="md" />,
+              description:
+                "A team room: every message reaches each agent you add, and each one is a turn it spends.",
+            },
+          ]}
+        />
         <StartNote report={report?.taken ? null : report} />
       </div>
     </Modal>
+  );
+}
+
+/** How a new room's agents follow it: when named, or every message. */
+export type RoomFollowing = "named" | "every";
+
+/**
+ * A new room's founding members as `create_channel` takes them: a bare handle
+ * for a member who answers when named, and `{handle, follow_all}` for an agent
+ * that gets every message, which a team room makes of every agent added. A
+ * person is never woken by a message, so a person stays a bare handle.
+ */
+export function foundingMembers(
+  handles: readonly string[],
+  following: RoomFollowing,
+  person: (handle: string) => Pick<ChatPerson, "kind">,
+): (string | { handle: string; follow_all: true })[] {
+  return handles.map((handle) =>
+    following === "every" && person(handle).kind === "agent"
+      ? { handle, follow_all: true }
+      : handle,
   );
 }
 

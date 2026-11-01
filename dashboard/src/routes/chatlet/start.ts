@@ -45,7 +45,8 @@ import type { ChatReceipt } from "~/protocol/index.ts";
 export const SHORTEN = "Nothing is cut to fit. Shorten it.";
 
 /** Which gesture answered, because the retry advice differs for each. */
-export type StartKind = "channel" | "direct" | "join" | "leave" | "topic" | "members" | "delete";
+export type StartKind =
+  "channel" | "direct" | "join" | "leave" | "topic" | "members" | "following" | "delete";
 
 /**
  * How a report is drawn.
@@ -121,9 +122,11 @@ function retryAdvice(kind: StartKind): string {
       return "Ask again. If the first try worked, asking again changes nothing.";
     case "topic":
     case "members":
+    case "following":
     case "delete":
       // A PATCH THAT AGREES WITH WHAT IS THERE publishes nothing, an add names
-      // a set, and a second delete of a tombstone changes nothing.
+      // a set, a membership the room already holds publishes nothing, and a
+      // second delete of a tombstone changes nothing.
       return "Ask again. If the first try worked, asking again changes nothing.";
   }
 }
@@ -143,6 +146,8 @@ function what(kind: StartKind): string {
       return "the change was saved";
     case "members":
       return "they were added";
+    case "following":
+      return "the change was saved";
     case "delete":
       return "the message was deleted";
   }
