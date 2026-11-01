@@ -1,0 +1,1 @@
+import{pi as e}from"./chunk-O7N6W52M-CFM3t9yO.js";import{t}from"./react-C1iE8mnY.js";var n=t();function r({children:t,hue:r,tone:i=`accent`,size:a=`md`,className:o,...s}){return(0,n.jsx)(`span`,{"aria-hidden":`true`,...s,className:e(`crewlet-icon-tile`,`crewlet-icon-tile--${a}`,r?`crewlet-icon-tile--${r}`:i===`neutral`&&`crewlet-icon-tile--neutral`,o),children:t})}export{r as t};
