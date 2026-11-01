@@ -4321,8 +4321,9 @@ node, so seats' reads and writes between them never hold more than half —
 and gives it back before its push lands. What the share holds is the read's
 or the build's own git; the short checks of what either names, before it,
 wait in the lane's queue like any short read. `crewlet.code.seatwork.held` is
-the share held now and `crewlet.code.seatwork.waits` every unit asked for, by
-the `work` it was for and whether it came free in time
+the share held now and `crewlet.code.seatwork.waits` how long every unit asked
+for waited, by the `work` it was for and whether it came free in time — the
+wait is a term of the attempt a read or a write is given on one git node
 ([Metrics](../reference/metrics.md)).
 
 A read's git process that reports damage to the copy is never answered from,

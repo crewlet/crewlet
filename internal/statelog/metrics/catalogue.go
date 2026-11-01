@@ -2031,25 +2031,28 @@ func Catalogue() []Instrument {
 				"`git.max_processes` " +
 				"(at least one), and the other half of the read lane stays the " +
 				"node's own and its persons' — a push's scans, a sync's peel, " +
-				"a fetch's check of its wants. Pinned at the share while " +
-				"`crewlet.code.seatwork.waits{outcome=unready}` climbs is a " +
-				"node whose seats ask more git than half its cores, and sends " +
-				"the rest to another git node.",
+				"a fetch's check of its wants. Pinned at the share while the " +
+				"count of `crewlet.code.seatwork.waits{outcome=unready}` " +
+				"climbs is a node whose seats ask more git than half its " +
+				"cores, and sends the rest to another git node.",
 		},
 		{
-			Name: CodeSeatworkWaits, Kind: KindCounter, Unit: UnitCount,
+			Name: CodeSeatworkWaits, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"outcome", "work"},
-			Shows: "Every unit of this git node's seat git-work share asked " +
-				"for, by `outcome` — `granted`, taken within two seconds; " +
-				"`unready`, none free in two seconds, answered so the asker " +
-				"is served by another git node — and by `work` (`read`: a " +
-				"server-side read of a repository by object id; `write`: the " +
-				"build of an engine write, a commit made through a tool). One " +
-				"whose " +
-				"caller went away while it waited is not counted. `unready` " +
-				"is a node at its share for whole seconds: more git nodes, or " +
-				"more cores and a wider `git.max_processes`, which widens the " +
-				"share with the lane.",
+			Shows: "How long every unit of this git node's seat git-work " +
+				"share asked for waited, by `outcome` — `granted`, taken " +
+				"within two seconds; `unready`, none free in two seconds, " +
+				"answered so the asker is served by another git node, its " +
+				"wait the whole two — and by `work` (`read`: a server-side " +
+				"read of a repository by object id; `write`: the build of an " +
+				"engine write, a commit made through a tool). One whose " +
+				"caller went away while it waited is not counted. The wait " +
+				"is a whole term of the attempt a seat's read or write is " +
+				"given on one git node, so the `granted` tail nearing two " +
+				"seconds is a node about to send its seats' work on; the " +
+				"`unready` count is a node at its share for whole seconds: " +
+				"more git nodes, or more cores and a wider " +
+				"`git.max_processes`, which widens the share with the lane.",
 		},
 		// ---- the code host ---------------------------------------------
 		{

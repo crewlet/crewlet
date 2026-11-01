@@ -144,22 +144,30 @@ var errShareWait = errors.New("code: the seat git-work share's wait ended")
 // naming what spent its asker's attempt.
 // release gives the unit back, and is idempotent — every holder defers it,
 // and the one that releases early calls it again harmlessly.
+//
+// EVERY TAKE IS TIMED, granted or unready (crewlet.code.seatwork.waits, a
+// histogram): the wait is a whole term of each attempt seat git work is
+// given — an engine write's (estate.GitWriteAttempt) and a read's
+// (estate.Timing's GitReadAttempt) — and a count of the waits that ran out
+// says only how often the node gave that term up whole, never how near the
+// granted ones came to it.
 func (s *GitShare) Take(ctx context.Context, work SeatWork) (release func(), err error) {
 	if !work.Valid() {
 		return nil, fmt.Errorf("%w: seat git work %q is not one of %v", ErrInvalid, work, SeatWorks())
 	}
+	began := time.Now()
 	wait, cancel := context.WithTimeoutCause(ctx, s.wait, errShareWait)
 	defer cancel()
 	if err := s.sem.Acquire(wait, 1); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		s.count(work, shareUnready)
+		s.waited(work, shareUnready, time.Since(began))
 		return nil, &ErrGitUnready{Reason: UnreadyShare, Detail: fmt.Sprintf(
 			"%s's seat git work holds its whole share — %d of its read lane's %d slots — and none came free "+
 				"within %s; another git node answers meanwhile", s.node, s.units, s.readSlots, s.wait)}
 	}
-	s.count(work, shareGranted)
+	s.waited(work, shareGranted, time.Since(began))
 	s.moved(+1)
 	return sync.OnceFunc(func() {
 		s.sem.Release(1)
@@ -187,9 +195,9 @@ func (s *GitShare) moved(delta int) {
 	}
 }
 
-// count records one take's outcome.
-func (s *GitShare) count(work SeatWork, outcome string) {
+// waited records how long one take waited, by its outcome.
+func (s *GitShare) waited(work SeatWork, outcome string, took time.Duration) {
 	if s.metrics != nil {
-		s.metrics.Add(metrics.CodeSeatworkWaits, 1, metrics.Attrs{"outcome": outcome, "work": string(work)})
+		s.metrics.Observe(metrics.CodeSeatworkWaits, took, metrics.Attrs{"outcome": outcome, "work": string(work)})
 	}
 }

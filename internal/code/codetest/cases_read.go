@@ -30,7 +30,7 @@ func readsServed(n Node) uint64 {
 	var total uint64
 	for _, s := range n.Metrics().Read() {
 		if s.Name == metrics.CodeSeatworkWaits {
-			total += s.Total
+			total += s.Count
 		}
 	}
 	return total

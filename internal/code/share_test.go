@@ -20,10 +20,12 @@ import (
 // are held, a third taker waits, and past GitShareWait (scaled here) it is
 // answered unready — about the node, so the asker's walk moves on — rather
 // than queued longer; a unit given back is taken by the waiter; and however
-// many takers race, never more than two run at once. Every take is counted by
-// its outcome, and the gauge follows what is held.
+// many takers race, never more than two run at once. Every take is timed by
+// its outcome — the one that ran out its whole wait, which is a term of the
+// attempt its asker was given — and the gauge follows what is held.
 //
-// Mutation: ShareOf answering the whole lane — four in flight, red.
+// Mutation: ShareOf answering the whole lane — four in flight, red. An
+// unready take recorded as no wait — red.
 func TestSeatGitWorkIsHalfTheReadLane(t *testing.T) {
 	t.Parallel()
 	for slots, want := range map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 4: 2, 5: 2, 64: 32} {
@@ -93,11 +95,12 @@ func TestSeatGitWorkIsHalfTheReadLane(t *testing.T) {
 	}
 	full1()
 	full2()
-	if got := waits(rec, "granted"); got != 5 {
-		t.Errorf("waits{outcome=granted} = %d, want 5", got)
+	if got, _ := waits(rec, "granted"); got != 5 {
+		t.Errorf("waits{outcome=granted} counts %d, want 5", got)
 	}
-	if got := waits(rec, "unready"); got != 1 {
-		t.Errorf("waits{outcome=unready} = %d, want 1 — the one that waited its while", got)
+	if got, waited := waits(rec, "unready"); got != 1 || waited < 50 {
+		t.Errorf("waits{outcome=unready} counts %d waiting %.1f ms, want 1 waiting its whole 50 ms — the one "+
+			"that waited its while", got, waited)
 	}
 
 	// NEVER MORE THAN THE SHARE AT ONCE, however many race.
@@ -177,11 +180,11 @@ func TestAWritesBuildDrawsOnTheSeatShare(t *testing.T) {
 		for _, snap := range rec.Read() {
 			if snap.Name == metrics.CodeSeatworkWaits && snap.Attrs["work"] == row.work &&
 				snap.Attrs["outcome"] == row.outcome {
-				got = snap.Total
+				got = snap.Count
 			}
 		}
 		if got != row.want {
-			t.Errorf("waits{work=%s, outcome=%s} = %d, want %d", row.work, row.outcome, got, row.want)
+			t.Errorf("waits{work=%s, outcome=%s} counts %d, want %d", row.work, row.outcome, got, row.want)
 		}
 	}
 }
@@ -196,12 +199,13 @@ func gauge(rec *metrics.Recorder, name string) float64 {
 	return -1
 }
 
-// waits is crewlet.code.seatwork.waits{outcome, work=read}.
-func waits(rec *metrics.Recorder, outcome string) uint64 {
+// waits is crewlet.code.seatwork.waits{outcome, work=read}: how many takes it
+// holds, and how long they waited in all, in milliseconds.
+func waits(rec *metrics.Recorder, outcome string) (count uint64, waitedMs float64) {
 	for _, s := range rec.Read() {
 		if s.Name == metrics.CodeSeatworkWaits && s.Attrs["outcome"] == outcome && s.Attrs["work"] == "read" {
-			return s.Total
+			return s.Count, s.Sum
 		}
 	}
-	return 0
+	return 0, 0
 }
