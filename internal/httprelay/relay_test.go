@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -34,12 +35,27 @@ type node struct {
 	// mute, once set, makes every Ask this node sends go unanswered: the
 	// node is still running, and nothing it says reaches anybody.
 	mute atomic.Bool
+	// admitting, once set, is called by this node's Admit before it answers,
+	// so a case can hold an OPEN while it is being admitted.
+	admitting atomic.Pointer[func()]
+	// answered counts the requests this node has answered, OPEN and CLOSE
+	// on its node subject and frames on an exchange's.
+	answered atomic.Int64
 }
 
-// muteable is a node's broker, which its node can silence.
+// muteable is a node's broker, which its node can silence, and which counts
+// what the node answers.
 type muteable struct {
 	Fabric
-	mute *atomic.Bool
+	mute     *atomic.Bool
+	answered *atomic.Int64
+}
+
+func (m muteable) Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error) {
+	return m.Fabric.Serve(ctx, subject, func(ctx context.Context, raw []byte) ([]byte, error) {
+		defer m.answered.Add(1)
+		return h(ctx, raw)
+	})
 }
 
 func (m muteable) Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error) {
@@ -63,8 +79,13 @@ func fleet(t *testing.T, h http.Handler, tune func(*clocks)) (entry, holder *nod
 		n := &node{}
 		n.verdict.Store(Serve)
 		rl, err := New(Options{
-			Fabric: muteable{Fabric: q, mute: &n.mute}, Name: "testrelay", Node: id, Owner: id + ":incarnation", Keyring: ring,
-			Admit:   func(*http.Request) Verdict { return n.verdict.Load().(Verdict) },
+			Fabric: muteable{Fabric: q, mute: &n.mute, answered: &n.answered}, Name: "testrelay", Node: id, Owner: id + ":incarnation", Keyring: ring,
+			Admit: func(*http.Request) Verdict {
+				if hold := n.admitting.Load(); hold != nil {
+					(*hold)()
+				}
+				return n.verdict.Load().(Verdict)
+			},
 			Handler: handler,
 		})
 		if err != nil {
@@ -378,6 +399,61 @@ func TestAClientThatHangsUpCancelsTheHoldersRequest(t *testing.T) {
 	}
 }
 
+// A CLIENT THAT HANGS UP BEFORE ITS OPEN IS ANSWERED never has its request
+// run: the entry gives the exchange up while the holder is still admitting
+// it, and the CLOSE it sends all the same keeps the holder from starting it,
+// rather than leaving a request nobody reads to run until the idle bound.
+func TestAClientThatHangsUpBeforeItsOpenIsAnsweredRunsNothing(t *testing.T) {
+	t.Parallel()
+	var ran atomic.Bool
+	entry, holder := fleet(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ran.Store(true)
+		<-r.Context().Done()
+	}), nil)
+	admitting, forwarded := make(chan struct{}), make(chan struct{})
+	hold := func() {
+		close(admitting)
+		<-forwarded
+	}
+	holder.admitting.Store(&hold)
+	client := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer close(forwarded)
+		req, err := Read(r)
+		if err != nil {
+			t.Errorf("Read: %v", err)
+			return
+		}
+		if outcome, _ := entry.relay.Forward(r.Context(), w, req, holder.relay.Owner()); outcome != Unanswered {
+			t.Errorf("an exchange whose client left during its open was %s; want %s", outcome, Unanswered)
+		}
+	}))
+	t.Cleanup(client.Close)
+	ctx, hangUp := context.WithCancel(t.Context())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, client.URL+"/stream", nil)
+	go func() {
+		if res, err := httpxtest.Pool(t).Do(req); err == nil {
+			_ = res.Body.Close()
+		}
+	}()
+	<-admitting
+	hangUp()
+	<-forwarded
+	// The holder answers the entry's CLOSE and then, let go, the OPEN.
+	deadline := time.Now().Add(5 * time.Second)
+	for holder.answered.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the holder answered %d requests; want the CLOSE and the OPEN", holder.answered.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !holder.relay.answering(0) {
+		t.Error("the holder is answering an exchange its entry gave up before it started")
+	}
+	if ran.Load() {
+		t.Error("the holder ran a request whose client had gone before it started")
+	}
+}
+
 // AN IDLE STREAM IS KEPT ALIVE BY ITS HEARTBEATS: a stream with nothing to say
 // for several idle bounds is still open, because the holder's empty frames are
 // what the entry counts as the holder being there.
@@ -524,4 +600,13 @@ func TestAHandlerWaitsOnceAFramesWorthIsUnsent(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a write still waits once its frame was sent")
 	}
+}
+
+// answering reports whether the relay is answering exactly n exchanges and
+// has ended at least one, which a case reads once an OPEN it held has been
+// let go.
+func (rl *Relay) answering(n int) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return len(rl.served) == n && len(rl.ended) > 0
 }
