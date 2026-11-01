@@ -69,7 +69,7 @@ type turn struct {
 	// segments, so a resumed segment's ids continue its first one's.
 	steps, cards, messages int
 	// finished counts the steps that have ENDED, which is what a status
-	// frame's steps_done says. Not the newest step's index: the coding CLI
+	// frame's steps_done says. Not the newest step's index: the harness
 	// calls tools in parallel, so steps end out of order, and the index of
 	// the one that ended last counted backwards (2, then 1) on screen.
 	finished int
@@ -555,12 +555,12 @@ func (t *turn) run(r loopRun) {
 		TerminateAfter: r.terminate,
 		Fence:          t.fence, OnProgress: t.onProgress, Progress: progress,
 		// STREAMED, so a round's prose reaches the drawer while it is
-		// written, through the CLI's token stream where it has one. A CLI
+		// written, through the harness's token stream where it has one. A harness
 		// that cannot stream never sends a fragment, and its round arrives
 		// whole when it commits, as before.
 		StreamPartials: true,
 		// The assistant's prompt is its whole instruction: it replaces a
-		// CLI's own coding-agent prompt rather than running under it.
+		// harness's own coding-agent prompt rather than running under it.
 		OwnPrompt: true,
 	})
 	if res == nil {

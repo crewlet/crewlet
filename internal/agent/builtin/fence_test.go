@@ -592,7 +592,7 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 		assertEnvelope(t, answer, provenance.TrustExternal, 1)
 	})
 
-	// A PARKED RUN'S QUESTION is what the seat's coding agent wrote, in the
+	// A PARKED RUN'S QUESTION is what the seat's harness wrote, in the
 	// seat's name, and whoever answers it reads it back: fenced as that run's,
 	// by the one rule for an executor's words (provenance.Executor).
 	t.Run("answer_executor", func(t *testing.T) {

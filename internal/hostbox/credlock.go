@@ -33,7 +33,7 @@ const credentialLockPoll = 10 * time.Millisecond
 // copies the directory — a login bundle, a box's seed — ever carries the lock
 // along with the logins.
 //
-// ONE NAME FOR EVERY WRITER. The CLI LLM backend's seats and `crewlet llm`
+// ONE NAME FOR EVERY WRITER. The harness backend's seats and `crewlet llm`
 // commands write the shared directory, and so does every local sandbox's
 // teardown, writing back a login its run refreshed: a compare-and-swap is one
 // only against writers that agree on the lock, and each deriving the name for

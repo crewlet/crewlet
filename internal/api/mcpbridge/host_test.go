@@ -37,7 +37,7 @@ func (n namingHost) RoundTrip(r *http.Request) (*http.Response, error) {
 	return n.next.RoundTrip(named)
 }
 
-// connectAs connects an MCP client the way a coding agent's own client would,
+// connectAs connects an MCP client the way a harness's own client would,
 // over server's own pool, every request it sends naming host.
 func connectAs(t *testing.T, server *httptest.Server, endpoint, host string) (*mcp.ClientSession, error) {
 	t.Helper()

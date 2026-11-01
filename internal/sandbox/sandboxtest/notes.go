@@ -91,7 +91,7 @@ func mustFile(t *testing.T, s sandbox.PendingStore, turnID, id string) {
 }
 
 // bridgeTake is a take the run's tool bridge makes: pinned to its job, while
-// the run is launching or running, at a boundary of the CLI's own loop.
+// the run is launching or running, at a boundary of the harness's own loop.
 func bridgeTake(launch string, ids ...string) sandbox.NoteTake {
 	return sandbox.NoteTake{
 		IDs: ids, Launch: launch,
@@ -162,7 +162,7 @@ func testANoteWaitsUntilATakeReadsIt(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// TWO TAKES OF ONE NOTE READ IT ONCE: a CLI's hook and the reviewer — or two
+// TWO TAKES OF ONE NOTE READ IT ONCE: a harness's hook and the reviewer — or two
 // boxes a seat move left serving one run — racing for the same note get it
 // exactly once between them.
 func testTwoTakesOfOneNoteReadItOnce(t *testing.T, s sandbox.PendingStore) {
@@ -381,7 +381,7 @@ func testAParkKeepsEveryWaitingNote(t *testing.T, s sandbox.PendingStore) {
 
 // A LAUNCH ANCHORS THE SEAT AND READS ITS BRIEF UNDER THE JOB IT OPENS, in the
 // one write that opens it: a note the brief carries is never one the job's own
-// CLI could take again, and the seat a person's authority is decided on is on
+// harness could take again, and the seat a person's authority is decided on is on
 // the record from its first byte.
 func testALaunchAnchorsTheSeatAndReadsItsBriefUnderTheNewJob(t *testing.T, s sandbox.PendingStore) {
 	r := run("t-brief")
@@ -418,7 +418,7 @@ func testALaunchAnchorsTheSeatAndReadsItsBriefUnderTheNewJob(t *testing.T, s san
 // A RESET KEEPS THE TURN'S NOTES — every one, read or waiting, their numbering
 // and the anchor — and the next job's brief reads what it carries: a note the
 // record held waiting is read under the NEW job, one the brief brings from
-// elsewhere is added read. Whether a CLI asked for notes is the job's, and goes.
+// elsewhere is added read. Whether a harness asked for notes is the job's, and goes.
 func testAResetKeepsTheTurnsNotesAndClearsPulled(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	first := run("t-reset")
@@ -1058,7 +1058,7 @@ func compact(t *testing.T, text string) string {
 }
 
 // A STATE THE NOTE VIEW CANNOT READ IS PASSED OVER, never delivered as an empty
-// record: a reader following a run's notes — the bridge serving its CLI, a
+// record: a reader following a run's notes — the bridge serving its harness, a
 // resumed segment's source — that were handed "no record" would answer every
 // step with nothing until the next write it could read. It keeps what it last
 // knew, and the next state it can read replaces it.

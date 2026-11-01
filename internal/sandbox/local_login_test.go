@@ -13,13 +13,13 @@ import (
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
 
-// The cases here hold a box to the SHARED LOGIN BEING ONE LOGIN: a CLI that
+// The cases here hold a box to the SHARED LOGIN BEING ONE LOGIN: a harness that
 // keeps its login in two files — kimi-code's token beside its config.toml,
 // gemini-cli's token beside the account it names — is seeded with both from
 // one sign-in and writes both back in one step, or neither.
 
 // twoFileBox is a login of two files in a shared directory of the case's own,
-// mapped where a box keeps them: the map a CLI entry hands a local box.
+// mapped where a box keeps them: the map a harness entry hands a local box.
 func twoFileBox(t *testing.T) (dir string, files map[string]string) {
 	t.Helper()
 	dir = filepath.Join(t.TempDir(), "credentials")
@@ -117,7 +117,7 @@ func TestABoxIsSeededWithTheLoginAWriteCommitted(t *testing.T) {
 
 // A BOX IS SEEDED WITH A WHOLE LOGIN OR NONE. One of its files cannot be placed
 // in the box — its path climbs out of the home — so the box is given neither:
-// handed the other alone, the CLI starts on half a login and fails inside the
+// handed the other alone, the harness starts on half a login and fails inside the
 // run in a way nothing outside it explains.
 //
 // Mutation: seed the files that can be placed and skip the one that cannot,
@@ -159,7 +159,7 @@ func TestABoxWritesBackEveryFileItRefreshed(t *testing.T) {
 // run refreshed the token while the host rewrote the config.toml beside it:
 // judged a file at a time, the token's file still held its seed and was
 // written back, and the shared login became the box's token beside the host's
-// config.toml — a login no CLI wrote. The host's newer login is kept whole.
+// config.toml — a login no harness wrote. The host's newer login is kept whole.
 //
 // Mutation: compare each file the run changed with its own seed alone, and
 // the box's token lands beside the host's config.toml.
@@ -185,7 +185,7 @@ func TestABoxRefreshIsNeverWrittenBesideAnotherWritersFile(t *testing.T) {
 // A FILE THE LOGIN GAINED WHILE THE BOX RAN IS A NEWER LOGIN TOO. The box was
 // seeded with the token alone; the host's login gained a config.toml
 // meanwhile, the token's file untouched. The box's refresh of the token is no
-// refresh of that login, and written beside it would make one no CLI wrote.
+// refresh of that login, and written beside it would make one no harness wrote.
 //
 // Mutation: record only the files a box was given, and the box's token is
 // written beside the host's new config.toml.
@@ -210,7 +210,7 @@ func TestABoxRefreshIsNeverWrittenOverALoginThatGainedAFile(t *testing.T) {
 
 // A BOX OF A LOGIN NOBODY MADE IS GIVEN NOTHING. Every file of the login is
 // offered whether or not it is held, and the box is seeded with what the login
-// holds then — none of it here, so the CLI inside answers its own plain "not
+// holds then — none of it here, so the harness inside answers its own plain "not
 // authenticated" rather than failing on a file that is not there.
 func TestABoxOfALoginNobodyMadeIsGivenNothing(t *testing.T) {
 	t.Parallel()
@@ -229,7 +229,7 @@ func twoFileLogin(dir string, files map[string]string) boxLogin {
 
 // A BOX SEED THAT STOPS PART WAY TAKES BACK WHAT IT PUT IN THE BOX. The second
 // file cannot be put where the box keeps it — something is in the way — after
-// the first was: handed the first alone, the CLI starts on half a login and
+// the first was: handed the first alone, the harness starts on half a login and
 // fails inside the run in a way nothing outside it explains.
 //
 // Mutation: drop seedLogin's removal of the files it had already written, and

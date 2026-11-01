@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/modelcatalog"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -72,10 +72,10 @@ type LocalModel struct {
 	Variable string
 	// Resolves is whether its credential resolved on this node.
 	Resolves bool
-	// Hint is the resolved credential's hint (cliagent's
+	// Hint is the resolved credential's hint (harness's
 	// CredentialHint), "" for none.
 	Hint string
-	// TokenLifetime is how long the CLI's headless token lasts, zero when
+	// TokenLifetime is how long the harness's headless token lasts, zero when
 	// unknown or not a token.
 	TokenLifetime time.Duration
 }
@@ -171,7 +171,7 @@ type ModelSignIn struct {
 	HostLogins  []ModelHostLogin `json:"host_logins"`
 }
 
-// ModelHostLogin is one node's CLI login for an entry signing in with
+// ModelHostLogin is one node's harness login for an entry signing in with
 // credential files.
 type ModelHostLogin struct {
 	Node      string     `json:"node"`
@@ -763,7 +763,7 @@ func (s Sources) llmRunners(ctx context.Context, _ Params) (any, error) {
 	return out, nil
 }
 
-// ModelsAnswer is `llm_models`: what a model step suggests for one CLI.
+// ModelsAnswer is `llm_models`: what a model step suggests for one harness.
 type ModelsAnswer struct {
 	Source    string               `json:"source"`
 	FetchedAt *time.Time           `json:"fetched_at"`
@@ -774,26 +774,26 @@ type ModelsAnswer struct {
 	Reason    string               `json:"reason,omitempty"`
 }
 
-// ModelAliasRow is a model name the CLI resolves itself.
+// ModelAliasRow is a model name the harness resolves itself.
 type ModelAliasRow struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Detail string `json:"detail"`
 }
 
-// catalogueProviders is the catalogue provider each CLI reads, where it reads
-// one fixed provider: the ids its vendor's CLI takes as model arguments.
+// catalogueProviders is the catalogue provider each harness reads, where it reads
+// one fixed provider: the ids its vendor's harness takes as model arguments.
 // OpenCode names its provider in the model argument itself, so a caller
 // names it.
 var catalogueProviders = map[string]string{"claude-code": "anthropic", "codex": "openai"}
 
-// llmModels answers the models one CLI can be given: the catalogue's list for
-// the CLI's provider, the aliases the CLI resolves itself and its vendor's own
+// llmModels answers the models one harness can be given: the catalogue's list for
+// the harness's provider, the aliases the harness resolves itself and its vendor's own
 // page. No credential is read or sent (decision D1): the list is the public
 // catalogue's, and the test call is what says whether a plan reaches a model.
 func (s Sources) llmModels(ctx context.Context, p Params) (any, error) {
 	harness := p.String("harness")
-	profile, known := cliprofile.Builtin(harness)
+	profile, known := harnessprofile.Builtin(harness)
 	if harness == "" || !known || !slices.Contains([]string{"claude-code", "codex", "opencode"}, harness) {
 		return nil, fmt.Errorf("%w: harness must be claude-code, codex or opencode", ErrBadParams)
 	}

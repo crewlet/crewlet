@@ -37,7 +37,7 @@ const (
 	// written whole on every status flip and every listing of active runs
 	// for as long as it waits; the park's announcement; the pane a person
 	// answers it from; and, once answered, the prompt of the run that
-	// carries the work on, which that run's CLI re-sends with every request
+	// carries the work on, which that run's harness re-sends with every request
 	// it makes from then on. 16 KiB is about four thousand tokens: a page of
 	// prose, the bound a run's whole free-text question was held to before
 	// asks were structured, so no context that fitted then is refused now.
@@ -195,7 +195,7 @@ type AskOutcome string
 
 const (
 	// AskRecorded is an ask on the job's row, which the run parks on once
-	// its CLI ends.
+	// its harness ends.
 	AskRecorded AskOutcome = "recorded"
 	// AskAlreadyAsked is a job that asked a question already, which stands.
 	// A run asks one question at a time, because one answer resumes it.

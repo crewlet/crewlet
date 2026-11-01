@@ -32,7 +32,7 @@ import (
 // imported.
 //
 // What building a company does is not undone by the reconcile that replaces
-// it: its shared tool servers started, its coding CLIs' credential bundles
+// it: its shared tool servers started, its harnesses' credential bundles
 // restored into empty logins (which every later revision's restore then
 // keeps, because a login is present), its native halves started and the store
 // opened at its embedding width (both decided once per process), so a live

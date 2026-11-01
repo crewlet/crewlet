@@ -13,7 +13,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/envref"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -410,7 +410,7 @@ var Harnesses = []Harness{
 func (n Harness) Valid() bool { return slices.Contains(Harnesses, n) }
 
 // ExecutorHarnesses is the closed set of harnesses that can run a seat's EXECUTOR: the
-// ones with an in-box runner (internal/sandbox/codingagent), which launches
+// ones with an in-box runner (internal/sandbox/executor), which launches
 // the harness as its own agentic run, renders its tools and limits, and reads
 // back what it did.
 //
@@ -419,7 +419,7 @@ func (n Harness) Valid() bool { return slices.Contains(Harnesses, n) }
 // so a chain with no member here can never run its seat's turn, and config
 // refuses it ([Company.validateExecutors]).
 //
-// HELD TO THE RUNNERS THAT EXIST by a test against codingagent.Names(): a
+// HELD TO THE RUNNERS THAT EXIST by a test against executor.Names(): a
 // runner added there and not here refuses entries that would run, and one
 // listed here with no runner admits entries every launch then refuses.
 var ExecutorHarnesses = []Harness{HarnessClaudeCode, HarnessOpenCode}
@@ -627,7 +627,7 @@ type CredentialSources struct {
 // CredentialSources says where each of this entry's credentials is read from:
 // the field the entry writes or, where it writes none, a conventional variable
 // — the harness's own token or key variable, and the bundle's
-// [cliprofile.BundleVarName].
+// [harnessprofile.BundleVarName].
 //
 // A CONVENTION, so `crewlet llm login -capture-token`, `crewlet llm export
 // -secret-store` and a key already exported as ANTHROPIC_API_KEY sign an entry
@@ -643,23 +643,23 @@ type CredentialSources struct {
 // environment, which the secret store is not part of. Nor does env: the
 // entry's own env is its sign-in, and the harness is handed no token and no key.
 func (l *LLMProvider) CredentialSources(key string) CredentialSources {
-	profile, err := cliprofile.Load(l.HarnessName(), l.Overrides)
+	profile, err := harnessprofile.Load(l.HarnessName(), l.Overrides)
 	if err != nil {
 		// A profile that does not load is refused at overrides by
 		// validation, and names no variable to fall back to.
-		profile = cliprofile.Profile{}
+		profile = harnessprofile.Profile{}
 	}
 	sources := CredentialSources{
 		Token:  CredentialSource{Value: l.Auth.Token},
 		APIKey: CredentialSource{Value: l.Auth.APIKey},
-		Bundle: CredentialSource{Value: l.Auth.CredentialBundle, Fallback: cliprofile.BundleVarName(key)},
+		Bundle: CredentialSource{Value: l.Auth.CredentialBundle, Fallback: harnessprofile.BundleVarName(key)},
 	}
 	switch l.ResolvedAuthMode() {
 	case AuthSubscription:
 		sources.Token.Fallback = profile.TokenEnv
 	case AuthAPIKey:
 		// NOT a variable other vendors' keys go in too: the entry names
-		// its key ([cliprofile.Profile.APIKeyEnvShared]).
+		// its key ([harnessprofile.Profile.APIKeyEnvShared]).
 		if !profile.APIKeyEnvShared {
 			sources.APIKey.Fallback = profile.APIKeyEnv
 		}
@@ -722,7 +722,7 @@ func (l *LLMProvider) validate(path Path) error {
 }
 
 // validateProfile holds an entry to the profile it drives — the built-in
-// profile with overrides merged in, loaded by the same [cliprofile.Load] the
+// profile with overrides merged in, loaded by the same [harnessprofile.Load] the
 // backend is built from — and its model to that profile's model flag.
 //
 // HERE, AND NOT ONLY WHERE THE BACKEND IS BUILT, because building it is what
@@ -740,9 +740,9 @@ func (l *LLMProvider) validateProfile(path Path) error {
 		return nil // reported at harness; there is no profile to judge
 	}
 	var p problems
-	profile, err := cliprofile.Load(l.HarnessName(), l.Overrides)
+	profile, err := harnessprofile.Load(l.HarnessName(), l.Overrides)
 	switch {
-	case errors.Is(err, cliprofile.ErrOverrides):
+	case errors.Is(err, harnessprofile.ErrOverrides):
 		p.add(at(path, "overrides"), ErrShape, "%v", err)
 		return p.err()
 	case err != nil:
@@ -768,7 +768,7 @@ func (l *LLMProvider) validateProfile(path Path) error {
 // ([LLMProvider.ResolvedStateDir]), so a key with a `/` nested one entry's
 // login inside another's, and `..` left the home altogether. And it names a
 // variable: the entry's credential bundle is read from
-// [cliprofile.BundleVarName], which upper-cases the key and maps every other
+// [harnessprofile.BundleVarName], which upper-cases the key and maps every other
 // character to `_`. Lowercase only, so the one key a person reads in the
 // document, a URL path and a Kubernetes resource name (crewlet-operator's,
 // which are DNS labels already) is the same string.
@@ -777,7 +777,7 @@ var ProviderKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 // validateLLMKeys holds every providers.llm key to [ProviderKeyPattern], and
 // no two keys to one credential bundle variable.
 //
-// ONE BUNDLE PER ENTRY. [cliprofile.BundleVarName] maps `.`, `_` and `-` to
+// ONE BUNDLE PER ENTRY. [harnessprofile.BundleVarName] maps `.`, `_` and `-` to
 // one character, so `gpt-5`, `gpt_5` and `gpt.5` all read
 // CREWLET_LLM_CLI_GPT_5_CREDENTIALS: the second entry was restored the first
 // one's login, silently, and `crewlet llm export -secret-store` from either
@@ -806,7 +806,7 @@ func (c *Company) validateLLMKeys() error {
 				key, ProviderKeyPattern, suggestProviderKey(key))
 			continue
 		}
-		bundle := cliprofile.BundleVarName(key)
+		bundle := harnessprofile.BundleVarName(key)
 		if first, ok := bundles[bundle]; ok {
 			p.add(path, ErrConflict,
 				"%q and %q read one credential bundle, %s, since the variable maps '.', '_' and "+
@@ -868,7 +868,7 @@ func (c *Company) validateLLMModels() error {
 
 // validateModel holds an entry's model to the grammar its harness reads it in,
 // where the merged profile declares one
-// ([cliprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
+// ([harnessprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
 // the first slash into a provider and a model, so a bare `claude-sonnet-5`
 // names the provider "claude-sonnet-5" and no model, and every call the entry
 // makes — its runs on this host and an executor run alike, which are handed
@@ -889,7 +889,7 @@ func (l *LLMProvider) validateModel(path Path) error {
 	if (l.Harness != "" && !l.Harness.Valid()) || envref.Has(l.Model) || strings.TrimSpace(l.Model) == "" {
 		return nil
 	}
-	profile, err := cliprofile.Load(l.HarnessName(), l.Overrides)
+	profile, err := harnessprofile.Load(l.HarnessName(), l.Overrides)
 	if err != nil || !profile.ModelNamesProvider {
 		//nolint:nilerr // Deliberate: a profile that does not load is a
 		// runnable fault validateProfile already reports at overrides,
@@ -929,10 +929,10 @@ func (l *LLMProvider) validateModel(path Path) error {
 // validateCredentials holds an entry's credentials to the variables its
 // merged profile names, those variables to the reference grammar, and the
 // profile itself to keeping every credential behind auth
-// ([cliprofile.Profile.ValidateCredentials]).
+// ([harnessprofile.Profile.ValidateCredentials]).
 //
 // The rules exist because the backend's applyAuth (in
-// internal/providers/llm/cliagent) places a credential only where the profile
+// internal/providers/llm/harness) places a credential only where the profile
 // names a variable for it and drops it silently otherwise: an api-key entry
 // on a harness with no api_key_env ran signed in to nothing, and so did a token on
 // a harness with no token_env. Every such shape is refused, naming the route the
@@ -955,7 +955,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 	if l.Harness != "" && !l.Harness.Valid() {
 		return nil
 	}
-	profile, err := cliprofile.Load(l.HarnessName(), l.Overrides)
+	profile, err := harnessprofile.Load(l.HarnessName(), l.Overrides)
 	if err != nil {
 		//nolint:nilerr // Deliberate: a profile that does not load is a
 		// runnable fault validateProfile already reports at overrides,
@@ -1115,7 +1115,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"here reaches the harness depends on auth.mode and on whether the secret "+
 					"store or the engine's environment holds a token of its own. Give "+
 					"the token as auth.token", name)
-		case cliprofile.ZoneVariable:
+		case harnessprofile.ZoneVariable:
 			// The engine pins the zone of every harness it starts, and reads a
 			// reset the harness names with no zone in it; a value here would be
 			// replaced without a word, or, honoured, would have the engine
@@ -1168,8 +1168,8 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 //
 // UNDER env, THE ENV MUST SIGN THE HARNESS IN. The mode hands the harness no token
 // and no key and seeds no login, so an env that sets none of the names the
-// profile signs in by ([cliprofile.Profile.SignInEnv]), or on a harness that reads
-// its model provider's key from its environment ([cliprofile.Profile.EnvSignIn])
+// profile signs in by ([harnessprofile.Profile.SignInEnv]), or on a harness that reads
+// its model provider's key from its environment ([harnessprofile.Profile.EnvSignIn])
 // no credential-named variable, is an entry signed in to nothing. A profile
 // that declares neither has no env that signs it in, and cannot take the mode.
 //
@@ -1183,7 +1183,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 //
 // ADMISSION, like the rest of [LLMProvider.validateCredentials]: the harness
 // starts and signs in from whatever it reads.
-func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, mode HarnessAuthMode) error {
+func (l *LLMProvider) validateEnvSignIn(path Path, profile harnessprofile.Profile, mode HarnessAuthMode) error {
 	var p problems
 	harness := l.HarnessName()
 	if mode != AuthEnv {
@@ -1216,7 +1216,7 @@ func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, m
 		}
 	case profile.EnvSignIn:
 		signed := slices.ContainsFunc(slices.Collect(maps.Keys(l.Env)), func(name string) bool {
-			return cliprofile.IsCredentialName(name) && strings.TrimSpace(l.Env[name]) != ""
+			return harnessprofile.IsCredentialName(name) && strings.TrimSpace(l.Env[name]) != ""
 		})
 		if !signed {
 			p.add(at(path, "env"), ErrMissing,
@@ -1237,16 +1237,16 @@ func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, m
 }
 
 // subscriptionEnvName reports whether name is one the profile sets under
-// subscription ([cliprofile.Profile.SubscriptionEnv]) on an entry running
+// subscription ([harnessprofile.Profile.SubscriptionEnv]) on an entry running
 // under it.
-func subscriptionEnvName(profile cliprofile.Profile, mode HarnessAuthMode, name string) bool {
+func subscriptionEnvName(profile harnessprofile.Profile, mode HarnessAuthMode, name string) bool {
 	_, ok := profile.SubscriptionEnv[name]
 	return ok && mode == AuthSubscription
 }
 
 // isolationRemedy is where an isolation variable's value IS changed, for the
 // refusal of an entry's env that names one: the field of the layer that sets
-// it ([cliprofile.Profile.IsolationLayerOf]), or none.
+// it ([harnessprofile.Profile.IsolationLayerOf]), or none.
 //
 // PER LAYER, because the three fields refuse each other's variables: one
 // remedy naming overrides.config_env for every variable sent an operator who
@@ -1254,15 +1254,15 @@ func subscriptionEnvName(profile cliprofile.Profile, mode HarnessAuthMode, name 
 // OPENCODE_CONFIG_DIR is work_config_env's, so config_env naming it too is
 // "one variable, two directories", and OPENCODE_CONFIG_PROJECT_DISABLE is an
 // isolation_env switch, which may not also be a relocated variable.
-func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile cliprofile.Profile) string {
+func isolationRemedy(name string, layer harnessprofile.IsolationLayer, profile harnessprofile.Profile) string {
 	switch layer {
-	case cliprofile.IsolationConfigEnv:
+	case harnessprofile.IsolationConfigEnv:
 		return relocationRemedy("config_env", "the seat's home", profile.ConfigEnv[name],
 			profile.KeptUnder(name))
-	case cliprofile.IsolationWorkConfigEnv:
+	case harnessprofile.IsolationWorkConfigEnv:
 		return relocationRemedy("work_config_env", "the call's working directory",
 			profile.WorkConfigEnv[name], profile.KeptUnder(name))
-	case cliprofile.IsolationSwitch:
+	case harnessprofile.IsolationSwitch:
 		// Not refused there: an override is the profile itself, written on
 		// purpose. Turning the switch off is a decision about every seat's
 		// isolation, and the remedy says so rather than hand it out as a
@@ -1270,7 +1270,7 @@ func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile clipr
 		return fmt.Sprintf("it is the profile's isolation switch, which the profile sets to "+
 			"%q, changed only deliberately, with overrides.isolation_env, since a value "+
 			"that turns it off undoes the isolation it is there for", profile.IsolationEnv[name])
-	default: // cliprofile.IsolationHome, which every profile field refuses
+	default: // harnessprofile.IsolationHome, which every profile field refuses
 		return "the engine points it at or inside the seat's own home for every harness, " +
 			"and no field changes it"
 	}
@@ -1281,7 +1281,7 @@ func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile clipr
 //
 // WITH THE PATHS KEPT UNDER IT, because the directory alone is not a remedy
 // that works: the harness finds the profile's login, sessions, tool policy or
-// agent file through the variable ([cliprofile.Profile.KeptUnder]), so "a
+// agent file through the variable ([harnessprofile.Profile.KeptUnder]), so "a
 // different directory is set with overrides.work_config_env", followed as
 // written, was an entry every write path accepted whose OpenCode found no
 // agent and no policy. The profile refuses such a move now; the remedy says

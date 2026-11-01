@@ -39,7 +39,7 @@ var carriers = map[string]string{
 
 // The executor's RUN, once it is running, is the one thing a turn starts that
 // no fence here reaches, and that is a decision rather than an omission. Every
-// executor is its coding CLI's own run, and that run is DETACHED: the phase
+// executor is its harness's own run, and that run is DETACHED: the phase
 // suspends the moment it starts, the turn ends, and the run outlives it —
 // deliberately, since its placement is on its own row and the process that
 // collects it is often not the one that launched it. Fencing it while it runs

@@ -414,7 +414,7 @@ func TestARunsWorkersNestUnderTheRunsRound(t *testing.T) {
 
 // workerProvider plays a delegated worker that submits at once — the one
 // model a run's delegate call reaches through the engine, since the run's own
-// rounds are its CLI's. Anything else asking it is a fixture wired wrong, and
+// rounds are its harness's. Anything else asking it is a fixture wired wrong, and
 // is refused rather than handed a worker's answer.
 type workerProvider struct{}
 

@@ -23,7 +23,7 @@ var deep = sync.OnceValues(func() (Tool, error) {
 	t := Tool{
 		Name: StartDeepWorkTool, Kind: KindDeep, Tier: TierRead,
 		Phrase: "hand a task to deep work",
-		Description: "Hand this task to deep work: a run of a coding agent with its own " +
+		Description: "Hand this task to deep work: a run of a harness with its own " +
 			"shell, files, web search and fetch, and image reading, for as long as the task " +
 			"needs within its limits. Use it when the task needs research, scripts, " +
 			"generated files, the images the person attached, or many steps: for example " +

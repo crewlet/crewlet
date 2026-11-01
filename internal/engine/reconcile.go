@@ -50,7 +50,7 @@ type Reconciler struct {
 
 	// progress is this node's convergence state, published as ONE value.
 	//
-	// Written only by the tick — Run's loop, or the one-shot CLI path,
+	// Written only by the tick — Run's loop, or the one-shot harness path,
 	// never both at once, which [Engine.following] enforces — and read by
 	// every surface that reports on this node: the seat heartbeat through
 	// SetPosture, the readiness probe, and each runtime-state HTTP
@@ -126,7 +126,7 @@ type Reconciler struct {
 	// recorded is the last apply outcome this node wrote to the fleet view,
 	// which every tick after it writes again — see [Reconciler.refresh].
 	// Written and read by the tick alone; atomic because the tick is not
-	// pinned to one goroutine (Run's loop, or the one-shot CLI path).
+	// pinned to one goroutine (Run's loop, or the one-shot harness path).
 	recorded atomic.Pointer[coord.NodeApply]
 
 	// decided is the last posture this reconciler computed, for the one

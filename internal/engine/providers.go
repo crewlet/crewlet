@@ -48,8 +48,8 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // buildProviders turns the company's providers.llm map into the ordered
@@ -69,11 +69,11 @@ import (
 // what [Company.Models] documents and what the dispatcher reads to hold every
 // seat's work until a provider arrives.
 //
-// EVERY ENTRY ON THE NODE'S ONE [cliagent.Plans], which outlives the revision:
+// EVERY ENTRY ON THE NODE'S ONE [harness.Plans], which outlives the revision:
 // an entry rebuilt with the same sign-in finds the windows its predecessor was
 // sitting out there, and nil (a company built to validate it, not to run it)
 // gives each entry a registry of its own.
-func buildProviders(c *config.Company, r *config.Resolver, plans *cliagent.Plans) (*phase.Registry, error) {
+func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans) (*phase.Registry, error) {
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
 		return nil, nil
@@ -88,7 +88,7 @@ func buildProviders(c *config.Company, r *config.Resolver, plans *cliagent.Plans
 			// using it would fall back to another model with nothing said.
 			return nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
 		}
-		p, err := BuildCLIAgent(key, spec, r, plans)
+		p, err := BuildHarness(key, spec, r, plans)
 		if err != nil {
 			return nil, err
 		}
@@ -100,9 +100,9 @@ func buildProviders(c *config.Company, r *config.Resolver, plans *cliagent.Plans
 // log is the package logger.
 var log = logging.Get("engine")
 
-// restoreBundles restores every cli-agent entry's configured credential bundle
+// restoreBundles restores every harness entry's configured credential bundle
 // into its state directory where that directory holds no login yet
-// ([cliagent.Provider.RestoreConfiguredBundle]).
+// ([harness.Provider.RestoreConfiguredBundle]).
 //
 // A STEP OF ITS OWN, made by the paths that build an epoch to RUN it — a node's
 // boot and every apply — and not by building one: [NewCompany] is also what
@@ -119,31 +119,31 @@ var log = logging.Get("engine")
 // A failed restore is WARNED and never refuses the epoch: a node with a broken
 // bundle can still be logged in by hand, and refusing a whole revision over one
 // blob is the worse outcome. An entry `crewlet llm logout` emptied restores
-// nothing either ([cliagent.ErrLoggedOut]) — the logout is the operator's
+// nothing either ([harness.ErrLoggedOut]) — the logout is the operator's
 // decision and outlives every apply until a login is written again — and that
-// is warned as what it is, `cli_agent_bundle_withheld`, naming the logout and
+// is warned as what it is, `harness_bundle_withheld`, naming the logout and
 // how to sign in again, rather than as a bundle that failed.
 func (c *Company) restoreBundles(ctx context.Context) {
 	if c == nil || c.Models == nil {
 		return
 	}
 	for key, provider := range c.Models.All() {
-		cli, ok := provider.(*cliagent.Provider)
+		cli, ok := provider.(*harness.Provider)
 		if !ok {
 			continue
 		}
 		err := cli.RestoreConfiguredBundle(ctx)
 		switch {
 		case err == nil:
-		case errors.Is(err, cliagent.ErrLoggedOut):
-			log.WarnContext(ctx, "cli_agent_bundle_withheld", "provider", key, "detail", err.Error())
+		case errors.Is(err, harness.ErrLoggedOut):
+			log.WarnContext(ctx, "harness_bundle_withheld", "provider", key, "detail", err.Error())
 		default:
-			log.WarnContext(ctx, "cli_agent_bundle_restore_failed", "provider", key, "error", err)
+			log.WarnContext(ctx, "harness_bundle_restore_failed", "provider", key, "error", err)
 		}
 	}
 }
 
-// BuildCLIAgent constructs one providers.llm entry's provider.
+// BuildHarness constructs one providers.llm entry's provider.
 //
 // Exported for `crewlet llm`, which has to build the SAME provider the engine
 // would in order to report on it: a doctor that constructed its own would
@@ -151,36 +151,36 @@ func (c *Company) restoreBundles(ctx context.Context) {
 // time a default changed.
 //
 // A provider whose credentials are missing still BUILDS. Every call then fails
-// with the CLI's own "not authenticated", which names the CLI and is exactly
+// with the harness's own "not authenticated", which names the harness and is exactly
 // what `crewlet llm doctor` explains — far easier to diagnose than a
 // constructor that refused to exist and took the whole company down at boot
 // over one login.
 //
 // ITS CREDENTIALS DO NOT ARRIVE AS A BAG OF KEYS. The entry holds ONE login,
-// kept by the vendor's CLI in a directory on disk, and at most a single
+// kept by the vendor's harness in a directory on disk, and at most a single
 // long-lived token or API key beside it, so there is no pool here and nothing
 // to rotate: a second key is a second entry in the seat's fallback chain.
 //
-// plans is the node's registry of sign-ins ([cliagent.Config.Plans]); nil
+// plans is the node's registry of sign-ins ([harness.Config.Plans]); nil
 // gives the entry one of its own, which is what a command that reports on one
 // entry needs.
-func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
-	plans *cliagent.Plans) (*cliagent.Provider, error) {
+func BuildHarness(key string, spec config.LLMProvider, r *config.Resolver,
+	plans *harness.Plans) (*harness.Provider, error) {
 	stateDir, err := spec.ResolvedStateDir(key)
 	if err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
 	}
-	// The model, RESOLVED HERE: Tier B stores "${VAR}" verbatim, so a CLI
+	// The model, RESOLVED HERE: Tier B stores "${VAR}" verbatim, so a harness
 	// handed the raw field would receive the literal reference on its
 	// --model flag and refuse a model by that name.
 	//
 	// A REFERENCE THAT RESOLVED TO NOTHING is refused, and that is not the
 	// same as a field somebody left out (which validation refuses). An entry
 	// that plainly reads `model: "${LLM_MODEL}"` and silently ran on the
-	// CLI's own default model when LLM_MODEL was unset would bill and answer
+	// harness's own default model when LLM_MODEL was unset would bill and answer
 	// as a model nobody chose; naming the variable sends the operator to the
 	// one thing they have to change. A missing CREDENTIAL still builds,
-	// because every call then fails with the CLI's own sign-in error that
+	// because every call then fails with the harness's own sign-in error that
 	// names it; a missing model has no such tell.
 	//
 	// "RESOLVED TO NOTHING" IS THE PRESENCE RULE, NOT SUBSTITUTION'S. Expand
@@ -191,8 +191,8 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
 	// built with no model at all. [config.Resolver.Missing] counts an empty
 	// answer as absent and tests every reference rather than the result, so
 	// `${PROVIDER}/sonnet` with PROVIDER unset is refused too instead of
-	// handing the CLI "/sonnet". The blank check catches what is left: a
-	// value that is all white space, which no CLI reads as a model.
+	// handing the harness "/sonnet". The blank check catches what is left: a
+	// value that is all white space, which no harness reads as a model.
 	model := strings.TrimSpace(r.Value(spec.Model))
 	if missing := r.Missing(spec.Model); len(missing) > 0 || model == "" {
 		if len(missing) == 0 {
@@ -210,10 +210,10 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
 	// receive the literal reference as its value.
 	env, missing := r.Map(fmt.Sprintf("providers.llm.%s.env", key), spec.Env)
 	for _, ref := range missing {
-		// Warned rather than refused: a CLI whose optional tuning
+		// Warned rather than refused: a harness whose optional tuning
 		// variable is unset still runs, and a provider that refused to
 		// build would take the company down over it.
-		log.Warn("cli_agent_env_unresolved", "provider", key,
+		log.Warn("harness_env_unresolved", "provider", key,
 			"path", ref.Path, "variables", strings.Join(ref.Names, ","))
 	}
 
@@ -221,7 +221,7 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
 	// (LLMProvider.validateProfile), so a failure here is a document that
 	// never went through validation — refused here rather than built on
 	// whatever CredentialSources made of a profile it could not load.
-	if _, err := cliprofile.Load(spec.HarnessName(), spec.Overrides); err != nil {
+	if _, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides); err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
 	}
 
@@ -231,18 +231,18 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
 	// `crewlet llm login <key> -capture-token` writes the token into the
 	// store, and an entry that had to name it explicitly would leave every
 	// operator wiring up a ${VAR} for a value Crewlet itself just wrote. The
-	// API key reads the CLI's own key variable — ANTHROPIC_API_KEY for
+	// API key reads the harness's own key variable — ANTHROPIC_API_KEY for
 	// Claude Code — so a key already exported, or set with `crewlet secrets
 	// set`, signs an api-key entry in with no YAML change; it reaches the
-	// child only under auth.mode api-key ([cliagent.Auth]).
+	// child only under auth.mode api-key ([harness.Auth]).
 	//
 	// WHICH variable each falls back to is [config.LLMProvider.CredentialSources],
 	// the one rule the company's account of the variables it reads also
 	// follows, so a credential this resolves is never one the Secrets screen
 	// calls read by nothing.
 	sources := spec.CredentialSources(key)
-	auth := cliagent.Auth{
-		Mode:            cliagent.AuthMode(spec.ResolvedAuthMode()),
+	auth := harness.Auth{
+		Mode:            harness.AuthMode(spec.ResolvedAuthMode()),
 		Token:           resolveOrConvention(r, sources.Token.Value, sources.Token.Fallback),
 		TokenConfigured: spec.Auth.Token != "",
 		APIKey:          strings.TrimSpace(resolveOrConvention(r, sources.APIKey.Value, sources.APIKey.Fallback)),
@@ -250,10 +250,10 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
 	bundle := resolveOrConvention(r, sources.Bundle.Value, sources.Bundle.Fallback)
 	bundleConfigured := spec.Auth.CredentialBundle != ""
 
-	return cliagent.New(cliagent.Config{
+	return harness.New(harness.Config{
 		Key:                        key,
 		Model:                      model,
-		Agent:                      spec.HarnessName(),
+		Harness:                    spec.HarnessName(),
 		StateDir:                   stateDir,
 		Overrides:                  spec.Overrides,
 		Timeout:                    time.Duration(spec.Timeout() * float64(time.Second)),

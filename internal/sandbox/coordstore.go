@@ -176,7 +176,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 // neither.
 //
 // Only the LAUNCH-SCOPED state is reset: the identity fields stay the existing
-// row's, and so does the box reference — its id, its cell, its CLI and its
+// row's, and so does the box reference — its id, its cell, its harness and its
 // host ([PendingRun.LaunchNode]), as one — until the launch attaches a box of
 // its own ([CoordStore.AttachSandbox]). The reset row hands that box to the
 // launch as [PendingRun.Prior], which decides whether the new job continues in
@@ -294,9 +294,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// THE TURN'S NOTES ARE THE TURN'S, not the job's: every note, read
 		// or waiting, and their numbering stay, and so does the seat anchor
 		// — written here only where the record has none. What is the job's
-		// is whether its CLI asked for them ([RunSteer.Pulled]), which a new
+		// is whether its harness asked for them ([RunSteer.Pulled]), which a new
 		// job has not; and the brief's notes are read BY THIS JOB, in the
-		// write that names it, so its CLI can never take them again — and
+		// write that names it, so its harness can never take them again — and
 		// the box's, if the launch hands any, filed after them.
 		existing.Steer.Notes = slices.Clone(existing.Steer.Notes)
 		if len(existing.Steer.Seat) == 0 {

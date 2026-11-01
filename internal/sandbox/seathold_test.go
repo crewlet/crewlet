@@ -252,8 +252,8 @@ func TestAFailedLaunchGivesItsSeatBack(t *testing.T) {
 		{name: "the box cannot be provisioned", derail: func(r *coordRig) {
 			r.provider.CreateErr = errors.New("no capacity")
 		}},
-		{name: "the coding agent cannot be started", derail: func(r *coordRig) {
-			r.runner.StartErr = errors.New("the coding CLI is not installed")
+		{name: "the harness cannot be started", derail: func(r *coordRig) {
+			r.runner.StartErr = errors.New("the harness is not installed")
 		}},
 		{name: "the turn cannot suspend into the run", derail: func(*coordRig) {}, suspendFails: true},
 	} {

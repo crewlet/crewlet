@@ -3086,7 +3086,7 @@ is keyed by the entry: one exported before the entry moved to another CLI
 names the old CLI, so a restore into the new CLI's empty directory refuses it
 and writes nothing — even where the two CLIs keep a login file under one name,
 as six keep an `auth.json` — at boot and apply as
-`cli_agent_bundle_restore_failed`, in `list`, `status`, `export` and `doctor`,
+`harness_bundle_restore_failed`, in `list`, `status`, `export` and `doctor`,
 and in `import`, until the new CLI is signed in and its own bundle exported in
 its place. A bundle that names no CLI is refused the same way: see [an entry
 moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).

@@ -210,7 +210,7 @@ func TestAnswerExecutorThatMayHaveLandedAnswersUnknown(t *testing.T) {
 
 // AN ANSWER IS HELD TO THE PAGE ITS QUESTION IS: it rides beside the question,
 // on the run's row and then in the prompt of the run it carries on, which that
-// run's coding agent reads again at every step. One as long as the longest
+// run's harness reads again at every step. One as long as the longest
 // question is delivered whole; one a byte longer is refused `invalid`, with
 // nothing delivered, and the refusal says how long it is — rounded up, so a
 // byte past the bound never reads as the bound itself — what the bound is, and

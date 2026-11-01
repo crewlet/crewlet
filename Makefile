@@ -536,7 +536,7 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	golangci-lint run
 
 # require-node, because this half runs a package that drives `node`:
-# internal/sandbox/codingagent's probe of the OpenCode notes plugin
+# internal/sandbox/executor's probe of the OpenCode notes plugin
 # (opencode_steer_test.go), which runs the plugin the engine embeds under node
 # against a stand-in of the bridge's notes route and a real bridge's. Without
 # node that case fails where CI is set and skips elsewhere — a skip
@@ -661,7 +661,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 	  echo "node is not on PATH, and two of the suite's gates need it."; \
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced, and"; \
-	  echo "  internal/sandbox/codingagent runs the OpenCode notes plugin the"; \
+	  echo "  internal/sandbox/executor runs the OpenCode notes plugin the"; \
 	  echo "  engine embeds. Each SKIPS without node, a skip internal/skipgate"; \
 	  echo "  declares nowhere: test and test-solo would fail on it only after"; \
 	  echo "  the whole suite, and test-norace would pass having checked neither."; \

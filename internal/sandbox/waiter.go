@@ -261,7 +261,7 @@ type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box
 // coordinator claims once.
 //
 // The same tick is also the PAUSE REAPER. A run blocked on a person's answer
-// parks its box paused so a quick reply resumes exactly where the coding agent
+// parks its box paused so a quick reply resumes exactly where the harness
 // stopped — but a paused box has no provider-side TTL, and the keepalive
 // deliberately does not touch it. Left alone, one unanswered question strands a
 // box forever.

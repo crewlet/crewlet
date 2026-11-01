@@ -155,7 +155,7 @@ type ArtifactBoxes interface {
 }
 
 // ArtifactBox is one executor's box as a publish reads it. Every path is
-// relative to the executor's workspace (the coding agent's working directory)
+// relative to the executor's workspace (the harness's working directory)
 // and slash-separated.
 type ArtifactBox interface {
 	// Files lists every regular file under dir, at most max of them. The

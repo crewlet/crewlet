@@ -165,8 +165,8 @@ func (r artifactRequesters) Requester(ctx context.Context, handle string) (iam.P
 // publish reading its build.
 //
 // THE RUN READS ITS OWN BOX, WHILE IT WORKS. A seat's executor is its coding
-// CLI's own run in that box, and every call that names a box source reaches
-// here from its CLI over the tool bridge — a worker it delegates to holds no
+// harness's own run in that box, and every call that names a box source reaches
+// here from its harness over the tool bridge — a worker it delegates to holds no
 // artifact write — while the run's record reads running: a collected run's
 // resumed segment calls no artifact tool (its reviewer holds one submission
 // tool, and the delivery check none). So a running record is the one a box is

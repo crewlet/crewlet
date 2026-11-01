@@ -67,7 +67,7 @@ type CallVersions struct {
 	Executions int `json:"executions"`
 	// Rounds numbers `rounds`, each round's timing — once a round.
 	Rounds int `json:"rounds"`
-	// Invocations numbers `invocations`, the CLI runs that have ended —
+	// Invocations numbers `invocations`, the harness runs that have ended —
 	// once a run. Versioned for rounds' reason, one level up: a phase that
 	// is steered or delegates ends a run each time, and a list re-sent at
 	// five pushes a second while one round streams is what versions remove.

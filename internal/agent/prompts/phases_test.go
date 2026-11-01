@@ -186,7 +186,7 @@ func TestPhaseUserMessageCarriesTheNotesTheTurnHasRead(t *testing.T) {
 
 // A NOTE READS THE SAME WHEREVER IT LANDS. It reaches a model at the opening of
 // a run of the engine's loop, in an executor's brief, and inside its run, where
-// its CLI places a hook's context — so it names who sent it and through what,
+// its harness places a hook's context — so it names who sent it and through what,
 // says it arrived while the work was under way and is the later word, and says
 // nothing about where it arrived, which would be false in every place but one.
 // The note itself is last and verbatim.

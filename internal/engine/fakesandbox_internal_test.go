@@ -7,12 +7,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A DEMONSTRATION COMPANY'S RUNS FINISH, ON EVERY CLI. `providers.sandbox.fake`
-// stands in for the box and not for the choice of CLI, so a fake company's
-// chains pick their member as a real one's do — and whichever CLI that member
+// A DEMONSTRATION COMPANY'S RUNS FINISH, ON EVERY HARNESS. `providers.sandbox.fake`
+// stands in for the box and not for the choice of harness, so a fake company's
+// chains pick their member as a real one's do — and whichever harness that member
 // drives has to be the double, with a run that completes. A real runner in a
 // fake box starts nothing that ever ends, and every turn of the company parks
 // on its first launch for good.
@@ -20,7 +20,7 @@ import (
 // BOTH PLAYS: the double's own, whose run did nothing and says so in its
 // report, and a scripted one, which is what a run DOES wherever a case scripts
 // it.
-func TestAFakeCatalogueCompletesEveryCLIsRuns(t *testing.T) {
+func TestAFakeCatalogueCompletesEveryHarnessRuns(t *testing.T) {
 	t.Parallel()
 	cfg := parseCompany(t, sandboxDoc(""))
 	scripted := func(_ context.Context, req sandbox.RunRequest) sandbox.Result {
@@ -39,7 +39,7 @@ func TestAFakeCatalogueCompletesEveryCLIsRuns(t *testing.T) {
 			if err != nil || manager == nil {
 				t.Fatalf("buildSandbox = %v, %v", manager, err)
 			}
-			completesOnEveryCLI(t, manager, tc.want)
+			completesOnEveryHarness(t, manager, tc.want)
 		})
 	}
 }
@@ -50,7 +50,7 @@ func TestAFakeCatalogueCompletesEveryCLIsRuns(t *testing.T) {
 // places its box by ([Company.catalogue]).
 func TestABootedFakeCatalogueRunsTheConfiguredPlay(t *testing.T) {
 	t.Parallel()
-	played := make(chan string, len(codingagent.Names()))
+	played := make(chan string, len(executor.Names()))
 	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
@@ -71,17 +71,17 @@ func TestABootedFakeCatalogueRunsTheConfiguredPlay(t *testing.T) {
 	if c == nil || c.catalogue == nil {
 		t.Fatal("the booted epoch carries no catalogue of its own")
 	}
-	completesOnEveryCLI(t, c.catalogue, "played: fix the failing test")
-	if len(played) != len(codingagent.Names()) {
-		t.Errorf("the configured play ran %d times, want once per CLI", len(played))
+	completesOnEveryHarness(t, c.catalogue, "played: fix the failing test")
+	if len(played) != len(executor.Names()) {
+		t.Errorf("the configured play ran %d times, want once per harness", len(played))
 	}
 }
 
-// completesOnEveryCLI starts one job on each executor CLI's runner in manager,
+// completesOnEveryHarness starts one job on each executor harness's runner in manager,
 // in a box of the double's, and holds it to finishing with want as its report.
-func completesOnEveryCLI(t *testing.T, manager *sandbox.Manager, want string) {
+func completesOnEveryHarness(t *testing.T, manager *sandbox.Manager, want string) {
 	t.Helper()
-	for _, cli := range codingagent.Names() {
+	for _, cli := range executor.Names() {
 		runner, err := manager.RunnerFor(cli)
 		if err != nil {
 			t.Fatalf("%s: no runner: %v", cli, err)

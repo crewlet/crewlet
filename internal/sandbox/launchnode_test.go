@@ -571,7 +571,7 @@ func (r *hostRig) waitAnnounced(t *testing.T, turn string, within time.Duration)
 }
 
 // A RUN THAT SUBMITTED ITS WORK IS POLLED AT ONCE by the waiter that drives
-// it, and again on a short schedule while its CLI exits — so its completion is
+// it, and again on a short schedule while its harness exits — so its completion is
 // found within seconds of its exit, not up to a poll interval later.
 //
 // Mutation: make a nudge do nothing, and the completion waits the hour.
@@ -579,7 +579,7 @@ func TestASubmittedRunIsPolledAtOnceAndAgainWhileItExits(t *testing.T) {
 	t.Parallel()
 	rig := newHostRig(t)
 	run := rig.launchIn("t-submitted", Direct, "node-a")
-	// THE CLI IS STILL EXITING at the first poll, and done at the next.
+	// THE HARNESS IS STILL EXITING at the first poll, and done at the next.
 	var polls sync.WaitGroup
 	polls.Add(1)
 	var once sync.Once

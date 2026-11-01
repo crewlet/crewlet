@@ -8,7 +8,7 @@ import (
 
 // The MCP bridge edge.
 //
-// A seat's executor — its coding CLI's own run, in a box — calls the seat's
+// A seat's executor — its harness's own run, in a box — calls the seat's
 // tools HERE rather than holding them, so the seat's credentials — its chat token, its tracker token, its
 // code-host token — never enter a box running generated code. See
 // internal/api/mcpbridge for what the bridge does with a call once it arrives.
@@ -55,7 +55,7 @@ func mountBridge(mux httpjson.Router, bridge *mcpbridge.Bridge) {
 	// a route that is registered wrong.
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	// AND THE RUN'S NOTES ROUTE beneath it, behind the same token and the
-	// same routing: a coding CLI's plugin polls it for its turn's notes
+	// same routing: a harness's plugin polls it for its turn's notes
 	// between steps (internal/api/mcpbridge, steer.go). Under the bridge's
 	// prefix, so the exemption, the public listener, the drain and the access
 	// log's redaction that cover the bridge cover it.

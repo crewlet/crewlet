@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // Assistant is the Tier B `assistant:` block: whether the Dashboard Assistant
@@ -433,7 +433,7 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 	if entry.Harness != "" && !entry.Harness.Valid() {
 		return p.err() // the entry's own rule names the agent; there is no profile
 	}
-	profile, err := cliprofile.Load(entry.HarnessName(), entry.Overrides)
+	profile, err := harnessprofile.Load(entry.HarnessName(), entry.Overrides)
 	if err != nil {
 		// The entry's own validation reports why its profile does not
 		// load; an assistant member nobody can judge is refused here too,
@@ -449,9 +449,9 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 	// file tool or tool server but the engine's own: one on the engine host
 	// reads the engine's own data and keys, outside every request of the
 	// person's (ADR-0050).
-	eligible := strings.Join(cliprofile.AssistantEligible(), ", ")
+	eligible := strings.Join(harnessprofile.AssistantEligible(), ", ")
 	switch {
-	case profile.LocalTools != cliprofile.LocalToolsDenied:
+	case profile.LocalTools != harnessprofile.LocalToolsDenied:
 		p.add(member, ErrConflict,
 			"providers.llm.%s runs the %s harness with its own local tools %s (%s), so a shell "+
 				"or a file reader on the engine host could read what no request of the "+
@@ -470,13 +470,13 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 				key, entry.HarnessName(), problem, eligible, entryField("overrides"))
 		}
 	}
-	if profile.EffectiveWebTools() != cliprofile.WebToolsDenied {
+	if profile.EffectiveWebTools() != harnessprofile.WebToolsDenied {
 		remedy := fmt.Sprintf("set %s: {web_tools: denied}", entryField("overrides"))
 		if !profile.CanDenyWeb() {
 			remedy = fmt.Sprintf("the %s profile has no measured web denial (%s), so "+
 				"use a harness that has one: %s",
 				entry.HarnessName(), strings.TrimSpace(profile.WebToolsNote),
-				strings.Join(cliprofile.WebDeniable(), ", "))
+				strings.Join(harnessprofile.WebDeniable(), ", "))
 		}
 		p.add(member, ErrConflict,
 			"providers.llm.%s keeps the harness's own web tools on, so the model could "+
@@ -487,7 +487,7 @@ func assistantMemberProblems(member Path, key string, entry *LLMProvider) error 
 }
 
 // localToolsWord renders a local-tools stance inside a sentence.
-func localToolsWord(t cliprofile.LocalTools) string {
+func localToolsWord(t harnessprofile.LocalTools) string {
 	if t == "" {
 		return "undeclared"
 	}

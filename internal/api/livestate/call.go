@@ -335,7 +335,7 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	if narration := list(payload, "round_narration"); len(narration) > 0 {
 		call.RoundNarration = narration
 	}
-	// And the runs, the failed one included: which CLI run died, and on
+	// And the runs, the failed one included: which harness run died, and on
 	// whose entry, is the first question a failed phase is opened for.
 	if runs := list(payload, "invocations"); len(runs) > 0 {
 		call.Invocations = runs

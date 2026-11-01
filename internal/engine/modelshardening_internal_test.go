@@ -20,8 +20,8 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -31,7 +31,7 @@ import (
 type anyFleet = coord.Fleet
 
 // failingCodeWrite is a fleet whose writes of a pending session fail: the
-// store going away just as the CLI printed its code.
+// store going away just as the harness printed its code.
 type failingCodeWrite struct{ anyFleet }
 
 func (f failingCodeWrite) UpdateDeviceSignIn(ctx context.Context, s coord.DeviceSignIn) (coord.DeviceSignIn, bool, error) {
@@ -61,11 +61,11 @@ func TestAStartWhoseCodeCannotBeRecordedSaysSo(t *testing.T) {
 }
 
 // stubbornLogin is a device login that prints its code and then ends only when
-// finish is closed, whatever its context says: a CLI slow to exit.
+// finish is closed, whatever its context says: a harness slow to exit.
 type stubbornLogin struct{ finish chan struct{} }
 
-func (f *stubbornLogin) login(_ context.Context, _ *cliagent.Provider, out func(cliagent.DeviceCode)) error {
-	out(cliagent.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
+func (f *stubbornLogin) login(_ context.Context, _ *harness.Provider, out func(harness.DeviceCode)) error {
+	out(harness.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
 		ExpiresAt: time.Now().Add(15 * time.Minute)})
 	<-f.finish
 	return errors.New("cancelled")
@@ -73,7 +73,7 @@ func (f *stubbornLogin) login(_ context.Context, _ *cliagent.Provider, out func(
 
 // A START WHOSE CODE CANNOT BE RECORDED ANSWERS ITS CALLER IN TIME. The
 // session is cancelled, and the start waits for its end only as long as the
-// person's request lasts: a CLI slow to exit holds the session, not the
+// person's request lasts: a harness slow to exit holds the session, not the
 // request.
 //
 // Mutation: wait for the session's end whatever the caller's context says,
@@ -121,9 +121,9 @@ func (w *slowWriter) Reload(ctx context.Context, _ string, _ iam.Actor) error {
 	}
 }
 
-// adoptLogin gives p a login of its CLI's own files, as an approved device
+// adoptLogin gives p a login of its harness's own files, as an approved device
 // sign-in leaves one.
-func adoptLogin(ctx context.Context, t *testing.T, p *cliagent.Provider, file, content string) error {
+func adoptLogin(ctx context.Context, t *testing.T, p *harness.Provider, file, content string) error {
 	t.Helper()
 	home := t.TempDir()
 	path := filepath.Join(home, filepath.FromSlash(file))
@@ -157,8 +157,8 @@ func TestAnApprovalIsStoredReactivatedAndSaid(t *testing.T) {
 	writer := &slowWriter{delay: 300 * time.Millisecond}
 	e.UseConfigWriter(writer)
 	e.signIns.finalBudget = 50 * time.Millisecond
-	e.signIns.login = func(ctx context.Context, p *cliagent.Provider, out func(cliagent.DeviceCode)) error {
-		out(cliagent.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
+	e.signIns.login = func(ctx context.Context, p *harness.Provider, out func(harness.DeviceCode)) error {
+		out(harness.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
 			ExpiresAt: time.Now().Add(15 * time.Minute)})
 		<-approve
 		return adoptLogin(ctx, t, p, ".codex/auth.json", `{"tokens":{"access_token":"approved"}}`)
@@ -180,7 +180,7 @@ func TestAnApprovalIsStoredReactivatedAndSaid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := cliprofile.BundleVarName("codex-review")
+	name := harnessprofile.BundleVarName("codex-review")
 	found := false
 	for _, r := range rows {
 		found = found || r.Name == name
@@ -201,7 +201,7 @@ func TestSameNodeStartsAreOneSession(t *testing.T) {
 	fleet, leases := coordmemory.NewFleet(), coordmemory.New()
 	login := &fakeDeviceLogin{finish: make(chan error)}
 	e := signInNode(t, fleet, leases, "node-1", login)
-	// EVERY SESSION'S CLI ENDS before the node's stop waits for them, so a
+	// EVERY SESSION'S HARNESS ENDS before the node's stop waits for them, so a
 	// session two starts both believed theirs fails this case rather than
 	// hanging it.
 	t.Cleanup(func() { close(login.finish) })
@@ -266,7 +266,7 @@ func TestASessionBeingStartedIsNotSweptAndAStoppingNodeStartsNone(t *testing.T) 
 }
 
 // A CANCEL HONOURS ITS CALLER. It waits for the session's own end, and no
-// longer than its caller does: a CLI slow to stop is the session's to wait
+// longer than its caller does: a harness slow to stop is the session's to wait
 // out, not the request's.
 //
 // Mutation: poll the record on a clock of its own rather than the caller's
@@ -277,8 +277,8 @@ func TestACancelHonoursItsCaller(t *testing.T) {
 	login := &fakeDeviceLogin{finish: make(chan error)}
 	e := signInNode(t, fleet, leases, "node-1", login)
 	release := make(chan struct{})
-	e.signIns.login = func(ctx context.Context, _ *cliagent.Provider, out func(cliagent.DeviceCode)) error {
-		out(cliagent.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
+	e.signIns.login = func(ctx context.Context, _ *harness.Provider, out func(harness.DeviceCode)) error {
+		out(harness.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
 			ExpiresAt: time.Now().Add(15 * time.Minute)})
 		<-release
 		return ctx.Err()
@@ -355,15 +355,15 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 		}
 	}
 	spec := config.LLMProvider{Harness: "claude-code", Model: "opus", StateDir: stateDir,
-		Overrides: map[string]any{"binary": rotatingCLI(t, root, "r0")}}
-	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
+		Overrides: map[string]any{"binary": rotatingHarness(t, root, "r0")}}
+	live, err := BuildHarness("plan", spec, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := adoptLogin(t.Context(), t, live, ".claude/.credentials.json", `{"claudeAiOauth":{"refreshToken":"r0"}}`); err != nil {
 		t.Fatalf("the live login: %v", err)
 	}
-	newer, err := BuildCLIAgent("plan", config.LLMProvider{Harness: "claude-code", Model: "opus",
+	newer, err := BuildHarness("plan", config.LLMProvider{Harness: "claude-code", Model: "opus",
 		StateDir: t.TempDir(), Overrides: missing}, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -404,13 +404,13 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 	}
 }
 
-// rotatingCLI is a claude-code CLI on a vendor that rotates its refresh
+// rotatingHarness is a claude-code harness on a vendor that rotates its refresh
 // token: every run that signs in with the token the vendor holds (root/vendor)
 // is handed a new one, written over its credentials file, and the old one is
 // retired; a run on any other token is refused and noted in root/refused. It
 // answers --version, fails every other run after signing in, and reads and
 // writes only under root, never the credentials of the host it runs on.
-func rotatingCLI(t *testing.T, root, first string) string {
+func rotatingHarness(t *testing.T, root, first string) string {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, "vendor"), []byte(first), 0o600); err != nil {
 		t.Fatal(err)
@@ -438,7 +438,7 @@ func rotatingCLI(t *testing.T, root, first string) string {
 // A DRAFT CHECK ON THE LIVE LOGIN LEAVES IT SIGNED IN. A draft that names no
 // bundle of its own signs in with the login the active entry keeps, and its
 // smoke call checks that login out as a seat does: on a vendor that rotates
-// its refresh token and retires the old one, the token the CLI was handed
+// its refresh token and retires the old one, the token the harness was handed
 // during the check reaches the shared directory, so the live entry still
 // signs in after it.
 //
@@ -455,8 +455,8 @@ func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
 		}
 	}
 	spec := config.LLMProvider{Harness: "claude-code", Model: "opus", StateDir: stateDir,
-		Overrides: map[string]any{"binary": rotatingCLI(t, root, "r0")}}
-	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
+		Overrides: map[string]any{"binary": rotatingHarness(t, root, "r0")}}
+	live, err := BuildHarness("plan", spec, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
 }
 
 // A DRAFT WHOSE STATE DIRECTORY CANNOT BE NAMED IS SAID. With no state_dir, no
-// CLI home and no home directory, the draft names no directory to sign in
+// harness home and no home directory, the draft names no directory to sign in
 // from, and its check says so rather than answering for a home it would never
 // run in.
 //
@@ -528,7 +528,7 @@ func TestAFailedRetryNowLeavesThisNodesSitOut(t *testing.T) {
 	spend(t, c, time.Now().Add(-time.Minute))
 	res, err := e.RetryModel(t.Context(), "plan", coord.RetryProbe, person)
 	if err != nil || res.Cleared || res.Failed == "" {
-		t.Fatalf("RetryModel(probe) on a CLI that cannot run = %+v, %v; want a failure, nothing cleared", res, err)
+		t.Fatalf("RetryModel(probe) on a harness that cannot run = %+v, %v; want a failure, nothing cleared", res, err)
 	}
 	if planOf(t, c).SittingOut() == nil {
 		t.Error("a probe that did not answer cleared this node's sit-out")
@@ -564,7 +564,7 @@ func TestARetryNowThatMeetsTheLimitHoldsItsWindow(t *testing.T) {
 	spend(t, c, reported)
 	res, err := e.RetryModel(t.Context(), "plan", coord.RetryProbe, person)
 	if err != nil || res.Still == nil {
-		t.Fatalf("RetryModel(probe) on a CLI still limited = %+v, %v; want the window it met", res, err)
+		t.Fatalf("RetryModel(probe) on a harness still limited = %+v, %v; want the window it met", res, err)
 	}
 	held, sitting := planOf(t, c).SitOut()
 	if !sitting || !held.Since.After(reported) {

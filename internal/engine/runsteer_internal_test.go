@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -146,7 +146,7 @@ func captureSteerLogs(t *testing.T) *bundleLog {
 
 // A NOTE WRITTEN ONTO A RECORD IN THE CLEAR REACHES NO MODEL. The store takes any
 // writer's word, so a note whose seal does not open is never handed to the
-// run's CLI, never carried into a resumed segment, never recorded as anybody's
+// run's harness, never carried into a resumed segment, never recorded as anybody's
 // — at its read or at the turn's end — and is said once, at ERROR; the sealed
 // note beside it is served as ever.
 //
@@ -402,14 +402,14 @@ func TestAnAnchorUnderAnUnheldKeyNamesTheHeldKeysInTheLog(t *testing.T) {
 	}
 }
 
-// A CLAUDE CODE TAKE FITS ITS BUDGET IN UTF-16 UNITS: the CLI measures a hook's
+// A CLAUDE CODE TAKE FITS ITS BUDGET IN UTF-16 UNITS: the harness measures a hook's
 // context as JavaScript does, so notes of characters outside the Basic
 // Multilingual Plane count two units each — three full notes of emoji are 7,000
 // characters, inside the budget by a count of characters and past it by the
-// CLI's. The oldest that fit are taken, and the rest wait for the next step.
+// harness's. The oldest that fit are taken, and the rest wait for the next step.
 //
-// Mutation: count runes in codingagent.UTF16Len, and the take hands all three
-// to a CLI that files the answer away unread.
+// Mutation: count runes in executor.UTF16Len, and the take hands all three
+// to a harness that files the answer away unread.
 func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
@@ -429,8 +429,8 @@ func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 	if err := json.Unmarshal([]byte(answer), &hook); err != nil {
 		t.Fatalf("the hook's answer does not decode: %v: %q", err, answer)
 	}
-	if n := codingagent.UTF16Len(hook.Output.Context); n > codingagent.ClaudeContextBudget+200 {
-		t.Errorf("the hook carries %d UTF-16 units, past the budget of %d", n, codingagent.ClaudeContextBudget)
+	if n := executor.UTF16Len(hook.Output.Context); n > executor.ClaudeContextBudget+200 {
+		t.Errorf("the hook carries %d UTF-16 units, past the budget of %d", n, executor.ClaudeContextBudget)
 	}
 	if _, waiting := recordedNotes(t, store, "run-1"); !slices.Equal(waiting, []string{"n-3"}) {
 		t.Errorf("the notes still waiting are %v, want the newest, which did not fit", waiting)
@@ -441,7 +441,7 @@ func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 // own order of the writes that read them, whatever waits between them and
 // whatever each writer's clock said. A record holds a waiting note between two
 // read ones whenever a note waits while a later one is read — a seal this node
-// cannot open yet, or a later note a CLI took first — and the writes that read
+// cannot open yet, or a later note a harness took first — and the writes that read
 // notes are made by whichever nodes launch the run, serve its bridge and resume
 // the turn, each stamping its own time. The carry is what every later phase and
 // brief renders in order: two notes from one person that disagree must reach the
@@ -555,7 +555,7 @@ func TestANotesInboxIDIsItsJobs(t *testing.T) {
 	if again := waitFor(boundInbox(t, runs, store, "run-1", first)); again[0].Inbox != firstNotes[0].Inbox {
 		t.Errorf("two polls of one job answered ids %q and %q, want one", firstNotes[0].Inbox, again[0].Inbox)
 	}
-	if want := codingagent.OpenCodeInboxID(first, "req-1"); firstNotes[0].Inbox != want {
+	if want := executor.OpenCodeInboxID(first, "req-1"); firstNotes[0].Inbox != want {
 		t.Errorf("the note's inbox id is %q, want %q, the job's", firstNotes[0].Inbox, want)
 	}
 	relaunched, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
@@ -566,7 +566,7 @@ func TestANotesInboxIDIsItsJobs(t *testing.T) {
 	}
 	second := waitFor(boundInbox(t, runs, store, "run-1", relaunched.LaunchID))
 	if second[0].Inbox == firstNotes[0].Inbox ||
-		second[0].Inbox != codingagent.OpenCodeInboxID(relaunched.LaunchID, "req-1") {
+		second[0].Inbox != executor.OpenCodeInboxID(relaunched.LaunchID, "req-1") {
 		t.Errorf("the relaunch's poll answered id %q, want its own job's, not %q", second[0].Inbox,
 			firstNotes[0].Inbox)
 	}

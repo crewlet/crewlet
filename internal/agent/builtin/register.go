@@ -801,7 +801,7 @@ func feedReads(deps WorkDeps) bool {
 // the engine serves published every tool with a name, a description and a
 // schema and nothing else: [internal/api/operator] hands a company's whole
 // tracker to an operator's own assistant, and [internal/api/mcpbridge] hands a
-// seat's tools to a sandboxed coding agent, and neither client could tell a
+// seat's tools to a sandboxed harness, and neither client could tell a
 // read from an irreversible write. The registry has carried these hints the
 // whole time; nothing outside this process had ever been told one.
 //

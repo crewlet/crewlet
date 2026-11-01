@@ -26,15 +26,15 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // The knob has three states and the manager's input carries a pointer for
 // exactly that reason. Getting this wrong is not visible as a config error: a
-// seat silently loses its checkout the moment a coding agent asks a question,
+// seat silently loses its checkout the moment a harness asks a question,
 // which is the case a paused box exists for.
 func TestTheSeatsPauseOverrideDistinguishesInheritFromNever(t *testing.T) {
 	t.Parallel()
@@ -99,12 +99,12 @@ func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) 
 	if err != nil {
 		t.Fatalf("%s's executor chain: %v", seat.Name, err)
 	}
-	return newCodingRun(member.Provider.(*cliagent.Provider), seatEnv)
+	return newCodingRun(member.Provider.(*harness.Provider), seatEnv)
 }
 
 // AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
 //
-// Under auth.mode api-key an entry signs its CLI in with one metered key, and
+// Under auth.mode api-key an entry signs its harness in with one metered key, and
 // a launch on that entry has to carry it: Claude Code in a box reads only
 // its environment, so a run that left the key behind started signed in to
 // nothing. Model and key are the epoch's resolution, the one its seats' own
@@ -193,12 +193,12 @@ roles:
 	}
 }
 
-// AN ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN CLI.
+// AN ENTRY'S RUN NAMES THE MODEL AS ITS TEXT CALLS DO, FOR ITS OWN HARNESS.
 //
 // The run used to be handed a FAMILY instead — the profile's vendor — from
 // which OpenCode rebuilt `anthropic/<model>`. So an OpenCode executor ran its
 // box on a model its text calls never named, and no value of `model`
-// worked for both. The model is resolved (a `${VAR}` reaches the CLI as its
+// worked for both. The model is resolved (a `${VAR}` reaches the harness as its
 // value) and passed as written.
 func TestAnEntrysRunNamesItsModelAsItsTextCallsDo(t *testing.T) {
 	state := t.TempDir()
@@ -223,7 +223,7 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := member.Provider.(*cliagent.Provider).ModelArgument()
+	text := member.Provider.(*harness.Provider).ModelArgument()
 	if text != "openrouter/anthropic/claude-sonnet-5" {
 		t.Fatalf("the text calls' model = %q, want the resolved model as written", text)
 	}
@@ -232,7 +232,7 @@ roles:
 	}
 	// The run is a script quoted for `sh -c`; its quoting undone, the model
 	// is an argument of its own.
-	cmd := codingagent.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", Model: run.model}, codingagent.Paths{}, "")
+	cmd := executor.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", Model: run.model}, executor.Paths{}, "")
 	if script := strings.ReplaceAll(cmd, `'\''`, "'"); !strings.Contains(script, "--model '"+text+"'") {
 		t.Errorf("the agent run gave:\n%s\nwant --model %q, the value every text call passes", cmd, text)
 	}
@@ -264,8 +264,8 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
-	doc := filepath.Join(shared, cliprofile.CredentialStoreDocument)
+	shared := member.Provider.(*harness.Provider).Workspace().CredentialsDir()
+	doc := filepath.Join(shared, harnessprofile.CredentialStoreDocument)
 	for _, signedIn := range []bool{false, true} {
 		if signedIn {
 			if err := os.MkdirAll(shared, 0o700); err != nil {
@@ -276,9 +276,9 @@ roles:
 			}
 		}
 		run := runOn(t, c, seat, nil)
-		if got := run.files[codingagent.CredentialDocument]; got != doc || len(run.files) != 1 {
+		if got := run.files[executor.CredentialDocument]; got != doc || len(run.files) != 1 {
 			t.Errorf("signed in %v: the box is seeded from %q at %s, want the shared login %q "+
-				"and nothing else (files %v)", signedIn, got, codingagent.CredentialDocument, doc, run.files)
+				"and nothing else (files %v)", signedIn, got, executor.CredentialDocument, doc, run.files)
 		}
 	}
 }
@@ -329,7 +329,7 @@ roles:
 
 // A BOX IS OFFERED EVERY FILE OF THE LOGIN, signed in or not: the map names
 // where the login is kept, and the box is seeded with whatever the login holds
-// when it is seeded — nothing at all for an entry nobody signed in, so the CLI
+// when it is seeded — nothing at all for an entry nobody signed in, so the harness
 // inside says its own plain "not authenticated" rather than failing on a file
 // that is not there. A map of only the files present when the run was
 // resolved named a login the shared directory may have moved past by the
@@ -355,7 +355,7 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
+	shared := member.Provider.(*harness.Provider).Workspace().CredentialsDir()
 	if want := filepath.Join(shared, ".credentials.json"); files[".claude/.credentials.json"] != want || len(files) != 1 {
 		t.Errorf("an entry nobody signed in offered %v, want its one login file at %s", files, want)
 	}

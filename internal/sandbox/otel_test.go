@@ -568,7 +568,7 @@ func TestTheRunsCellPicksTheAddressItExportsTo(t *testing.T) {
 // THE OPERATOR'S OWN ENVIRONMENT WINS.
 //
 // role.sandbox.env is where an operator declares what a box gets, and a
-// deployment that points its coding agents at its own collector directly has
+// deployment that points its harnesses at its own collector directly has
 // said so deliberately. Overriding that silently would be the engine choosing
 // where somebody else's telemetry goes — and the failure is invisible: the
 // spans arrive somewhere, just not where the config said.

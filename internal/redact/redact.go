@@ -2,9 +2,9 @@
 // engine.
 //
 // Anything the engine ships to a place a person or a model reads — a tool
-// result, a coding-agent transcript, a setup-step failure, an event-store
+// result, a harness transcript, a setup-step failure, an event-store
 // payload — can carry a credential it never meant to. A cloned repo URL with
-// the token in it, a CLI that echoes its key on failure, a provisioning
+// the token in it, a harness that echoes its key on failure, a provisioning
 // command whose ${VAR} was resolved before it ran.
 //
 // There is deliberately only one of these: a second copy is how a surface ends
@@ -337,7 +337,7 @@ func armourAt(text string, i int) bool {
 //
 // Go's regexp is RE2: no backtracking, so matching is linear in the input
 // whatever the pattern — which matters here, because this pass runs over
-// coding-agent transcripts, the largest free text the engine moves. Every rule
+// harness transcripts, the largest free text the engine moves. Every rule
 // opens with a literal RE2 skips ahead on, or is [keyed] on the words it opens
 // with instead.
 //
@@ -365,7 +365,7 @@ var rules = []rule{
 //
 // BY ITS SHAPE, as a vendor's key is, because there is no value to redact it
 // by: no node that collects an executor holds the tokens its launch minted —
-// the run's row carries none — and a coding agent that prints its environment
+// the run's row carries none — and a harness that prints its environment
 // or its MCP configuration prints its run's. `crewlet_rt1` is the literal
 // runtoken opens every token with for this rule to key on, and runtoken's
 // TestAMintedTokenIsRedacted holds the two spellings to one.

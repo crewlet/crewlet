@@ -404,7 +404,7 @@ trust and proxy settings, because the child gets an
 [allowlisted](#isolation-the-part-that-actually-matters) environment rather than
 the engine's. It is `${VAR}`-resolved when the entry is built and redacted on
 every config read; a reference that resolves to nothing is warned about
-(`cli_agent_env_unresolved`) rather than refused, since a CLI whose optional
+(`harness_env_unresolved`) rather than refused, since a CLI whose optional
 variable is unset still runs. It reaches **every** invocation of the CLI: each
 call on this host, and a seat's [executor run](#the-executors-run-in-a-box) in
 whichever cell its box is, beneath the seat's own `role.sandbox.env` — so a
@@ -614,7 +614,7 @@ cannot tell two CLIs apart: Codex, Cursor Agent, Grok, Hermes, Muse Code and Pi
 each keep a login in an `auth.json`. Wherever the new CLI's credential directory is empty —
 every node you have not signed it in on, and every container on a fresh
 volume — each boot and apply refuses the bundle and writes nothing, logged as
-`cli_agent_bundle_restore_failed` with the CLI the bundle names, and `crewlet
+`harness_bundle_restore_failed` with the CLI the bundle names, and `crewlet
 llm list`, `status`, `export` and `doctor` say so too, as `crewlet llm import`
 does for a bundle of another CLI's, until it is replaced: sign the new CLI in,
 then export its bundle in the old one's place (`crewlet llm export <key>
@@ -805,12 +805,12 @@ reads how it ended — its answer, its error, whether it failed, and the CLI's o
 terminal event (Claude Code's result line, with its `api_error_status`) —
 against the same `limit_events` and `limit_markers`, by the same rules as a
 call, and sits the entry out before the turn launches again
-(`cli_agent_run_limit_reported`). A reset named as a time of day is read against
+(`harness_run_limit_reported`). A reset named as a time of day is read against
 when the run's ending was first collected, so a resume held for hours past it
 reads it as over rather than as the next day's, and the sit-out runs from then
 too: a job collected again after a hold reads the same ending as the same
 report, which sits out nothing more once its window is over
-(`cli_agent_run_limit_report_over`) and takes no step of the backoff, so the
+(`harness_run_limit_report_over`) and takes no step of the backoff, so the
 review the hold waited for reaches the model. A run that succeeded answers for
 the entry once its ending is dated after the entry's window, so its backoff
 starts again from the first step; one from before the window's end says nothing
@@ -925,7 +925,7 @@ a report. Under
 `marker_scope: events` a sentinel is instead the failure *class*, compared whole
 with the CLI's own failure event and nothing else
 (see [CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)).
-Every sit-out logs `cli_agent_limit_reported` with where its sentinel matched —
+Every sit-out logs `harness_limit_reported` with where its sentinel matched —
 `report`, `failed-run`, `stderr` or `event` — and the line it matched, so one
 you doubt can be traced to what the vendor said.
 
@@ -2587,11 +2587,11 @@ and the stream is read as far as it got. Which stream decides the call:
 
 - **standard error held**: the answer on standard output is whole, so it
   stands; the cut costs only the CLI's own commentary, and
-  `cli_agent_output_held` is logged with `stream: stderr`.
+  `harness_output_held` is logged with `stream: stderr`.
 - **standard output held**: what was read stops wherever the five seconds ran
   out, so no reading of it can be shown to be the whole answer. The call fails
   as `server`, as a clipped answer does: the chain carries it to the next entry,
-  and the entry is not sat out. `cli_agent_output_held` is logged with
+  and the entry is not sat out. `harness_output_held` is logged with
   `stream: stdout`.
 
 A CLI whose wait fails another way after it started is `server` too. A helper
@@ -2697,10 +2697,10 @@ cost nothing — the counts fall back to what stdout reported, which for
 "even when the run fails", so its absence means the run did not get that far
 and failing a completion the model answered over a count would throw away work
 you paid for; that is the one fallback that logs nothing. A file that is there
-and cannot be read, or holds nothing, logs `cli_agent_usage_file_unreadable`.
+and cannot be read, or holds nothing, logs `harness_usage_file_unreadable`.
 A report whose keys this profile cannot read is **drift**, not a zero-token
 turn: it falls back the same way rather than charging zero, and logs
-`cli_agent_usage_report_unreadable` with the reason (`the report is not one
+`harness_usage_report_unreadable` with the reason (`the report is not one
 JSON object`, or `usage.input and usage.output do not both resolve in it`),
 the paths it looked in and what the counts came from instead — on a run the
 CLI did not report failed. A failed call is charged nothing, and a vendor's
@@ -2745,8 +2745,8 @@ can be a sub-agent's. Either way the call keeps its answer, and the counts
 fall back to what stdout reported — for OpenCode, whose stdout carries no
 `data.tokens`, the estimate — with a warning naming which way it failed: a
 command that exits non-zero, times out, overflows its output or exits 0 having
-printed nothing logs `cli_agent_usage_report_failed`; one that printed a
-report this profile cannot read logs `cli_agent_usage_report_unreadable`, as a
+printed nothing logs `harness_usage_report_failed`; one that printed a
+report this profile cannot read logs `harness_usage_report_unreadable`, as a
 usage file does. `usage_args` and `usage_file_args` are refused together: one
 call, one report. The command, like an export or an import of a login, is
 held to 30 seconds — sixty times what it takes on an idle host — and runs
@@ -2959,7 +2959,7 @@ this one decodes strictly, is the usual way to get there — every seat's call
 fails as an authentication failure naming the three ways out. `crewlet llm
 login <KEY>` starts its sign-in from an empty database and writes what you sign
 in with over the unreadable document, saying so on your terminal (and as
-`cli_agent_shared_login_refused` in the log); `-from-host` adopts a working
+`harness_shared_login_refused` in the log); `-from-host` adopts a working
 login without importing the old one; `crewlet llm logout <KEY>` removes it.
 `status` keeps refusing, since it makes no login to put in the document's
 place.
@@ -2980,7 +2980,7 @@ than in it, so no bundle carries it), and while that record stands the entry's c
 [bundle](#4-move-a-login-onto-another-host) is not restored into the directory
 the logout emptied — not at the engine's next boot or apply, and not by
 `list`, `status`, `export` or `doctor`, each of which says so, naming the
-logout and how to sign in again (the engine as a `cli_agent_bundle_withheld`
+logout and how to sign in again (the engine as a `harness_bundle_withheld`
 warning). What ends it is a login **written into the credential directory**:
 `crewlet llm login` (brokered, or `-username`), `-from-host` or `import` — or a
 `-capture-token` whose sign-in also left a login file there. A headless token
@@ -3109,7 +3109,7 @@ so and to set `auth.mode: subscription` and sign the CLI in with a login, in
 place of the variables. A `subscription` entry is told:
 
 ```
-cliagent: this CLI has no such login command: the "claude-code" CLI
+harness: this CLI has no such login command: the "claude-code" CLI
 authenticates through the vendor's browser OAuth flow — there is no
 username/password login to drive: run `crewlet llm login default`, or mint
 a headless CLAUDE_CODE_OAUTH_TOKEN with `crewlet llm login default
@@ -3441,7 +3441,7 @@ So a writer killed between two files, or refused by the disk part way, leaves
 the login it was replacing or the one it was writing, never half of each: the
 next reader puts the new one in place. A write whose journal landed is the
 login of record from that moment, so one that could not put every file in
-place at once is reported as written, with a `cli_agent_login_unapplied`
+place at once is reported as written, with a `harness_login_unapplied`
 warning naming why (`local_sandbox_credential_unapplied` from a box's
 teardown), and the next reader finishes it. A journal that cannot be finished — the
 disk still refusing it — is never read as a login: `doctor` reports the
@@ -3492,7 +3492,7 @@ every file of it, and the absence of every file it did not hold, so a refresh
 of one file is never written beside another writer's newer copy of the other.
 If anything else wrote in between — another seat's refresh, your `crewlet llm
 login` or `-from-host` while seats were mid-call, a `crewlet llm logout` — the
-newer login is kept and the seat's is dropped, with a `cli_agent_login_superseded`
+newer login is kept and the seat's is dropped, with a `harness_login_superseded`
 warning naming the provider and the file (never what either holds) and how the
 shared login moved (`changed` or `removed`). The check and the write are one
 step under a lock beside the credentials directory (`credentials.lock`), which
@@ -3538,9 +3538,9 @@ refresh token the vendor has just rotated away. A home a call is running in is
 never touched — each generation holds a lock in its seat directory from its
 first call to its last, which an engine in another process sees too — and a
 seat whose export keeps failing is tried by the other seats again after a
-minute, doubling to half an hour, with a `cli_agent_carry_out_failed` warning
+minute, doubling to half an hour, with a `harness_carry_out_failed` warning
 each time (and a `seats/` directory that cannot be listed at all is a
-`cli_agent_sweep_failed` warning, never read as nothing to carry out). The
+`harness_sweep_failed` warning, never read as nothing to carry out). The
 seat's own next call tries every time, and a call that cannot
 carry its own login out is refused with a retryable error naming the export
 (the fallback chain moves on), rather than run on the stale database or
@@ -3558,7 +3558,7 @@ over a refresh a seat made meanwhile, since it is your sign-in, but never over
 a login of record you replaced after it finished: a `-from-host`, a `crewlet
 llm import` or a `crewlet llm logout` since then wins — one that stopped before
 its write landed included, since each moves `login-epoch` first — and the
-kept login is dropped with `cli_agent_login_superseded` (`shared=replaced`).
+kept login is dropped with `harness_login_superseded` (`shared=replaced`).
 It counts as finished when its command, once the export has failed, reads
 `login-epoch` under the lock those writes take, so a write part way through at
 that moment counts wholly before it or wholly after; where it cannot be read
@@ -3567,7 +3567,7 @@ bundle the engine restores at boot into the empty directory the failed login
 left is not one of those, so your sign-in still lands over it. A `status` or a vendor's
 own logout that cannot carry the kept login out is refused, naming the way
 out: `crewlet llm login` itself replaces a kept login it cannot carry out and
-says so on your terminal (`cli_agent_login_discarded`), and `crewlet llm
+says so on your terminal (`harness_login_discarded`), and `crewlet llm
 logout` discards it before anything else.
 
 Two seats refreshing at the same instant still race for the vendor's next
@@ -3795,7 +3795,7 @@ it runs on.
 | `usage` | `{input, output, cache_read, cache_write, reasoning, tool_prompt, input_includes_cache}`: where the token counts are, each a list of paths tried in order. `reasoning` is added to output and `tool_prompt` to input, for a CLI that reports them apart. `input_includes_cache: true` says the input count already holds the cache reads and writes, which are then not added to it. A step spelled `*` sums over every member of the object or array there — usage paths only ([Token accounting](#token-accounting)). |
 | `usage_file_args` | The flag asking the CLI to write its counts to a file, with `{usage_file}`. |
 | `session_args` | The flag naming the call's session, with `{session}` — 32 hex characters minted per call. |
-| `usage_args` | A command run after the call that prints its counts, with the same `{session}`; read through `usage`. Exclusive with `usage_file_args`. One that fails, or prints nothing, logs `cli_agent_usage_report_failed`; one this profile cannot read logs `cli_agent_usage_report_unreadable`; either way the counts are what stdout reported. |
+| `usage_args` | A command run after the call that prints its counts, with the same `{session}`; read through `usage`. Exclusive with `usage_file_args`. One that fails, or prints nothing, logs `harness_usage_report_failed`; one this profile cannot read logs `harness_usage_report_unreadable`; either way the counts are what stdout reported. |
 | `config_env` | A vendor's own relocation variable, mapped to a directory under the seat home — relative, and staying inside it; never `HOME`, an XDG home or `TMPDIR`, which the engine sets. An override that moves a directory the built-in profile keeps paths under must move those paths with it (its login files, volatile paths and home seed files), each to the same place under the new directory — a move to the home itself or to a parent leaves them where the CLI no longer reads them — or it is refused naming the ones left behind. |
 | `work_config_env` | A vendor's relocation variable mapped to a directory under the per-call working directory, for configuration a call must not share with the seat's other calls. Set only for the call and its usage command; never `HOME`, an XDG home, `TMPDIR`, or a `config_env` variable. An override that moves the built-in profile's directory must move what it keeps there too (its work seed files and a discovered system prompt file), or is refused. |
 | `isolation_env` | A vendor's own switch that keeps the CLI from reading configuration outside its seat's home and its call's directory, with the value that turns that reading off — set on every command the profile runs, and refused in `env`, `passthrough_env` and the entry's `env`, each of which is layered over it. The name the CLI reads first, never a fallback spelling of it. Never empty (a CLI that reads `1` as on reads an empty value as off), never a credential, `HOME`, an XDG home, `TMPDIR` or a relocated variable. |
@@ -4010,7 +4010,7 @@ endpoint that reports its own clock and applies the same test:
 
 ```
 provider      : default
-cli agent     : claude-code
+harness       : claude-code
 model         : sonnet
 binary        : /usr/local/bin/claude
 version       : 2.1.310 (Claude Code)

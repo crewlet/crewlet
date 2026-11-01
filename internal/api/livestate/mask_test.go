@@ -42,7 +42,7 @@ var callFamily = map[string]class{
 	"cache_write_tokens": status, "node": status, "in_progress": status,
 	"failed": status, "error": status, "updated_at": status, "started_at": status,
 	"versions": status, "body_withheld": status,
-	// A CLI RUN IS STATUS: when it ran, on whose entry, how it ended and
+	// A harness RUN IS STATUS: when it ran, on whose entry, how it ended and
 	// what it spent are what the seat is doing, like a round's timing.
 	"invocations": status,
 	// THE RUNNING CALLS ARE STATUS WITHOUT THEIR ARGUMENTS: which tools are
@@ -334,7 +334,7 @@ func fullCall() *LiveCall {
 		Rounds:         []any{map[string]any{"round": 1}},
 		Invocations: []any{map[string]any{"first_round": 1, "last_round": 1,
 			"outcome": "stopped"}},
-		// Two calls of one response running side by side, as a CLI runs
+		// Two calls of one response running side by side, as a harness runs
 		// them.
 		RunningCalls: []any{
 			map[string]any{"id": "call-1", "round": 2, "name": "read_file",

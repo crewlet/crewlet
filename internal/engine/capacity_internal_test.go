@@ -106,13 +106,13 @@ func TestANormalNodeWritesItsAdmissionBeforeItReadsTheOperation(t *testing.T) {
 }
 
 // A REFUSED BOOT IS TOLD THE MODE ITS WINDOW IS IN, and the status read in a
-// form the CLI takes.
+// form the harness takes.
 //
 // The refusal told every node to restart into maintenance mode, whatever the
 // window's phase: from `baselined` on the fleet's next restart is into seal
 // mode, and a node that followed it then wrote an acknowledgement the seal
 // refuses and had to restart again. It also named the status read without
-// the log, which the CLI refuses.
+// the log, which the harness refuses.
 //
 // Mutation: name maintenance mode at every phase, or drop -stream, and this
 // fails.
@@ -819,7 +819,7 @@ func TestAWindowOutOfAttemptsClosesTheWayItsSentenceSays(t *testing.T) {
 	said := statelog.BlockedDetail(op, nil, nil)
 	if want := "`crewlet retention maintenance abandon -stream " + stream +
 		" -confirm capacity:tracker`"; !strings.Contains(said, want) {
-		t.Fatalf("the sentence %q names no abandonment as the CLI takes it", said)
+		t.Fatalf("the sentence %q names no abandonment as the harness takes it", said)
 	}
 
 	// THE SENTENCE'S STEPS: abandon, then set-capacity from seal mode.
@@ -1856,7 +1856,7 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 	if !strings.Contains(err.Error(), "node-2") {
 		t.Errorf("the refusal does not name who has not restarted: %v", err)
 	}
-	// THE COMMAND IT NAMES IS ONE THE CLI RUNS, for this window's stream
+	// THE COMMAND IT NAMES IS ONE THE HARNESS RUNS, for this window's stream
 	// and this node, and the sentence reads right for one node: it named a
 	// `--exclude` flag nothing parses, and said `"node-2" have not
 	// restarted`. And it says no restart is RECORDED, since a node that did
@@ -1872,7 +1872,7 @@ func TestABaselineOfNothingIsRefusedRatherThanRecorded(t *testing.T) {
 		}
 	}
 	if strings.Contains(err.Error(), "--exclude") || strings.Contains(err.Error(), "these nodes") {
-		t.Errorf("the refusal names a flag the CLI lacks or reads wrong for one node: %v", err)
+		t.Errorf("the refusal names a flag the harness lacks or reads wrong for one node: %v", err)
 	}
 	if strings.Contains(err.Error(), "never came back") {
 		t.Errorf("the refusal gives a reason the seal can't produce: %v", err)
@@ -2080,7 +2080,7 @@ func TestAnAdmissionStopsTheWindowsFirstRequest(t *testing.T) {
 		t.Fatal("the window baselined while a node held an admission")
 	}
 	err := toldRefusal(t, refusal)
-	// THE COMMANDS IT NAMES ARE ONES THE CLI RUNS, for this window's stream
+	// THE COMMANDS IT NAMES ARE ONES THE HARNESS RUNS, for this window's stream
 	// and this node, and the sentence reads right for one node.
 	for _, want := range []string{
 		`"node-9" holds an admission`, "-mode maintenance",
@@ -2845,7 +2845,7 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 		t.Errorf("the refusal does not say the fleet may already be excluded: %v", err)
 	}
 	if want := "`crewlet retention maintenance status -stream CREWLET_TRACKER_LOG`"; !strings.Contains(err.Error(), want) {
-		t.Errorf("the refusal doesn't name the status read as the CLI takes it, %s: %v",
+		t.Errorf("the refusal doesn't name the status read as the harness takes it, %s: %v",
 			want, err)
 	}
 }
@@ -3083,7 +3083,7 @@ func TestARefusedCeilingIsReportedAsARefusalAndNotAsAnUnknown(t *testing.T) {
 		strconv.FormatInt(7<<30, 10), // already reserved
 		strconv.FormatInt(8<<30, 10), // the limit
 		"stream.store_max_bytes",     // the lever
-		// AND THE ABANDONMENT AS THE CLI TAKES IT, its confirmation
+		// AND THE ABANDONMENT AS THE HARNESS TAKES IT, its confirmation
 		// included: without -confirm the node refuses it as written.
 		"`crewlet retention maintenance abandon -stream " + stream +
 			" -confirm capacity:open`",

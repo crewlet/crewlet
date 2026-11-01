@@ -297,12 +297,12 @@ export function RecentPhases({
         cell: (r) =>
           !r.launch ? (
             <TableNumberCell value={r.roundsUsed} format={fmtCount} />
-          ) : r.cliTurns > 0 ? (
-            <TableNumberCell value={r.cliTurns} format={fmtCount} />
+          ) : r.harnessTurns > 0 ? (
+            <TableNumberCell value={r.harnessTurns} format={fmtCount} />
           ) : (
             <EmptyValue label="Its CLI reported no turns" />
           ),
-        sortValue: (r) => (r.launch ? r.cliTurns : r.roundsUsed),
+        sortValue: (r) => (r.launch ? r.harnessTurns : r.roundsUsed),
       },
       {
         key: "tokens",

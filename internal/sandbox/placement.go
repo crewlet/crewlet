@@ -28,7 +28,7 @@ package sandbox
 type Placement string
 
 const (
-	// Direct runs the coding agent as a process tree on the engine host,
+	// Direct runs the harness as a process tree on the engine host,
 	// rooted in a per-box directory with HOME and the XDG variables pointed
 	// at it and an allowlisted environment.
 	//
@@ -43,7 +43,7 @@ const (
 	// Container runs a long-lived Docker or Podman container per box, with
 	// the box's home bind-mounted at DefaultHome — the home a remote box's
 	// account has, so a path under it reads the same in both cells. Real
-	// host isolation, at the cost of an image with the coding CLI already
+	// host isolation, at the cost of an image with the harness already
 	// installed.
 	//
 	// IT DOES NOT TAKE A SYSTEM PATH, though this once said it did: a setup

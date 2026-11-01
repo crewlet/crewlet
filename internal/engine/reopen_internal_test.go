@@ -51,7 +51,7 @@ func (p *probeTool) values() []string {
 	return append([]string(nil), p.seen...)
 }
 
-// connect dials an executor run's bridge the way its box's coding agent does,
+// connect dials an executor run's bridge the way its box's harness does,
 // reporting the error rather than failing on it.
 func connect(t *testing.T, endpoint string) (*mcp.ClientSession, error) {
 	t.Helper()

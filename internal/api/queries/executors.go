@@ -80,7 +80,7 @@ type ExecutorTails interface {
 // lacks, or a reset. A cursor's offset is a whole number of bytes, refused by
 // name otherwise.
 //
-// DECIDED ON THE RUN'S SEAT, as its trail: what a coding agent prints is its
+// DECIDED ON THE RUN'S SEAT, as its trail: what a harness prints is its
 // transcript, so it is read by whoever reads the seat's trail — its lead, or
 // an admin — and never by everybody the run's status reaches. See
 // [Sources.mayTail].
@@ -531,7 +531,7 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		"bridge_calls":        nonNil(run.BridgeCalls),
 		"bridge_calls_elided": run.BridgeCallsElided,
 		// THE THREE IDENTIFIERS a person needs to find this run in
-		// somebody else's system: the coding CLI's own session, the
+		// somebody else's system: the harness's own session, the
 		// command the engine launched, and the chain of asks that led
 		// here.
 		"session_id":       run.SessionID,

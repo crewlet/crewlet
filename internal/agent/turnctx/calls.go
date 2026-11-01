@@ -191,7 +191,7 @@ func (l *CallLog) Fork() *CallLog {
 //
 // FOR CALLS THAT RUN SIDE BY SIDE. [CallLog.Record] after each call returns is
 // the rule for calls made one after another, where the order they return in is
-// the order they were made in. A coding CLI makes a response's calls at once
+// the order they were made in. A harness makes a response's calls at once
 // and they return in whatever order their tools finish, so a count read
 // against a log their returns are recorded into would depend on which sibling
 // finished first — and a re-run, making the same calls, would not reproduce

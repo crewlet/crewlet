@@ -168,7 +168,7 @@ func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCar
 		run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 		run.Launch = c.publishCollected(ctx, run, result)
 		if run.asked() {
-			// IT ASKED BEFORE IT WENT: the question was written and its CLI
+			// IT ASKED BEFORE IT WENT: the question was written and its harness
 			// was on its way out, so the run is parked on it as a job that
 			// finished asking is, and the answer carries it on.
 			return nil, c.park(ctx, run, result)

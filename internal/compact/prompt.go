@@ -70,7 +70,7 @@ var kindBriefs = map[Kind]string{
 		"the reviewer's account of what landed — and the rewrite is the one line a task's " +
 		"card shows for that turn. Say what the turn did and delivered, and where, with " +
 		"its identifiers; leave out how it got there.",
-	KindReport: "The text is the report a coding agent wrote about a coding task it finished. " +
+	KindReport: "The text is the report a harness wrote about a coding task it finished. " +
 		"Keep what it changed and where, what it delivered (branches, pull requests, " +
 		"commits), what it tested and how, what failed, and what it says is left to do.",
 }

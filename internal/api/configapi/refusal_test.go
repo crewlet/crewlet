@@ -280,10 +280,10 @@ func TestRefusalFieldsIsAlwaysWritable(t *testing.T) {
 	}
 }
 
-// AN ENTRY IS JUDGED AGAINST ITS CLI'S PROFILE AT ADMISSION.
+// AN ENTRY IS JUDGED AGAINST ITS HARNESS'S PROFILE AT ADMISSION.
 //
 // No API write builds a provider, so a rule that lived only in the epoch build
-// — an unloadable profile, a key the CLI has no variable for — was admitted
+// — an unloadable profile, a key the harness has no variable for — was admitted
 // here, activated, and then refused by every node's apply. The validator the
 // API runs now holds the entry to its profile, so the write is refused where
 // the person making it can see why.
@@ -293,7 +293,7 @@ func TestAPutIsRefusedForAnEntryItsProfileCannotRun(t *testing.T) {
 		{"a profile that cannot load",
 			"      model: m\n      harness: custom\n",
 			"providers.llm.sub.overrides"},
-		{"an api key the CLI has no variable for",
+		{"an api key the harness has no variable for",
 			"      model: m\n      harness: hermes\n" +
 				"      auth: {mode: api-key, api_key: \"${OPENROUTER_API_KEY}\"}\n",
 			"providers.llm.sub.auth.mode"},

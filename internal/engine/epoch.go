@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -286,7 +286,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// THE SPENT PLANS STAY SPENT, with nothing carried: every entry is built
 	// on the node's registry of sign-ins, so one that calls as the same
 	// account finds the window its predecessor was sitting out, and one on a
-	// new credential starts clean ([cliagent.Plans]). What the sweep drops is
+	// new credential starts clean ([harness.Plans]). What the sweep drops is
 	// a sign-in neither epoch names and that sits nothing out.
 	e.plans.Sweep(append(signIns(e.Company()), signIns(next)...), time.Now())
 	// THE NATIVE HALVES, on a node whose FIRST company this is — before the
@@ -521,12 +521,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 // trail names them: `company` once the company is built, so a catalogue
 // refused after it is reported past the company, as it always was.
 //
-// What it leaves behind is what an apply's build leaves: a coding CLI's
-// working directory is claimed in this process for the CLI an entry names
-// (the cli-agent backend's workspace registry), so a later revision driving
-// another CLI from the same directory is refused until a restart — as it is
+// What it leaves behind is what an apply's build leaves: a harness's
+// working directory is claimed in this process for the harness an entry names
+// (the harness backend's workspace registry), so a later revision driving
+// another harness from the same directory is refused until a restart — as it is
 // after an apply that built and was refused.
-func buildRevision(cfg *config.Company, env *config.Resolver, plans *cliagent.Plans,
+func buildRevision(cfg *config.Company, env *config.Resolver, plans *harness.Plans,
 	otel *sandbox.OtelReceiver, play fakePlayer) (*Company, *sandbox.Manager, []string, error) {
 
 	next, err := newCompany(cfg, env, plans)
@@ -543,15 +543,15 @@ func buildRevision(cfg *config.Company, env *config.Resolver, plans *cliagent.Pl
 	return next, manager, built, nil
 }
 
-// signIns is the sign-in of every coding-CLI entry of an epoch, for
-// [cliagent.Plans.Sweep]: the sign-ins whose records an apply must keep.
-func signIns(c *Company) []cliagent.SignInID {
+// signIns is the sign-in of every harness entry of an epoch, for
+// [harness.Plans.Sweep]: the sign-ins whose records an apply must keep.
+func signIns(c *Company) []harness.SignInID {
 	if c == nil || c.Models == nil {
 		return nil
 	}
-	var ids []cliagent.SignInID
+	var ids []harness.SignInID
 	for _, provider := range c.Models.All() {
-		if cli, ok := provider.(*cliagent.Provider); ok {
+		if cli, ok := provider.(*harness.Provider); ok {
 			if id := cli.SignInID(); id != "" {
 				ids = append(ids, id)
 			}

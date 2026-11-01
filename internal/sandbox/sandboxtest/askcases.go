@@ -68,7 +68,7 @@ func questionOf(r sandbox.PendingRun) sandbox.Ask {
 
 func testAnAskIsRecordedOnTheJobsRow(t *testing.T, s sandbox.PendingStore) {
 	// RECORDED ON THE FIELDS A PARKED QUESTION IS READ FROM, whole, and on
-	// a job still launching as well as on one running: a CLI can ask before
+	// a job still launching as well as on one running: a harness can ask before
 	// the turn that started it has suspended.
 	for name, launch := range map[string]func(*testing.T, sandbox.PendingStore, sandbox.PendingRun) string{
 		"launching": mustBeginLaunch,

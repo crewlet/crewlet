@@ -238,7 +238,7 @@ func assigned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	if !pr {
 		// A FACT ABOUT THIS ENGINE, not advice: who makes the change, and
 		// whose name the pull request carries. The executor reading this IS
-		// the seat's coding CLI's own run, with its own checkout, shell and
+		// the seat's harness's own run, with its own checkout, shell and
 		// git, so the change is its own to make: there is no other runtime to
 		// hand it to, and a prompt that names one has the seat look for
 		// something that does not exist. The request opens under the seat's

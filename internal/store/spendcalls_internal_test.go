@@ -5,7 +5,7 @@ import "testing"
 // A SPEND ROW COUNTS ITS PROVIDER CALLS: a phase its rounds where it lists
 // them, its rounds_used where it does not, and one where neither says; an
 // executor's own record NONE, since its run's calls are its launches'; a
-// collected launch its CLI's own turns as reported, and one where the CLI
+// collected launch its harness's own turns as reported, and one where the harness
 // reported none, filed as the executor's phase under the round that launched
 // it — and an auxiliary record counts the calls it coalesced, filed as the
 // auxiliary phase with its purpose as the worker and its stage beside it.
@@ -35,7 +35,7 @@ func TestASpendRowCountsItsProviderCalls(t *testing.T) {
 			ProviderKey: "plan", InputTokens: 30, OutputTokens: 10, TotalTokens: 40,
 			CacheReadTokens: 20, Calls: 12},
 	}, {
-		name: "a launch whose CLI reported no turns", eventType: "executor_collected",
+		name: "a launch whose harness reported no turns", eventType: "executor_collected",
 		payload: `{"total_tokens":40}`,
 		want:    Spend{Phase: "execute", TotalTokens: 40, Calls: 1},
 	}, {

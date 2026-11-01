@@ -30,7 +30,7 @@ import (
 // A model's usage limit has an end the vendor usually names: Claude Code's
 // "You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)". The
 // backend reads it and sits its entry out until then
-// (internal/providers/llm/cliagent), so a call in that window is refused
+// (internal/providers/llm/harness), so a call in that window is refused
 // without a process being started. Before this park, nothing above the backend
 // used it. A turn every member of whose chain was refused failed, the
 // dispatcher NAKed its delivery, and the redelivery a second later ran a turn
@@ -75,18 +75,18 @@ import (
 //
 // ONE PROBE PER LIMITED CHAIN, NOT PER SEAT. The limit is the entries', and so
 // is its end: five seats on one spent subscription each arming its own alarm
-// made five calls at every retry instant, each a full run of the CLI, to learn
+// made five calls at every retry instant, each a full run of the harness, to learn
 // one fact. Seats parked on the same entries, in the same order, of the same
 // registry share one probe, and its answer settles them all; a seat on another
 // chain has its own.
 //
-// WHAT A PROBE COSTS. It is a full run of the entry's CLI: a process launched,
-// and a request carrying the CLI's own fixed overhead (its harness, which a
+// WHAT A PROBE COSTS. It is a full run of the entry's harness: a process launched,
+// and a request carrying the harness's own fixed overhead (its harness, which a
 // one-word prompt does not shrink), far more than the prompt itself. It is
 // spend like any other auxiliary call, charged and recorded through the seam
 // under the background stage (`provider_probe`), where the Spend screen
 // shows it, to the seat the probe runs as: the parked seat that sorts first,
-// on whose CLI home ([llm.WithSeat]) the call is made. Members still sitting
+// on whose harness home ([llm.WithSeat]) the call is made. Members still sitting
 // out refuse without a process being started, so each retry instant costs
 // one such run, to the member whose window is over, for every seat at once.
 //
@@ -99,8 +99,8 @@ import (
 // another ([Engine.reconcileProviderParks]): the redelivery asks the new
 // entries, and a limit that still holds parks the seat again at the cost of one
 // delivery. An entry that still calls as the same account finds the sit-out
-// its sign-in is serving on the node's registry ([cliagent.Plans]), so that
-// re-park costs the delivery and no process: the entry refuses before any CLI
+// its sign-in is serving on the node's registry ([harness.Plans]), so that
+// re-park costs the delivery and no process: the entry refuses before any harness
 // is started. The park is not
 // carried across instead, because whether the seat's chain is still the one
 // that refused is the new company's to say (its `llm`, the entries it names),
@@ -113,7 +113,7 @@ import (
 // was collected and reviewed into the vendor's window once the sit-out ended.
 //
 // A RESUME THAT MEETS THE LIMIT PARKS ITS SEAT TOO ([Engine.parkResumeOnLimit]).
-// A seat's executor is its coding CLI's own run in a box, so the usual way a
+// A seat's executor is its harness's own run in a box, so the usual way a
 // plan runs out is inside a run: the run ends on its vendor's limit report, the
 // segment that collects it sits the entry out, and the review or the relaunch
 // that segment makes is refused, every member sitting out. That segment is no
@@ -403,7 +403,7 @@ func (e *Engine) parkOnLimit(ctx context.Context, handle string, limit chain.Lim
 // AN INSTANT STILL TO COME, OR NONE. A refusal's Until is when it lifts on the
 // clock alone, and an answer's retry re-checks at it
 // ([sandbox.Coordinator.waitOwed]). From the instant the probe's alarm fires
-// until its call comes back, a full run of the entry's CLI, that instant is
+// until its call comes back, a full run of the entry's harness, that instant is
 // past and the park still stands: named, it told every answer waiting on the
 // seat to re-check at once, and each one did, thousands of times a second for
 // as long as the call was out, every pass re-reading its run, opening its
@@ -514,7 +514,7 @@ func (e *Engine) fireLimitProbe(ctx context.Context, key probeKey, probe *limitP
 	asking, cancel := context.WithCancel(ctx)
 	call := &probeCall{cancel: cancel}
 	probe.call = call
-	// THE PARKED SEAT THAT SORTS FIRST runs the call, on its CLI home and
+	// THE PARKED SEAT THAT SORTS FIRST runs the call, on its harness home and
 	// its counter: a stable choice, so one probe after another runs as
 	// the same seat while the set is the same.
 	handle := probe.seats[slices.MinFunc(slices.Collect(maps.Keys(probe.seats)),
@@ -660,7 +660,7 @@ func (e *Engine) leaveLimitProbe(seat uuid.UUID, basis providerBasis) {
 
 // probeModels makes the probe's one call through the members of c's registry
 // keys names, in order, charged and recorded through the auxiliary seam and on
-// handle's own CLI home. A key the registry no longer has is an error that is
+// handle's own harness home. A key the registry no longer has is an error that is
 // not a limit, which lifts the park.
 func (e *Engine) probeModels(ctx context.Context, c *Company, handle string, keys []string) error {
 	members := make([]chain.Member, 0, len(keys))

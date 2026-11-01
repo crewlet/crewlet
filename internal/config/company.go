@@ -1616,7 +1616,7 @@ func (c *Company) validateSandboxPlacement() error {
 		if named, wanted := reached[PlacementContainer]; wanted && strings.TrimSpace(local.Image) == "" {
 			p.add(field("providers.sandbox.local.image"), ErrMissing,
 				"%s runs in a container, so the local backend needs an image "+
-					"with the coding-agent harness installed", named)
+					"with the harness installed", named)
 		}
 		if _, wanted := reached[PlacementContainer]; !wanted {
 			for _, unread := range local.containerOnly() {

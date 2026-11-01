@@ -270,7 +270,7 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		// THE EXECUTOR'S SPEND, filed where every reader already looks for
 		// it: phase `execute`, under the round that launched it — the
 		// record's own `iteration` — and nested under nothing. Its calls are
-		// its CLI's own turns, by the rule the live projection counts it by.
+		// its harness's own turns, by the rule the live projection counts it by.
 		spend.Phase, spend.HostPhase, spend.Worker = phaseExecute, "", ""
 		spend.Calls = tokens.LaunchCalls(jsonInt(body["cli_turns"]))
 	case auxiliarySpendType:

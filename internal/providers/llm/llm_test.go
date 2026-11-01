@@ -29,7 +29,7 @@ func TestTheStopReasonSetIsClosedAndEmptyIsUnreported(t *testing.T) {
 
 // ONLY A FATAL STOPS THE CHAIN. Retryable is what the fallback chain reads:
 // a fatal is a call the engine or its host cannot make, and every other kind —
-// a spent plan, a login, a slow, silent or failed CLI run — is one the next
+// a spent plan, a login, a slow, silent or failed harness run — is one the next
 // member may well answer.
 func TestOnlyAFatalStopsTheChain(t *testing.T) {
 	t.Parallel()
@@ -48,7 +48,7 @@ func TestOnlyAFatalStopsTheChain(t *testing.T) {
 // gives the chain.
 func TestKindOfReadsThroughWrappingAndDefaultsToFatal(t *testing.T) {
 	t.Parallel()
-	classified := &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code", Model: "sonnet",
+	classified := &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code", Model: "sonnet",
 		Err: errors.New("Usage limit reached")}
 	for _, tc := range []struct {
 		name string
@@ -65,8 +65,8 @@ func TestKindOfReadsThroughWrappingAndDefaultsToFatal(t *testing.T) {
 		}
 	}
 	if msg := classified.Error(); !strings.Contains(msg, "rate_limit") ||
-		!strings.Contains(msg, "Usage limit reached") || !strings.Contains(msg, "cli-agent/claude-code") {
-		t.Errorf("Error() = %q, want the backend, the kind and what the CLI said", msg)
+		!strings.Contains(msg, "Usage limit reached") || !strings.Contains(msg, "harness/claude-code") {
+		t.Errorf("Error() = %q, want the backend, the kind and what the harness said", msg)
 	}
 }
 

@@ -1,16 +1,16 @@
 // Package llm is the contract a language-model backend implements, and the
 // vocabulary a turn speaks to one.
 //
-// THE BACKEND IS A CODING CLI, and no model is reached over a vendor's HTTP
+// THE BACKEND IS A HARNESS, and no model is reached over a vendor's HTTP
 // API (ADR-0045). Every providers.llm entry is one
-// (internal/providers/llm/cliagent), and the only other implementations are
+// (internal/providers/llm/harness), and the only other implementations are
 // the seat's fallback chain (internal/providers/llm/chain) and test doubles.
-// So the contract is what a CLI can be handed and what it can honestly
+// So the contract is what a harness can be handed and what it can honestly
 // report: a conversation in, an answer and its usage out — and, for a seat at
 // work, the phase's tools beside the conversation as a [ToolHost], which the
-// backend serves to its CLI as one MCP server. The CLI calls them NATIVELY, in
+// backend serves to its harness as one MCP server. The harness calls them NATIVELY, in
 // its own loop, so there are no tool calls in an answer: they happened during
-// the call, through the host, which recorded them. A field no CLI reads or
+// the call, through the host, which recorded them. A field no harness reads or
 // writes is not here, because a caller that sets one believes it changed
 // something.
 //
@@ -92,16 +92,16 @@ type ToolCall struct {
 	ArgumentsError string `json:"ArgumentsError,omitempty"`
 }
 
-// StopReason is why a model stopped writing — one response, or one CLI run's
+// StopReason is why a model stopped writing — one response, or one harness run's
 // whole loop — so the tool loop decides on ONE vocabulary and the record says
 // which it was.
 //
 // THE ZERO VALUE IS "NOT REPORTED", and it reads as an ordinary end: a backend
 // that names no reason has not said the response was cut short.
 //
-// THREE REASONS, the ones a CLI can honestly name. A model request ends in an
-// answer or in calls to run; a CLI run ends when its model answers with no
-// call, or when the CLI's OWN turn cap stops it, which each CLI that has one
+// THREE REASONS, the ones a harness can honestly name. A model request ends in an
+// answer or in calls to run; a harness run ends when its model answers with no
+// call, or when the harness's OWN turn cap stops it, which each harness that has one
 // reports in a shape its profile recognises. A run the engine stopped is not
 // a reason the model gave, and is the tool loop's to record.
 type StopReason string
@@ -114,8 +114,8 @@ const (
 	// StopToolUse is a response that ended to let its tool calls run.
 	StopToolUse StopReason = "tool_use"
 
-	// StopCap is a CLI run its own turn cap ended, with the model still
-	// working: the CLI stopped asking it rather than the model stopping.
+	// StopCap is a harness run its own turn cap ended, with the model still
+	// working: the harness stopped asking it rather than the model stopping.
 	StopCap StopReason = "cap"
 )
 
@@ -182,15 +182,15 @@ func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
 // it grows, and every feature added over time would otherwise become another
 // positional argument at forty call sites.
 //
-// NO SAMPLING, NO OUTPUT CAP AND NO EFFORT. A coding CLI driven headlessly
+// NO SAMPLING, NO OUTPUT CAP AND NO EFFORT. A harness driven headlessly
 // takes none of them per call — each reads its model's behaviour from its own
 // configuration — so a field for one would be a setting every caller could
 // write and no backend would send. A caller that needs a short answer says so
-// in its prompt, which is the one channel every CLI reads.
+// in its prompt, which is the one channel every harness reads.
 type Request struct {
 	Messages []Message
 
-	// Tools is the phase's live tool host, served to the CLI as ONE MCP
+	// Tools is the phase's live tool host, served to the harness as ONE MCP
 	// server for the length of the call, or nil for a call that offers none
 	// — a text function. See [ToolHost].
 	//
@@ -261,8 +261,8 @@ type Delta struct {
 	// consumer can say which model gave up and which took over.
 	Model string
 
-	// Request is the CLI's id of the model request this text belongs to
-	// ([Turn.ID]), where the backend knows it. A CLI's record can show a
+	// Request is the harness's id of the model request this text belongs to
+	// ([Turn.ID]), where the backend knows it. A harness's record can show a
 	// request before its prose is written, so text that arrives after the
 	// host was told of the request is filed under it by this id — read by
 	// arrival instead, it was filed under the request after.
@@ -329,40 +329,40 @@ type ErrorKind int
 const (
 	// KindFatal is a call the engine itself cannot make: a prompt it cannot
 	// render, a file of the call's it cannot write, a seat's home this host
-	// cannot prepare, a CLI it cannot start — exec's own refusal before any
+	// cannot prepare, a harness it cannot start — exec's own refusal before any
 	// child exists, a binary missing or not executable on this host, or no
 	// pipe or process to give it. The chain does NOT try another provider.
-	// The fault is in front of the CLI, on the engine's side of the exec, so
+	// The fault is in front of the harness, on the engine's side of the exec, so
 	// it is the operator's to fix rather than an outage to wait out: a
 	// prompt that cannot be rendered fails identically on every member, and
-	// a host that cannot start a CLI or write its files is a deployment
+	// a host that cannot start a harness or write its files is a deployment
 	// fault that a walk would paper over by carrying every call on the node
 	// to the next member — and its bill — until somebody read why.
 	//
-	// NOT a CLI that started and failed, however it failed — its exit, its
+	// NOT a harness that started and failed, however it failed — its exit, its
 	// output, the wait for it: that is [KindServer], [KindTimeout] for a
-	// deadline, or a marker's kind where the CLI said why in words its
+	// deadline, or a marker's kind where the harness said why in words its
 	// profile recognises.
 	KindFatal ErrorKind = iota
 
-	// KindRateLimit is a spent plan or a rate limit the CLI reported in its
+	// KindRateLimit is a spent plan or a rate limit the harness reported in its
 	// vendor's own words. The backend sits the entry out for a while
-	// (internal/providers/llm/cliagent), and the chain moves on — a call to
+	// (internal/providers/llm/harness), and the chain moves on — a call to
 	// its next member, and a seat's executor launch to the next member that
 	// can run it.
 	KindRateLimit
 
-	// KindAuth is a login the CLI reports expired or missing. Retryable
+	// KindAuth is a login the harness reports expired or missing. Retryable
 	// across the chain, so a seat keeps working while somebody signs the
-	// CLI in again.
+	// harness in again.
 	KindAuth
 
-	// KindTimeout is a call that ran out of time — the CLI's own wall-clock
+	// KindTimeout is a call that ran out of time — the harness's own wall-clock
 	// cap, or a seat queued behind others for a slot. Retryable across the
 	// chain.
 	KindTimeout
 
-	// KindServer is a CLI that ran and gave no usable answer, for no reason
+	// KindServer is a harness that ran and gave no usable answer, for no reason
 	// its profile recognises: a run it reports failed — a non-zero exit, or
 	// its own failure flag — over a vendor error it relayed, a crash or
 	// words no marker knows; a run not seen to its end — its stdout still
@@ -374,13 +374,13 @@ const (
 	KindServer
 
 	// KindCancelled is a call its CALLER gave up on: a person stopped the
-	// turn, a node began to drain, a seat's turn was stopped. The CLI it
+	// turn, a node began to drain, a seat's turn was stopped. The harness it
 	// started was signalled with it (and exits 143, or 130, or not at
-	// all), which says nothing about the CLI, its login or its vendor, so
+	// all), which says nothing about the harness, its login or its vendor, so
 	// NOTHING is learned from it: the chain does not try another member,
 	// the entry's readiness is not touched, and it is not an incident to
 	// log. Decided from the caller's context, never from how the process
-	// ended: a CLI the engine killed exits exactly as one that crashed on a
+	// ended: a harness the engine killed exits exactly as one that crashed on a
 	// signal of its own.
 	KindCancelled
 )
@@ -404,7 +404,7 @@ func (k ErrorKind) String() string {
 
 // Retryable reports whether another member of a fallback chain is worth
 // trying: every kind but a fatal, which is a fault of the engine's or its
-// host's for the operator to fix rather than a failure one member's CLI or
+// host's for the operator to fix rather than a failure one member's harness or
 // vendor had, and a cancellation, which no member can answer since nobody is
 // waiting for the answer.
 func (k ErrorKind) Retryable() bool { return k != KindFatal && k != KindCancelled }
@@ -434,11 +434,11 @@ type Error struct {
 	// [KindRateLimit]: the plan's session window, its weekly one, or one
 	// model's own ([LimitWindow]). Empty where the backend cannot tell.
 	Window LimitWindow
-	// Agent is the CLI the entry drives (`claude-code`), and Subscription
-	// whether that CLI signs in on a plan rather than a metered key: what
+	// Agent is the harness the entry drives (`claude-code`), and Subscription
+	// whether that harness signs in on a plan rather than a metered key: what
 	// a person is told a limit is OF ("Claude Code subscription limit
 	// reached"), without the entry's configuration, which only an admin
-	// reads. Empty and false for a backend that is not a CLI's.
+	// reads. Empty and false for a backend that is not a harness's.
 	Agent        string
 	Subscription bool
 	Err          error
@@ -495,11 +495,11 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.Err }
 
-// ErrNotRunnable is a CLI that could not be started on this host at all: its
+// ErrNotRunnable is a harness that could not be started on this host at all: its
 // binary missing or not executable, or no process to give it. A backend wraps
 // it under [KindFatal], so a caller telling a person why the model did not
 // answer can say the model's program is missing rather than that it failed.
-var ErrNotRunnable = errors.New("the model's CLI could not be started on this host")
+var ErrNotRunnable = errors.New("the model's harness could not be started on this host")
 
 // KindOf returns the classification of an error, or KindFatal for anything
 // this package did not classify. Fatal is the safe default for an UNRECOGNISED
