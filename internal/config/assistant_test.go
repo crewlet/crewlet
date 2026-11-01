@@ -152,11 +152,11 @@ func TestTheAssistantRefusesAnEntryThatCanRunLocalTools(t *testing.T) {
 	cases := map[string]struct{ entry, want string }{
 		"codex keeps apply_patch": {
 			entry: "    assistant:\n      harness: codex\n      model: gpt-5\n      overrides: {web_tools: denied}\n",
-			want:  "no measured way to run the harness with no tool of its own",
+			want:  "no measured way to run the CLI with no tool of its own",
 		},
 		"opencode is unmeasured": {
 			entry: "    assistant:\n      harness: opencode\n      model: openrouter/qwen\n      overrides: {web_tools: denied}\n",
-			want:  "no measured way to run the harness with no tool of its own",
+			want:  "no measured way to run the CLI with no tool of its own",
 		},
 		"claude-code without the empty allow list": {
 			entry: claude(argv()), want: `does not carry "--tools "`,

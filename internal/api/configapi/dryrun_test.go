@@ -550,7 +550,7 @@ func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
 	}
 
 	// A refusal is the write's own, located at the key to correct.
-	provider["agent"] = "nonsense"
+	provider["harness"] = "nonsense"
 	broken, err := json.Marshal(provider)
 	if err != nil {
 		t.Fatal(err)
@@ -558,7 +558,7 @@ func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
 	refused := s.do(t, http.MethodPut, "/config/llm-providers/zulu?dry_run=true", string(broken), nil)
 	if refused.Code != http.StatusBadRequest ||
 		!strings.Contains(refused.Body.String(), "providers.llm.zulu.harness") {
-		t.Errorf("a check of an unknown agent = %d %s, want 400 located at the key", refused.Code, refused.Body)
+		t.Errorf("a check of an unknown harness = %d %s, want 400 located at the key", refused.Code, refused.Body)
 	}
 	if got := s.writes(); got != (writeCounts{}) {
 		t.Errorf("a refused entity check wrote %+v, want nothing", got)

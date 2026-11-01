@@ -72,7 +72,7 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 				"      harness: nowhere\n      model: claude-sonnet-5\n", 1), summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "validation_error")
 		p := problemAt(t, body, "providers.llm.zulu.harness")
-		if !reflect.DeepEqual(p.Segments, config.Path{"providers", "llm", "zulu", "agent"}) {
+		if !reflect.DeepEqual(p.Segments, config.Path{"providers", "llm", "zulu", "harness"}) {
 			t.Errorf("problem = %+v, want it located with its segments", p)
 		}
 		if !strings.Contains(body.Detail, p.Message) {
