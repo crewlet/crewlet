@@ -153,6 +153,12 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	session := &mcpbridge.Session{
 		RunID: run.TurnID, Handle: handle, Role: seat.Name,
 		Surface: surface, Ledger: ledger,
+		// THE MODEL THE LAUNCH POINTED THE RUN'S CLI AT, as its row records
+		// it: the session the launch opened carried it ([mcpbridge.Session.Model]),
+		// and a session opened again without it would stamp every call the
+		// box makes from here on with no model, so a code write the run pushes
+		// after its seat moved named nobody's model.
+		Model: run.Launch.Model,
 		// AS THE LAUNCH OPENED IT, so the opening is refused or made on the
 		// same terms; the box already holds its endpoint and is never handed
 		// the one this opening mints.

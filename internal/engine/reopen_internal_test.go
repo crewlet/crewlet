@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
@@ -24,10 +25,12 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// probeTool answers every call and remembers the value each one carried.
+// probeTool answers every call and remembers the value each one carried, and
+// the model it was made on ([toolloop.CallModel]).
 type probeTool struct {
-	mu   sync.Mutex
-	seen []string
+	mu     sync.Mutex
+	seen   []string
+	models []string
 }
 
 func (p *probeTool) Name() string        { return "probe" }
@@ -37,10 +40,11 @@ func (p *probeTool) Parameters() map[string]any {
 		"properties": map[string]any{"value": map[string]any{"type": "string"}}}
 }
 
-func (p *probeTool) Call(_ context.Context, args map[string]any) (tools.Result, error) {
+func (p *probeTool) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	value, _ := args["value"].(string)
 	p.mu.Lock()
 	p.seen = append(p.seen, value)
+	p.models = append(p.models, toolloop.CallModel(ctx))
 	p.mu.Unlock()
 	return tools.Result{Output: "probed " + value}, nil
 }
@@ -49,6 +53,12 @@ func (p *probeTool) values() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.seen...)
+}
+
+func (p *probeTool) callModels() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.models...)
 }
 
 // connect dials an executor run's bridge the way its box's coding agent does,
@@ -213,6 +223,51 @@ func TestARunIsServedAgainByTheNodeThatRecoversIt(t *testing.T) {
 	last := row.BridgeCalls[1]
 	if last.Name != "probe" || last.Seq != 2 {
 		t.Errorf("the call after the recovery is recorded as %+v, want probe as the run's second", last)
+	}
+}
+
+// A RECOVERED RUN'S CALLS ARE MADE ON THE MODEL ITS LAUNCH NAMED. Every call a
+// box makes over the bridge carries the model the run's CLI was pointed at
+// ([mcpbridge.Session.Model]), which a seat's code write names on its push. The
+// launch's session is given it from the launch; the session a recovering node
+// opens has only the run's row to give it from, and the row records it
+// ([sandbox.LaunchRecord.Model]) — so a call after the seat moved, or its node
+// restarted, is made on the same model as the call before.
+//
+// Mutation: drop Model from the session reopenAgentRun builds, and the call
+// after the recovery carries no model.
+func TestARecoveredRunsCallsCarryTheModelItsLaunchNamed(t *testing.T) {
+	t.Parallel()
+	run := launchRecoverable(t)
+	launched := run.row(t).Launch.Model
+	if launched == "" {
+		t.Fatal("the launch recorded no model on the run's row, so this asserts nothing")
+	}
+	before, err := connect(t, run.endpoint)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	callProbe(t, before, "before")
+
+	run.restart()
+	run.e.reopenAgentRun(t.Context(), run.row(t))
+	after, err := connect(t, run.endpoint)
+	if err != nil {
+		t.Fatalf("the box's own endpoint does not reach the recovered run: %v", err)
+	}
+	callProbe(t, after, "after")
+
+	got := run.tool.callModels()
+	if len(got) != 2 {
+		t.Fatalf("the seat's tool saw %d calls (%v), want the one before the restart and the one after",
+			len(got), got)
+	}
+	if got[0] != launched {
+		t.Fatalf("the call before the restart was made on %q, want the launch's %q", got[0], launched)
+	}
+	if got[1] != launched {
+		t.Errorf("the call after the recovery was made on %q, want the launch's %q, as the call "+
+			"before it was", got[1], launched)
 	}
 }
 
