@@ -174,13 +174,14 @@ type ExecResult struct {
 // clock, so this is the one bound on its rounds, and it is the operator's to
 // choose.
 //
-// MAXBUDGETUSD IS SET BY NOBODY, deliberately. The fleet's own token meter
-// already post-charges a collected run against the seat's budget, and a second
-// cap denominated in the operator's dollars would fight it: two ceilings on one
-// spend, disagreeing, with the harness's the one that silently wins.
+// NO DOLLAR CAP. The fleet's own token meter already post-charges a collected
+// run against the seat's budget, and a second cap denominated in the
+// operator's dollars would fight it: two ceilings on one spend, disagreeing,
+// with the harness's the one that silently wins. A MaxBudgetUSD field stood
+// here, set by nobody while the runner turned it into a flag, and went the way
+// TimeoutSec did.
 type Limits struct {
-	MaxTurns     int
-	MaxBudgetUSD float64
+	MaxTurns int
 }
 
 // Spec is what it takes to mint and drive one box.

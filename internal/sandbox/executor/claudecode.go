@@ -130,7 +130,7 @@ func (ClaudeCode) Session(req sandbox.RunRequest) Session {
 // ([claudeCapture]), exiting with the harness's own status.
 //
 // Pure and deterministic given its session, so the exact flags can be pinned by
-// a test. Budget caps are appended only when set, so a minimal call stays
+// a test. The turn cap is appended only when set, so a minimal call stays
 // minimal.
 //
 // THE BRIEF IS NOT ON IT: `-p` with no prompt reads the prompt on stdin, which
@@ -205,10 +205,6 @@ func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, 
 	}
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-turns", strconv.Itoa(req.Limits.MaxTurns))
-	}
-	if req.Limits.MaxBudgetUSD > 0 {
-		parts = append(parts, "--max-budget-usd",
-			strconv.FormatFloat(req.Limits.MaxBudgetUSD, 'f', -1, 64))
 	}
 	if configPath != "" {
 		// --strict-mcp-config so the agent gets EXACTLY the scoped surface:
