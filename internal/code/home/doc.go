@@ -65,9 +65,10 @@
 // # What a turn of the changes worker does
 //
 // It reads the repository's due changes — at the nudge's floor, or stale on a
-// backstop pass — with the repository's path owners in the same snapshot, and
-// for each change owing its FACTS: asks the repository's git reads for the
-// revision's facts (internal/code's GitRevisionFacts, the engine's own read,
+// backstop pass — with the repository's path owners in the same snapshot on
+// a page naming a change owing its facts, and for each change owing its
+// FACTS: asks the repository's git reads for the revision's facts
+// (internal/code's GitRevisionFacts, the engine's own read,
 // through the router, which asks the home first — this node — and its
 // runner-up when the home's copy cannot answer), then either lands the change
 // — its head inside its target's tip, whatever push moved the target there —

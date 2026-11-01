@@ -996,8 +996,8 @@ const (
 	// mergeability against the branch it merges into, or whose mergeability
 	// is due again, by id; with one, the first two kinds of that repository,
 	// by source branch, each with its target's tip as the rows hold it
-	// ([ChangeDue]), beside the repository's path owners, and the third
-	// oldest first. The engine's own read, as `compaction_due` is: what its
+	// ([ChangeDue]), beside the repository's path owners where a change of
+	// the page owes its facts, and the third oldest first. The engine's own read, as `compaction_due` is: what its
 	// home polls and is nudged into reading.
 	ReadChangesDue ReadKind = "changes_due"
 	// ReadIndexed is the active and archived repositories searched by index
