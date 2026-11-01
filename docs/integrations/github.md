@@ -1168,7 +1168,13 @@ as `$CREWLET_AGENT_HANDLE` with `$CREWLET_AGENT_EMAIL`; set the seat's `email`
 to the app's bot noreply address,
 `<bot user id>+<slug>[bot]@users.noreply.github.com`, to have GitHub attribute
 them to the app. The bot user id is not the app id: it is the `id` GitHub
-answers for `GET /users/<slug>[bot]` once the app exists. The run is detached:
+answers for `GET /users/<slug>[bot]` once the app exists. Each of those commits
+also credits Crewlet as a co-author (`Co-authored-by: Crewlet
+<noreply@crewlet.ai>`, with the run's `Crewlet-Run:`), which GitHub shows
+beside the app among the commit's participants; a person's commit the agent
+amends or rebases is left alone, and `providers.sandbox.commit_attribution:
+false` turns it off ([Commit attribution](../concepts/code-sandbox.md#commit-attribution)).
+The run is detached:
 the turn suspends at launch and resumes with the run's report, so the agent
 reports the pull request in the same turn.
 

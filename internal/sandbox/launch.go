@@ -564,6 +564,10 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// WHERE THE JOB'S CLI ASKS FOR ITS TURN'S NOTES, as the job's own
 		// opening answered it — see [Opening.Steer].
 		Steer: steer,
+		// THE CREDIT ON THE JOB'S OWN COMMITS, naming the turn: the run's
+		// page is addressed by it, and every job of the turn is that one
+		// run's ([Manager.CommitAttribution]).
+		Attribution: m.CommitAttribution(req.Turn.TurnID),
 	})
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())

@@ -172,3 +172,54 @@ providers:
 		}
 	}
 }
+
+// A RUN'S COMMITS CREDIT CREWLET UNLESS THE COMPANY SAYS THEY DO NOT, and
+// saying so survives the store.
+//
+// The credit is on by default, so a company that says nothing has its runs'
+// commits credited, and a catalogue that is not there at all reads the same
+// (it runs no box, so nothing reads it). An explicit false is a setting rather
+// than an absence: a stored revision is decoded onto the defaults, so a false
+// the encoder dropped would come back as the credit the company turned off.
+//
+// Mutation: read the field as a plain bool, or drop the pointer's false on
+// encoding, and this goes red.
+func TestARunsCommitsCreditCrewletUnlessTheCompanySaysNot(t *testing.T) {
+	const catalogue = `
+name: Nimbus
+providers:
+  sandbox:
+    fake: true
+`
+	silent, err := config.ParseCompany([]byte(catalogue))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !silent.Providers.Sandbox.AttributesCommits() {
+		t.Error("a catalogue that says nothing credits no commit, want the credit on")
+	}
+	var none *config.SandboxProvider
+	if !none.AttributesCommits() {
+		t.Error("no catalogue at all reads the credit off, want it on")
+	}
+
+	for value, want := range map[string]bool{"true": true, "false": false} {
+		said, err := config.ParseCompany([]byte(catalogue + "    commit_attribution: " + value + "\n"))
+		if err != nil {
+			t.Fatalf("parse commit_attribution: %s: %v", value, err)
+		}
+		stored, err := json.Marshal(said)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := config.DecodeCompany(stored)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, c := range map[string]*config.Company{"authored": said, "stored": back} {
+			if got := c.Providers.Sandbox.AttributesCommits(); got != want {
+				t.Errorf("%s with commit_attribution: %s credits commits: %v, want %v", name, value, got, want)
+			}
+		}
+	}
+}

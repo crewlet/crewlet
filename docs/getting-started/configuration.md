@@ -576,6 +576,8 @@ providers:
     # default_timeout_seconds: 900      # box TTL / keepalive: not a run cap
     # default_pause_ttl_seconds: 1800   # how long a box blocked on a person stays paused;
                                         #   0 = never pause
+    # commit_attribution: true          # credit Crewlet as co-author on the commits a run
+                                        #   makes as itself; false = credit nothing
     # setup: []                         # provisioning steps applied to every box
 ```
 

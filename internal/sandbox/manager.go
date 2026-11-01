@@ -81,6 +81,12 @@ type ManagerOptions struct {
 	// passes through rather than a value it fills in.
 	DefaultMaxTurns int
 
+	// AttributeCommits is whether every run's own commits credit Crewlet
+	// (providers.sandbox.commit_attribution, whose default and its reason
+	// are the config's) — see [Manager.CommitAttribution]. False credits
+	// nothing.
+	AttributeCommits bool
+
 	// DefaultSetup are the engine-wide steps (providers.sandbox.setup)
 	// applied to every box before a role's own extras. The engine ships
 	// none of its own, so these two config lists are the ONLY provisioning
@@ -117,6 +123,9 @@ type Manager struct {
 	maxTurns  int
 	setup     []SetupStep
 	telemetry *OtelReceiver
+
+	// attributes is [ManagerOptions.AttributeCommits].
+	attributes bool
 }
 
 // NewManager validates the options and returns the manager.
@@ -145,6 +154,8 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		maxTurns:  max(opts.DefaultMaxTurns, 0),
 		setup:     slices.Clone(opts.DefaultSetup),
 		telemetry: opts.Telemetry,
+
+		attributes: opts.AttributeCommits,
 	}
 	if m.placement == "" && len(m.providers) == 1 {
 		// One backend is not a choice, so nothing is being decided for the
@@ -388,6 +399,23 @@ type SpecInput struct {
 
 	Env             map[string]string
 	CredentialFiles map[string]string
+}
+
+// CommitAttribution is the credit a run's own commits carry under this
+// manager's catalogue: Crewlet as co-author, and run named where the run has
+// a page to be named by ("" names none) — or nil where the company turned the
+// credit off. Every launch path asks it, so a run is credited however it was
+// launched ([RunRequest.Attribution]).
+//
+// ASKED OF THE MANAGER rather than carried on the [Spec], because a spec is
+// written onto a run's records and this is the catalogue's say at the moment
+// of the launch: a revision that turns it off reaches the next launch, not a
+// run already started.
+func (m *Manager) CommitAttribution(run string) *CommitAttribution {
+	if !m.attributes {
+		return nil
+	}
+	return &CommitAttribution{Run: run}
 }
 
 // BuildSpec overlays per-role inputs onto the provider defaults.

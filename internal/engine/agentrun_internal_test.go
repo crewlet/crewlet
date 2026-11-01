@@ -203,12 +203,15 @@ func launchRigRunners(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engi
 	if spec := c.Config.Providers.Sandbox; spec != nil {
 		defaults = setupSteps(spec.Setup)
 	}
+	// AND ITS SAY ON CREDITING COMMITS, as buildSandbox hands it over, so a
+	// job here is started asking for what a node's would.
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: providers, DefaultPlacement: sandbox.Direct,
 		Runners: map[string]sandbox.Runner{
 			"claude-code": runners["claude-code"], "opencode": runners["opencode"],
 		},
-		DefaultSetup: defaults,
+		DefaultSetup:     defaults,
+		AttributeCommits: c.Config.Providers.Sandbox.AttributesCommits(),
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
