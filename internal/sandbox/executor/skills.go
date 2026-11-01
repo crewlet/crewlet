@@ -158,17 +158,17 @@ func writeClaudeSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbo
 	if err != nil {
 		return err
 	}
-	if err := box.WriteFile(ctx, dir+"/.claude-plugin/plugin.json", manifest); err != nil {
+	if err = box.WriteFile(ctx, dir+"/.claude-plugin/plugin.json", manifest); err != nil {
 		return fmt.Errorf("executor: writing the run's skills plugin: %w", err)
 	}
 	for _, s := range skills {
 		// The skill's own name: the plugin's prefixes it, which is the name
 		// the harness lists it under ([sandbox.Skill.Listed]).
-		file, err := skillFile(s.Name, s.Description, s.Body)
-		if err != nil {
+		var file []byte
+		if file, err = skillFile(s.Name, s.Description, s.Body); err != nil {
 			return err
 		}
-		if err := box.WriteFile(ctx, dir+"/skills/"+s.Name+"/SKILL.md", file); err != nil {
+		if err = box.WriteFile(ctx, dir+"/skills/"+s.Name+"/SKILL.md", file); err != nil {
 			return fmt.Errorf("executor: writing the run's skill %q: %w", s.Listed(), err)
 		}
 	}
@@ -182,7 +182,7 @@ func writeClaudeSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbo
 	if err != nil {
 		return err
 	}
-	if err := box.WriteFile(ctx, dir+"/hooks/hooks.json", hooks); err != nil {
+	if err = box.WriteFile(ctx, dir+"/hooks/hooks.json", hooks); err != nil {
 		return fmt.Errorf("executor: writing the run's skill-load hook: %w", err)
 	}
 	return nil
@@ -235,7 +235,7 @@ func writeOpenCodeSkills(ctx context.Context, box sandbox.Sandbox, skills []sand
 		if err != nil {
 			return err
 		}
-		if err := box.WriteFile(ctx, paths.OpenCodeSkills()+"/"+s.Listed()+"/SKILL.md", file); err != nil {
+		if err = box.WriteFile(ctx, paths.OpenCodeSkills()+"/"+s.Listed()+"/SKILL.md", file); err != nil {
 			return fmt.Errorf("executor: writing the run's skill %q: %w", s.Listed(), err)
 		}
 	}

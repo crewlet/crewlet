@@ -113,6 +113,7 @@ func (o *binding) skillMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 				load = skillLoad{}
 			}
 		}
+		//nolint:contextcheck // the load is a call of the run's, run under the run's own context as every one is (toolsession.Dispatcher.Call), never the hook's request
 		o.loadSkill(load.Skill)
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: ""}}}, nil
 	}
