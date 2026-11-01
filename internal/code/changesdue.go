@@ -18,8 +18,10 @@ import (
 // an ACTIVE repository, its target a live branch, owes its home:
 //
 //   - its head revision's FACTS, where it holds none against the branch it
-//     merges into (code_revision_facts by its key — a revision with no row, or
-//     one read against another branch, the change retargeted since), which
+//     merges into, matched against the path owners its repository holds
+//     (code_revision_facts by its key — a revision with no row, one read
+//     against another branch, the change retargeted since, or one whose
+//     owners_digest is not its repository's, its owners changed since), which
 //     the home reads and records ([Revise]) — or, finding a head its target
 //     holds, lands ([ChangeLanded]);
 //   - its head revision's MERGE, where it holds no mergeability of that
@@ -323,7 +325,12 @@ func dueChangesPage(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, page
 			return err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, pageRows, q.ChangesDue.ChartEpoch)
+	digests, err := matchDigestsIn(ctx, tx, repoID)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, dueChangesSQL, repoID, q.Cursor, pageRows, q.ChangesDue.ChartEpoch,
+		digests.owners)
 	if err != nil {
 		return fmt.Errorf("code: list repository %s's due changes: %w", repoID, err)
 	}
@@ -462,8 +469,9 @@ const (
 		WHERE c.repo_id > ?1 AND ` + liveChanges + `
 			AND (EXISTS (SELECT 1 FROM code_refs AS t INDEXED BY ` + refsKey + `
 				WHERE t.repo_id = c.repo_id AND t.ref = c.target_ref AND t.target != ''
-					AND (NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
-							WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref)
+					AND (NOT EXISTS (SELECT 1 FROM code_revision_facts AS f CROSS JOIN code_repos AS o
+							WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref
+								AND o.id = c.repo_id AND o.owners_digest = f.owners_digest)
 						OR NOT EXISTS (SELECT 1 FROM code_mergeability AS m
 							WHERE ` + mergeHeld + `)
 						OR EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `)))
@@ -498,7 +506,8 @@ const (
 	dueChangesSQL = `SELECT c.id, c.number, c.revision, c.head_oid, c.source_ref, c.target_ref, t.target,
 			t.position,
 			NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
-				WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref),
+				WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref
+					AND f.owners_digest = ?5),
 			NOT EXISTS (SELECT 1 FROM code_mergeability AS m
 				WHERE m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref),
 			EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `)
@@ -507,7 +516,8 @@ const (
 		WHERE c.repo_id = ?1 AND c.source_ref > ?2 AND ` + liveChanges + `
 			AND t.repo_id = c.repo_id AND t.ref = c.target_ref AND t.target != ''
 			AND (NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
-					WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref)
+					WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref
+						AND f.owners_digest = ?5)
 				OR NOT EXISTS (SELECT 1 FROM code_mergeability AS m
 					WHERE m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref)
 				OR EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `))

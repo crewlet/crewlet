@@ -443,6 +443,71 @@ func TestAnOwnerRuleChangeSupersedesTheRevise(t *testing.T) {
 	}
 }
 
+// AN OWNER CHANGE MAKES THE FACTS DUE AGAIN: a revision's facts matched
+// against the path owners its repository held are its home's work no longer,
+// until the repository's owners change — and then the change is due its facts
+// again, since a statement cannot match a glob and the gate judging
+// owners_approve on the stale match would wait, computing, for a push that
+// may never come. The same tip read again is then no repeat: its facts,
+// matched against the owners the repository holds now, replace the stale
+// ones and ask the owner they add, and the change is no longer due them; the
+// same tip read a third time, the owners unchanged, is a repeat, superseded.
+//
+// Mutations: drop the owners' term of the due listing — the change is not
+// due its facts after the owners change, red; drop it from the revise's
+// guard — the same tip's facts matched again are refused superseded, red.
+func TestAnOwnerChangeMakesTheFactsDueAgain(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	was := []code.PathOwner{pathOwner(code.OwnerUnit, "Platform", "upload/**")}
+	repo, change := ownedChange(t, n, "web", was...)
+	w, _ := writerOn(t, n, n.pub)
+	res, err := w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, was, "upload/retry.go"))
+	requireConversed(t, res, err)
+	if n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched against the owners its repository holds is due them again")
+	}
+
+	now := []code.PathOwner{pathOwner(code.OwnerSeat, "cto", "upload/**")}
+	s := suiteSettings()
+	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	s.PathOwners = code.CanonicalPathOwners(now)
+	n.ensure("web", s, t1)
+	if !n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched against owners its repository has changed since is not " +
+			"due them again")
+	}
+	again := n.revising(repo, change, 1, oidOf("B"), mainRef, now, "upload/retry.go")
+	res, err = w.Converse(t.Context(), again)
+	requireConversed(t, res, err)
+	if got, ok := n.reviewer(change, "cto"); !ok || got.reason != string(code.ReviewerPathOwner) {
+		t.Fatalf("the facts matched again did not ask the owner they add, the cto: %+v (%v)", got, ok)
+	}
+	if n.factsDue(repo, change) {
+		t.Fatal("a revision whose facts were matched again is still due them")
+	}
+	before := n.end()
+	res, err = w.Converse(t.Context(), n.revising(repo, change, 1, oidOf("B"), mainRef, now, "upload/retry.go"))
+	requireConversationRefused(t, n, before, res, err, code.ConversationRefusalSuperseded, "holds facts against")
+}
+
+// factsDue reports whether repo's due listing names change as due its head
+// revision's facts, read as a home reads its first page.
+func (n *node) factsDue(repo, change string) bool {
+	n.t.Helper()
+	a, err := n.reader.Read(n.t.Context(), code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+		ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: harnessAt}})
+	if err != nil {
+		n.t.Fatalf("read %s's due changes: %v", repo, err)
+	}
+	for _, d := range a.DueChanges {
+		if d.ID == change {
+			return d.FactsDue
+		}
+	}
+	return false
+}
+
 // A REVISION'S FIRST FACTS WAKE WHO MUST LOOK AGAIN, AND A CHANGE'S FIRST
 // FACTS ITS LEAD: the writer stamps on the record, from its snapshot and its
 // chart, the reviewers whose standing verdict asks for changes on an earlier

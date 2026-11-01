@@ -5588,9 +5588,12 @@ was past its bound.
   and naming no asker. The HOME matches the globs, up to 64 owners' 32 globs
   each against up to 1 000 paths, which no decide pays on every round it may
   take, and sends the digest of the owners it matched against; the decide
-  computes the digest of the owners its own snapshot holds, and facts matched
-  against owners changed since are refused `superseded`, for the home to
-  match again.
+  holds it to the digest its own snapshot's repository row carries, written
+  beside the owners by every change of them, and facts matched against owners
+  changed since are refused `superseded`, for the home to match again. A
+  change whose facts were matched before its repository's owners changed is
+  due its facts again at its home's next pass: the same tip read again
+  replaces them, asking any owner the new match adds.
 - **An owner who cannot review is skipped, and the facts say why**: a seat
   whose grant is below `review` (`below_review`), an author of the change
   (`author`), a unit nobody leads (`no_lead`), an owner the chart holds no seat
@@ -5997,9 +6000,10 @@ merged by somebody, and landed by its queue:
   ([Recorded on the change](#recorded-on-the-change)) against the owner rows
   whose digest it records: up to 64 owners of 32 globs each against a
   thousand paths, which no decision pays on every round it takes. Where the
-  owner rows a snapshot holds digest to another value — owners added or
-  removed since — `owners_approval` is `computing` until the home matches the
-  paths again.
+  repository's owners digest to another value than the match recorded —
+  owners added or removed since — `owners_approval` is `computing` until the
+  home matches the paths again, which the change is due at the home's next
+  pass.
   The gate's human paths, at most 32 a rule, are matched against the paths
   the facts list, and a glob this build cannot read holds the change.
 - **A change to the checks waits for a person.** A gate that requires checks

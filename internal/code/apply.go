@@ -480,20 +480,34 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 }
 
 // insertPathOwners writes a repository's path owners, one row an owner with its
-// globs packed one a line ([packPaths]). An owner the record names twice —
-// which no writer forms, the settings holding each owner once — keeps its first
-// row rather than aborting the transaction on every node, as a protection's
+// globs packed one a line ([packPaths]), and their digest on the repository's
+// row ([OwnersDigest]; code_repos.owners_digest) — beside the rows it digests,
+// so no reader holds the one without the other: the merge gate and a revise's
+// decide read the column rather than hash every owner row, and the home's due
+// listing compares it with the digest a revision's facts were matched against,
+// which no statement could hash. An owner the record names twice — which no
+// writer forms, the settings holding each owner once — keeps its first row
+// rather than aborting the transaction on every node, as a protection's
 // pattern does.
 func insertPathOwners(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
 	owners []PathOwner) (int, error) {
 
-	return store.InsertRows(ctx, tx, maxVariables,
+	n, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_path_owners (repo_id, owner_kind, owner, paths) VALUES `,
 		`(?, ?, ?, ?)`, `ON CONFLICT (repo_id, owner_kind, owner) DO NOTHING`, len(owners),
 		func(i int) []any {
 			po := owners[i]
 			return []any{repoID, string(po.Owner.Kind), po.Owner.Ref, packPaths(po.Paths)}
 		})
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, ownersDigestSQL, OwnersDigest(owners), repoID)
+	if err != nil {
+		return 0, fmt.Errorf("digest the path owners: %w", err)
+	}
+	digested, _ := res.RowsAffected()
+	return n + int(digested), nil
 }
 
 // packPaths and unpackPaths are a path owner's globs as its row holds them:
@@ -911,6 +925,7 @@ const (
 		WHERE id = ?`
 	clearProtectionsSQL = `DELETE FROM code_protections WHERE repo_id = ?`
 	clearPathOwnersSQL  = `DELETE FROM code_path_owners WHERE repo_id = ?`
+	ownersDigestSQL     = `UPDATE code_repos SET owners_digest = ? WHERE id = ?`
 	deleteRepoSQL       = `UPDATE code_repos SET
 			status = 'deleted', deleted_at = ?, config_epoch = ?, version = ?
 		WHERE id = ? AND status IN ('importing', 'active', 'archived')`

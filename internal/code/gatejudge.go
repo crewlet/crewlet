@@ -58,9 +58,10 @@ import (
 //     RECORDED match ([Revise.RequestedOwners]): its home matched the globs,
 //     and NO GLOB IS MATCHED HERE — up to MaxPathOwners × MaxPathOwnerPaths
 //     globs against MaxTouchedPaths paths on every judgment would put the
-//     home's work on every decide's round. A snapshot whose owner rows digest
-//     to another digest than the match recorded is owners the home has not
-//     matched yet, and leaves the term COMPUTING until its next revise.
+//     home's work on every decide's round. A snapshot whose repository row
+//     digests its owners to another digest than the match recorded is owners
+//     the home has not matched yet, and leaves the term COMPUTING until its
+//     next revise — which the change is due at once ([ReadChangesDue]).
 //   - CHECK, where it requires checks: every required check passed — or
 //     skipped, its paths untouched — on the head commit, by its latest
 //     attempt whatever ran it.
@@ -81,12 +82,12 @@ import (
 //
 // [GateFacts] is what one snapshot holds of a change and its repository —
 // M4's rows, the repository's rules, and what of the head revision's facts,
-// its owners' rows and its checks the gate reaches — read for a whole page of
+// its owners' digest and its checks the gate reaches — read for a whole page of
 // changes a kind of row at a time ([gateFactsIn]), and for one change by a
 // decide ([LoadGateFacts]). What a target's gate does not reach is not read:
 // a touched list (up to MaxTouchedBytes a change) only for a gate naming
-// human paths or exempting classes, the owner rows only for one making path
-// owners gating, the check rows only for one requiring checks.
+// human paths or exempting classes, the owners' digest only for one making
+// path owners gating, the check rows only for one requiring checks.
 //
 // The gate is a set of PRECONDITIONS judged on one snapshot, and the race
 // between that snapshot and the record that moves the branch is the
@@ -269,10 +270,11 @@ type GateFacts struct {
 	// Head is what the gate reads of the head revision's facts beyond M4's —
 	// read only where the target's gate judges paths or path owners.
 	Head HeadFacts
-	// OwnerRowsDigest is the digest of the repository's path owner rows as
-	// this snapshot holds them ([OwnersDigest]) — read only where the
-	// target's gate makes path owners gating — against which the head
-	// revision's recorded match is current or not.
+	// OwnerRowsDigest is the digest of the repository's path owners as this
+	// snapshot's row of it carries it ([OwnersDigest];
+	// code_repos.owners_digest) — read only where the target's gate makes
+	// path owners gating — against which the head revision's recorded match
+	// is current or not.
 	OwnerRowsDigest string
 	// Checks is the latest attempt of each check the target's gate requires
 	// on the head commit, by name — none for a check no attempt of which is
@@ -366,8 +368,9 @@ func LoadGateFacts(ctx context.Context, tx *sql.Tx, repoID, changeID string) (Ga
 // repository the changes are of, in one statement; and then only what each
 // change's gate reaches — its head revision's touched paths, classes and owner
 // match, driven from the list of (change, head revision) pairs whose gate
-// judges paths or path owners; the path owner rows of every repository one of
-// whose changes' gates makes them gating, in one statement; and every attempt
+// judges paths or path owners; the digest of the path owners of every
+// repository one of whose changes' gates makes them gating, in one statement;
+// and every attempt
 // of a required check on a head commit checked for the change's target, driven
 // from the list of (repository, commit, target, check) keys, of which the
 // latest is kept. The answer is subjects' order.
@@ -576,9 +579,14 @@ func headFactsIn(ctx context.Context, tx *sql.Tx, heads [][2]any, at map[string]
 	return rows.Err()
 }
 
-// ownerDigestsIn sets the digest of each repository of owned's path owner rows
+// ownerDigestsIn sets the digest of each repository of owned's path owners
 // ([OwnersDigest]) on every change of it in out — one statement over the
-// repositories, each one's rows put in the order a record carries them in.
+// repositories, one seek of each one's row: the digest its row carries
+// (code_repos.owners_digest), written beside the owner rows by every record
+// that writes them, never the rows hashed again. A page of changes of
+// repositories at their bound of owners read and hashed up to a quarter of a
+// mebibyte of owner rows a repository, and an enqueue's and a mergeability's
+// decide as much on every round.
 func ownerDigestsIn(ctx context.Context, tx *sql.Tx, owned []string, subjects []readinessSubject,
 	out []GateFacts) error {
 
@@ -589,13 +597,25 @@ func ownerDigestsIn(ctx context.Context, tx *sql.Tx, owned []string, subjects []
 	if err != nil {
 		return err
 	}
-	of := make(map[string][]PathOwner, len(owned))
-	if err := pathOwnersOf(ctx, tx, list, func(id string, po PathOwner) { of[id] = append(of[id], po) }); err != nil {
+	rows, err := tx.QueryContext(ctx, ownerDigestsSQL, list)
+	if err != nil {
+		return fmt.Errorf("code: read the path owners a merge gate judges: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	of := make(map[string]string, len(owned))
+	for rows.Next() {
+		var id, digest string
+		if err := rows.Scan(&id, &digest); err != nil {
+			return fmt.Errorf("code: read the path owners a merge gate judges: %w", err)
+		}
+		of[id] = digest
+	}
+	if err := rows.Err(); err != nil {
 		return fmt.Errorf("code: read the path owners a merge gate judges: %w", err)
 	}
 	for i, s := range subjects {
-		if slices.Contains(owned, s.repo.ID) {
-			out[i].OwnerRowsDigest = OwnersDigest(of[s.repo.ID])
+		if digest, ok := of[s.repo.ID]; ok {
+			out[i].OwnerRowsDigest = digest
 		}
 	}
 	return nil
@@ -876,8 +896,9 @@ func (g gateJudge) classOf(place int) ChangeClass {
 // revision touches no owned path, or ONE counted approval comes from somebody
 // eligible for every path owner it touches — a person, or a seat on every one
 // of their lead chains ([gateJudge.commonEligible]); computing until the head
-// revision's facts against its target are recorded, and while the owner rows
-// this snapshot holds are not the ones its home matched them against; unmet
+// revision's facts against its target are recorded, and while the owners this
+// snapshot's repository row digests are not the ones its home matched them
+// against; unmet
 // otherwise, waiting on the common seats that may review it and the persons
 // asked, or on its owner to ask one.
 func (g gateJudge) ownersApproval() Precondition {
@@ -1168,7 +1189,9 @@ func appendOnce[T comparable](list []T, v T) []T {
 // The merge gate's reads, each registered in plan_test.go — beside M4's
 // readiness rows and the repositories' rules, read by their own statements:
 // the head revisions' facts the gate reaches, driven from the list of
-// (change, revision) pairs, one seek of their key a pair; and every attempt of
+// (change, revision) pairs, one seek of their key a pair; the digests of the
+// path owners of a list of repositories, driven from the list, one seek of
+// each one's key; and every attempt of
 // a required check on a head commit checked for the change's target, driven
 // from the list of (repository, commit, target, check) keys, one seek of the
 // checks' key a key — the key NAMED, since code_checks_finished_idx leads with
@@ -1179,6 +1202,8 @@ const (
 			f.owners_digest
 		FROM json_each(?) AS j CROSS JOIN code_revision_facts AS f
 		WHERE f.change_id = CAST(j.value ->> 0 AS TEXT) AND f.n = CAST(j.value ->> 1 AS INTEGER)`
+	ownerDigestsSQL = `SELECT r.id, r.owners_digest FROM json_each(?) AS j CROSS JOIN code_repos AS r
+		WHERE r.id = j.value`
 	gateChecksSQL = `SELECT c.repo_id, c.commit_oid, c.target_ref, c.name, c.attempt, c.state, c.reason,
 			c.placement
 		FROM json_each(?) AS j CROSS JOIN code_checks AS c INDEXED BY ` + checksKey + `

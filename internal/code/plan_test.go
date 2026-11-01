@@ -356,6 +356,7 @@ func registeredStatements() map[string]statement {
 		"path owners":         {pathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"path owners of":      {pathOwnersOfSQL, []any{`["repo-1","repo-2"]`}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"clear path owners":   {clearPathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
+		"owners digest":       {ownersDigestSQL, []any{strings.Repeat("a", 64), "repo-1"}, []string{repoKey + " (id=?)"}},
 		"delete repo":         {deleteRepoSQL, []any{1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
@@ -722,7 +723,8 @@ func registeredStatements() map[string]statement {
 		"reopened asks": {reopenedAsksSQL, []any{"repo-1", MaxAskSettlesPerRead},
 			[]string{"code_changes_open_idx (repo_id=?)", conversationKey + " (change_id=?)"}},
 		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems, int64(5000)},
+		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems, int64(5000),
+			strings.Repeat("a", 64)},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				factsKey + " (change_id=? AND n=?)", mergeabilityKey + " (change_id=?)",
 				conversationKey + " (change_id=?)",
@@ -773,12 +775,16 @@ func registeredStatements() map[string]statement {
 		// THE MERGE GATE (gatejudge.go), beside the readiness rows and the
 		// repositories' rules ("protections of"): the head revisions' facts a
 		// gate reaches, driven from the list of (change, revision) pairs, one
-		// seek of their key a pair; and every attempt of a required check on
+		// seek of their key a pair; the digests of a list of repositories'
+		// path owners, driven from the list, one seek of each one's key; and
+		// every attempt of a required check on
 		// a head commit checked for the change's target, driven from the list
 		// of (repository, commit, target, check) keys, one seek of the checks'
 		// key a key.
 		"gate heads": {gateHeadsSQL, []any{`[["repo-1-change-000001",3],["repo-1-change-000002",1]]`},
 			[]string{"SCAN json_each AS j", factsKey + " (change_id=? AND n=?)"}},
+		"gate owner digests": {ownerDigestsSQL, []any{`["repo-1","repo-2"]`},
+			[]string{"SCAN json_each AS j", repoKey + " (id=?)"}},
 		// THE MERGE QUEUE (queue.go, apply_queue.go, queueread.go): one entry
 		// by its key; the live entries of a list of changes, driven from the
 		// list, one seek of code_queue_change_idx a change, and which of a
@@ -938,12 +944,15 @@ func registeredStatements() map[string]statement {
 			[]any{`[["repo-1-change-000001",3000],["repo-1-change-000002",9223372036854775807]]`},
 			[]string{"SCAN json_each AS j", blockersKey + " (change_id=? AND position<=?)"}},
 		// A REVISION'S FACTS: one revision's by their key, a decide's and an
-		// apply's; whether a change holds any, by the key's prefix; who
+		// apply's, and what its repository's row says they are matched
+		// against now, by its key; whether a change holds any, by the key's
+		// prefix; who
 		// stands on request_changes before a revision, a range of the
 		// participants' key; and the reviewers a change asks now, a range of
 		// the reviewers' key.
 		"facts of a revision": {factsSQL, []any{"repo-1-change-000001", 1},
 			[]string{factsKey + " (change_id=? AND n=?)"}},
+		"what facts are matched against": {matchDigestsSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"whether a change holds facts": {anyFactsSQL, []any{"repo-1-change-000001"},
 			[]string{factsKey + " (change_id=?)"}},
 		"changes requested before": {changesRequestedBeforeSQL, []any{"repo-1-change-000001", 3, MaxReReviewers},
