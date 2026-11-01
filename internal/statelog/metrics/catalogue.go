@@ -443,7 +443,7 @@ func Catalogue() []Instrument {
 				"left on every log that claims identity (Worklet's, Doclet's, " +
 				"the identity estate's, the artifacts log's, the artifact " +
 				"datastore's, Ask Crewlet's, Chatlet's and the executor " +
-				"log): the ceiling " +
+				"log's): the ceiling " +
 				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +

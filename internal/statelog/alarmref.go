@@ -70,7 +70,7 @@ var alarmMeaning = map[Kind]string{
 		"rather than dropping records; on every log that claims identity " +
 		"(Worklet's, Doclet's, the identity estate's, the artifacts " +
 		"log's, the artifact datastore's, Ask Crewlet's, Chatlet's and the " +
-		"executor log) an eviction still lands in the gate reserve above that " +
+		"executor log's) an eviction still lands in the gate reserve above that " +
 		"ceiling.",
 	KindBackupAge: "No verified backup of a log has been recorded, or the " +
 		"newest one covering it is older than the policy asks for. The trim " +
