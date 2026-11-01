@@ -639,6 +639,7 @@ every other route.
 > | `Accept-Patch` | sends a refused `PATCH /config` again in a format it names |
 > | `Allow` | uses a method an `OPTIONS` or a `405` lists |
 > | `Content-Disposition` | saves a downloaded project file under its name |
+> | `Location` | reads a started verification of a git node's copy back (`POST /code/repos/{name}/verify`'s `202`), at [`GET /code/repos/{name}/verify/{id}`](#get-codereposnameverifyid) |
 >
 > `Content-Type`, `Content-Length` and `Cache-Control` are readable without
 > being listed, as every CORS-safelisted header is. `X-Crewlet-Reader` is

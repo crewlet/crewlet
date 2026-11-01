@@ -1521,8 +1521,8 @@ browser asked for: `Authorization`, `Content-Type`, `Idempotency-Key`,
 `If-Match`, `If-None-Match`, `X-Summary`, `X-Request-Id` and the two link
 secrets. An answer to a permitted origin exposes exactly the headers a client
 acts on (`Access-Control-Expose-Headers`): `X-Crewlet-Engine`, `ETag`,
-`Retry-After`, `Accept-Patch`, `Allow`, `Content-Disposition` and
-`X-Request-Id`; an origin the list does not name is answered with none of
+`Retry-After`, `Accept-Patch`, `Allow`, `Content-Disposition`, `Location`
+and `X-Request-Id`; an origin the list does not name is answered with none of
 these. Leaving one out does not strip it; the browser refuses the whole
 request, or hides the header from the page, so a route reading a header a
 permitted origin cannot send is a route that origin can never use.
