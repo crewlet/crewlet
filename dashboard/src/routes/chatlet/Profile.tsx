@@ -37,7 +37,11 @@ export function ProfilePane({ handle, onClose }: { handle: string; onClose: () =
   const me = handle === frame.viewer;
   const seat = index.byHandle.get(handle);
   const common = useQuery("chat_channels", { with: handle }, { enabled: !me });
-  const rooms = (me ? frame.channels : (common.data?.channels ?? []))
+  // THE READER'S OWN ROOMS ARE THEIR MEMBERSHIPS: the rail also lists rooms
+  // they starred and are not in, which are not rooms they are in.
+  const rooms = (
+    me ? frame.channels.filter((summary) => summary.member) : (common.data?.channels ?? [])
+  )
     .map((summary) => summary.channel)
     .filter((channel) => !isDirect(channel.kind));
 

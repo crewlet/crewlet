@@ -33,6 +33,8 @@ import { roomTitle, roomWhere } from "./rooms.ts";
 export interface LoneRoomProbe {
   nav: ChatNav | null;
   marked: { room: string; through: unknown }[];
+  /** Each star pressed in the room, where a suite asks for them. */
+  stars?: { room: string; on: boolean }[];
 }
 
 /**
@@ -99,9 +101,10 @@ export function LoneRoom({
       cursors,
       markRead: (room, through) => probe?.marked.push({ room, through }),
       // THE READER'S MARKS AND COUNTS are the top bar's and the Rooms panel's,
-      // which a room alone does not draw.
+      // which a room alone does not draw; a star pressed in the room itself
+      // (a team's room offers one) is recorded for the suite that asks.
       starred: new Set<string>(),
-      star: () => undefined,
+      star: (room, on) => probe?.stars?.push({ room, on }),
       counts: null,
     }),
     [viewer, nameOf, rail, channels, outbox, cursors, probe],

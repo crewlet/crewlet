@@ -18,6 +18,12 @@
  * kind this build cannot classify refuses every write. Those are the engine's
  * rules, and `canJoin` mirrors them so the screen does not offer a button
  * whose only outcome is a refusal; Open is offered instead.
+ *
+ * # A row is the kit's
+ *
+ * Each room is the kit's `RoomRow` in a divided `List`: the row is one link to
+ * the room, and Join or Open stands beside it as a control of its own, with
+ * what a refused join came to under both.
  */
 
 import { useMemo, useState } from "react";
@@ -28,6 +34,8 @@ import {
   Callout,
   EmptyState,
   Input,
+  List,
+  RoomRow,
   SegmentedControl,
   Select,
   Tag,
@@ -186,11 +194,11 @@ export function BrowseView() {
               description="Try another word, or make the room yourself."
             />
           ) : (
-            <ul className="chat-browse-list">
+            <List variant="divided" aria-label="Rooms">
               {rooms.map((room) => (
                 <BrowseRow key={room.channel.id} room={room} />
               ))}
-            </ul>
+            </List>
           )}
         </QueryState>
       </div>
@@ -232,50 +240,48 @@ export function BrowseRow({ room }: { room: ChatDirectoryRoom }) {
     setReport(answer);
   }
 
+  const href = nav.hrefOf({ kind: "room", id: channel.id });
   return (
-    <li className="chat-browse-row">
-      <a className="chat-browse-row__main" href={nav.hrefOf({ kind: "room", id: channel.id })}>
-        <span className="chat-browse-row__name">
-          <NamedGlyph name={roomMark(channel.kind)} size="sm" />
-          {channel.name || channel.id}
-          {member && (
-            <Tag size="xs" variant="success" dot>
-              Joined
-            </Tag>
-          )}
-          {archived && <Tag size="xs">Archived</Tag>}
-        </span>
-        {channel.topic && <span className="chat-browse-row__topic">{channel.topic}</span>}
-        <span className="chat-browse-row__meta">
-          {plural(room.members, "member")}
-          {room.last_at ? ` · last message ${relTime(room.last_at, now)}` : ""}
-          {note ? ` · ${note}` : ""}
-        </span>
-      </a>
-      {joinable ? (
-        <WriteButton
-          size="small"
-          variant="secondary"
-          write={join}
-          showRefusal={false}
-          onPress={() => void press()}
-        >
-          {join.busy ? "Joining" : "Join"}
-        </WriteButton>
-      ) : (
-        <ButtonLink
-          size="small"
-          variant="ghost"
-          href={nav.hrefOf({ kind: "room", id: channel.id })}
-        >
-          Open
-        </ButtonLink>
-      )}
-      {report && (
-        <div className="chat-browse-row__note">
-          <StartNote report={report} />
-        </div>
-      )}
-    </li>
+    <RoomRow
+      href={href}
+      mark={<NamedGlyph name={roomMark(channel.kind)} size="sm" />}
+      name={channel.name || channel.id}
+      tags={
+        member || archived ? (
+          <>
+            {member && (
+              <Tag size="xs" variant="success" dot>
+                Joined
+              </Tag>
+            )}
+            {archived && <Tag size="xs">Archived</Tag>}
+          </>
+        ) : undefined
+      }
+      topic={channel.topic}
+      facts={[
+        plural(room.members, "member"),
+        room.last_at ? `last message ${relTime(room.last_at, now)}` : "",
+        note,
+      ]}
+      action={
+        joinable ? (
+          <WriteButton
+            size="small"
+            variant="secondary"
+            write={join}
+            showRefusal={false}
+            onPress={() => void press()}
+          >
+            {join.busy ? "Joining" : "Join"}
+          </WriteButton>
+        ) : (
+          <ButtonLink size="small" variant="ghost" href={href}>
+            Open
+          </ButtonLink>
+        )
+      }
+      note={report ? <StartNote report={report} /> : undefined}
+    />
   );
 }

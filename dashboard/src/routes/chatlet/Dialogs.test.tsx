@@ -19,7 +19,7 @@ import { MAX_TOPIC_CHARS } from "~/contract/chat.ts";
 import { ADA, actEngine, applied, type Pressed } from "~/test/chat.tsx";
 import { CHAT_ORG, SERVED, WRITE_READERS, heldWith } from "~/test/chatAccess.ts";
 
-import { ChatDialogHost, characters } from "./Dialogs.tsx";
+import { ChatDialogHost, characters, foundingMembers } from "./Dialogs.tsx";
 import { mountInFrame } from "./frameKit.tsx";
 import type { ChatDialog } from "./nav.tsx";
 
@@ -282,5 +282,35 @@ describe("New room", () => {
       args: { channel: "launch", kind: "public", members: ["bo"] },
     });
     await waitFor(() => expect(location.hash).toContain("room-new"));
+  });
+
+  test("a team room's agents get every message, and its people are added as they are", async () => {
+    presses = actEngine((tool) => applied(tool, { channel: "room-new" }));
+    open({ kind: "new-room" });
+    fireEvent.change(await screen.findByLabelText(/^Name/), { target: { value: "core" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Bo Chen/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Ops Agent/ }));
+    // THE TWO ARRANGEMENTS ARE SAID IN WORDS, and answering when named is
+    // where a room starts.
+    expect(screen.getByRole("radio", { name: /Agents answer when named/ })).toHaveProperty(
+      "checked",
+      true,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /Agents get every message/ }));
+    fireEvent.click(screen.getByRole("button", { name: /create room/i }));
+    await waitFor(() => expect(presses).toHaveLength(1));
+    expect(presses[0]).toMatchObject({
+      tool: "create_channel",
+      args: { channel: "core", members: ["bo", { handle: "ops", follow_all: true }] },
+    });
+  });
+
+  test("a founding member follows as the room's choice says, and a person always when named", () => {
+    const kind = (handle: string) => ({ kind: handle === "ops" ? "agent" : "human" }) as const;
+    expect(foundingMembers(["bo", "ops"], "named", kind)).toEqual(["bo", "ops"]);
+    expect(foundingMembers(["bo", "ops"], "every", kind)).toEqual([
+      "bo",
+      { handle: "ops", follow_all: true },
+    ]);
   });
 });
