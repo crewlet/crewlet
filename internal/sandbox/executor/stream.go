@@ -87,9 +87,31 @@ const maxLineBytes = sandbox.MaxFileBytes
 // is complete wherever it stops, and a running one's is the decoder's to
 // recognise as partial.
 func eachLine(r io.Reader, dec Decoder, bound int) error {
+	return readLines(r, bound,
+		func(line []byte) error {
+			dec.Line(line)
+			return nil
+		},
+		func(n int64) error {
+			dec.Skipped(n, bound)
+			return nil
+		})
+}
+
+// readLines is the one way a run's record is read a line at a time: line is
+// handed every line of r up to bound bytes, without its line break (the slice
+// reused once it returns), and skipped the size of every line past bound,
+// which is never held — its bytes are counted as they pass. The first error
+// either returns ends the read and is returned, which is how a reader that has
+// what it came for stops ([ReadTranscript]); so is a failure of r itself.
+//
+// ONE IMPLEMENTATION for a stream's decoder ([eachLine]) and a captured
+// session's transcript, because a second copy of the bound is a second answer
+// to how long a line may be.
+func readLines(r io.Reader, bound int, line func([]byte) error, skipped func(int64) error) error {
 	br := bufio.NewReaderSize(r, 64<<10)
 	var (
-		line []byte
+		held []byte
 		over int64 // the size of a line already past the bound
 	)
 	for {
@@ -97,29 +119,32 @@ func eachLine(r io.Reader, dec Decoder, bound int) error {
 		switch {
 		case over > 0:
 			over += int64(len(chunk))
-		case len(line)+len(chunk) > bound:
-			over = int64(len(line) + len(chunk))
+		case len(held)+len(chunk) > bound:
+			over = int64(len(held) + len(chunk))
 			// RELEASED, not truncated: a line that reached the bound has
 			// grown the buffer to it, and keeping that buffer would hold
 			// the bound's worth of memory for the rest of the read.
-			line = nil
+			held = nil
 		default:
-			line = append(line, chunk...)
+			held = append(held, chunk...)
 		}
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
 		}
+		var stop error
 		if over > 0 {
-			dec.Skipped(over, bound)
+			stop = skipped(over)
 			over = 0
-		} else if len(line) > 0 {
-			dec.Line(bytes.TrimRight(line, "\r\n"))
+		} else if len(held) > 0 {
+			stop = line(bytes.TrimRight(held, "\r\n"))
 		}
-		line = line[:0]
-		if errors.Is(err, io.EOF) {
+		held = held[:0]
+		switch {
+		case stop != nil:
+			return stop
+		case errors.Is(err, io.EOF):
 			return nil
-		}
-		if err != nil {
+		case err != nil:
 			return err
 		}
 	}
