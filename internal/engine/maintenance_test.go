@@ -70,16 +70,14 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// applier, the trash through the trash reaper) rather than a local
 		// delete.
 		"artifacts_ops",
-		// THE ASSISTANT LOG'S TWO, for the same reason. Its conversations
-		// are NOT here: they are Replicated, so their retention rides a
-		// record (the trash reaper's retention purge) rather than a local
-		// delete.
-		"assistant_anchors",
+		// THE ASSISTANT LOG'S, for the same reason. Its conversations are
+		// NOT here: they are Replicated, so their retention rides a record
+		// (the trash reaper's retention purge) rather than a local delete.
+		// Nor its anchors, which the trim removes (see pages_ops below).
 		"assistant_ops",
-		// THE CHAT LOG'S anchor table and operation ledger, per node, for
-		// the reason every registered domain's pair is (see pages_ops
-		// below).
-		"chat_anchors",
+		// THE CHAT LOG'S operation ledger, per node, for the reason every
+		// registered domain's is (see pages_ops below), and not its
+		// anchors, for the same reason as every domain's.
 		"chat_ops",
 		// EACH HUMAN SEAT'S CHAT READ STATE, a coordination record with
 		// no age: without this entry the cursors, mutes and
