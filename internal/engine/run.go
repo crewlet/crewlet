@@ -351,6 +351,10 @@ type Engine struct {
 	// ([modelRetries]).
 	retries modelRetries
 
+	// listings is this node's published MCP listings and its watched copy
+	// of every node's ([mcpListings]).
+	listings mcpListings
+
 	// signIns is the device sign-ins this node runs, and the watch that
 	// hears their cancels ([deviceSignIns]).
 	signIns deviceSignIns
@@ -2106,6 +2110,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// THE RETRIES PEOPLE ASKED FOR, applied as every node hears them.
 	e.startModelRetries(ctx)
 	e.startDeviceSignIns(ctx)
+	// WHAT THIS NODE'S MCP SERVERS LIST, published, and every node's,
+	// watched: the catalogue a per-agent server's tools reach.
+	e.startMCPListings(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2757,6 +2764,8 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRunnerProbe()
 	e.stopHostLogins()
 	e.stopModelRetries()
+	// AND THIS NODE'S MCP LISTINGS, removed now that its servers are down.
+	e.stopMCPListings(ctx)
 	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
 	// the person starts again on a node that is up.
 	e.stopDeviceSignIns()

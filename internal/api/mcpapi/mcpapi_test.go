@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -15,9 +16,13 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpapi"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
 
@@ -59,11 +64,16 @@ func surface(t *testing.T, registry string, search mcpapi.Searcher) *mcpapi.Serv
 		t.Fatal(err)
 	}
 	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
-		Registry: search})
+		Registry: search, Detail: noDetail})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return svc
+}
+
+// noDetail answers every server as one nobody configures, reports or lists.
+func noDetail(_ context.Context, name string) (queries.MCPServerAnswer, error) {
+	return queries.MCPServerAnswer{}, fmt.Errorf("%w: %s", queries.ErrNotFound, name)
 }
 
 // THE CURATED CATALOGUE IS ANSWERED WHOLE, AND THE REGISTRY IS ASKED ONLY FOR
@@ -153,16 +163,16 @@ func get(t *testing.T, svc *mcpapi.Service, as iam.Principal, path string) (int,
 func TestTheCatalogueRouteIsTheConfigurationReaders(t *testing.T) {
 	t.Parallel()
 	svc := surface(t, registryURL, &fakeRegistry{})
-	if code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-servers/catalogue"); code != http.StatusOK ||
+	if code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-catalogue"); code != http.StatusOK ||
 		len(body["curated"].([]any)) != len(catalogue.Curated()) {
 		t.Errorf("an admin whose proof is an hour old read %d %v", code, body)
 	}
 	if code, body := get(t, svc, caller(slices.DeleteFunc(slices.Clone(iam.AllGrants),
-		func(g iam.Grant) bool { return g == iam.GrantAdmin })...), "/mcp-servers/catalogue"); code !=
+		func(g iam.Grant) bool { return g == iam.GrantAdmin })...), "/mcp-catalogue"); code !=
 		http.StatusForbidden {
 		t.Errorf("a member holding every app read %d %v", code, body)
 	}
-	code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-servers/catalogue?q="+strings.Repeat("a", 201))
+	code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-catalogue?q="+strings.Repeat("a", 201))
 	if code != http.StatusBadRequest || body["error"] != "bad_params" ||
 		!strings.Contains(body["detail"].(string), "200 characters") {
 		t.Errorf("search text past its bound answered %d %v", code, body)
@@ -183,7 +193,7 @@ func TestTheCatalogueAnswersEveryFieldOfEveryEntry(t *testing.T) {
 		Auth: []catalogue.AuthMethod{catalogue.AuthNone}, Package: "browser", Release: "1.0.0", Community: true,
 		Publisher: "io.github.x", Version: "1.0.0", UpdatedAt: &updated}
 	svc := surface(t, registryURL, &fakeRegistry{found: catalogue.Found{Entries: []catalogue.Entry{listing}}})
-	code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-servers/catalogue?q=browser")
+	code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-catalogue?q=browser")
 	if code != http.StatusOK {
 		t.Fatalf("answered %d %v", code, body)
 	}
@@ -220,5 +230,104 @@ func holdKeys(t *testing.T, what string, got map[string]any, want ...string) {
 	keys := slices.Sorted(maps.Keys(got))
 	if slices.Sort(want); !slices.Equal(keys, want) {
 		t.Errorf("%s carries %v, want exactly %v", what, keys, want)
+	}
+}
+
+// detailSurface is the surface over a detail that answers github whole and a
+// server named "catalogue", says nothing is called "nothing", and cannot read
+// anything else.
+func detailSurface(t *testing.T) *mcpapi.Service {
+	t.Helper()
+	company, err := config.ParseCompany([]byte("name: Acme\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := func(_ context.Context, name string) (queries.MCPServerAnswer, error) {
+		switch name {
+		case "github":
+			return queries.MCPServerAnswer{
+				Server: queries.MCPServerRow{Name: "github", Args: []string{}, UnlistedAnnotations: []string{},
+					RefusedTools: []queries.MCPRefusedTool{}, ShadowedTools: []queries.MCPShadowedTool{},
+					Nodes: []queries.MCPServerNode{}},
+				Nodes: []queries.MCPStatusNode{}, Listed: []queries.MCPServerListing{},
+				Tools: []queries.MCPToolView{{Name: "get_issue", Raw: "get_issue", Risk: mcp.RiskReadOnly,
+					Digest: strings.Repeat("a", 64), Definitions: 1, Instances: 1, Nodes: []string{"node-a"},
+					InputSchema: map[string]any{"type": "object"}}},
+				ServerInfo: &coord.MCPServerInfo{Name: "github-mcp"},
+				Dependants: configapi.MCPDependants{MCPCleared: configapi.MCPCleared{
+					MCPEnv: []configapi.MCPEnvDependant{}, Sandbox: []configapi.MCPSandboxDependant{}},
+					Secrets: []string{}},
+			}, nil
+		case "catalogue":
+			return queries.MCPServerAnswer{Server: queries.MCPServerRow{Name: "catalogue"}}, nil
+		case "nothing":
+			return queries.MCPServerAnswer{}, fmt.Errorf("%w: nothing", queries.ErrNotFound)
+		}
+		return queries.MCPServerAnswer{}, queries.ErrMCPDetailUnavailable
+	}
+	svc, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return company },
+		Registry: &fakeRegistry{}, Detail: detail})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
+}
+
+// ONE SERVER'S DETAIL IS THE CONFIGURATION READER'S, AND SAYS WHY IT CANNOT
+// ANSWER: an admin reads it, a member holding every app is refused, a server
+// nobody configures, reports or lists is 404, and a node that could not read
+// the fleet's listings answers 503 with the wait to retry after, never an empty
+// server. The catalogue lives outside the servers' namespace, so a server
+// named "catalogue" has a detail of its own.
+//
+// Mutation: mount the detail on a member's verb, answer an unreadable listing
+// as a server with no tools, or serve the catalogue under /mcp-servers/, and
+// this is red.
+func TestAServersDetailIsTheConfigurationReadersAndSaysWhyItCannotAnswer(t *testing.T) {
+	t.Parallel()
+	svc := detailSurface(t)
+	code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-servers/github")
+	if code != http.StatusOK {
+		t.Fatalf("an admin read %d %v", code, body)
+	}
+	holdKeys(t, "the detail", body, "server", "nodes", "listed", "tools", "tool_count",
+		"server_info", "instructions", "dependants")
+	tool := body["tools"].([]any)[0].(map[string]any)
+	holdKeys(t, "a tool", tool, "name", "raw", "title", "description", "annotations", "risk",
+		"risk_declared", "external", "digest", "definitions", "instances", "nodes", "input_schema",
+		"output_schema")
+	if tool["risk"] != "read_only" || tool["output_schema"] != nil {
+		t.Errorf("the tool answered %v", tool)
+	}
+	holdKeys(t, "the dependants", body["dependants"].(map[string]any), "mcp_env", "sandbox", "secrets")
+	if code, body := get(t, svc, caller(slices.DeleteFunc(slices.Clone(iam.AllGrants),
+		func(g iam.Grant) bool { return g == iam.GrantAdmin })...), "/mcp-servers/github"); code != http.StatusForbidden {
+		t.Errorf("a member holding every app read %d %v", code, body)
+	}
+	if code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-servers/nothing"); code != http.StatusNotFound ||
+		body["error"] != "not_found" {
+		t.Errorf("an unknown server answered %d %v", code, body)
+	}
+	req := httptest.NewRequestWithContext(iam.WithPrincipal(t.Context(), caller(iam.GrantAdmin)),
+		http.MethodGet, "/mcp-servers/unreadable", nil)
+	w := httptest.NewRecorder()
+	mux := http.NewServeMux()
+	if err := svc.Routes(mux); err != nil {
+		t.Fatal(err)
+	}
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") != "15" {
+		t.Errorf("an unreadable listing answered %d, Retry-After %q", w.Code, w.Header().Get("Retry-After"))
+	}
+	if code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-catalogue"); code != http.StatusOK ||
+		body["curated"] == nil {
+		t.Errorf("the catalogue answered %d %v", code, body)
+	}
+	if code, body := get(t, svc, caller(iam.GrantAdmin), "/mcp-servers/catalogue"); code != http.StatusOK ||
+		body["server"] == nil || body["server"].(map[string]any)["name"] != "catalogue" {
+		t.Errorf("a server named catalogue answered %d %v, want its own detail", code, body)
+	}
+	if _, err := mcpapi.New(mcpapi.Options{Company: func() *config.Company { return nil }}); err == nil {
+		t.Error("a surface with no detail was built")
 	}
 }

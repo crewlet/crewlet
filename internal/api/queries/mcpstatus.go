@@ -253,6 +253,13 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		// github" drawn over a store blip is the wrong thing to act on.
 		return nil, err
 	}
+	return s.mcpStatusOf(leases), nil
+}
+
+// mcpStatusOf is `mcp_servers_status` read off the presence leases given: the
+// one reading of every server's row, which a server's detail answers its own
+// row from.
+func (s Sources) mcpStatusOf(leases []coord.Lease) MCPStatusAnswer {
 
 	type report struct {
 		node     string
@@ -363,7 +370,7 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 		row.State = mcpState(row.Enabled, anyReported, row.Started, row.Failed, row.Waiting)
 		out.Servers = append(out.Servers, *row)
 	}
-	return out, nil
+	return out
 }
 
 // refusedTools is the fleet's refusals of one server's tools, sorted by tool,

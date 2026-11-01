@@ -84,6 +84,9 @@ type fakeRuntime struct {
 	// builtins are the engine's own tools as a seat is offered them,
 	// answered as they are set.
 	builtins []queries.ToolRow
+	// listings is the fleet's MCP listings the node holds, nil for a node
+	// that keeps no copy.
+	listings queries.MCPListingReader
 
 	// presenceHangs makes Fleet's presence read one that never returns on
 	// its own, the way a wedged broker's key scan does: it answers only
@@ -106,6 +109,8 @@ func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState {
 func (f *fakeRuntime) Tools() []queries.ToolRow { return f.tools }
 
 func (f *fakeRuntime) Builtins() []queries.ToolRow { return f.builtins }
+
+func (f *fakeRuntime) Listings() queries.MCPListingReader { return f.listings }
 
 // Seats answers from the same state Snapshot does, as ShuttingDown does.
 func (f *fakeRuntime) Seats() []string { return f.state.Seats }
