@@ -26,7 +26,9 @@ import (
 //     repository's, newest ended first and every attempt not yet ended after
 //     them (code_checks_finished_idx, read backwards); one change's of it —
 //     its head's, or a commit it names, CHECKED FOR ITS TARGET — by name and
-//     attempt, or one commit's for every target (both code_checks' key); or
+//     attempt, or one commit's for every target or for the one it names (all
+//     code_checks' key), each of those also as each check's LATEST attempt
+//     alone ([CheckQuery.Latest]: what a check stands at, one page); or
 //     the WINDOW — no repository named — every repository's attempts that
 //     ended at or after a moment, newest ended first (code_checks_recent_idx),
 //     each kept only where its repository is one the asker reads, so a page
@@ -184,9 +186,10 @@ func (q ReadQuery) checksQuery(fresh statelog.Freshness) statelog.Query {
 
 // validateChecks is [ReadQuery.validate]'s rules for a `checks` and a `check`
 // read, beyond every principal read's: a `checks` read narrows a repository's
-// listing to a change or a commit, or bounds the window — never both, and
-// never an attempt's name; a `check` read names its repository and its one
-// attempt whole, and is neither paged nor bounded.
+// listing to a change or a commit — a commit's for one branch where it names
+// a target, and each check's latest attempt alone where it asks — or bounds
+// the window — never both, and never an attempt's name; a `check` read names
+// its repository and its one attempt whole, and is neither paged nor bounded.
 func (q ReadQuery) validateChecks() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	c := q.Checks
@@ -201,6 +204,9 @@ func (q ReadQuery) validateChecks() error {
 		case c.State != "":
 			return refused("checks.state", "a check read names one attempt, whatever its state; a listing of "+
 				"checks is narrowed by one")
+		case c.Latest:
+			return refused("checks.latest", "a check read names its attempt; a listing of a change's or a "+
+				"commit's checks answers each one's latest")
 		case q.Cursor != "" || q.Limit != 0:
 			return refused("limit", "one attempt is read whole, never paged")
 		case !gitref.ValidOID(c.OID) || c.OID == ZeroOID:
@@ -220,9 +226,15 @@ func (q ReadQuery) validateChecks() error {
 		return nil
 	}
 	switch {
-	case c.Target != "":
-		return refused("checks.target", "a listing of checks names no branch: a change's are those checked "+
-			"for its own target, and a commit's those checked for every branch it was; a check read names one")
+	case c.Target != "" && (c.OID == "" || c.Change != 0):
+		return refused("checks.target", "a listing of checks names a branch only beside a commit: a change's "+
+			"are those checked for its own target, and a repository's and the window's every branch's")
+	case c.Target != "" && (!strings.HasPrefix(c.Target, "refs/heads/") || !ValidRef(c.Target)):
+		return refused("checks.target", fmt.Sprintf("%q is not a branch's ref: a commit is checked for a "+
+			"branch", c.Target))
+	case c.Latest && c.Change == 0 && c.OID == "":
+		return refused("checks.latest", "only a change's or a commit's checks are listed at their latest "+
+			"attempts: a repository's and the window's walk the endings in time")
 	case c.Attempt != 0:
 		return refused("checks.attempt", "a listing of checks names no attempt; a check read reads one")
 	case c.Name != "" && !config.ValidCodeCheckName(c.Name):
@@ -571,11 +583,15 @@ func (r *Reader) checkBox(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Rea
 // one change's attempts, one commit's, or all of them newest ended first — or
 // of the window, every repository the asker reads.
 func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
-	limit := min(limitOr(q.Limit, defaultCheckLimit), r.pageRows)
 	c := CheckQuery{}
 	if q.Checks != nil {
 		c = *q.Checks
 	}
+	fallback := defaultCheckLimit
+	if c.Latest {
+		fallback = latestCheckLimit
+	}
+	limit := min(limitOr(q.Limit, fallback), r.pageRows)
 	if q.Repo == "" {
 		return r.checksWindow(ctx, tx, q, c, chart, limit, out)
 	}
@@ -606,17 +622,19 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if c.OID != "" {
 			oid = c.OID
 		}
-		name, attempt, ok := cutNameAttempt(q.Cursor)
-		if !ok {
-			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
-		}
-		rows, err = tx.QueryContext(ctx, checksOfTargetSQL, repo.ref.ID, oid, change.target, name, attempt, limit)
+		rows, err = checksOfTarget(ctx, tx, q.Cursor, c.Latest, repo.ref.ID, oid, change.target, limit)
+	case c.Target != "":
+		rows, err = checksOfTarget(ctx, tx, q.Cursor, c.Latest, repo.ref.ID, c.OID, c.Target, limit)
 	case c.OID != "":
 		target, name, attempt, ok := cutTargetCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
-		rows, err = tx.QueryContext(ctx, checksOfCommitSQL, repo.ref.ID, c.OID, target, name, attempt, limit)
+		statement := checksOfCommitSQL
+		if c.Latest {
+			statement = latestOfCommitSQL
+		}
+		rows, err = tx.QueryContext(ctx, statement, repo.ref.ID, c.OID, target, name, attempt, limit)
 	case q.Cursor == "":
 		rows, err = tx.QueryContext(ctx, checksOfRepoSQL, repo.ref.ID, limit)
 	default:
@@ -639,6 +657,24 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	}
 	r.pageChecks(scanned, c.keeps, limit, checksWalk(q), out)
 	return nil
+}
+
+// checksOfTarget runs the walk of one commit's attempts checked for one
+// target — a change's, or a commit's beside the branch it names — after the
+// (name, attempt) cursor names: every attempt, or each check's latest where
+// latest asks ([CheckQuery.Latest]).
+func checksOfTarget(ctx context.Context, tx *sql.Tx, cursor string, latest bool, repoID, oid, target string,
+	limit int) (*sql.Rows, error) {
+
+	name, attempt, ok := cutNameAttempt(cursor)
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrBadCursor, cursor)
+	}
+	statement := checksOfTargetSQL
+	if latest {
+		statement = latestOfTargetSQL
+	}
+	return tx.QueryContext(ctx, statement, repoID, oid, target, name, attempt, limit)
 }
 
 // checksWindow serves one page of the window: every repository's attempts
@@ -1072,9 +1108,12 @@ var cursorTarget = base64.RawURLEncoding
 
 // checksWalk is how a `checks` listing q spells the cursor that resumes it
 // after a row it served, by the walk its question takes: the window's where it
-// names no repository ([windowCursor]); one change's attempts at its head, by
+// names no repository ([windowCursor]); one commit's attempts for one target
+// — a change's at its head, or a commit's beside the branch it names — by
 // name and attempt ([nameAttemptCursor]); one commit's for every target
 // ([targetCursor]); and a repository's, newest ended first ([endedCursor]).
+// A latest listing ([CheckQuery.Latest]) walks the same key and resumes
+// alike: after a check's latest attempt, its next check.
 // THE ONE CHOICE: the reader pages by it and [ReadQuery.ChecksCursor] answers
 // from it, so a page's own cursor and one a caller asks for after any of its
 // rows are spelled alike.
@@ -1086,7 +1125,7 @@ func checksWalk(q ReadQuery) func(CheckRow) string {
 	switch {
 	case q.Repo == "":
 		return windowCursor
-	case c.Change != 0:
+	case c.Change != 0 || c.Target != "":
 		return nameAttemptCursor
 	case c.OID != "":
 		return targetCursor
@@ -1196,8 +1235,9 @@ func cutWindowCursor(s string) (int64, string, string, string, string, int, bool
 // one check of one commit for one target, the key read backwards from its
 // (repository, commit, target, name) prefix; one commit's attempts for every
 // target after a (target, name, attempt) on the key, or for one target after
-// a (name, attempt) — what a change's attempts are; a repository's newest
-// ended first, from the top or after a place, on code_checks_finished_idx read
+// a (name, attempt) — what a change's attempts are — and the same two walks
+// keeping each check's latest attempt alone; a repository's newest ended
+// first, from the top or after a place, on code_checks_finished_idx read
 // backwards; and the window's, on code_checks_recent_idx read backwards above
 // its moment. Each keyset's >= beside its OR is what keeps the index's range
 // seek (planner.go).
@@ -1217,6 +1257,25 @@ const (
 	checksOfTargetSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ?1 AND commit_oid = ?2 AND target_ref = ?3 AND name >= ?4 AND (name > ?4 OR attempt > ?5)
 		ORDER BY name, attempt LIMIT ?6`
+	// THE LATEST ATTEMPTS ([CheckQuery.Latest]): the same walks of the key,
+	// each row kept only where the key holds no later attempt of its check —
+	// one seek of its (repository, commit, target, name) prefix above the
+	// row's attempt. A page is then a row a check, never its history; the
+	// walk still reads a check's earlier attempts, at most MaxCheckAttempts
+	// a check, so a page of MaxChecksPerFile checks reads at most 640 rows of
+	// the key and sends 64.
+	latestOfCommitSQL = `SELECT ` + checkColumns + ` FROM code_checks AS k INDEXED BY ` + checksKey + `
+		WHERE k.repo_id = ?1 AND k.commit_oid = ?2 AND k.target_ref >= ?3
+			AND (k.target_ref > ?3 OR k.name > ?4 OR (k.name = ?4 AND k.attempt > ?5))
+			AND ` + latestOnly + `
+		ORDER BY k.target_ref, k.name, k.attempt LIMIT ?6`
+	latestOfTargetSQL = `SELECT ` + checkColumns + ` FROM code_checks AS k INDEXED BY ` + checksKey + `
+		WHERE k.repo_id = ?1 AND k.commit_oid = ?2 AND k.target_ref = ?3 AND k.name >= ?4
+			AND (k.name > ?4 OR k.attempt > ?5) AND ` + latestOnly + `
+		ORDER BY k.name, k.attempt LIMIT ?6`
+	latestOnly = `NOT EXISTS (SELECT 1 FROM code_checks AS n INDEXED BY ` + checksKey + `
+		WHERE n.repo_id = k.repo_id AND n.commit_oid = k.commit_oid AND n.target_ref = k.target_ref
+			AND n.name = k.name AND n.attempt > k.attempt)`
 	checksOfRepoSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksEndedKey + `
 		WHERE repo_id = ?1
 		ORDER BY finished_at DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC LIMIT ?2`

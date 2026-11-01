@@ -1341,7 +1341,12 @@ func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 //     CheckSummaryBytes, so 200 attempts summarised in a line are under
 //     200 KB, and a page of summaries at their 4 KiB ends near 950 KB, under
 //     the byte budget; the bound is on the rows a page READS, so a window a
-//     seat reads little of costs what a full page does and no more.
+//     seat reads little of costs what a full page does and no more. A
+//     listing of each check's LATEST attempt ([CheckQuery.Latest]) takes
+//     latestCheckLimit by default: MaxChecksPerFile, every check one checks
+//     file declares for a branch, so a change's head's or a queue tip's
+//     checks for its branch are one page and a reader asks once — at their
+//     4 KiB summaries and 2 KiB links about 440 KB, under the byte budget.
 //
 // The maxima are exported for a client that pages: the most a page may ask
 // for of each, which a page past them is refused naming.
@@ -1355,6 +1360,7 @@ const (
 	defaultChangeLimit   = 50
 	MaxChangesPerPage    = 200
 	defaultCheckLimit    = 50
+	latestCheckLimit     = MaxChecksPerFile
 	MaxChecksPerPage     = 200
 	defaultRevisionLimit = 200
 	MaxRevisionsPerPage  = 1_000

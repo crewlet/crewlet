@@ -2145,16 +2145,42 @@ type CheckQuery struct {
 	// checked for its target. A `checks` read's alone.
 	Change int64 `json:"change,omitempty"`
 	// OID is a commit's whole id: its attempts — checked for every target,
-	// or for the target of the change Change names — and the commit a
-	// `check` read's attempt is of.
+	// for the target of the change Change names, or for the Target named
+	// beside it — and the commit a `check` read's attempt is of.
 	OID string `json:"oid,omitempty"`
 	// Target, Name and Attempt are the one attempt a `check` read is of —
 	// the branch it was checked for, the check and the attempt — REQUIRED
-	// there. A `checks` read refuses a Target and an Attempt, and takes a
-	// Name as a NARROWING: the attempts of the check of that name alone.
+	// there. A `checks` read takes a Target only beside an OID and no
+	// Change — that commit's attempts checked for that branch, a range of
+	// code_checks' key, as a change's are for its own — refuses an Attempt,
+	// and takes a Name as a NARROWING: the attempts of the check of that name
+	// alone.
 	Target  string `json:"target,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Attempt int    `json:"attempt,omitempty"`
+	// Latest answers, of a change's or a commit's attempts, each check's
+	// LATEST attempt for each branch it was checked for, and no attempt a
+	// later one reran: what a check STANDS AT, which a merge gate, a queue's
+	// meter and an Inbox card read. Without it a caller rebuilt that from the
+	// whole history, which a page cuts — a check rerun across a page's end
+	// was drawn at its superseded attempt. Refused on a repository's listing
+	// and on the window, which walk the endings in time and hold a check's
+	// attempts anywhere in them, and on a `check` read, which names one.
+	//
+	// ONE WALK OF code_checks' KEY, each row kept only where the key holds no
+	// later attempt of its check (one seek of the key's next attempt), so a
+	// page of it is at most one row a check and a target: one checks file
+	// declares at most [MaxChecksPerFile], which is the page a Latest listing
+	// takes where it names no limit ([latestCheckLimit]).
+	//
+	// AN ESTATE REQUEST'S FIELD, as State is, under the same STATED
+	// CONDITION (M3-O84 §2 item 5): no build carrying the code domain has run
+	// without it. A build that predated it would decode and ignore it and
+	// answer every attempt — the history a caller then reduces wrongly only
+	// where a page cuts it — and would refuse a Target beside an OID; were
+	// such a build ever to run first, a latest listing would move to a kind of
+	// its own, which such a build refuses as one it does not know.
+	Latest bool `json:"latest,omitempty"`
 	// State narrows a `checks` read to the attempts in one state; refused on
 	// a `check` read, which names its one attempt whatever its state.
 	//

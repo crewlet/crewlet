@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1089,6 +1090,17 @@ func checksOfEveryShape(t *testing.T) (*node, code.ChangeResult, map[string]chec
 			Fresh: stale, Checks: &code.CheckQuery{Change: 1, OID: oidOf("B")}}, []string{"lint", "unit", "vet"}},
 		"the backport's, at the same head": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web",
 			Limit: 1, Fresh: stale, Checks: &code.CheckQuery{Change: 2}}, []string{"unit"}},
+		"a commit's, for one target": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 1,
+			Fresh: stale, Checks: &code.CheckQuery{OID: oidOf("B"), Target: mainRef}}, []string{"lint", "unit",
+			"vet"}},
+		"a commit's, for the other target": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web",
+			Limit: 1, Fresh: stale, Checks: &code.CheckQuery{OID: oidOf("B"), Target: releaseRef}},
+			[]string{"unit"}},
+		"a change's latest": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Limit: 1,
+			Fresh: stale, Checks: &code.CheckQuery{Change: 1, Latest: true}}, []string{"lint", "unit", "vet"}},
+		"a commit's latest, for every target": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web",
+			Limit: 1, Fresh: stale, Checks: &code.CheckQuery{OID: oidOf("B"), Latest: true}},
+			[]string{"lint", "unit", "vet", "unit"}},
 		"the repository's, newest ended first": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web",
 			Limit: 1, Fresh: stale}, []string{"unit", "lint", "unit", "vet"}},
 		"the window's": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Limit: 1, Fresh: stale,
@@ -1127,7 +1139,8 @@ func checkNames(rows []code.CheckRow) []string {
 }
 
 // A REPOSITORY'S CHECKS ARE READ BY EVERY SHAPE: a commit's attempts for
-// every target, a change's — its head's, checked for ITS target — the
+// every target and for the one it names, a change's — its head's, checked
+// for ITS target — each also at its checks' latest attempts, the
 // repository's newest ended first and the window's — each a keyset that
 // resumes where its page ended — and one attempt whole, with the failures its
 // ending named and its repository's name; and a reader the repository's grant
@@ -1138,8 +1151,10 @@ func checkNames(rows []code.CheckRow) []string {
 // — as two sets of attempts at one commit, and each change reads its own
 // target's alone.
 //
-// Mutation: read a change's attempts at its head for every target — the
-// backport's change reads main's three beside its own unit — red.
+// Mutations: read a change's attempts at its head for every target — the
+// backport's change reads main's three beside its own unit — red; read a
+// commit's for the target it names by every target (the reader's Target case
+// dropped) → release's unit among main's, red.
 func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 	t.Parallel()
 	n, backport, shapes := checksOfEveryShape(t)
@@ -1181,6 +1196,124 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 		Fresh: stale})
 	if err != nil || len(window.Checks) != 0 {
 		t.Fatalf("a seat the grant shuts out read the window (%v, %v), want none of web's", window.Checks, err)
+	}
+}
+
+// insertAttempt writes attempt of check name of commit B checked for target
+// on repo straight into code_checks, ended in state at the attempt's own
+// minute: a history of reruns no test reaches through the writer but by a
+// rerun a principal asks for each.
+func insertAttempt(n *node, repo, target, name string, attempt int, state code.CheckState) {
+	at := harnessAt.Add(time.Duration(attempt) * time.Minute)
+	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
+		revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
+		runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
+		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
+		url, summary, def, failures, tail)
+		VALUES (?, ?, ?, ?, ?, ?, 'head', '', 1, '', '', '', '', 1, '', 600,
+			'exit', 'git-a', 'container', '', 0, '', ?, ?, ?, 1000, NULL, 0, 1, 2, 0, 0, '', '', '', '', '')`,
+		repo, oidOf("B"), target, name, attempt, string(state), store.EncodeTime(at), store.EncodeTime(at),
+		store.EncodeTime(at.Add(time.Second)))
+}
+
+// A LATEST LISTING ANSWERS WHAT EACH CHECK STANDS AT, IN ONE PAGE. Change 1's
+// head B is checked for main by sixty checks, six of them rerun — the
+// last-named among them, its first attempt failed and its second passed — so
+// main holds sixty-six attempts at B, past a listing's default page of fifty,
+// and release one check's three beside them. A change's listing at its
+// latest answers sixty rows, one a check, each at its latest attempt — the
+// last-named passed — on ONE page with no next; a commit's for main answers
+// the same; a commit's for every branch adds release's third attempt; and
+// each, read seven rows at a time, walks to the same rows.
+//
+// Mutations: keep every attempt (latestOnly matching nothing) → sixty-six
+// rows, red; take the listing's default page (latestCheckLimit at
+// defaultCheckLimit) → fifty rows and a next, red.
+func TestALatestListingAnswersWhatEachCheckStandsAtInOnePage(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, _ := discussed(t, n, "web")
+	const checks, reruns = 60, 6
+	var main []string
+	for i := range checks {
+		name := fmt.Sprintf("c%02d", i)
+		insertAttempt(n, repo, mainRef, name, 1, code.CheckStateFailed)
+		latest := name + "/1"
+		if i >= checks-reruns {
+			insertAttempt(n, repo, mainRef, name, 2, code.CheckStatePassed)
+			latest = name + "/2"
+		}
+		main = append(main, latest)
+	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		insertAttempt(n, repo, releaseRef, "c00", attempt, code.CheckStateErrored)
+	}
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	attempts := func(rows []code.CheckRow) []string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.Name+"/"+strconv.Itoa(r.Attempt))
+		}
+		return out
+	}
+	for name, tc := range map[string]struct {
+		c    code.CheckQuery
+		want []string
+	}{
+		"a change's":          {code.CheckQuery{Change: 1, Latest: true}, main},
+		"a commit's for main": {code.CheckQuery{OID: oidOf("B"), Target: mainRef, Latest: true}, main},
+		"a commit's for every branch": {code.CheckQuery{OID: oidOf("B"), Latest: true},
+			append(slices.Clone(main), "c00/3")},
+	} {
+		q := code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Repo: "web", Fresh: stale, Checks: &tc.c}
+		page, err := n.reader.Read(t.Context(), q)
+		if err != nil {
+			t.Fatalf("%s at its latest: %v", name, err)
+		}
+		if got := attempts(page.Checks); !slices.Equal(got, tc.want) || page.Next != "" {
+			t.Errorf("%s at its latest answered %v (next %q), want %v on one page", name, got, page.Next, tc.want)
+			continue
+		}
+		if last := page.Checks[checks-1]; last.Name != "c59" || last.State != code.CheckStatePassed {
+			t.Errorf("%s at its latest stands c59 at %+v, want its rerun, passed", name, last)
+		}
+		q.Limit = 7
+		if got := attempts(servedChecks(t, n, q)); !slices.Equal(got, tc.want) {
+			t.Errorf("%s at its latest, seven a page, walked %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// A CHECKS LISTING REFUSES WHAT ITS WALK CANNOT ANSWER, naming the field: a
+// latest listing of a repository's attempts or of the window, which walk the
+// endings in time and hold a check's attempts anywhere in them; a branch
+// beside no commit, beside a change — whose own target its listing reads —
+// or that is no branch; and a latest `check` read, which names its attempt.
+//
+// Mutation: drop the refusal of a latest listing beside no change and no
+// commit → the repository's latest answers every attempt, red.
+func TestAChecksListingRefusesWhatItsWalkCannotAnswer(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	discussed(t, n, "web")
+	stale := statelog.Freshness{Level: statelog.ReadStale}
+	for name, q := range map[string]code.ReadQuery{
+		"a repository's at its latest": {Kind: code.ReadChecks, Repo: "web",
+			Checks: &code.CheckQuery{Latest: true}},
+		"the window at its latest": {Kind: code.ReadChecks, Checks: &code.CheckQuery{Latest: true}},
+		"a branch beside no commit": {Kind: code.ReadChecks, Repo: "web",
+			Checks: &code.CheckQuery{Target: mainRef}},
+		"a branch beside a change": {Kind: code.ReadChecks, Repo: "web",
+			Checks: &code.CheckQuery{Change: 1, OID: oidOf("B"), Target: mainRef}},
+		"a branch that is no branch": {Kind: code.ReadChecks, Repo: "web",
+			Checks: &code.CheckQuery{OID: oidOf("B"), Target: "refs/tags/v1"}},
+		"one attempt at its latest": {Kind: code.ReadCheck, Repo: "web", Checks: &code.CheckQuery{
+			OID: oidOf("B"), Target: mainRef, Name: "unit", Attempt: 1, Latest: true}},
+	} {
+		q.Asker, q.Fresh = ada, stale
+		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) {
+			t.Errorf("%s answered %v, want code.ErrInvalid", name, err)
+		}
 	}
 }
 

@@ -1200,18 +1200,26 @@ func registeredStatements() map[string]statement {
 		// the latest attempt of one check of one commit for one target, the
 		// key's prefix read backwards; a commit's attempts for every target
 		// after a (target, name, attempt) on the key, and for one target —
-		// a change's — after a (name, attempt) on the key; a
+		// a change's — after a (name, attempt) on the key, and the same two
+		// keeping each check's latest attempt, each row tested by one seek of
+		// its check's later attempts on the key; a
 		// repository's newest ended first, from the top or after a place, on
 		// code_checks_finished_idx; the window's above its moment, on
 		// code_checks_recent_idx; and the home's due work — the due
 		// listing's statements, a head tested by its dispatch's key and its
 		// target's, and a target's reading by its key.
-		"check listed":          {checkRowSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
-		"check whole":           {checkWholeSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
-		"check log":             {checkLogSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
-		"latest check":          {latestCheckSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit"}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
-		"checks of a commit":    {checksOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)"}},
-		"checks of a target":    {checksOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)"}},
+		"check listed":       {checkRowSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"check whole":        {checkWholeSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"check log":          {checkLogSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"latest check":       {latestCheckSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit"}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
+		"checks of a commit": {checksOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)"}},
+		"checks of a target": {checksOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)"}},
+		"latest of a commit": {latestOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 64},
+			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
+		"latest of a target": {latestOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 64},
+			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
 		"checks of a repo":      {checksOfRepoSQL, []any{"repo-1", 50}, []string{checksEndedKey + " (repo_id=?)"}},
 		"checks of a repo next": {checksOfRepoAfterSQL, []any{"repo-1", 1000, oid("c"), "refs/heads/main", "unit", 1, 50}, []string{checksEndedKey + " (repo_id=? AND finished_at<=?)"}},
 		"checks window":         {checksWindowSQL, []any{1, 50}, []string{"code_checks_recent_idx (finished_at>=?)"}},

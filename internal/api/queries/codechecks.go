@@ -3,6 +3,7 @@ package queries
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,10 +19,12 @@ import (
 //     of the trains testing them: one repository's (`repo`), one of its
 //     branches' (`target`, in full), or every repository's the asker reads;
 //   - `code_checks`, attempts of checks: one repository's newest ended first
-//     (`repo`), one change's of it (`change`) or one commit's (`oid`), or —
-//     naming no repository — the WINDOW, every repository's the asker reads
-//     whose attempts ended at or after `since`; each shape narrowed by a
-//     check's `name` and a `state`;
+//     (`repo`), one change's of it (`change`) or one commit's (`oid`, for
+//     one branch beside `target`, in full), a change's and a commit's at
+//     each check's latest attempt alone where it asks (`latest=true`: what
+//     each check stands at, one page), or — naming no repository — the
+//     WINDOW, every repository's the asker reads whose attempts ended at or
+//     after `since`; each shape narrowed by a check's `name` and a `state`;
 //   - `code_check`, one attempt whole — its row, its definition, its tail,
 //     the failures its ending named and the log a failed run kept — named on
 //     its repository's path by its commit, its check and its attempt, beside
@@ -99,9 +102,10 @@ type CheckLogPage struct {
 }
 
 // checksListing is a `code_checks` request's narrowing, refused
-// [ErrBadParams] naming what is not one: a change's number and a commit's
-// whole id on the repository it names, the window's lower bound, a check's
-// name and a state — nil where it names none, the repository's or the
+// [ErrBadParams] naming what is not one: a change's number, a commit's whole
+// id and the branch it was checked for on the repository it names, whether
+// each check's latest attempt alone is asked for, the window's lower bound, a
+// check's name and a state — nil where it names none, the repository's or the
 // window's whole listing. Which of them stand beside which is the reader's
 // to refuse, naming the field.
 func checksListing(p Params) (*code.CheckQuery, error) {
@@ -115,7 +119,15 @@ func checksListing(p Params) (*code.CheckQuery, error) {
 		c.Change = n
 	}
 	c.OID = strings.TrimSpace(p.String("oid"))
+	c.Target = strings.TrimSpace(p.String("target"))
 	c.Name = strings.TrimSpace(p.String("name"))
+	if p.Has("latest") {
+		latest, err := strconv.ParseBool(strings.TrimSpace(p.String("latest")))
+		if err != nil {
+			return nil, fmt.Errorf("%w: latest %q is not true or false", ErrBadParams, p.String("latest"))
+		}
+		c.Latest = latest
+	}
 	if state := strings.TrimSpace(p.String("state")); state != "" {
 		c.State = code.CheckState(state)
 		if !c.State.Valid() {
