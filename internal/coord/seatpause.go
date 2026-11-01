@@ -70,9 +70,9 @@ type SeatPause struct {
 
 	// StopRunning asks the node running the seat to end its running work
 	// rather than letting it finish: the turn it is on at that turn's next
-	// round boundary, and a coding run it has out at once (the node ends
-	// the run through sandbox.Coordinator.StopSeat). Without it a pause only
-	// stops NEW work, and the work in flight runs to its end.
+	// round boundary, and its executor in its box at once (the node ends
+	// the executor through sandbox.Coordinator.StopSeat). Without it a pause
+	// only stops NEW work, and the work in flight runs to its end.
 	StopRunning bool `json:"stop_running,omitempty"`
 
 	// At is when the seat was paused.

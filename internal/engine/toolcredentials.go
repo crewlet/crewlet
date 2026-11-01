@@ -20,7 +20,7 @@ import (
 // `url`, and, for a seat's child of a per-role template, the seat's own
 // `mcp_env` block for it, a unit's block layered under that — must resolve to
 // a value before the server is started: on this node, as a shared server or a
-// seat's child, or in a coding agent's box. A credential that arrives empty
+// seat's child, or in a harness's box. A credential that arrives empty
 // either fails the server, which is then retried for a value that is not
 // coming, or — worse — is accepted, and the server acts as nobody, or as
 // whatever default identity it falls back to, under the seat's name. One that
@@ -120,7 +120,7 @@ import (
 // string, and neither the variable nor whether anything will mint it is
 // there to name. This is the last place both are in hand — and the ONE place
 // a server's values are resolved at all: [resolveServer] is what [serverSpec]
-// and a coding agent's box are built from, so no path starts a server around
+// and a harness's box are built from, so no path starts a server around
 // it.
 //
 // # Why the seat's mailbox does not wait for it
@@ -282,15 +282,15 @@ type issueFailure struct {
 }
 
 // credentialMissing is why a server was not started — a seat's child, a
-// shared server, or one a coding agent's box was not given — or what a coding
-// run's own environment lacks ([Engine.runEnvironment]): references among the
-// values it is started with resolved to nothing, and the keys holding them are
-// not declared optional. See the file comment.
+// shared server, or one a harness's box was not given — or what a
+// launch's own environment lacks ([Engine.runEnvironment]): references among
+// the values it is started with resolved to nothing, and the keys holding them
+// are not declared optional. See the file comment.
 type credentialMissing struct {
 	// seat is the seat's handle, which is what an integration's findings
 	// name a seat by — empty for a shared server; server is the
 	// configuration's name for the server, and instance the bridge's name
-	// for this start of it, both empty for a coding run.
+	// for this start of it, both empty for a launch.
 	seat, server, instance string
 
 	// reader is what goes without a value its sentence offers to declare

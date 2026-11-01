@@ -183,7 +183,7 @@ live-editable, so the first version does not need to be the last.
    *how they pay*, then write the entry for that CLI:
 
    - **Anthropic's, on a Claude Pro / Max plan** — `model: sonnet` (Claude
-     Code is the default `agent`). No key; the founder signs the CLI in once
+     Code is the default `harness`). No key; the founder signs the CLI in once
      on the engine host with `crewlet llm login <key> -from-host` (or
      `-capture-token`).
    - **Anthropic's, on an API key** — `model: sonnet` plus
@@ -191,10 +191,10 @@ live-editable, so the first version does not need to be the last.
      store or the environment. Name another variable with
      `auth.api_key: "${VAR}"` only if theirs is called something else.
    - **Open models** (OpenRouter, a hosted provider, a local server) —
-     `agent: opencode`, `model: <provider>/<model>` (a bare id is refused), and
+     `harness: opencode`, `model: <provider>/<model>` (a bare id is refused), and
      the provider's key in `env` under that provider's own variable, e.g.
      `env: {OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"}`.
-   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth`, which
+   - **OpenAI's** — `harness: codex`, `model: gpt-5`, and the same `auth`, which
      reads an OpenAI API key from `CODEX_API_KEY`, the variable codex signs in
      with; leave `auth` out for a ChatGPT login. **Not on its own:** every
      agent seat's executor is its coding CLI's own run, which only

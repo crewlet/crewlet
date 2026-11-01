@@ -794,7 +794,7 @@ func pricesInModule(module []byte) []priceFound {
 // and never in money.
 //
 // The engine records a price where one is reported — only a subscription
-// coding CLI quotes one — and it is on the wire. A currency covering that
+// harness quotes one — and it is on the wire. A currency covering that
 // minority of calls, beside a token count covering all of them, reads as the
 // company's spend and is a fraction of it, so the client declares no price
 // field and draws none. dashboard/src/money.test.tsx holds the source and the
@@ -1130,11 +1130,11 @@ const (
 	// of prose opens its block, in the shared Markdown module the entry
 	// loads, took it to 349.1 KiB. 350 KiB, still under two seconds on that
 	// link. A model's usage limit as one condition per entry (ADR-0064): the
-	// queue's wording of it and the CLI names it is said in, the time of day
+	// queue's wording of it and the harness names it is said in, the time of day
 	// it lifts, its remedy in the link table, and the store keeping a row a
 	// push leaves as it was, all in the attention queue and the store the
 	// frame loads, took it to 351.0 KiB. 352 KiB, still under two seconds on
-	// that link. Steering a turn whose coding run is out, merged beside it (the
+	// that link. Steering a turn whose executor is out, merged beside it (the
 	// shared write hook reading a press label's own sentence for its receipt,
 	// `landed`, which says when a note is read, in the seats chunk the entry
 	// loads), measured 350.9 KiB with it (359,293 bytes), under 351 KiB:
@@ -1145,7 +1145,7 @@ const (
 	// later without a reader waiting for it. The frame it joined measured
 	// 349.0 KiB (357,410 bytes): the steering above came to 348.8 KiB once
 	// merged beside the flattening that drawing what prose names moved out of
-	// the renderer (`lib/markdownText.ts`), and a coding run's question asked
+	// the renderer (`lib/markdownText.ts`), and an executor's question asked
 	// as a decision added 0.2 KiB. With Chatlet the load measured 355.0 KiB
 	// (363,549 bytes), 29 bytes past 355 KiB, so it moved to 356 KiB, which is
 	// 1.94 seconds on that link. Merged beside Settings › Models, whose frame
@@ -1252,7 +1252,7 @@ const (
 	// preview hook the draft file card now shares. 4493 KiB, which still
 	// refuses a doubled baseline. Merging main's MCP tool route (#371) beside
 	// the assistant's card rendering took it to 4499.8 KiB: the live view's
-	// CLI runs, their calls in flight and a run drawn before its first round.
+	// harness runs, their calls in flight and a run drawn before its first round.
 	// 4501 KiB, which still refuses a doubled baseline. uilet 0.64.0 and a
 	// card value drawn as what it is (a list as its items, a body as code,
 	// page text as an inert preview, a colour beside its chip) took it to
@@ -1337,14 +1337,14 @@ const (
 	// section matched by its path and name, Home's spent week through the
 	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
 	// still refuses a doubled baseline. A model's usage limit as one
-	// condition per entry (ADR-0064): its wording, the CLI names and its
+	// condition per entry (ADR-0064): its wording, the harness names and its
 	// remedy, the store keeping a row a push leaves as it was, and the Inbox
 	// keeping the rows it drew, took it to 4606.9 KiB. 4607 KiB, which still
 	// refuses a doubled baseline. The review's fixes (a failure's own text
 	// and the spend by model entry kept to an admin, the provider split
 	// offered to an admin alone, and the card that says so) took it to
 	// 4607.0 KiB, past it by bytes. 4608 KiB, which still refuses a doubled
-	// baseline. Saying what became of an answer to a parked coding run (sent,
+	// baseline. Saying what became of an answer to a parked executor (sent,
 	// recorded while its seat is busy and on what, answered, or not used and
 	// why) off the run's own record, drawn with uilet 0.74.0's pending tone
 	// while it is on its way, took it to 4610.7 KiB. 4611 KiB, which still
@@ -1360,10 +1360,10 @@ const (
 	// uilet 0.75.1's smaller marks took it to 4629.3 KiB, again all in the lazy
 	// chunks that render Markdown: the first load is 348.9 KiB. 4630 KiB, which
 	// still refuses a doubled baseline. Saying that a person's stop ended a
-	// seat's coding run (a stopped turn's tag and a stopped run's span drawn
+	// seat's executor (a stopped turn's tag and a stopped run's span drawn
 	// closed rather than failed, a seat whose last turn "was stopped", the
 	// task's "stopped by a person" pill and the pause dialog's words) and
-	// steering a turn whose coding run is out (Steer offered on a parked turn,
+	// steering a turn whose executor is out (Steer offered on a parked turn,
 	// and a note read inside a run drawn on the run's bar in the words of its
 	// step), merged beside it, took it to 4631.8 KiB. 4632 KiB, which still
 	// refuses a doubled baseline. The hardening of inline links merged beside
@@ -1372,7 +1372,7 @@ const (
 	// Confluence page rebuilt from its space and id, and uilet 0.75.2's
 	// unclipped marks) took it to 4632.7 KiB, again in the lazy chunks that
 	// render Markdown, the first load 348.8 KiB. 4633 KiB, which still
-	// refuses a doubled baseline. A coding run's question asked and answered
+	// refuses a doubled baseline. An executor's question asked and answered
 	// as a decision (the run's ask drawn with the decision components, its
 	// options read back with the chosen one marked, and its answered history
 	// in the Inbox's Answered group), all in lazy chunks, took it to

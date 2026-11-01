@@ -189,7 +189,7 @@ func (j slowJudge) Decide(ctx context.Context, _ extension.Request) (extension.D
 }
 
 // refusingProvider fails every call, after taking its time — the failure path
-// that used to publish a record with no measurement on it. A CLI that never
+// that used to publish a record with no measurement on it. A harness that never
 // reached its tools: it fails before it connects.
 type refusingProvider struct{ delay time.Duration }
 

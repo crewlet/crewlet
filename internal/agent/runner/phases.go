@@ -42,7 +42,7 @@ var log = logging.Get("agent.runner")
 // reach: onboarding, the only engine-driven phase with a ceiling above its
 // budget ([Onboarding.Ceiling]).
 //
-// The executor has no round knob here at all: it is its coding CLI's own run,
+// The executor has no round knob here at all: it is its harness's own run,
 // bounded by the run's own turn cap (role.sandbox.max_turns, else
 // providers.sandbox.default_max_turns) rather than by rounds of an engine
 // loop. The reviewer has none either: it holds one submission tool, so its
@@ -104,9 +104,9 @@ type Config struct {
 	Metrics *metrics.Recorder
 
 	// Sessions is where every phase the engine drives serves its tools to
-	// its CLI — this process's one [toolsession.Host], whose directory is
-	// what admits a CLI's relay. Required: a phase that offers tools reaches
-	// its CLI through nothing else. The executor's run is the one exception,
+	// its harness — this process's one [toolsession.Host], whose directory is
+	// what admits a harness's relay. Required: a phase that offers tools reaches
+	// its harness through nothing else. The executor's run is the one exception,
 	// reaching the seat's tools over the tool bridge from its box.
 	Sessions *toolsession.Host
 
@@ -211,7 +211,7 @@ type Config struct {
 	Resume *Resume
 
 	// Launcher starts the executor: every seat's executor is its coding
-	// CLI's own agentic run, detached in a box. REQUIRED — [New] refuses a
+	// harness's own agentic run, detached in a box. REQUIRED — [New] refuses a
 	// runner without one, because there is no other way to run the
 	// executor and a runner that found out at its first Execute would fail
 	// a turn on an assembly mistake. See agentrun.go.
@@ -226,7 +226,7 @@ type Config struct {
 	// Steer is where the turn's notes from a person wait
 	// (internal/agent/steer): taken at the opening of every run of the
 	// REVIEWER — the turn's own conversation the engine drives — and by the
-	// brief of every coding run the turn launches. Never a worker's (a leaf
+	// brief of every launch of the turn's executor. Never a worker's (a leaf
 	// its parent directs), the onboarding pass's (orientation, not the work)
 	// or the extension judge's (a question about the phase, not part of it):
 	// a note waiting while one of those runs is read by the next step of the
@@ -245,14 +245,14 @@ type Config struct {
 }
 
 // SteerSource is where a turn's notes from a person wait, as the runner reads
-// them: the first segment's box ([steer.Box]), or the record of the coding run
+// them: the first segment's box ([steer.Box]), or the record of the executor
 // a resumed segment collects. Declared here, by the consumer.
 type SteerSource interface {
 	// Take takes every note waiting, recording it read where at says, and
 	// answers what it took — what a run of the engine's loop opens with.
 	Take(ctx context.Context, at steer.Reading) []steer.Note
 
-	// Brief is the notes a coding run's brief takes, oldest first. They are
+	// Brief is the notes a launch's brief takes, oldest first. They are
 	// the launch's from here: recorded read by the write that opens the
 	// run's job, or handed back with [SteerSource.Return] where the launch
 	// fails before that write.
@@ -279,7 +279,7 @@ type SteerSource interface {
 // (`ask_and_wait`, ADR-0068), as the runner offers it.
 //
 // Gate is the run's submission as its surface offers it beside the ask: a job
-// that asked is parked on the answer, and its CLI is told so if it submits
+// that asked is parked on the answer, and its harness is told so if it submits
 // rather than ending. The collection holds the same line on its own
 // ([Resume.Answered]), so a submission the gate let through in a race with
 // the ask is still not the round's.
@@ -292,7 +292,7 @@ type RunAsk interface {
 type Resume struct {
 	State execstate.State
 
-	// Answer is the run's closing text: what its CLI said last, which the
+	// Answer is the run's closing text: what its harness said last, which the
 	// phase reports as its prose and the reviewer reads as what the agent
 	// produced.
 	Answer string
@@ -358,7 +358,7 @@ type BridgedCall struct {
 	ledger.Call
 
 	// Seq is the call's place in the order the bridge admitted the run's
-	// calls, from 1 — the order the CLI made them in, which is not the order
+	// calls, from 1 — the order the harness made them in, which is not the order
 	// they finished in when it made several at once. One order for the
 	// round: a job opened again after a recovery, and a job carrying on one
 	// that asked a person ([Asked]), number theirs after the calls before
@@ -367,7 +367,7 @@ type BridgedCall struct {
 
 	// StartedAt is when the call was handed to the seat's surface, and
 	// Duration how long the surface took to answer — measured at the bridge,
-	// since the call ran inside the CLI's own loop. Both zero on a call
+	// since the call ran inside the harness's own loop. Both zero on a call
 	// answered without running — arguments that did not parse — and zero
 	// means "not measured", never "instant".
 	StartedAt time.Time
@@ -392,9 +392,9 @@ func bridgedLedger(bridged []BridgedCall) []ledger.Call {
 // RunRecord is what a phase event says about the run an executor was, and the
 // box it ran in.
 //
-// It is what lets the executor's record name the CLI that did the work, the
-// box it ran in and what it delivered — `coding_agent`, `sandbox_id` and
-// `delivered_refs`, which the coding agents report and nothing else on the
+// It is what lets the executor's record name the harness that did the work, the
+// box it ran in and what it delivered — `harness`, `sandbox_id` and
+// `delivered_refs`, which the harnesses report and nothing else on the
 // resuming side knows. What the run itself cost is NOT here: that is each
 // launch's own fact, on the `executor_collected` record its collection
 // publishes, which a launch that parked on a question also gets.
@@ -405,9 +405,9 @@ func bridgedLedger(bridged []BridgedCall) []ledger.Call {
 // of the seat's executor chain that took the launch is the launch's own
 // answer, not the chain's head.
 type RunRecord struct {
-	// CodingAgent is the CLI that did the work; SandboxID the box it ran in.
-	CodingAgent string
-	SandboxID   string
+	// Harness is the harness that did the work; SandboxID the box it ran in.
+	Harness   string
+	SandboxID string
 
 	// ProviderKey is the providers.llm entry the run was launched on, and
 	// Model the model it ran — the member of the seat's executor chain that
@@ -432,10 +432,10 @@ type RunRecord struct {
 	LaunchID string
 }
 
-// Sandboxed reports whether the record names the run's CLI or its box: whether
+// Sandboxed reports whether the record names the run's harness or its box: whether
 // the phase collected a run at all, rather than closing on a launch that never
 // opened one.
-func (r RunRecord) Sandboxed() bool { return r.CodingAgent != "" || r.SandboxID != "" }
+func (r RunRecord) Sandboxed() bool { return r.Harness != "" || r.SandboxID != "" }
 
 // Runner implements [turn.Phases] against real models and real tools.
 //
@@ -471,8 +471,8 @@ type Runner struct {
 	// from the next unless it is carried: a later reviewer would judge the
 	// work against the task the person corrected. Carried as the SAME
 	// message rather than summarised, because the note's words are the
-	// person's and a paraphrase is the engine's. A turn that resumes from a
-	// coding run starts from the reads its run's record holds
+	// person's and a paraphrase is the engine's. A turn that resumes from
+	// its executor starts from the reads its run's record holds
 	// ([Resume.Steered]), which is every note the turn read before it — the
 	// record is where every read is written. Guarded by mu.
 	steered []steer.Read
@@ -484,7 +484,7 @@ var _ turn.Phases = (*Runner)(nil)
 //
 // A runner with no session host is refused here rather than at its first
 // phase: every turn runs a phase that offers tools — the reviewer, at the
-// least — and a phase reaches its CLI through nothing else, so the turn would
+// least — and a phase reaches its harness through nothing else, so the turn would
 // fail after its run was launched and its prefetch spent, naming a toolloop
 // field instead of this one.
 func New(cfg Config) (*Runner, error) {
@@ -495,13 +495,13 @@ func New(cfg Config) (*Runner, error) {
 		return nil, fmt.Errorf("runner: no provider registry")
 	case cfg.Sessions == nil:
 		return nil, fmt.Errorf("runner: no tool session host (Config.Sessions) — " +
-			"every phase serves its tools to its CLI on this process's one host")
+			"every phase serves its tools to its harness on this process's one host")
 	case cfg.Launcher == nil:
 		// AN ASSEMBLY MISTAKE, named where it is made. Every executor is
 		// a launched run, so a runner without a launcher cannot run the
 		// one phase every turn has.
 		return nil, fmt.Errorf("runner: no executor launcher (Config.Launcher) — " +
-			"every seat's executor is its coding CLI's own run, and the " +
+			"every seat's executor is its harness's own run, and the " +
 			"assembler must supply what launches it")
 	case cfg.Resume != nil && frozen(cfg.Context, cfg.Conversation) != (execstate.Frozen{}):
 		// TWO SOURCES FOR ONE FROZEN THING, and no honest way to pick: the
@@ -520,7 +520,7 @@ func New(cfg Config) (*Runner, error) {
 }
 
 // Execute is the executor: one agentic pass that decides what to do and does
-// it — launched as the seat's coding CLI's own run, detached in its box, and
+// it — launched as the seat's harness's own run, detached in its box, and
 // collected later through [Runner.Resume].
 //
 // It is given the whole first-party surface, and its MCP servers by name only
@@ -561,7 +561,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 }
 
 // executorPrompt is the executor's opening: its system prompt and the turn's
-// own ask, which its coding CLI is handed as an appended system prompt and
+// own ask, which its harness is handed as an appended system prompt and
 // the prompt it runs ([AgentRunRequest]).
 //
 // It also RECORDS what the prompt's tool-skill catalogue offered, as a
@@ -660,7 +660,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 	payload, submitted := w.submit.Value()
 	if !submitted {
 		// THE RESCUE PATH. A run that ended without calling submit_work —
-		// its CLI stopped, hit its turn cap, or answered only in prose —
+		// its harness stopped, hit its turn cap, or answered only in prose —
 		// has produced text and no account of itself. Discarding the turn
 		// wastes everything it did; calling it delivered puts words in its
 		// mouth on the one question that matters.
@@ -732,7 +732,7 @@ func undiscovered(universe tools.Snapshot, active []string) []string {
 //
 // It is given the tool LOG as evidence and told the narration is not. A
 // reviewer shown only what the executor said about itself grades the prose.
-// The log is the run's BRIDGED calls only — its CLI's own shell, edit and test
+// The log is the run's BRIDGED calls only — its harness's own shell, edit and test
 // work happened in its box and is in no log — so the reviewer is also handed
 // the branches and pull requests the run reported delivering, and its rules
 // say what the log cannot hold ([prompts.ReviewHeader]).
@@ -876,7 +876,7 @@ func reviewRecord(round int, system, user prompts.Prompt, res phaseResult,
 
 // runPhase drives one engine-loop phase, extending it when the judge allows:
 // the reviewer and the onboarding pass. Never the executor, which is its
-// CLI's own run.
+// harness's own run.
 //
 // The extension loop lives here rather than in the extension package because
 // only the caller knows what FINISHING looks like for its phase — the
@@ -1049,7 +1049,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// record and may be minutes away.
 	//
 	// THE SURFACE TRAVELS WITH THE TEXT because the prompt is both: every
-	// request carries the tool definitions, which the CLI lists from the
+	// request carries the tool definitions, which the harness lists from the
 	// phase's session and hands its model, and the vendor bills as input.
 	emit.started(ctx, ph, iteration, system, user, surface,
 		capsOf(policy, out.Rounds+in.rounds))
@@ -1239,7 +1239,7 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		steers[i] = m
 	}
 	res.Steers = steers
-	// A CLI run's rounds too, or an extension's first run names the phase's
+	// A harness run's rounds too, or an extension's first run names the phase's
 	// round 1 as its own: a run that made no request names none (zero),
 	// which stays zero.
 	invocations := make([]toolloop.Invocation, len(res.Invocations))
@@ -1422,7 +1422,7 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 		append([]toolloop.Round(nil), done.Result.Rounds...), res.Rounds...)
 	res.Steers = append(
 		append([]toolloop.SteerMark(nil), done.Result.Steers...), res.Steers...)
-	// Every CLI run of the phase, the extension's after the original's.
+	// Every harness run of the phase, the extension's after the original's.
 	res.Invocations = append(
 		append([]toolloop.Invocation(nil), done.Result.Invocations...), res.Invocations...)
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
@@ -1480,10 +1480,10 @@ type phaseResult struct {
 	// re-deriving one from the other is how the two come to disagree.
 	Result toolloop.Result
 
-	// RunSteers is what a collected coding run read of the turn's notes —
-	// in its brief, and at boundaries of its CLI's own loop — at the run's
+	// RunSteers is what a collected executor read of the turn's notes —
+	// in its brief, and at boundaries of its harness's own loop — at the run's
 	// one round with each one's boundary. A run of the engine's loop reads
-	// its notes at its rounds, which its Result records; a coding run's
+	// its notes at its rounds, which its Result records; an executor's
 	// reads are on its record instead ([Runner.resumeAgentRun]).
 	RunSteers []types.PhaseSteer
 }
@@ -1792,7 +1792,7 @@ func describe(s *tools.Surface) turn.Surface {
 // frequently did not contain the work.
 //
 // Bounded by what one reply of the run's model can write — its own output
-// ceiling, which the CLI holds it to — which is a real ceiling and the right
+// ceiling, which the harness holds it to — which is a real ceiling and the right
 // place for one.
 //
 // "(empty)" rather than "" for a pass with no text: an absent section reads as
@@ -1846,8 +1846,8 @@ func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
 // has one once its calls in flight are answered, so the next run reads it.
 func (s phaseSteer) Waiting() bool { return s.r.cfg.Steer.Waiting() }
 
-// sessionTitle is how a phase's tool session names itself to its CLI: the
-// seat and the phase, for the CLI's own logs and a person reading them.
+// sessionTitle is how a phase's tool session names itself to its harness: the
+// seat and the phase, for the harness's own logs and a person reading them.
 func sessionTitle(seat prompts.Seat, ph phase.Phase) string {
 	if seat.Role == nil {
 		return string(ph)
@@ -1874,7 +1874,7 @@ func (r *Runner) carriedSteers() []string {
 	return out
 }
 
-// steerBrief is the notes a coding run's brief takes — none on a turn nobody
+// steerBrief is the notes a launch's brief takes — none on a turn nobody
 // can steer.
 func (r *Runner) steerBrief(ctx context.Context) []steer.Note {
 	if r.cfg.Steer == nil {

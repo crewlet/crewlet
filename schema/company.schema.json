@@ -5,7 +5,7 @@
       "properties": {
         "deep_work": {
           "$ref": "#/$defs/AssistantDeepWork",
-          "description": "Deep work: Ask Crewlet hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
+          "description": "Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
         },
         "enabled": {
           "description": "Run Ask Crewlet for this company. Absent or false: off.",
@@ -38,7 +38,7 @@
               "type": "array"
             }
           ],
-          "description": "providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."
+          "description": "providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."
         },
         "max_steps": {
           "description": "Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30.",
@@ -161,56 +161,6 @@
             "boolean",
             "null"
           ]
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "CLIAgentAuth": {
-      "additionalProperties": false,
-      "properties": {
-        "api_key": {
-          "description": "${VAR} holding an API key, read under auth.mode api-key. Empty reads the CLI's own key variable.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ],
-          "x-crewlet-secret": true
-        },
-        "credential_bundle": {
-          "description": "${VAR} holding a bundle exported by crewlet llm export.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ],
-          "x-crewlet-secret": true
-        },
-        "mode": {
-          "description": "subscription (default), api-key, inherit-env, or env (the entry's env signs the CLI in: a cloud provider or a gateway).",
-          "enum": [
-            "subscription",
-            "api-key",
-            "inherit-env",
-            "env",
-            "",
-            null
-          ]
-        },
-        "token": {
-          "description": "${VAR} holding a long-lived subscription token.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ],
-          "x-crewlet-secret": true
         }
       },
       "type": [
@@ -1066,6 +1016,56 @@
         "null"
       ]
     },
+    "HarnessAuth": {
+      "additionalProperties": false,
+      "properties": {
+        "api_key": {
+          "description": "${VAR} holding an API key, read under auth.mode api-key. Empty reads the harness's own key variable.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "credential_bundle": {
+          "description": "${VAR} holding a bundle exported by crewlet llm export.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
+        "mode": {
+          "description": "subscription (default), api-key, inherit-env, or env (the entry's env signs the harness in: a cloud provider or a gateway).",
+          "enum": [
+            "subscription",
+            "api-key",
+            "inherit-env",
+            "env",
+            "",
+            null
+          ]
+        },
+        "token": {
+          "description": "${VAR} holding a long-lived subscription token.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "HumanContact": {
       "additionalProperties": false,
       "properties": {
@@ -1313,8 +1313,27 @@
     "LLMProvider": {
       "additionalProperties": false,
       "properties": {
-        "agent": {
-          "description": "Which coding CLI to drive (default claude-code).",
+        "auth": {
+          "$ref": "#/$defs/HarnessAuth"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ],
+            "x-crewlet-secret": true
+          },
+          "description": "Extra environment for the harness, on this host and in every executor run's box (beneath the seat's role.sandbox.env).",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "harness": {
+          "description": "Which harness to drive (default claude-code).",
           "enum": [
             "claude-code",
             "codex",
@@ -1333,27 +1352,8 @@
             null
           ]
         },
-        "auth": {
-          "$ref": "#/$defs/CLIAgentAuth"
-        },
-        "env": {
-          "additionalProperties": {
-            "type": [
-              "string",
-              "number",
-              "boolean",
-              "null"
-            ],
-            "x-crewlet-secret": true
-          },
-          "description": "Extra environment for the CLI, on this host and in every executor run's box (beneath the seat's role.sandbox.env).",
-          "type": [
-            "object",
-            "null"
-          ]
-        },
         "max_concurrent": {
-          "description": "Concurrent CLI processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one.",
+          "description": "Concurrent harness processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one.",
           "minimum": 0,
           "type": [
             "integer",
@@ -1361,7 +1361,7 @@
           ]
         },
         "model": {
-          "description": "Model id, in the CLI's own grammar (OpenCode: <provider>/<model>).",
+          "description": "Model id, in the harness's own grammar (OpenCode: <provider>/<model>).",
           "type": [
             "string",
             "number",
@@ -1371,7 +1371,7 @@
         },
         "overrides": {
           "additionalProperties": {},
-          "description": "Field-wise overrides of the built-in CLI profile.",
+          "description": "Field-wise overrides of the built-in harness profile.",
           "type": [
             "object",
             "null"
@@ -1388,7 +1388,7 @@
           ]
         },
         "state_dir": {
-          "description": "Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login.",
+          "description": "Credential + per-seat home directory, each harness under <state_dir>/<harness>. Entries sharing one and a harness share a login.",
           "type": [
             "string",
             "number",
@@ -1397,7 +1397,7 @@
           ]
         },
         "timeout_seconds": {
-          "description": "Wall-clock cap on one stretch of a CLI run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead.",
+          "description": "Wall-clock cap on one stretch of a harness run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead.",
           "minimum": 0,
           "type": [
             "number",
@@ -1459,7 +1459,7 @@
       "additionalProperties": false,
       "properties": {
         "image": {
-          "description": "Container image with the coding-agent CLI installed. Required for run_in: container.",
+          "description": "Container image with the harness installed. Required for run_in: container.",
           "type": [
             "string",
             "number",
@@ -1468,7 +1468,7 @@
           ]
         },
         "network": {
-          "description": "Container network; setting it to none also cuts off the coding agent's LLM.",
+          "description": "Container network; setting it to none also cuts off the harness's LLM.",
           "type": [
             "string",
             "number",
@@ -1519,6 +1519,24 @@
         },
         "state_dir": {
           "description": "Parent directory for box directories; used by both local placements and by deep work on the engine host.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "MCPRegistry": {
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "description": "The registry's https address; /v0.1/servers is appended to it. Absent: no community search.",
           "type": [
             "string",
             "number",
@@ -1932,7 +1950,7 @@
           "additionalProperties": {
             "$ref": "#/$defs/LLMProvider"
           },
-          "description": "Named models, each a coding CLI the engine drives; seats select one by key.",
+          "description": "Named models, each a harness the engine drives; seats select one by key.",
           "type": [
             "object",
             "null"
@@ -3167,7 +3185,7 @@
       "additionalProperties": false,
       "properties": {
         "brief": {
-          "description": "What this step made true about the box, told to the coding agent.",
+          "description": "What this step made true about the box, told to the harness.",
           "type": [
             "string",
             "number",
@@ -4188,6 +4206,10 @@
     },
     "learning": {
       "$ref": "#/$defs/Learning"
+    },
+    "mcp_registry": {
+      "$ref": "#/$defs/MCPRegistry",
+      "description": "The community MCP registry the dashboard searches beside the curated catalogue. Absent: none."
     },
     "mcp_servers": {
       "description": "Tool servers, stdio or http. Per-agent credentials live in role.mcp_env.",

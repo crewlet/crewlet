@@ -24,13 +24,13 @@ import (
 // A RESUME NEVER RUNS INTO A LIMIT ITS MODELS ALREADY KNOW, and one that meets
 // a limit it did not know waits for it: neither is a failure.
 //
-// What a running engine did: a coding run's completion reached a seat whose
+// What a running engine did: a launch's completion reached a seat whose
 // models were all at their usage limit, the resume ran a turn into the limit,
 // the turn was reverted, and the control topic NAKed the completion, which the
 // broker redelivered into the same limit 25 times in about ten minutes.
 
-// spentEntry is a model whose CLI already reported its usage limit, as
-// cliagent's entry knows it ([chain.Unready]), until the case lifts it. calls
+// spentEntry is a model whose harness already reported its usage limit, as
+// harness's entry knows it ([chain.Unready]), until the case lifts it. calls
 // counts what reached it, which a limit its entry knows should keep out.
 type spentEntry struct {
 	limited atomic.Bool
@@ -73,7 +73,7 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	r := newDrainRig(t)
 	e := r.start(t)
 	e.providerParks.after = (&fakeAlarms{}).after
-	spent := cliProvider(t, chainMember{key: "default", agent: "claude-code", model: "opus", spent: true})
+	spent := harnessProvider(t, chainMember{key: "default", agent: "claude-code", model: "opus", spent: true})
 	retry, _, limited := llm.LimitedUntil(spent.SittingOut())
 	if !limited {
 		t.Fatalf("the premise: the spent entry sits out nothing (%v)", spent.SittingOut())
@@ -239,7 +239,7 @@ func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	run := r.run(t, e, "t1")
 	payload := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: run.AgentHandle,
 		RoleName: run.Role, TurnID: run.TurnID, WorkKey: run.WorkKey, LaunchID: run.LaunchID,
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+		SandboxID: run.SandboxID, Harness: run.Harness}
 	err = e.sandbox.Load().coordinator.OnCompleted(t.Context(), payload,
 		events.New(payload, events.TraceContext{}))
 	var refused *sandbox.TurnRefused
@@ -302,7 +302,7 @@ func (m *midTurnLimit) limitedErr() error {
 		Err: errors.New("You've hit your 5-hour limit")}
 }
 
-// limitedResume is a drain rig whose swe seat's coding run has finished and
+// limitedResume is a drain rig whose swe seat's launch has finished and
 // whose resume has met the model's limit mid-turn, with the waiter stopped so
 // nothing but a signal can bring the kept completion back: the engine, the
 // model, how many times the gate admitted a resume, how many it had once the
@@ -404,7 +404,7 @@ func (lr *limitedResume) announce(t *testing.T) error {
 	run := lr.r.run(t, lr.e, "t1")
 	payload := types.ExecutorFinished{Agent: run.AgentID, AgentHandle: run.AgentHandle,
 		RoleName: run.Role, TurnID: run.TurnID, WorkKey: run.WorkKey, LaunchID: run.LaunchID,
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+		SandboxID: run.SandboxID, Harness: run.Harness}
 	return lr.e.sandbox.Load().coordinator.OnCompleted(t.Context(), payload,
 		events.New(payload, events.TraceContext{}))
 }
@@ -568,7 +568,7 @@ func (m *countedLimit) Complete(ctx context.Context, req llm.Request) (*llm.Comp
 // AGAIN AT ONCE. The seat's resume met the limit mid-turn and parked it, and its
 // node holds the job. A published company releases every park decided under the
 // models it replaces and re-fires the job; its entry, left unchanged by the
-// apply, keeps the sit-out its sign-in is serving (cliagent.Plans), so the job
+// apply, keeps the sit-out its sign-in is serving (harness.Plans), so the job
 // is collected again and its resume refused on that limit before its turn runs,
 // and the seat is parked on it once more, its probe armed: no review, no model
 // call, and no job collected and reviewed into the vendor's window once the

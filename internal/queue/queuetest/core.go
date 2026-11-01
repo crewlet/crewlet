@@ -360,7 +360,7 @@ func (s *suite) runCore(t *testing.T) {
 	// and node test runs on the twin, so for as long as the twin replayed a
 	// failure from the head they certified a seat that retried a failed
 	// message before its conversation's newer one — an order production never
-	// gives. A parked coding run's answer route and the ordinary turn's retry
+	// gives. A parked executor's answer route and the ordinary turn's retry
 	// were both written against it. One case, both backends, one answer.
 	//
 	// The mail is HELD while it is published, so both events are waiting

@@ -282,8 +282,8 @@ type unitRoomResult struct {
 // The chart is the only writer of a unit room's membership — every other
 // membership gesture is refused for this kind — so a room whose unit stopped
 // declaring it, or left the chart, kept its last members for good: agents
-// with FollowAll among them, woken into a coding run by every message posted
-// there, in a room no prompt names as theirs and nothing else
+// with FollowAll among them, woken into a turn, its executor in a box, by every
+// message posted there, in a room no prompt names as theirs and nothing else
 // could ever change. So every unit room NO unit in the chart declares —
 // [unitRoomOwner] answers nil, and a room another unit declares has followed
 // its channel there above — is emptied at this activation, under whatever
@@ -567,7 +567,7 @@ func unitRoomLead(chart *org.Organization, stored, room string) string {
 // because a person is addressable and runs no turn. Without that split, one
 // message in a division's room would be a turn for every agent beneath it —
 // every inheriting team's included, since a channel cascades down a whole
-// branch — each its own coding run in a box.
+// branch — each with its own executor in a box.
 //
 // DEDUPLICATED, because the lead is nearly always also a member of the subtree
 // and the record names each member once; SORTED so the record is the same

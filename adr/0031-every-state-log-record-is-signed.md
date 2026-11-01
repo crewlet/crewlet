@@ -174,7 +174,7 @@ and reply); a frame that does not open shows nobody.
 
 The coordination store stays outside the rule as a store: its writes are the
 coordinator's bookkeeping, decided between writers by compare-and-set. One
-value it holds is not bookkeeping. A person's answer to a coding run parked on
+value it holds is not bookkeeping. A person's answer to an executor parked on
 a question waits on the run's row until a node resumes the run, and the resumed
 turn hands it to the run's coding CLI as that person's words and names who gave
 them — an instruction, the same as a note to a running turn. So the node that
@@ -188,10 +188,10 @@ does not open as an answer to that question is never handed to a turn or
 attributed to anybody — it is logged at error and let go of, and the run waits
 on its question again. The detail is `internal/sandbox`'s (answerseal.go).
 
-## Amendment: a note to a coding run is sealed on its record
+## Amendment: a note to an executor is sealed on its record
 
-A person's note to a turn whose coding run is out waits on the run's record in
-the coordination store ([ADR-0067](0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)),
+A person's note to a turn whose executor is out waits on the run's record in
+the coordination store ([ADR-0067](0067-a-note-to-an-executor-waits-sealed-on-its-record.md)),
 and is still an instruction: the run's CLI or the review reads it as that
 person's words. So the node that files it seals it under the fleet keyring, in
 a key domain of its own (`seat.steer.note`), bound to the turn and the note's

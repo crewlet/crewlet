@@ -105,6 +105,10 @@ type Company struct {
 	// server from one.
 	MCPServers []MCPServer `yaml:"mcp_servers,omitempty" json:"mcp_servers,omitempty" desc:"Tool servers, stdio or http. Per-agent credentials live in role.mcp_env."`
 
+	// MCPRegistry is the community registry the dashboard searches beside
+	// the curated MCP catalogue; absent, there is none. See [MCPRegistry].
+	MCPRegistry MCPRegistry `yaml:"mcp_registry,omitempty" json:"mcp_registry,omitzero" desc:"The community MCP registry the dashboard searches beside the curated catalogue. Absent: none."`
+
 	// TokenBudget is the org-wide LLM token ceiling per calendar window,
 	// across every seat; a window it does not name is uncapped. Charged
 	// before a seat's own budget, so the first completion that would cross
@@ -278,10 +282,10 @@ func (c *Company) ValidateRunnable() error {
 // cannot draw or one on a human seat ([Company.validateAvatars]), a
 // providers.llm key outside its grammar or sharing another's credential bundle
 // variable ([Company.validateLLMKeys]), a
-// providers.llm entry's credential configured where its CLI never reads it or
+// providers.llm entry's credential configured where its harness never reads it or
 // handed over under a variable name no store can hold
 // ([LLMProvider.validateCredentials]), a model with no provider segment on a
-// CLI that reads one ([LLMProvider.validateModel]), a setup step writing a
+// harness that reads one ([LLMProvider.validateModel]), a setup step writing a
 // file a box it reaches refuses ([Company.validateSetupFileHomes]), an
 // executor box's `optional_keys` entry leaving nothing out
 // ([Company.validateRunOptionalKeys]),
@@ -296,7 +300,9 @@ func (c *Company) ValidateRunnable() error {
 // whose chain is held to its rules again wherever it is handed out, and the
 // per-seat access rules ([Company.validateSeatAccess]): every seat block says
 // whether it is on, holds access the vendor offers within the company's reach,
-// and writes no credential the engine manages.
+// and writes no credential the engine manages. And the community MCP
+// registry's address ([Company.validateMCPRegistry]), which only a search
+// reads.
 func (c *Company) ValidateAdmission() error {
 	o, index := c.organization()
 	return index.locate(c.validateAdmission(o))
@@ -309,7 +315,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateMCPNames(),
-		c.validateAssistant(), c.validateSeatAccess())
+		c.validateAssistant(), c.validateSeatAccess(), c.validateMCPRegistry())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See
@@ -937,7 +943,7 @@ func (b TrackerBackend) Valid() bool { return slices.Contains(TrackerBackends, b
 // DefaultSkillsContainer is the container tool-skill pages live in when the
 // config names none.
 //
-// "TS" is the key the publishing CLI writes into and the docs name, so a
+// "TS" is the key the publishing harness writes into and the docs name, so a
 // company that follows the guide works with nothing configured. It is a
 // RESERVED key on either backend: excluded from knowledge search and from
 // routing alike, because those pages are machinery and a seat told to read
@@ -1368,12 +1374,12 @@ func (c *Company) executorKeys() []string {
 }
 
 // describeChain renders chain as an operator reads it: each entry's path and
-// the CLI it drives.
+// the harness it drives.
 func (c *Company) describeChain(chain []string) string {
 	parts := make([]string, len(chain))
 	for i, key := range chain {
 		entry := c.Providers.LLM[key]
-		parts[i] = fmt.Sprintf("providers.llm.%s (%s)", key, entry.AgentName())
+		parts[i] = fmt.Sprintf("providers.llm.%s (%s)", key, entry.HarnessName())
 	}
 	return strings.Join(parts, ", ")
 }
@@ -1381,8 +1387,8 @@ func (c *Company) describeChain(chain []string) string {
 // validateExecutors refuses an agent seat whose executor chain has no member
 // that can run it.
 //
-// Every agent seat's executor is its coding CLI's own agentic run, and only a
-// CLI with an in-box runner can be one ([CodingAgents]). A launch walks the
+// Every agent seat's executor is its harness's own agentic run, and only a
+// harness with an in-box runner can be one ([ExecutorHarnesses]). A launch walks the
 // seat's chain for its first such member that is not sitting out and skips
 // the rest, so a chain with NONE never launches: the seat is placed, takes
 // its work, and fails every turn at launch. RUNNABLE for that reason — no
@@ -1394,11 +1400,11 @@ func (c *Company) describeChain(chain []string) string {
 // is refused there. A seat naming no configured key runs on the company's
 // fallback entry (the one called "default", else the first declared), which
 // is ONE entry for every such seat, so it is refused once, at that entry's
-// `agent`, naming the first seat that falls to it and how many more. Both
-// remedies are named because both are real: the entry can move to a CLI
+// `harness`, naming the first seat that falls to it and how many more. Both
+// remedies are named because both are real: the entry can move to a harness
 // that runs, or the seat's `llm` can point at one that does — and the other
-// CLI stays the seat's reviewer, workers or side passes through llm_review,
-// llm_subagent, llm_auxiliary or llm_judge, which any CLI can serve.
+// harness stays the seat's reviewer, workers or side passes through llm_review,
+// llm_subagent, llm_auxiliary or llm_judge, which any harness can serve.
 func (c *Company) validateExecutors() error {
 	var p problems
 	type fallen struct {
@@ -1414,12 +1420,12 @@ func (c *Company) validateExecutors() error {
 		if seat.own {
 			p.add(at(seat.path, "llm"), ErrConflict,
 				"this seat's executor chain is %s, and no member of it can run the "+
-					"executor: a seat's executor is its coding CLI's own run, which "+
-					"only %s have. Point `llm` at an entry with agent: claude-code or "+
+					"executor: a seat's executor is its harness's own run, which "+
+					"only %s have. Point `llm` at an entry with harness: claude-code or "+
 					"opencode (and keep these entries for the reviewer, workers and "+
 					"side passes with llm_review, llm_subagent, llm_auxiliary or "+
 					"llm_judge), or move one of them to claude-code or opencode",
-				c.describeChain(seat.chain), words.And(CodingAgents))
+				c.describeChain(seat.chain), words.And(ExecutorHarnesses))
 			continue
 		}
 		if seat.named {
@@ -1454,13 +1460,13 @@ func (c *Company) validateExecutors() error {
 		case f.more > 1:
 			seats += fmt.Sprintf(", and %d more seats do too", f.more)
 		}
-		p.add(at(entryPath(key), "agent"), ErrConflict,
+		p.add(at(entryPath(key), "harness"), ErrConflict,
 			"a seat that names no `llm` runs its executor on this entry, %s, and it "+
 				"drives %s, which cannot run an executor: a seat's executor is its "+
-				"coding CLI's own run, which only %s have. %s. Move this entry to "+
+				"harness's own run, which only %s have. %s. Move this entry to "+
 				"claude-code or opencode, or point those seats' `llm` at an entry "+
 				"that drives one",
-			which, entry.AgentName(), words.And(CodingAgents), seats)
+			which, entry.HarnessName(), words.And(ExecutorHarnesses), seats)
 	}
 	return p.err()
 }
@@ -1471,7 +1477,7 @@ func (c *Company) validateExecutors() error {
 // A WARNING AND NOT A RULE, because the chain is valid: a launch skips the
 // member and runs on the rest, and the member still serves every text phase
 // that falls back to `llm` — the reviewer, workers, side passes and
-// onboarding — which any CLI can. What the author should still know is that
+// onboarding — which any harness can. What the author should still know is that
 // the executor never falls back to it, so a chain written as "Claude, then
 // Codex when Claude's plan is spent" falls back to nothing. AT THE SEAT'S
 // `llm`, which is where either reading is written.
@@ -1490,11 +1496,11 @@ func (c *Company) executorWarnings() []Warning {
 		}
 		handle := seat.role.Seat().Handle()
 		w := advisory(at(seat.path, "llm"), fmt.Sprintf("%s's executor never runs on "+
-			"%s: a seat's executor is its coding CLI's own run, which only %s have, "+
+			"%s: a seat's executor is its harness's own run, which only %s have, "+
 			"so a launch skips it and runs on %s alone. That is fine if it is there "+
 			"for the reviewer, workers and side passes, which fall back to `llm`; "+
 			"otherwise take it out",
-			handle, c.describeChain(skipped), words.And(CodingAgents), c.describeChain(runners)))
+			handle, c.describeChain(skipped), words.And(ExecutorHarnesses), c.describeChain(runners)))
 		w.Seat = handle
 		out = append(out, w)
 	}
@@ -1545,7 +1551,7 @@ func (c *Company) validateSandboxPlacement() error {
 				seats += fmt.Sprintf(", and %d more seats do too", more)
 			}
 			p.add(field("providers.sandbox"), ErrMissing,
-				"every agent seat's executor runs as its coding CLI's own run, in a "+
+				"every agent seat's executor runs as its harness's own run, in a "+
 					"box this block configures, and this company configures none: %s. "+
 					"Add providers.sandbox: `local: {}` with `default_run_in: direct` "+
 					"runs it on this host as the engine's user, `e2b:` in a remote box",
@@ -1618,7 +1624,7 @@ func (c *Company) validateSandboxPlacement() error {
 		if named, wanted := reached[PlacementContainer]; wanted && strings.TrimSpace(local.Image) == "" {
 			p.add(field("providers.sandbox.local.image"), ErrMissing,
 				"%s runs in a container, so the local backend needs an image "+
-					"with the coding-agent CLI installed", named)
+					"with the harness installed", named)
 		}
 		if _, wanted := reached[PlacementContainer]; !wanted {
 			for _, unread := range local.containerOnly() {

@@ -340,7 +340,7 @@ A few things worth knowing when deploying Crewlet:
   only answer the question their asker put — history, search, a seat's
   memory, a sandbox's tail — are not signed. Keep both ports on a private network. The decision is
   [ADR-0031](adr/0031-every-state-log-record-is-signed.md), and the note's
-  [ADR-0067](adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md).
+  [ADR-0067](adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md).
 - **Removing a person erases their values from every data node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,

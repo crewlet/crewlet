@@ -5,7 +5,7 @@ package sandbox
 // Every process a local box runs descends from the engine, and a child takes
 // its parent's oom_score_adj: the kernel's bias, in thousandths of the memory
 // it is choosing for, when it picks a process to kill because that memory ran
-// out. Left at the engine's own, a coding CLI and the builds it runs competed
+// out. Left at the engine's own, a harness and the builds it runs competed
 // with the engine on size alone, and the engine — the embedded broker, the
 // store and every turn on the node — is usually the largest process on its
 // host, so the kernel took the node to spare a run. A box is the most

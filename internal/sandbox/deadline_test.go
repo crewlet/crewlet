@@ -19,12 +19,12 @@ func (r *waiterRig) launchUntil(turnID string, deadline time.Time) PendingRun {
 	}
 	if _, err := r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: sweID, Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: r.now, Deadline: deadline,
+		Harness: "claude-code", CreatedAt: r.now, Deadline: deadline,
 	}, rigLease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
-		SandboxID: box.ID(), CommandID: "cmd-1", CodingAgent: "claude-code",
+		SandboxID: box.ID(), CommandID: "cmd-1", Harness: "claude-code",
 	}, rigLease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}

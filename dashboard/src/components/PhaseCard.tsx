@@ -710,9 +710,9 @@ function LaunchBody({ record }: { record: PhaseRecord }) {
  * CLI said its own loop took, or the mark that it said none.
  */
 function LaunchTurns({ record }: { record: PhaseRecord }) {
-  return record.cliTurns > 0 ? (
+  return record.harnessTurns > 0 ? (
     <span className="phase-meta t-num" title="the model turns its CLI's own loop took">
-      {plural(record.cliTurns, "turn")}
+      {plural(record.harnessTurns, "turn")}
     </span>
   ) : (
     <span className="phase-meta" title="its CLI reported no turns">
@@ -749,9 +749,9 @@ function Launches({ launches, now }: { launches: readonly PhaseRecord[]; now: nu
                 <span className="run-name">
                   {launches.length > 1 ? `Launch ${i + 1}` : "Launch"}
                 </span>
-                {l.codingAgent && (
+                {l.harness && (
                   <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
-                    {l.codingAgent}
+                    {l.harness}
                   </Tag>
                 )}
                 {l.model && (
@@ -985,9 +985,9 @@ export function PhaseCard({
             executor that collected a run and on each launch's own record. A
             phase that ran on the engine host names neither, so it has no
             badge. */}
-        {(record.codingAgent !== "" || record.sandboxId !== "") && (
+        {(record.harness !== "" || record.sandboxId !== "") && (
           <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
-            {record.codingAgent || "sandbox"}
+            {record.harness || "sandbox"}
           </Tag>
         )}
         {record.failed && <Tag variant="danger">{failureWords(record.errorKind).tag}</Tag>}

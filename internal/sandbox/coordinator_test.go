@@ -393,7 +393,7 @@ func (r *coordRig) completion(turnID string) (types.ExecutorFinished, *events.Ev
 	payload := types.ExecutorFinished{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, LaunchID: run.LaunchID,
-		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent,
+		SandboxID: run.SandboxID, Harness: run.Harness,
 	}
 	return payload, events.New(payload, events.TraceContext{TraceID: run.TraceID})
 }
@@ -402,7 +402,7 @@ func (r *coordRig) completion(turnID string) (types.ExecutorFinished, *events.Ev
 // the busy gate
 // ---------------------------------------------------------------------
 
-// A coding job can run for hours, far past any broker ack window, so its
+// An executor can run for hours, far past any broker ack window, so its
 // seat's mail is parked rather than consumed and held.
 func TestALaunchedRunParksTheSeatsMail(t *testing.T) {
 	t.Parallel()
@@ -588,7 +588,7 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 // job's ONLY segment — days later, possibly on another node, with nothing
 // collected. The job's tokens therefore travel on the row with its question,
 // or the turn's work item is charged for the collection and never for the
-// coding run that asked.
+// launch that asked.
 func TestAParkedJobsTokensReachTheAnswersResume(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -1131,7 +1131,7 @@ func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 // A RELAUNCH CONTINUES IN THE BOX ITS TURN LEFT. A reviewer that sends the
 // work back relaunches the executor on the same work, and the checkout is the
 // expensive half of a run: the collect pauses the box rather than tearing it
-// down, and the relaunch — the same CLI in the same cell — reattaches to it
+// down, and the relaunch — the same harness in the same cell — reattaches to it
 // rather than provisioning beside it.
 //
 // THROUGH THE REAL LAUNCH, not a hand-written status flip: a case that set the
@@ -1215,12 +1215,12 @@ func TestARelaunchWhoseBoxIsGoneStartsInAFreshOne(t *testing.T) {
 	}
 }
 
-// A RELAUNCH ON ANOTHER CLI RECLAIMS THE BOX IT LEAVES. Launch-time fallback
-// picks a member at every launch, so a turn's next job can run another CLI
-// than its last — which the box was installed for and no other CLI can run in.
+// A RELAUNCH ON ANOTHER HARNESS RECLAIMS THE BOX IT LEAVES. Launch-time fallback
+// picks a member at every launch, so a turn's next job can run another harness
+// than its last — which the box was installed for and no other harness can run in.
 // The attach overwrites the row's reference, so a box the relaunch walked
 // away from was named by nothing: no settle, no reaper would ever reclaim it.
-func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
+func TestARelaunchOnAnotherHarnessReclaimsTheBoxItLeaves(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	opencode := NewFakeRunner("opencode")
@@ -1236,7 +1236,7 @@ func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
 	var relaunch LaunchResult
 	rig.resumer.during = func(ctx context.Context, r PendingRun) {
 		req := launchReq(r.TurnID)
-		req.Spec.CodingAgent = "opencode"
+		req.Spec.Harness = "opencode"
 		res, err := rig.launchVia(ctx, m, req)
 		if err != nil {
 			t.Errorf("relaunch: %v", err)
@@ -1250,7 +1250,7 @@ func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	if relaunch.Reused || relaunch.SandboxID == run.SandboxID {
-		t.Fatalf("relaunch = %+v, want a fresh box for the other CLI", relaunch)
+		t.Fatalf("relaunch = %+v, want a fresh box for the other harness", relaunch)
 	}
 	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
 		t.Fatalf("killed %v, want the claude-code box %q reclaimed as the opencode job "+
@@ -1260,9 +1260,9 @@ func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
 		t.Fatalf("the opencode runner started %d jobs, want the relaunch", len(opencode.Started()))
 	}
 	got := rig.get("t1")
-	if got.SandboxID != relaunch.SandboxID || got.CodingAgent != "opencode" {
+	if got.SandboxID != relaunch.SandboxID || got.Harness != "opencode" {
 		t.Fatalf("row = box %q on %q, want the relaunch's box %q on opencode",
-			got.SandboxID, got.CodingAgent, relaunch.SandboxID)
+			got.SandboxID, got.Harness, relaunch.SandboxID)
 	}
 }
 
@@ -1338,8 +1338,8 @@ func TestARelaunchIntoAnotherCellMovesTheRowWithIt(t *testing.T) {
 	}
 }
 
-// THE LAUNCH WINDOW. A coding job can finish between the launch starting it
-// and the turn writing the conversation a resume re-enters — a few
+// THE LAUNCH WINDOW. An executor's job can finish between the launch starting
+// it and the turn writing the conversation a resume re-enters — a few
 // milliseconds on an idle host, hundreds on a loaded one, and every trivial
 // run is a candidate. Claiming there hands the coordinator a run it cannot
 // resume, and its only honest answer to that is to fail the turn: the agent's
@@ -1972,7 +1972,7 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 		}
 		completion := types.ExecutorFinished{
 			AgentHandle: next.AgentHandle, TurnID: next.TurnID, LaunchID: next.LaunchID,
-			SandboxID: next.SandboxID, CodingAgent: next.CodingAgent,
+			SandboxID: next.SandboxID, Harness: next.Harness,
 		}
 		if err := rig.coordinator.OnCompleted(ctx, completion, events.New(completion, events.TraceContext{})); err != nil {
 			t.Errorf("the next job's completion: %v", err)
@@ -2250,7 +2250,7 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 			rig.launch("t1")
 			if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
 				SandboxID: rig.get("t1").SandboxID, CommandID: "cmd-1",
-				CodingAgent: "claude-code", PauseTTLSec: ttl,
+				Harness: "claude-code", PauseTTLSec: ttl,
 			}, Fence{}); err != nil {
 				t.Fatalf("AttachSandbox: %v", err)
 			}
@@ -2360,7 +2360,7 @@ func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 1000})
 	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, r PendingRun) {
-		rig.runner.StartErr = errors.New("the coding agent would not start")
+		rig.runner.StartErr = errors.New("the harness would not start")
 		req := launchReq(r.TurnID)
 		if _, err := rig.launchVia(ctx, rig.manager, req); err == nil {
 			t.Error("the relaunch started a job the fixture refuses")
@@ -3792,7 +3792,7 @@ func TestAZeroPauseTtlTearsTheBoxDownTheMomentTheRunBlocks(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
-		SandboxID: run.SandboxID, CodingAgent: "claude-code", PauseTTLSec: 0,
+		SandboxID: run.SandboxID, Harness: "claude-code", PauseTTLSec: 0,
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -4467,7 +4467,7 @@ func (w *finishWitness) Finish(ctx context.Context, turnID, ending string) (Pend
 
 // EVERY ANNOUNCEMENT CARRIES THE UNIT OF WORK the row was launched for.
 //
-// A coding run is detached: the row is read minutes or days later, possibly
+// An executor runs detached: the row is read minutes or days later, possibly
 // on another node, with no trigger left to re-derive the key from, so the
 // row's WorkKey is the only place it survives. The completion, the question
 // and the failure are the three gestures a resumed turn's identity travels

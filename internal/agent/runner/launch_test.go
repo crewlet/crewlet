@@ -63,7 +63,7 @@ func (l *playLauncher) last(t *testing.T) runner.AgentRunRequest {
 	return l.reqs[len(l.reqs)-1]
 }
 
-// run is what a fake executor run does: the calls its CLI makes over the
+// run is what a fake executor run does: the calls its harness makes over the
 // bridge, in order, and the closing text it ends on.
 type run struct {
 	calls []llm.ToolCall
@@ -243,7 +243,7 @@ func TestAnAnswerCarriesTheRunOnRatherThanReportingIt(t *testing.T) {
 // A CARRIED-ON RUN IS SERVED THE SURFACE THE ASKING RUN LEFT, and may cite
 // what it delivered. The run that asked activated tools and made deliveries
 // over the bridge after its launch recorded the park, and the run carrying it
-// on — the same round, often the same CLI session — goes on calling those
+// on — the same round, often the same harness session — goes on calling those
 // tools and reports those deliveries. Rebuilt from the launch's record alone,
 // a tool it activated was refused as inactive; judged against the relaunch's
 // own calls alone, its submission citing a delivery made before the question

@@ -173,7 +173,7 @@ const (
 	//
 	// A PERSON'S DECISION ABOUT A SEAT, and never a seat's: pausing one,
 	// resuming one, sending a note to the turn it is running, answering
-	// the question a coding run it launched parked on. Each is decided on
+	// the question an executor it launched parked on. Each is decided on
 	// the SEAT the gesture is about, by the owner-or-lead class — the
 	// seat's holder, whoever leads it, or admin — and
 	// each is decided INSIDE its tool, because the seat is never simply

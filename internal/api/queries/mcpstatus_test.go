@@ -16,7 +16,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // mcpCompany declares a shared server, a per-seat template and a server no
@@ -71,7 +71,10 @@ func mcpSources(t *testing.T, backend coord.Backend) queries.Sources {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return queries.Sources{Coord: backend, Company: companySource(t, cfg)}
+	return queries.Sources{
+		Coord: backend, Company: companySource(t, cfg),
+		Builtins: func() []queries.ToolRow { return catalogueBuiltins() },
+	}
 }
 
 // mcpFleet is two reporting nodes and one whose last heartbeat carried no
@@ -121,7 +124,7 @@ func mcpFleet(t *testing.T) coord.Backend {
 
 // longGitHubTool is a name github's tool_prefix pushes one character over
 // the longest a coding CLI can hand its model.
-var longGitHubTool = "gh_" + strings.Repeat("x", cliprofile.ToolNameMax()-2)
+var longGitHubTool = "gh_" + strings.Repeat("x", harnessprofile.ToolNameMax()-2)
 
 // A SERVER'S TOOLS LOST TO THEIR NAMES ARE ONE LIST ACROSS THE FLEET, each
 // tool once however many nodes name it, sorted, each with the engine's
@@ -505,6 +508,8 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 		cells = append(cells, rowsOf(t, s["nodes"])...)
 	}
 	holdShape(t, "McpServerNode", cells, false)
+	holdShape(t, "BuiltinGroup", rowsOf(t, body["builtin"]), false)
+
 	var refused, shadowed []map[string]any
 	for _, s := range servers {
 		refused = append(refused, rowsOf(t, s["refused_tools"])...)
@@ -552,4 +557,41 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// A SERVER IS DRAWN AS THE CATALOGUE ENTRY IT IS, by its address or its
+// command, and by its own name with no mark where the catalogue knows it not.
+func TestAServerRowNamesTheCatalogueEntryItIs(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+mcp_servers:
+  - name: code
+    transport: http
+    shared: false
+    url: https://api.githubcopilot.com/mcp/
+  - name: db
+    command: uvx
+    args: ["postgres-mcp==0.3.0", "--access-mode=restricted"]
+  - name: wiki
+    transport: http
+    url: https://wiki.example.com/mcp
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", nil)
+	answer := askMCPStatus(t, queries.Sources{Coord: backend, Company: companySource(t, cfg)})
+	for _, want := range []queries.MCPServerRow{
+		{Name: "code", Title: "GitHub", Catalogue: "github", Vendor: "github"},
+		{Name: "db", Title: "PostgreSQL", Catalogue: "postgres", Vendor: "postgresql"},
+		{Name: "wiki", Title: "wiki"},
+	} {
+		row := serverRow(t, answer, want.Name)
+		if row.Title != want.Title || row.Catalogue != want.Catalogue || row.Vendor != want.Vendor {
+			t.Errorf("%s is drawn as %q, %q, %q; want %q, %q, %q", want.Name, row.Title, row.Catalogue,
+				row.Vendor, want.Title, want.Catalogue, want.Vendor)
+		}
+	}
 }

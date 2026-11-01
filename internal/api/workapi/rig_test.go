@@ -563,7 +563,7 @@ func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *ope
 }
 
 // noRunRecords is the run records the rig's steer control files a note on: a
-// fleet in which no turn has launched its coding run.
+// fleet in which no turn has launched its executor.
 type noRunRecords struct{}
 
 func (noRunRecords) Seat(context.Context, string) (builtin.RunSeat, bool, error) {

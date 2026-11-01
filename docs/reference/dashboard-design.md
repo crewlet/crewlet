@@ -4142,7 +4142,7 @@ reader (`chat_unfurls`, with an address the engine built), an address of an app
 the dashboard knows unfurls into its mark, name and reference, every other is
 the address token, and one whose scheme the allowlist refuses is its words.
 An executor's question is read so wherever it is answered: its Answer dialog
-(`components/writes.tsx`), opened from Live › Runs, a seat's page and every
+(`components/writes.tsx`), opened from Live › Executors, a seat's page and every
 decision row, reads the run's context and reasoning `checked`.
 An outbound link a token makes opens a tab with `rel="noopener noreferrer"`
 and says so to a screen reader, as every outbound link in rendered Markdown

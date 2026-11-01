@@ -40,7 +40,7 @@ func TestAPeersTailClassesItsOwnBlipAsAWait(t *testing.T) {
 	ctx := t.Context()
 	runs := sandbox.NewCoordStore(coordmem.NewFleet())
 	if _, err := runs.BeginLaunch(ctx, sandbox.PendingRun{
-		TurnID: "t1", AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
+		TurnID: "t1", AgentHandle: "swe", Role: "SWE", Harness: "claude-code",
 		SandboxID: "box-1", Placement: string(sandbox.Direct), CommandID: "cmd-1",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatal(err)

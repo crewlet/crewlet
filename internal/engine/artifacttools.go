@@ -26,7 +26,7 @@ import (
 // for the operator catalogue, over the artifacts estate through the router (a
 // node without `data` acts through a data node), the node's one publish
 // pipeline, the running chart, the identity directory for whoever a turn is
-// acting for, and the coding run's box a publish reads.
+// acting for, and the executor's box a publish reads.
 
 // ArtifactToolDeps are the artifacts tools' dependencies on this node, or the
 // zero value (which serves none of them) where the node takes no artifact
@@ -159,14 +159,14 @@ func (r artifactRequesters) Requester(ctx context.Context, handle string) (iam.P
 	return p, nil
 }
 
-// ---- the coding run's box ------------------------------------------------ //
+// ---- the executor's box -------------------------------------------------- //
 
-// artifactBoxes attaches the box of the coding run working in a turn, for a
+// artifactBoxes attaches the box of the executor working in a turn, for a
 // publish reading its build.
 //
 // THE RUN READS ITS OWN BOX, WHILE IT WORKS. A seat's executor is its coding
-// CLI's own run in that box, and every call that names a box source reaches
-// here from its CLI over the tool bridge — a worker it delegates to holds no
+// harness's own run in that box, and every call that names a box source reaches
+// here from its harness over the tool bridge — a worker it delegates to holds no
 // artifact write — while the run's record reads running: a collected run's
 // resumed segment calls no artifact tool (its reviewer holds one submission
 // tool, and the delivery check none). So a running record is the one a box is
@@ -209,7 +209,7 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 	// timer to its own, under the waiter that keeps it — where a reader
 	// changes nothing. A box paused under a running record is a collection
 	// that has not moved the record on yet: its run is over.
-	box, _, err := manager.Attach(ctx, sandbox.Placement(row.Placement), row.SandboxID, row.CodingAgent)
+	box, _, err := manager.Attach(ctx, sandbox.Placement(row.Placement), row.SandboxID, row.Harness)
 	switch {
 	case errors.Is(err, sandbox.ErrBoxGone), errors.Is(err, sandbox.ErrBoxPaused):
 		return nil, fmt.Errorf("%w: %w", builtin.ErrNoBox, err)

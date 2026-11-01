@@ -15,7 +15,7 @@ import (
 //
 // # Why a recovered run needs it
 //
-// The box keeps calling the seat's tools for as long as its CLI runs, over a
+// The box keeps calling the seat's tools for as long as its harness runs, over a
 // session that lived in the process that launched it. That process can
 // restart, or lose the seat to a peer, while the box is still working — and
 // then every bridged call was refused and the rest of the run was done blind:
@@ -123,7 +123,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 
 	// THE RUN'S CONTEXT, as its launch had it: its trace, and the seat a
 	// model call made inside one of its calls — a delegated worker's — runs
-	// its CLI as.
+	// its harness as.
 	ctx = parkedRunContext(ctx, run)
 
 	input, _, err := e.parkedTurnRunner(ctx, company, resumeInput{

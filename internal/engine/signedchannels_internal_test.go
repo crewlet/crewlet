@@ -18,7 +18,7 @@ import (
 // holding its session, and the Dashboard Assistant's replays and stops — and
 // none of them in a state log's. So does a person's answer to a parked run,
 // sealed onto the run's row and handed to the resumed run as their words, and
-// a note to a turn whose coding run is out, sealed onto the run's row with the
+// a note to a turn whose executor is out, sealed onto the run's row with the
 // seat anchor a person's authority to send one is decided on. And so do the
 // sealed channels that are no instruction: presence, which a node displays as
 // a person in a room; the live relay, whose answers a node pushes to its

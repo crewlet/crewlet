@@ -680,9 +680,11 @@ reaches the engine perfectly well.
   through their apps, and which setting makes events arrive.
 
 What counts as reachable depends on where GitHub runs. github.com reaches only
-the public internet: a loopback, private, link-local or unspecified address, a
-single-label name and the `localhost`, `.local`, `.internal`, `.lan` and
-`.home.arpa` names are not reachable. An Enterprise Server runs inside the
+the public internet: an address it does not route (loopback, private,
+link-local, unspecified, carrier-grade NAT such as a tailnet's `100.x`
+addresses, and the documentation and other reserved ranges), a single-label
+name and the `localhost`, `.local`, `.internal`, `.lan` and `.home.arpa` names
+are not reachable. An Enterprise Server runs inside the
 company's network, so there only the server's own loopback, an unspecified
 address and `localhost` are refused.
 

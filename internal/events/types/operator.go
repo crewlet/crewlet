@@ -98,7 +98,7 @@ const (
 	TransportMCP = "mcp"
 	// TransportWork is the human write surface's routes, `/worklet/…`,
 	// `/doclet/pages/…` and `/chatlet/…` (internal/api/workapi): the scriptable
-	// resource REST a CLI or a script writes through, which calls the
+	// resource REST a harness or a script writes through, which calls the
 	// same dispatch rather than the tools directly, and whose verbs with
 	// no tool are recorded under it too.
 	TransportWork = "work"

@@ -4,7 +4,7 @@
 // path.
 //
 // ONE PHASE REACHES IT: onboarding, the only engine-driven phase with a
-// ceiling above its round budget. The executor is its coding CLI's own run,
+// ceiling above its round budget. The executor is its harness's own run,
 // bounded by the run's own turn cap rather than by engine rounds; the reviewer
 // runs on a fixed budget with no ceiling, and a worker's loop has no
 // extension.

@@ -30,7 +30,7 @@ import (
 // # The shape is internal/decision's, the record is this package's
 //
 // The value and its structural contract are [decision.Decision], shared with
-// the ask a coding run parks on (ADR-0068), so an agent asks a person in one
+// the ask an executor parks on (ADR-0068), so an agent asks a person in one
 // shape wherever it asks from. What this file adds is what only the tracker
 // can check: that a cited task and page exist ([ValidateDecision]), that a
 // decision rides only the comment that asks and an `inform` only an agent

@@ -215,7 +215,7 @@ func TestInheritTakesOnlyTheAllowlist(t *testing.T) {
 
 // A BOX REPLACES WHERE ITS CHILD KEEPS ITS FILES, so the base allowlist must
 // not carry the engine user's own: a box consumer that inherited HOME and then
-// forgot to overwrite one XDG directory would have a coding agent writing its
+// forgot to overwrite one XDG directory would have a harness writing its
 // login into the engine user's real dotfiles. The host user's locations are a
 // separate list a child that runs in no box asks for by name.
 func TestTheBaseAllowlistCarriesNoneOfTheHostUsersLocations(t *testing.T) {
@@ -456,7 +456,7 @@ func TestReplaceFileInLeavesNothingStagedWhenItsRenameFails(t *testing.T) {
 // docs/guides/tools-and-mcp.md tells an operator exactly which host variables
 // a tool server receives, so they know which ones to declare — and it is a
 // copy of [PassthroughEnv], [HostUserEnv] and the container runtime's rule,
-// written in another file in another language. Copies drift: the CLI backend's
+// written in another file in another language. Copies drift: the harness backend's
 // own copy of the allowlist had already disagreed with this one by five names.
 // So each row's names are read out of the page and held to the Go list in BOTH
 // directions — a name added here and not there, or published and never passed.

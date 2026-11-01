@@ -2081,7 +2081,7 @@ func TestAnEditThatNamesAColleagueSubscribesThemToTheThread(t *testing.T) {
 // you. Every gesture that withdraws a name has to take it back — an edit that
 // drops the name, a delete, an erase — or a colleague named by mistake and
 // corrected away a minute later is woken by every reply the thread ever gets,
-// each its own coding run in a box, with no unfollow in this build's
+// each its own launch in a box, with no unfollow in this build's
 // vocabulary to stop it. And a follow is the THREAD's, not the
 // message's, so a seat the root or another reply still names keeps it.
 func TestANameTakenBackStopsTheThreadWakingWhomItNamed(t *testing.T) {

@@ -76,7 +76,7 @@ import (
 // that server's tools and nothing else: the seat still has its builtins, the
 // other servers still work, and the operator surface shows the group missing
 // rather than the builtins mysteriously shrinking. Refusing the seat instead
-// would take a company offline because one vendor's CLI was slow to install.
+// would take a company offline because one vendor's harness was slow to install.
 
 // startSharedServers brings up the company-wide children for an epoch.
 //
@@ -752,7 +752,7 @@ func (e *Engine) withheldForCredentials(ctx context.Context, outcomes []mcpOutco
 // whatever the transport, and an http connection reads no environment
 // ([mcp.Spec.Headers]), so every seat's child of a per-role http server — the
 // remote GitHub server a seat reaches with its own `Authorization: Bearer …` —
-// connected with the template's headers alone. A coding agent's box is given
+// connected with the template's headers alone. A harness's box is given
 // the same server from the same values ([sandboxMCP]).
 //
 // AND AT THE ADDRESS IT WILL BE DIALLED AT, held to the rule a document is

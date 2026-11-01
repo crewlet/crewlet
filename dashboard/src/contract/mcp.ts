@@ -9,6 +9,8 @@
  * state union included.
  */
 
+import type { ToolRow } from "./tools.ts";
+
 /**
  * A server's condition across the fleet, decided by the engine. `disabled`:
  * the configuration turns it off (`enabled: false`), so nothing is started for
@@ -59,6 +61,13 @@ export interface McpServerNode {
 /** One server. */
 export interface McpServerStatus {
   name: string;
+  /** The curated catalogue entry's title where the engine recognises the
+   *  server by its address or its command, else the server's name. */
+  title: string;
+  /** That entry's key, or "" for a server the catalogue does not know. */
+  catalogue: string;
+  /** The vetted vendor mark to draw, or "" for the generic server glyph. */
+  vendor: string;
   /** False for a server a node reports and this configuration does not carry. */
   configured: boolean;
   /** One instance for the company, rather than one per seat granted it. */
@@ -108,6 +117,19 @@ export interface McpServerStatus {
 }
 
 /**
+ * One shelf of the built-in catalogue: the engine's own tools as a seat is
+ * offered them, filed and worded by the engine.
+ */
+interface BuiltinGroup {
+  key: Exclude<ToolRow["group"], "">;
+  label: string;
+  /** One line about what the shelf's tools are for. */
+  description: string;
+  /** In the catalogue's order, each naming who may call it (`gate`). */
+  tools: ToolRow[];
+}
+
+/**
  * Why a tool is not offered under its name. `characters`: the name holds one
  * a model's tool name cannot (only letters, digits, `_` and `-`). `too_long`:
  * with the server's `tool_prefix`, it is longer than a coding CLI's prefix
@@ -140,4 +162,10 @@ export interface McpServersStatusAnswer {
   servers: McpServerStatus[];
   /** The live nodes in id order: the columns every server is drawn against. */
   nodes: McpStatusNode[];
+  /**
+   * The engine's built-ins, shelf by shelf in the catalogue's order. A shelf
+   * the company offers no tool of (Worklet's on a company running Jira) is
+   * left out.
+   */
+  builtin: BuiltinGroup[];
 }

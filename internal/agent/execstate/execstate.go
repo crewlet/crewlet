@@ -1,7 +1,7 @@
 // Package execstate is the wire format for a turn parked on its executor's
 // run.
 //
-// Every seat's executor is its coding CLI's own agentic run, detached in a box
+// Every seat's executor is its harness's own agentic run, detached in a box
 // and minutes to hours long. The turn that launched it does not wait for it:
 // it parks, and is re-entered when the run is collected — after a restart,
 // possibly on another node, possibly days later once a person answers a
@@ -69,7 +69,7 @@ import (
 // is.
 //
 // It is 4 because 2 and 3 described a parked engine conversation — a tool
-// loop stopped on an unanswered call, 3 the one a CLI drove over MCP — with a
+// loop stopped on an unanswered call, 3 the one a harness drove over MCP — with a
 // flag marking the states that were not one. Every state is a parked run now
 // and the conversation is gone, so a build that read a new row as 3 would
 // take it for a conversation with no messages; a number is never reused, so a

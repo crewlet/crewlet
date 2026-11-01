@@ -13,9 +13,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// Who a parked coding run's question is put to.
+// Who a parked executor's question is put to.
 //
-// The coding agent names its audience in its own words — `requester`,
+// The harness names its audience in its own words — `requester`,
 // `manager`, `team`, or a colleague's name — and until this existed nothing
 // resolved that label: every parked question in the company was visible to
 // everybody and none of them said whose it was. So the park resolves it once,
@@ -59,7 +59,7 @@ const (
 
 // exactTiers are the colleague match methods a NAMED audience may resolve
 // through. Only these, never a substring or a fuzzy match: a question is put
-// to a person on a coding agent's say-so, and a guessed person is somebody
+// to a person on a harness's say-so, and a guessed person is somebody
 // else's question in their inbox. A name that resolves only approximately is
 // a name the chart does not have, and the question falls back.
 var exactTiers = []colleague.Method{

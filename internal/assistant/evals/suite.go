@@ -93,7 +93,7 @@ type Expect struct {
 	// answer (ADR-0059), which the turn's frames cannot show: a refusal's
 	// sentence reaches the model and no card. Judged against a scripted
 	// model, which hears every answer; a live model's answers travel inside
-	// its own CLI, and the expectation is not judged there.
+	// its own harness, and the expectation is not judged there.
 	Refusals [][]string `yaml:"refusals"`
 }
 

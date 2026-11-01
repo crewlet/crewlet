@@ -2,12 +2,11 @@ package config
 
 import (
 	"maps"
-	"net/url"
-	"path"
 	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -26,15 +25,16 @@ import (
 // serve` reads GITLAB_TOKEN where another GitLab server reads
 // GITLAB_PERSONAL_ACCESS_TOKEN, and Slack's community server reads
 // SLACK_MCP_XOXB_TOKEN. So an `mcp_servers` entry declares what it reads
-// ([MCPServer.SeatCredentials]), and the table below supplies the declaration
-// for the servers this build recognises by their command or their address
-// ([SeatToolBindings]). A per-seat server named after an integration with
+// ([MCPServer.SeatCredentials]), and the MCP catalogue supplies the
+// declaration for the servers this build recognises by their command or their
+// address ([catalogue.SeatKeysFor]): ONE recognition, which also names the
+// entry and the vendor mark a server is drawn with. A per-seat server named after an integration with
 // neither is reported ([Company.UnboundSeatServers]): it would start, and act
 // as nobody.
 //
 // BOUND WHERE THE ORG MODEL IS BUILT ([Company.organization]), the one place
 // every reader of a seat's tool environment takes it from: the engine starting
-// a seat's server, a coding run's box, [MCPServer.Grants] and the org
+// a seat's server, an executor's box, [MCPServer.Grants] and the org
 // projection.
 
 // SeatCredential is one seat credential a per-seat server reads, as an
@@ -87,129 +87,19 @@ func SeatCredentialKind(lane string) string {
 	return lane
 }
 
-// SeatToolKey is one credential field and the key a recognised server reads it
-// under, by transport.
-type SeatToolKey struct {
-	Field  string
-	Env    string
-	Header string
-	Prefix string
-}
-
-// SeatToolBinding is a recognised server's declaration: which integration's
-// seat credential it reads, under which keys.
-type SeatToolBinding struct {
-	// Vendor is the integration, and Server the name such a server is
-	// conventionally declared under.
-	Vendor string
-	Server string
-	Keys   []SeatToolKey
-
-	// match recognises the server by its command or its address.
-	match func(*MCPServer) bool
-}
-
-// SeatToolBindings is every server this build recognises, the conventional one
-// per integration first.
-func SeatToolBindings() []SeatToolBinding {
-	return []SeatToolBinding{
-		{Vendor: "datadog", Server: "datadog", match: hostUnder(DatadogSites...), Keys: []SeatToolKey{
-			// Datadog's remote server. The organization's API key is the
-			// server's own header, the same for every seat.
-			{Field: "APP_KEY", Env: "DD_APPLICATION_KEY", Header: "DD_APPLICATION_KEY"},
-		}},
-		{Vendor: "github", Server: "github", match: either(hostIs("api.githubcopilot.com"), launches("github-mcp-server")), Keys: []SeatToolKey{
-			{Field: "APP_TOKEN", Env: "GITHUB_PERSONAL_ACCESS_TOKEN", Header: "Authorization", Prefix: "Bearer "},
-		}},
-		{Vendor: "gitlab", Server: "gitlab", match: glabServe, Keys: []SeatToolKey{
-			{Field: "TOKEN", Env: "GITLAB_TOKEN", Header: "Private-Token"},
-		}},
-		{Vendor: "gitlab", Server: "gitlab", match: launches("server-gitlab", "gitlab-mcp"), Keys: []SeatToolKey{
-			{Field: "TOKEN", Env: "GITLAB_PERSONAL_ACCESS_TOKEN", Header: "Private-Token"},
-		}},
-		{Vendor: "slack", Server: "slack", match: launches("slack-mcp-server"), Keys: []SeatToolKey{
-			{Field: "BOT_TOKEN", Env: "SLACK_MCP_XOXB_TOKEN", Header: "Authorization", Prefix: "Bearer "},
-		}},
-		{Vendor: "mattermost", Server: "mattermost", match: launches("mcp-server-mattermost"), Keys: []SeatToolKey{
-			{Field: "BOT_TOKEN", Env: "MATTERMOST_TOKEN"},
-		}},
-		{Vendor: "atlassian", Server: "atlassian", match: launches("mcp-atlassian"), Keys: []SeatToolKey{
-			{Field: "TOKEN", Env: "JIRA_API_TOKEN"}, {Field: "EMAIL", Env: "JIRA_USERNAME"},
-			{Field: "TOKEN", Env: "CONFLUENCE_API_TOKEN"}, {Field: "EMAIL", Env: "CONFLUENCE_USERNAME"},
-		}},
-	}
-}
-
 // SeatToolBindingFor is the conventional recognised server for lane's
-// integration, or false where this build recognises none.
-func SeatToolBindingFor(lane string) (SeatToolBinding, bool) {
-	kind := SeatCredentialKind(lane)
-	for _, b := range SeatToolBindings() {
-		if b.Vendor == kind {
-			return b, true
-		}
-	}
-	return SeatToolBinding{}, false
+// integration, from the catalogue's recognition table, or false where this
+// build recognises none. A company binds any other server by declaring its
+// `seat_credentials`.
+func SeatToolBindingFor(lane string) (catalogue.Binding, bool) {
+	return catalogue.BindingFor(SeatCredentialKind(lane))
 }
 
-// launches recognises a stdio server whose command or an argument names one of
-// the packages (`npx -y @korotovsky/slack-mcp-server`, a container image).
-func launches(packages ...string) func(*MCPServer) bool {
-	return func(m *MCPServer) bool {
-		if m.Kind() != TransportStdio {
-			return false
-		}
-		for _, word := range append([]string{m.Command}, m.Args...) {
-			for _, pkg := range packages {
-				if strings.Contains(word, pkg) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-}
-
-// glabServe recognises GitLab's own CLI serving MCP: `glab mcp serve`.
-func glabServe(m *MCPServer) bool {
-	return m.Kind() == TransportStdio && path.Base(m.Command) == "glab" && slices.Contains(m.Args, "mcp")
-}
-
-// hostIs recognises an http server at exactly host.
-func hostIs(host string) func(*MCPServer) bool {
-	return func(m *MCPServer) bool { return m.Kind() == TransportHTTP && hostOf(m.URL) == host }
-}
-
-// hostUnder recognises an http server at one of the domains or a host beneath
-// one (`mcp.us5.datadoghq.com` under `us5.datadoghq.com`).
-//
-// WHOLE LABELS, NEVER A SUBSTRING: a seat's credential is handed to whatever
-// server this recognises, so `datadoghq.com.example.net` and
-// `evil-datadoghq.com` must not be.
-func hostUnder(domains ...string) func(*MCPServer) bool {
-	return func(m *MCPServer) bool {
-		if m.Kind() != TransportHTTP {
-			return false
-		}
-		host := hostOf(m.URL)
-		return slices.ContainsFunc(domains, func(d string) bool {
-			return host == d || strings.HasSuffix(host, "."+d)
-		})
-	}
-}
-
-func either(a, b func(*MCPServer) bool) func(*MCPServer) bool {
-	return func(m *MCPServer) bool { return a(m) || b(m) }
-}
-
-func hostOf(raw string) string {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		// A url that does not parse names no host this build recognises;
-		// the server's own rules report the url.
-		return ""
-	}
-	return strings.ToLower(u.Hostname())
+// Launch is the server as recognition reads it: its transport and its address
+// or its command, never a credential.
+func (m *MCPServer) Launch() catalogue.Launch {
+	return catalogue.Launch{Transport: catalogue.Transport(m.Kind()), URL: m.URL, Command: m.Command,
+		Args: slices.Clone(m.Args)}
 }
 
 // BoundSeatKey is one seat credential a server is started with: the
@@ -239,22 +129,20 @@ func (m *MCPServer) SeatBindings() []BoundSeatKey {
 		}
 		return out
 	}
-	for _, b := range SeatToolBindings() {
-		if !b.match(m) {
-			continue
-		}
-		for _, k := range b.Keys {
-			key, prefix := k.Env, ""
-			if m.Kind() == TransportHTTP {
-				key, prefix = k.Header, k.Prefix
-			}
-			if key != "" {
-				out = append(out, BoundSeatKey{Kind: b.Vendor, Field: k.Field, Key: key, Prefix: prefix})
-			}
-		}
-		return out
+	kind, keys, ok := catalogue.SeatKeysFor(m.Launch())
+	if !ok {
+		return nil
 	}
-	return nil
+	for _, k := range keys {
+		key, prefix := k.Env, ""
+		if m.Kind() == TransportHTTP {
+			key, prefix = k.Header, k.Prefix
+		}
+		if key != "" {
+			out = append(out, BoundSeatKey{Kind: kind, Field: k.Field, Key: key, Prefix: prefix})
+		}
+	}
+	return out
 }
 
 // validateSeatCredentials checks a server's declared seat credentials.

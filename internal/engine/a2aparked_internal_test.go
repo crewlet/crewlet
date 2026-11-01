@@ -217,7 +217,7 @@ func (r *runRig) loseRun(t *testing.T, turnID string) {
 	completion := types.ExecutorFinished{
 		Agent: row.AgentID, AgentHandle: row.AgentHandle, RoleName: row.Role,
 		TurnID: row.TurnID, WorkKey: row.WorkKey, LaunchID: row.LaunchID,
-		SandboxID: row.SandboxID, CodingAgent: row.CodingAgent,
+		SandboxID: row.SandboxID, Harness: row.Harness,
 	}
 	ev := events.New(completion, events.TraceContext{TraceID: row.TraceID, ParentSpanID: row.SpanID})
 	if err := r.engine.sandbox.Load().coordinator.OnCompleted(t.Context(), completion, ev); err != nil {

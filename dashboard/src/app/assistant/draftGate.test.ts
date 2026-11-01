@@ -79,7 +79,7 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/artifacts/DocEditor.tsx", "routes/artifacts/SlidesView.tsx"],
     why: "its editing status is drawn from the open kind's editor, which declares the draft",
   },
-  "routes/settings/models/wizard/steps/CliStep.tsx": {
+  "routes/settings/models/wizard/steps/HarnessStep.tsx": {
     screen: ["routes/settings/models/wizard/ModelWizard.tsx"],
     why: "one step of the model wizard, whose draft the wizard declares",
   },

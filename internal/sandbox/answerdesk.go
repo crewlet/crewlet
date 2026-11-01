@@ -25,7 +25,7 @@ import (
 //
 // THE CONTROL TOPIC, NEVER THE SEAT'S INBOX. The answer is addressed to a run,
 // like the completion that topic was made for, and the inbox is the seat's
-// mail: held for as long as any of the seat's coding runs holds it, and worked
+// mail: held for as long as any of the seat's executors holds it, and worked
 // oldest first after that. An answer put there waited behind every job the
 // seat took on and every message it had not got to, and on a busy seat it
 // waited until the run's pause TTL took its box (see

@@ -2,14 +2,14 @@
 // the engine host.
 //
 // Three subsystems do that, and they must do it identically: the subscription
-// CLI LLM backend, which drives a coding CLI per seat with its own HOME; the
-// local sandbox provider, which runs a whole coding agent in a box and drives a
+// harness backend, which drives a harness per seat with its own HOME; the
+// local sandbox provider, which runs a whole harness in a box and drives a
 // container runtime's CLI to make one; and the MCP client, which starts every
 // stdio tool server a company declares. The first two seed operator-supplied
 // credential paths in and copy a refreshed login back out, and all three hand
 // a child process an environment. A second implementation of any of those is
 // the one that drifts — and each of them is a guard, so drift means a hole.
-// The environment had already drifted: the CLI backend carried a copy of the
+// The environment had already drifted: the harness backend carried a copy of the
 // allowlist that disagreed with this one about five names, and the MCP client
 // carried none at all and handed every tool server the engine's whole
 // environment — its keyring and its Tier A token values among it. A container runtime's own CLI has a rule
@@ -19,7 +19,7 @@
 // which config validation applies to a setup step before any box exists. And
 // so does how a shared login of several files is read and written: as ONE
 // login, journaled under the directory's lock ([ReadCredentials],
-// [WriteCredentials]), because the CLI backend's seats and commands and a
+// [WriteCredentials]), because the harness backend's seats and commands and a
 // local box's teardown all write it, and one of them replacing its files a
 // rename at a time is a login half written whenever that writer stops between
 // two of them.
@@ -40,7 +40,7 @@ import (
 	"strings"
 )
 
-// DirMode is the mode for every directory the CLI backend and the local
+// DirMode is the mode for every directory the harness backend and the local
 // sandbox create. Credentials and prompt transcripts both land under one, on a
 // host that may run other services.
 const DirMode os.FileMode = 0o700
@@ -65,9 +65,9 @@ const FileMode os.FileMode = 0o600
 // never what to authenticate as. Credentials reach a child only through the
 // environment its config deliberately declares.
 //
-// ONE LIST FOR EVERY CHILD. The CLI backend kept its own and had already
+// ONE LIST FOR EVERY CHILD. The harness backend kept its own and had already
 // drifted from this one: it lacked LC_NUMERIC, TERM and the ALL_PROXY pair (so
-// a coding CLI behind a SOCKS proxy reached nothing), and it carried LANGUAGE,
+// a harness behind a SOCKS proxy reached nothing), and it carried LANGUAGE,
 // which this one did not.
 var PassthroughEnv = []string{
 	"PATH",
@@ -98,7 +98,7 @@ var PassthroughEnv = []string{
 // directories.
 //
 // SEPARATE FROM [PassthroughEnv] because a box REPLACES every one of these: a
-// coding CLI and a sandboxed coding agent each get a HOME, an XDG tree and a
+// harness on the host and a sandboxed one each get a HOME, an XDG tree and a
 // TMPDIR of their own, which is the isolation, so inheriting the engine's would
 // only be overwritten. A child that runs AS the host user in no box of its own —
 // a stdio MCP server launched through `npx` or `uvx`, which keeps its package
@@ -329,7 +329,7 @@ func InHome(home, path string) (string, bool) {
 
 // SafeJoin resolves rel under root, refusing anything that lands outside it.
 //
-// The paths it guards are operator config — a CLI profile's credential_paths,
+// The paths it guards are operator config — a harness profile's credential_paths,
 // a setup step's file entries — so "../../.." is a value someone can write. In
 // a local sandbox that is not a sandboxed write: the box directory is a real
 // host directory, so an escape writes to the engine host itself.

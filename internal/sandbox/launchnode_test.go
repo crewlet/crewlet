@@ -58,13 +58,13 @@ func (r *hostRig) launchIn(turnID string, cell Placement, node string) PendingRu
 	}
 	if _, err := r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: sweID, Role: "SWE",
-		CodingAgent: "claude-code", TraceID: "tr-1", CreatedAt: r.now, LaunchNode: node,
+		Harness: "claude-code", TraceID: "tr-1", CreatedAt: r.now, LaunchNode: node,
 	}, rigLease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1", Placement: string(cell),
-		CodingAgent: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
+		Harness: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, rigLease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -468,7 +468,7 @@ func TestAHostReclaimsTheBoxesNoRunNamesAnyMore(t *testing.T) {
 		t.Fatalf("killed %s while its run was launching anew, which may continue in it", moved.SandboxID)
 	}
 	if err := rig.pending.AttachSandbox(t.Context(), "t-moved", BoxRef{
-		SandboxID: "box-on-b", Placement: string(Direct), CodingAgent: "claude-code",
+		SandboxID: "box-on-b", Placement: string(Direct), Harness: "claude-code",
 	}, rigLease); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -571,7 +571,7 @@ func (r *hostRig) waitAnnounced(t *testing.T, turn string, within time.Duration)
 }
 
 // A RUN THAT SUBMITTED ITS WORK IS POLLED AT ONCE by the waiter that drives
-// it, and again on a short schedule while its CLI exits — so its completion is
+// it, and again on a short schedule while its harness exits — so its completion is
 // found within seconds of its exit, not up to a poll interval later.
 //
 // Mutation: make a nudge do nothing, and the completion waits the hour.
@@ -579,7 +579,7 @@ func TestASubmittedRunIsPolledAtOnceAndAgainWhileItExits(t *testing.T) {
 	t.Parallel()
 	rig := newHostRig(t)
 	run := rig.launchIn("t-submitted", Direct, "node-a")
-	// THE CLI IS STILL EXITING at the first poll, and done at the next.
+	// THE HARNESS IS STILL EXITING at the first poll, and done at the next.
 	var polls sync.WaitGroup
 	polls.Add(1)
 	var once sync.Once

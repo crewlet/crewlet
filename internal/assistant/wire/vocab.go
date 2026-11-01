@@ -450,17 +450,17 @@ type ErrorCode string
 
 const (
 	// ErrorModelUnavailable is every model in the assistant's chain
-	// failing for a reason none of the codes below names, or its CLI
+	// failing for a reason none of the codes below names, or its harness
 	// missing or unable to start on the node.
 	ErrorModelUnavailable ErrorCode = "model_unavailable"
-	// ErrorModelSignedOut is the chain's CLI signed out: its login expired
+	// ErrorModelSignedOut is the chain's harness signed out: its login expired
 	// or missing, or its token invalid. Asking again does not help until
 	// somebody signs it in.
 	ErrorModelSignedOut ErrorCode = "model_signed_out"
 	// ErrorModelBusy is the chain's usage plan spent or rate limited, with
-	// the reset where the CLI named one.
+	// the reset where the harness named one.
 	ErrorModelBusy ErrorCode = "model_busy"
-	// ErrorModelTimeout is the chain's CLI running out of its own time
+	// ErrorModelTimeout is the chain's harness running out of its own time
 	// before it answered.
 	ErrorModelTimeout ErrorCode = "model_timeout"
 	// ErrorTurnTimeout is the turn's wall clock running out.
@@ -498,7 +498,7 @@ func (c ErrorCode) Valid() bool { return slices.Contains(ErrorCodes, c) }
 // Sentence is the code's sentence a person reads: what a turn's error frame
 // says where nothing about the moment changes it, and what a transcript says
 // of a turn that ended with it, long after the moment that may have
-// sharpened it (a person's own budget rather than the company's, a CLI that
+// sharpened it (a person's own budget rather than the company's, a harness that
 // cannot start rather than one that did not answer) is gone. Empty for a
 // code this build does not know.
 func (c ErrorCode) Sentence() string { return errorSentences[c] }
@@ -674,7 +674,7 @@ const (
 	ViewerNoPermission ViewerReason = "no_permission"
 	// ViewerModelNotReady is a person who may ask, on a chain every model
 	// of which is known unusable right now (signed out, its plan spent, its
-	// CLI unable to start), known without a call; the answer's
+	// harness unable to start), known without a call; the answer's
 	// [ViewerAssistant.Model] says which and what to do. Checked after
 	// every other reason, so only a person the assistant answers learns
 	// the state of its model.

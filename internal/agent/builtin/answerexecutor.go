@@ -23,20 +23,20 @@ import (
 // AnswerExecutorTool is the tool's wire name.
 const AnswerExecutorTool = "answer_executor"
 
-// MaxRunAnswerBytes bounds one answer to a parked coding run.
+// MaxRunAnswerBytes bounds one answer to a parked executor.
 //
 // THE PAGE ITS QUESTION'S CONTEXT IS HELD TO ([sandbox.MaxAskContextBytes]),
 // because the answer travels where the question does, beside it. It is sealed onto the
 // run's coordination row with the delivery it came in, which every status flip
 // and every listing of active runs reads whole until the run is carried on;
 // and then it is that run's prompt — the asking run's next message in its own
-// CLI session, after the question it answers, or, where that session cannot
-// go on, a fresh run's brief beside the round's own — which the run's CLI
+// harness session, after the question it answers, or, where that session cannot
+// go on, a fresh run's brief beside the round's own — which the run's harness
 // re-sends with every request it makes from then on, each charged to the
 // budget in full, cached or not. So every byte of an answer is paid for again
 // at every step the run takes after it.
 //
-// A person's answer to a coding agent's question is a sentence or a
+// A person's answer to a harness's question is a sentence or a
 // paragraph. One past a page is a document, and belongs on a page or the work
 // item, which the run reads with its own tools when it needs it rather than at
 // every step.
@@ -77,8 +77,8 @@ type runParties struct {
 	requester string
 }
 
-// answerExecutor answers a coding run that stopped to ask a person something,
-// by naming the run.
+// answerExecutor answers an executor that stopped to ask a person something,
+// by naming its turn.
 //
 // # Why by turn
 //
@@ -104,7 +104,7 @@ type runParties struct {
 // It answers `pending`: the answer is on the seat's control topic, and the
 // node holding the seat records it on the run when it takes it off (the run
 // then reads `answered`) and resumes the run with it once the seat is free of
-// any other coding run, any turn in flight and a person's pause. That node is
+// any other executor, any turn in flight and a person's pause. That node is
 // the only one that can, and it may be restarting, so the answer's fate is
 // settled there and not here. The result names the question it answers
 // (`launch_id`) and the answer's own id (`answer_id`), and the run's record is
@@ -170,7 +170,7 @@ func (t *answerExecutor) Parameters() map[string]any {
 			"answer": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("Your answer to the executor's question, as "+
-					"its coding agent should read it: the whole answer to an open question, "+
+					"its harness should read it: the whole answer to an open question, "+
 					"or what to add to a `choice`. At most %d KiB: put anything longer on "+
 					"a page the executor can read, and say where it is.", MaxRunAnswerBytes>>10),
 			},
@@ -210,11 +210,11 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	switch {
 	case answer == "" && choice == "":
 		return failed(AnswerExecutorTool + " needs a `choice` naming the option chosen, or an " +
-			"`answer` saying what the coding agent should be told, or both."), nil
+			"`answer` saying what the harness should be told, or both."), nil
 	case len(answer) > MaxRunAnswerBytes:
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
 			"it becomes the executor's next message, or a fresh launch's brief where the "+
-			"executor cannot carry on in its own session, and its coding agent reads it again "+
+			"executor cannot carry on in its own session, and its harness reads it again "+
 			"at every step after. Put the detail on a page the executor can read, and answer "+
 			"with where it is.",
 			kib(len(answer)), MaxRunAnswerBytes>>10)), nil
@@ -311,9 +311,9 @@ func (t *answerExecutor) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if choice != "" {
 		result["choice"] = choice
 	}
-	// THE QUESTION IS THE RUN'S WORDS, written by the seat's coding agent in
+	// THE QUESTION IS THE RUN'S WORDS, written by the seat's harness in
 	// the seat's name, and whoever answers it is usually reading through an
-	// assistant: it goes back fenced by the one rule for a coding run's words
+	// assistant: it goes back fenced by the one rule for an executor's words
 	// ([provenance.Executor]), as every other door to them reads them
 	// (ADR-0040), not as a line of the engine's receipt.
 	read := newForeignRead(turn, actor.Handle)

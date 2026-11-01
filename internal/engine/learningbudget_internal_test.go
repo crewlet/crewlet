@@ -114,7 +114,7 @@ func TestTheLearningGateDeclinesASeatWithNoRoomLeft(t *testing.T) {
 
 // A DECLINED REFLECTION IS THE GATE'S REFUSAL, AND THE COUNTER RECORDS IT.
 //
-// The seat's day was filled by a post-charge — its own coding run collected,
+// The seat's day was filled by a post-charge — its executor's launch collected,
 // or its turn's auxiliary calls — which refuses nothing and stamps nothing.
 // The gate then turns away the reflection stage's calls before any is made,
 // the pass's and a conversation entry's rewrites alike: unrecorded, a seat

@@ -989,7 +989,7 @@ var budgetCases = []fleetCase{{
 }, {
 	name: "a post-charge records spend that overran both caps",
 	fn: func(h *fleetHarness) {
-		// The spend already happened (a detached coding run, collected
+		// The spend already happened (a detached executor launch, collected
 		// long after it started) and nothing waits on a verdict about it,
 		// so nothing refuses it: it is recorded whole, past both caps, and
 		// the next round is refused against what the run used.

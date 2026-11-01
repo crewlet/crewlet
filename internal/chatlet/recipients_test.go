@@ -155,7 +155,7 @@ func TestAHandleHearsUnderTheFirstReasonThatNamesIt(t *testing.T) {
 
 // A COLLECTIVE WAKE IS CAPPED, AND THE RECORD SAYS SO.
 //
-// One `@channel` must not start a coding run for every agent in a room of any
+// One `@channel` must not launch an executor for every agent in a room of any
 // size ([chatlet.MaxCollectiveRecipients] is as many as one message may name),
 // and a room that could not see the cut would read a partial broadcast as a
 // complete one — which is the failure the flag exists for, arriving at the

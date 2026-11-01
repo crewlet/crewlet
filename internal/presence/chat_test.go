@@ -75,7 +75,7 @@ func TestAChatRoomsTypingLapsesAndAnArtifactsEditingDoesNot(t *testing.T) {
 
 // A SEAT ANSWERING IN A CHAT ROOM IS SHOWN PER THREAD, WITH ITS LINE, UNTIL IT
 // IS WITHDRAWN. A seat answering in two threads of one room — a turn parked
-// behind a coding run and the seat's next turn — is two members, a peer's
+// behind its executor and the seat's next turn — is two members, a peer's
 // sockets see each one's thread, status line and turn as the seat's node set
 // them, and withdrawing one takes it down at once and leaves the other.
 //

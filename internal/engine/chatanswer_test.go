@@ -32,7 +32,7 @@ import (
 // A PERSON'S CHAT REPLY TO A PARKED RUN IS RECORDED AS WHAT THEY TYPED, AND THE
 // RUN READS IT UNDER WHO WROTE IT.
 //
-// Ana answers the question swe's coding run stopped on, in the Chatlet thread
+// Ana answers the question swe's executor stopped on, in the Chatlet thread
 // it asked in, with "Use Postgres". The delivery reaches swe's inbox as the
 // notification service builds every wake: its body is the seat's prompt, the
 // message fenced under the wake's token among the surface's triage guidance
@@ -85,7 +85,7 @@ func TestAChatReplyToAParkedRunIsRecordedAsWhatThePersonTyped(t *testing.T) {
 	}
 }
 
-// chatAnswerRig is a seat, swe, with a coding run parked on a question it
+// chatAnswerRig is a seat, swe, with an executor parked on a question it
 // asked in a Chatlet thread, a person, ana, who can answer it there, and the
 // dispatch a reply reaches swe through.
 type chatAnswerRig struct {
@@ -257,7 +257,7 @@ func (rig *chatAnswerRig) park(t *testing.T, wake *events.Event) {
 	}
 	run := sandbox.PendingRun{
 		TurnID: "t1", AgentHandle: "swe", AgentID: fixtureSeat("swe").String(), Role: "SWE",
-		CodingAgent: "claude-code", ConversationKey: conv, PartitionKey: part,
+		Harness: "claude-code", ConversationKey: conv, PartitionKey: part,
 	}
 	if _, err := rig.store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

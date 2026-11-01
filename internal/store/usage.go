@@ -65,7 +65,7 @@ import (
 // of a turn such a build parked, whose earlier segments nobody measured — is
 // read off its records by its id, as it always was ([DB.usageLegacyTurns]),
 // and those reach back to wherever the turn STARTED — days, since a park lasts
-// as long as its coding run, which nothing stops on a timer, or as long as a
+// as long as its executor, which nothing stops on a timer, or as long as a
 // person takes to answer: so for such a turn a row changes the day the turn
 // ended as well as its own. A kept settle that lands only that earlier row
 // marks the earlier day, and the publisher derives every day from a mark
@@ -159,7 +159,7 @@ type UsageTokens struct {
 //
 // A turn belongs to the day its final completion falls in — the one record
 // that is not a suspension — because that is when it stopped costing time and
-// started being a result. A turn still parked on a coding run has ended
+// started being a result. A turn still parked on its executor has ended
 // nowhere yet and counts nowhere. Every figure below is read off that one
 // record ([types.TurnTally]), never off the turn's other records, which a
 // custody group spreads over the data nodes a second at a time and a resume

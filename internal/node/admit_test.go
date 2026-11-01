@@ -18,7 +18,7 @@ import (
 
 // THE ADMISSION OUTSIDE THE MAILBOX.
 //
-// A seat's mailbox is not the only road to a turn: a coding run that finishes
+// A seat's mailbox is not the only road to a turn: an executor that finishes
 // resumes its turn from the seat's control topic, and a recorded answer's retry
 // from the sandbox coordinator's own timer. A draining node went on starting
 // full turns through both, past its concurrency ceiling, because only the

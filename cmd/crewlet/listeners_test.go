@@ -524,12 +524,12 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 }
 
 // A HELD POLL FOR A RUN'S NOTES DOES NOT SPEND THE LISTENER'S GRACE. A coding
-// CLI's poll is held for longer than the grace while no note waits
+// harness's poll is held for longer than the grace while no note waits
 // (internal/api/mcpbridge), so a stop that left it to the listener would spend
 // the whole grace on a request with nothing to answer and log the cut; the
 // surface releases every held poll before it closes a listener — as a 503 the
-// CLI pauses on, never an empty answer it would ask again at once — and the
-// CLI polls again wherever the seat goes next.
+// harness pauses on, never an empty answer it would ask again at once — and the
+// harness polls again wherever the seat goes next.
 //
 // Mutation: drop the bridge's shutdown from the surface's stop, and this stop
 // takes the whole grace.

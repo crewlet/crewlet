@@ -179,7 +179,7 @@ type ModelStatus struct {
 	Plan string
 
 	// SignIn is the route this node resolves the entry's sign-in through,
-	// in cliagent's words (token, credentials, api-key, env, inherit-env,
+	// in harness's words (token, credentials, api-key, env, inherit-env,
 	// environment, none), and Resolves whether its credential resolved
 	// here.
 	SignIn   string
@@ -206,7 +206,7 @@ type ModelStatus struct {
 	ParkedCount int
 	ParkedSince time.Time
 
-	// HostLogin is the entry's CLI login on this node's disk, only for an
+	// HostLogin is the entry's harness login on this node's disk, only for an
 	// entry that signs in with credential files: nil for every other.
 	HostLogin *HostLogin
 }
@@ -218,7 +218,7 @@ type ModelSitOut struct {
 	// report that opened the window.
 	Until, ResetsAt, Since time.Time
 
-	// Window is which of the vendor's limits it is, in cliagent's words
+	// Window is which of the vendor's limits it is, in harness's words
 	// (session, weekly, model, unknown).
 	Window string
 
@@ -228,7 +228,7 @@ type ModelSitOut struct {
 }
 
 // ModelFailure is a failure on the wire: its llm kind (auth, rate_limit,
-// timeout, server, fatal), when, and the head of what the CLI said, bounded to
+// timeout, server, fatal), when, and the head of what the harness said, bounded to
 // [MaxModelSaidBytes].
 type ModelFailure struct {
 	Kind string
@@ -242,13 +242,13 @@ type ParkedSeat struct {
 	Since time.Time
 }
 
-// HostLoginState is a CLI login's state as its own status command reports it.
+// HostLoginState is a harness login's state as its own status command reports it.
 type HostLoginState string
 
 const (
 	// HostSignedIn is a status command that exited 0.
 	HostSignedIn HostLoginState = "signed_in"
-	// HostSignedOut is one that exited 1, the CLIs' own "not logged in".
+	// HostSignedOut is one that exited 1, the harnesses' own "not logged in".
 	HostSignedOut HostLoginState = "signed_out"
 	// HostLoginUnknown is anything else: the command could not run, timed
 	// out, or exited with a code that is no answer.
@@ -264,13 +264,13 @@ func (s HostLoginState) Valid() bool {
 	return false
 }
 
-// HostLogin is an entry's CLI login on one node's disk.
+// HostLogin is an entry's harness login on one node's disk.
 type HostLogin struct {
 	State HostLoginState
 
-	// Method is how it signed in, as the CLI says (claude.ai, console,
+	// Method is how it signed in, as the harness says (claude.ai, console,
 	// chatgpt), and Account the account it names, bounded to
-	// [MaxModelAccountBytes]. Either may be empty: not every CLI says.
+	// [MaxModelAccountBytes]. Either may be empty: not every harness says.
 	Method, Account string
 
 	// Detail is why the state is unknown, bounded to [MaxModelSaidBytes].
@@ -326,11 +326,11 @@ const ModelPlanChars = 12
 // finding and its fix.
 //
 // 240, because the useful part is the head: "You've hit your session limit ·
-// resets 4:30pm (America/Vancouver)" is 66 bytes, a CLI's auth refusal is a
+// resets 4:30pm (America/Vancouver)" is 66 bytes, a harness's auth refusal is a
 // line, and a probe's fix is one sentence. A row carries text only while a
 // failure or a sit-out stands, so the bound costs a healthy entry nothing on a
 // beat re-sent every [ReconcileInterval]; the whole sentence is in the node's
-// own `cli_agent_limit_reported` line.
+// own `harness_limit_reported` line.
 const MaxModelSaidBytes = 240
 
 // MaxModelParkedSeats bounds the parked seats a model row names on the wire:
@@ -342,7 +342,7 @@ const MaxModelSaidBytes = 240
 const MaxModelParkedSeats = 8
 
 // MaxModelAccountBytes bounds a host login's account (an email or an org
-// name): 120 bytes, past any real address, so a CLI that printed something
+// name): 120 bytes, past any real address, so a harness that printed something
 // else there cannot grow the beat.
 const MaxModelAccountBytes = 120
 

@@ -2710,7 +2710,7 @@ describe("a burst of live pushes", () => {
     parked: true,
     resets_at: "2026-10-27T23:30:00Z",
     since: "2026-10-27T23:16:00Z",
-    cli: "claude-code",
+    harness: "claude-code",
     subscription: true,
   };
   function failed(n: number) {

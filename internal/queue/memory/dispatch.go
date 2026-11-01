@@ -353,7 +353,7 @@ func (b *Broker) restoreLocked(
 //     back at the HEAD, and declared that as a capability the shipped broker
 //     did not have: every engine and node test run here certified a seat that
 //     retried a failure before a newer message of the same conversation, which
-//     production never does — the order a parked coding run's answer route
+//     production never does — the order a parked executor's answer route
 //     and the ordinary turn's retry were both written against.
 //   - A DEFER — a hand-back — goes back at the HEAD, which is where JetStream
 //     puts a plain Nak (it serves redeliveries before new mail): measured 100

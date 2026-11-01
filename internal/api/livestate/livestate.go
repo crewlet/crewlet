@@ -3,9 +3,9 @@
 //
 // It consumes the engine event stream — the same feed the WebSocket fan-out
 // reads — and maintains, per seat: the seat's live state, the TURN it is on and
-// the stage of it (context, a phase, or parked on a coding run), the last turn
+// the stage of it (context, a phase, or parked on its executor), the last turn
 // it ended, its current phase and iteration, its live token meter, and the
-// IN-FLIGHT LLM call. Beside the seats it keeps the coding runs in flight,
+// IN-FLIGHT LLM call. Beside the seats it keeps the executors in flight,
 // reconciled against their durable record (sandbox.go). What a seat has SPENT
 // is not held per seat: it is the per-agent row of the spend rollup, folded
 // from the same records by internal/tokens, so the projection holds no second
@@ -741,8 +741,8 @@ func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[s
 	case "agent_turn_completed":
 		if flag(payload, "suspended") {
 			// A SUSPENSION IS NOT AN END. The segment parked on a
-			// detached coding run and the same turn completes again
-			// when the run is collected.
+			// detached executor and the same turn completes again
+			// when the executor is collected.
 			s.touchTurn(agent, env, payload, StageParked)
 		} else {
 			s.endTurnRecord(agent, env, turnID, env.Failed, flag(payload, "stopped"))

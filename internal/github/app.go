@@ -9,8 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -277,14 +277,17 @@ func eventsFor(hook map[string]any) []string {
 //
 // TWO READINGS OF "REACHABLE", because the two products sit in different
 // places. github.com delivers from the public internet, so it reaches no
-// loopback, private, link-local or unspecified address and no name that is
-// not a public domain: a single label (`devbox`), `localhost` and the
-// `.localhost`, `.local`, `.internal`, `.lan` and `.home.arpa` suffixes,
-// which no public resolver answers. An Enterprise Server runs inside the
-// company's own network and routinely delivers to private addresses, so
-// there only an address that names the server's own host (loopback, an
-// unspecified address, `localhost`) is refused. Either way the scheme is
-// http or https, which is what GitHub accepts for a hook.
+// address [httpx.Public] refuses (loopback, private, link-local, carrier-grade
+// NAT, documentation and every other range the public internet does not
+// route) and no name that is not a public domain: a single label (`devbox`),
+// `localhost` and the `.localhost`, `.local`, `.internal`, `.lan` and
+// `.home.arpa` suffixes, which no public resolver answers. Which addresses
+// the public internet routes is httpx's one rule (ADR-0072) rather than a
+// list here, because a second list is the copy that drifts. An Enterprise
+// Server runs inside the company's own network and routinely delivers to
+// private addresses, so there only an address that names the server's own
+// host (loopback, an unspecified address, `localhost`) is refused. Either way
+// the scheme is http or https, which is what GitHub accepts for a hook.
 func Deliverable(base string, enterprise bool) bool {
 	u, err := url.Parse(strings.TrimSpace(base))
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
@@ -294,12 +297,11 @@ func Deliverable(base string, enterprise bool) bool {
 	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return false
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsUnspecified() {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if ip = ip.Unmap(); ip.IsLoopback() || ip.IsUnspecified() {
 			return false
 		}
-		return enterprise || (!ip.IsPrivate() && !ip.IsLinkLocalUnicast() &&
-			!ip.IsLinkLocalMulticast() && !ip.IsInterfaceLocalMulticast())
+		return enterprise || httpx.Public(ip)
 	}
 	if enterprise {
 		return true

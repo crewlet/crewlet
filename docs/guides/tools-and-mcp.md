@@ -401,6 +401,51 @@ all, the reads included.
 See [Chatlet](../concepts/chatlet.md) for who a message wakes, which of them owes a
 reply, and the two things the axis deliberately does not do.
 
+### Groups, and who may call each one
+
+Holding a tool is not being allowed to call it. Every call to a built-in is
+decided against the tool's own row in the engine's authority table, so an
+agent offered `update_artifact` still edits only an artifact it holds the
+editor role on. The engine files each built-in an agent can be offered in one
+group, and names the **gate** its authority row decides:
+
+| Group | `group` | What its tools are for |
+|---|---|---|
+| Work items | `work` | Worklet, the company's tracker: read, file, discuss and move work |
+| Projects | `projects` | Each project's settings, and the files kept in it |
+| Knowledge | `knowledge` | The company's pages in Doclet, and the search over its knowledge |
+| Chat | `chat` | Chatlet rooms and direct messages |
+| Artifacts | `artifacts` | Documents, slides, sheets and dashboards agents make and share, and the data behind them |
+| Colleagues | `colleagues` | Finding a colleague, and asking another agent a question |
+| Memory and skills | `memory` | The agent's own notes, past turns and skills |
+| MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, which the engine hands every executor and onboarding pass so it can reach its MCP servers' tools |
+
+| `gate` | Who may call it |
+|---|---|
+| `everybody` | Any agent. Also the discovery pair's, which no authority row decides |
+| `self` | The calling agent, about its own diary, past turns, skills and onboarding, and nobody else's |
+| `worklet` | An agent that uses Worklet. `my_work` is here too: it reads the caller's own day and takes no name for anybody else's |
+| `worklet_asked` | An agent that uses Worklet, or one an open ask on the item names |
+| `project_lead` | The lead of the project the work item or the file is in |
+| `doclet` | An agent that uses Doclet |
+| `chatlet` | An agent that uses Chatlet |
+| `artifacts` | An agent that authors artifacts |
+| `artifact_viewer` | Anybody the artifact is shared with, as a viewer or more |
+| `artifact_editor` | The artifact's editors who also author artifacts |
+| `artifact_owner` | The artifact's owner |
+
+An administrator passes every app gate. A group whose surface the company does
+not run is not there at all: a company on Jira holds no Worklet tool, and one
+on Slack no Chatlet tool.
+
+The gate is a word for the row, never a second decision: the engine's tests
+hold each built-in's gate to its row's class, app and artifact role, so a
+change to who may call a tool changes the gate with it. `GET /tools` and the
+`tools` push carry `group` and `gate` on every row (both empty on an MCP
+server's tool, whose calls no authority row decides), and `GET /mcp-servers`
+lists the built-ins group by group, the discovery pair included (see the
+[API reference](../reference/api-endpoints.md#get-mcp-servers)).
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
@@ -553,11 +598,85 @@ sentence saying what would offer it, beside `refused_count` and
 `shadowed_count`. The node's own log names each one as well
 (`mcp_tool_refused`, `tool_name_collision`).
 
+### The curated catalogue, and a community registry
+
+Adding a server starts from the **curated catalogue**: the MCP servers this
+build knows, each with its address or launch line, the headers or variables it
+reads, how a static credential's value is spelled, the sign-ins its vendor
+offers, what an admin has to do at the vendor first, and the day its facts
+were last read from the vendor (`read_at`). It is a table compiled into the
+engine and reviewed in pull requests, so every node answers it the same, with
+or without egress. `GET /mcp-servers/catalogue` serves it (see the
+[API reference](../reference/api-endpoints.md#get-mcp-serverscatalogue)).
+
+| Entry | Server | Sign-in |
+|---|---|---|
+| `github` | GitHub's remote server | the GitHub integration (each agent's own app token), or a token header |
+| `datadog` | Datadog's remote server, at your site's address | the Datadog integration, OAuth, or the `DD_API_KEY` and `DD_APPLICATION_KEY` headers |
+| `rovo` | Atlassian's Rovo remote server | OAuth, or an API token an organization admin has allowed |
+| `linear` | Linear's remote server | OAuth, or an API key header |
+| `notion` | Notion's remote server | OAuth |
+| `sentry` | Sentry's remote server | OAuth |
+| `stripe` | Stripe's remote server | OAuth, or an agent API key header |
+| `cloudflare` | The Cloudflare API server | OAuth, or an API token header |
+| `gitlab` | `glab mcp serve`, one per agent | the GitLab integration |
+| `slack` | `slack-mcp-server` 1.3.0, one per agent | the Slack integration |
+| `mattermost` | `mcp-server-mattermost` 0.6.1, one per agent | the Mattermost integration |
+| `atlassian` | `mcp-atlassian` 0.23.1 for Jira and Confluence, one per agent | the Atlassian integration |
+| `tavily` | `tavily-mcp` 0.2.22 | its API key variable |
+| `postgres` | Postgres MCP Pro (`postgres-mcp` 0.3.0), restricted to reads | its connection string variable |
+
+A local entry launched through a package runner names the exact release its
+facts were read against, and every page here that launches the same package
+names the same release: one test holds the catalogue and the pages together,
+so a bump moves them at once.
+
+**The same table recognises a configured server.** A server whose address or
+command matches an entry is drawn on Settings › MCP & tools with that entry's
+title and vendor mark, and `GET /mcp-servers` names it (`title`, `catalogue`,
+`vendor`). For the entries an integration serves, that recognition is also
+what binds each agent's own credential to a per-agent server (see
+[Seat credentials the engine binds](#seat-credentials-the-engine-binds)). An
+address is matched by whole host labels, never a substring.
+
+**A community registry is off until the company names one.** Set
+`mcp_registry.url` to the https address of a registry that speaks the
+[MCP Registry](https://registry.modelcontextprotocol.io) v0.1 API. That is
+usually a mirror the company curates: the official registry is a preview,
+and its own guidance is that a host reads a subregistry of it rather than it.
+
+```yaml
+mcp_registry:
+  url: https://registry.modelcontextprotocol.io
+```
+
+The add flow then offers a search of it beside the catalogue. What a registry
+lists is somebody else's description of somebody else's server, so:
+
+- every result is marked **not reviewed**, and carries no read date, no
+  integration and no fixed value; it is drawn with a vendor's mark only when
+  its address is that vendor's own host;
+- it is a draft for the same add flow, test and save as an address typed by
+  hand, and nothing it says starts a process or skips a step;
+- a result is offered only with a Streamable HTTP address that is https and
+  fixed, or a package from the public npm or PyPI registry at an exact
+  release, launched as `npx -y <package>@<release>` or
+  `uvx <package>==<release>`. A listing that needs a runner argument, a
+  package from another registry, a templated address, a field past its bound
+  or text with a direction override is left out, and the answer counts it;
+- a search reads at most a mebibyte and 20 results and gives up after 10
+  seconds, and the engine dials the registry alone: never an icon, a
+  repository or an address a listing names, and no redirect (a registry that
+  moved is reported with where it points, for you to write);
+- the address must be https, a private one included, because the launch lines
+  a registry answers are only as trustworthy as the connection they came over.
+
 ### What a tool can do
 
 Beside the origin, every catalogue row carries the **behavioural hints** the
-tool was registered with — what an MCP server advertised, plus whatever an
-operator overrode on top — and where calling it lands:
+tool was registered with (what an MCP server advertised, plus whatever an
+operator overrode on top), where calling it lands, and, for a built-in, its
+group and who may call it:
 
 | Field | What it says |
 |---|---|
@@ -566,6 +685,8 @@ operator overrode on top — and where calling it lands:
 | `annotations.idempotent` | Repeat calls have no additional effect |
 | `annotations.open_world` | The tool reaches entities outside the local system |
 | `delivers` | **Where** a call puts something in front of somebody outside the turn — empty for a tool that reaches nobody |
+| `group` | The built-in's [group](#groups-and-who-may-call-each-one), empty on an MCP server's tool |
+| `gate` | Who may [call the built-in](#groups-and-who-may-call-each-one), empty on an MCP server's tool |
 
 **Each hint is three-valued** — `yes`, `no`, `unknown` — and `unknown` is a
 first-class answer, not a soft `no`: it means the server did not advertise the
@@ -936,7 +1057,9 @@ mcp_servers:
 ```
 
 An entry that declares nothing is bound by what the engine recognises it as,
-by its command or its address:
+by its command or its address, through the
+[curated catalogue](#the-curated-catalogue-and-a-community-registry)'s
+recognition:
 
 | Server | Recognised by | Reads |
 |---|---|---|

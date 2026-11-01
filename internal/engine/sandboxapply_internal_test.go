@@ -406,7 +406,7 @@ name: Nimbus
 providers:
   llm:
     cc:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       run_in: e2b
       state_dir: %q
@@ -447,7 +447,7 @@ func applyOK(t *testing.T, e *Engine, doc string) []string {
 	return applied
 }
 
-// seedRunningRun records a running coding job on the swe seat, as e itself
+// seedRunningRun records a running executor on the swe seat, as e itself
 // launched it — before a restart, say — in the direct cell: no command id, so
 // the job never reports itself done and every tick of the poll is a keepalive.
 //
@@ -462,12 +462,12 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(), LaunchNode: e.id,
+		Harness: "claude-code", CreatedAt: time.Now().UTC(), LaunchNode: e.id,
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := store.AttachSandbox(ctx, turnID, sandbox.BoxRef{
-		SandboxID: sandboxID, CodingAgent: "claude-code", Placement: string(sandbox.Direct),
+		SandboxID: sandboxID, Harness: "claude-code", Placement: string(sandbox.Direct),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}

@@ -118,8 +118,8 @@ const pastRetention = live.EndedRetention + time.Second
 
 // THE STEP COUNT ONLY GROWS, and never past what has ended: every status
 // frame says how many steps have ENDED. It said the index of the step that
-// ended last, which a CLI calling tools in parallel ends out of order, and the
-// run chip counted 2, then 1. The scripted CLI here calls its tools in turn,
+// ended last, which a harness calling tools in parallel ends out of order, and the
+// run chip counted 2, then 1. The scripted harness here calls its tools in turn,
 // so this holds the invariant every frame must keep rather than replaying the
 // parallel order itself.
 func TestTheStatusStepCountOnlyGrows(t *testing.T) {

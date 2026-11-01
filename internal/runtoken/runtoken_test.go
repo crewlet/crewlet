@@ -36,8 +36,8 @@ func signer(t *testing.T, domain string, m runtoken.Material) *runtoken.Signer {
 
 // TestARotationDoesNotInvalidateAnOutstandingToken is the whole point.
 //
-// A detached coding run holds its endpoint's token for as long as the run
-// lasts, which is minutes to hours and outlives a rollout. The token names the
+// A detached executor holds its endpoint's token for as long as it runs,
+// which is minutes to hours and outlives a rollout. The token names the
 // key that signed it, so adding a key, flipping the active key and restarting
 // every node leaves it valid throughout.
 func TestARotationDoesNotInvalidateAnOutstandingToken(t *testing.T) {
@@ -246,7 +246,7 @@ func TestASubjectSurvivesTheRoundTrip(t *testing.T) {
 
 // A MINTED TOKEN IS REDACTED, whoever minted it and wherever a box prints it.
 //
-// No node that collects a coding run holds the tokens its launch minted — the
+// No node that collects an executor holds the tokens its launch minted — the
 // run's row carries none — so what a box hands back cannot be redacted of them
 // by their values. internal/redact knows them by their SHAPE instead: the
 // version literal this package opens every token with, as it knows a GitHub

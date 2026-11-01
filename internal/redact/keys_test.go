@@ -1856,7 +1856,7 @@ func TestAStreamOfKeyShapedLinesIsHeldOnlyAsFarAsAnEndCouldRead(t *testing.T) {
 // starts a read again from, and the line above one is shown after five.
 func TestOnlyALineThatReadsLikeAKeysBodyWaitsForAnEnd(t *testing.T) {
 	for name, line := range map[string]string{
-		"a long path":     "[tool] Read: /home/user/crewlet/internal/sandbox/codingagent/claudestream.go",
+		"a long path":     "[tool] Read: /home/user/crewlet/internal/sandbox/executor/claudestream.go",
 		"a commit's hash": "[tool] Bash: git show 9fceb02d0ae598e95dc970b74767f19372d61af8",
 		"prose":           "the build passed and the run went on",
 	} {

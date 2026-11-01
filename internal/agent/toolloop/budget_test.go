@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
-// The budget: every request's tokens charged as the CLI's record shows them, a
+// The budget: every request's tokens charged as the harness's record shows them, a
 // refusal deciding what FOLLOWS — no further call runs and no further request
 // is made — and a refusal already certain making no run at all.
 
@@ -107,10 +107,10 @@ func TestARefusedSpendNamesItsScopeAndStopsTheLoop(t *testing.T) {
 	if got := surf.calls(); len(got) != 0 {
 		t.Errorf("a refused request ran its tools: %v", got)
 	}
-	// The call the refused request made is answered only once the CLI is
-	// stopped: answered at once, it is the CLI's cue to ask its model again.
+	// The call the refused request made is answered only once the harness is
+	// stopped: answered at once, it is the harness's cue to ask its model again.
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) after the refusal", late)
+		t.Errorf("the harness asked its model %d time(s) after the refusal", late)
 	}
 }
 
@@ -133,7 +133,7 @@ func TestARefusalTheMeterHoldsMakesNoRun(t *testing.T) {
 		t.Fatalf("err = %v, want the refusal the meter holds, window and all", err)
 	}
 	if n := len(prov.Seen()); n != 0 {
-		t.Errorf("the CLI was started %d times on a refusal the meter already held", n)
+		t.Errorf("the harness was started %d times on a refusal the meter already held", n)
 	}
 	if spent, _ := m.total(); spent != 130 {
 		t.Errorf("the meter was charged to %d by a run that should never have started", spent)
@@ -146,7 +146,7 @@ func TestARefusalTheMeterHoldsMakesNoRun(t *testing.T) {
 // A REFUSAL LANDING DURING A CALL STOPS THE NEXT REQUEST. The request was
 // admitted and its tool ran, and the tool's own charge — a worker refused by
 // the seat — took the window past its ceiling: the call's answer is withheld,
-// so the CLI asks its model nothing more.
+// so the harness asks its model nothing more.
 func TestARefusalLandingDuringACallStopsTheNextRequest(t *testing.T) {
 	t.Parallel()
 	m := &weekMeter{refuseAt: 100}
@@ -161,18 +161,18 @@ func TestARefusalLandingDuringACallStopsTheNextRequest(t *testing.T) {
 		t.Fatalf("err = %v (result %+v), want the refusal the tool's charge left standing", err, res)
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) after the refusal", late)
+		t.Errorf("the harness asked its model %d time(s) after the refusal", late)
 	}
 	if got := surf.calls(); len(got) != 1 {
 		t.Errorf("tools ran %v, want the admitted request's one call", got)
 	}
 }
 
-// A REFUSAL MID-RUN LETS A CALL IN FLIGHT FINISH, AND RECORDS IT. A CLI running
+// A REFUSAL MID-RUN LETS A CALL IN FLIGHT FINISH, AND RECORDS IT. A harness running
 // a response's calls at once has them both out when one of them takes the
 // window past its ceiling: the other is a tool already writing, which the
 // refusal does not cut short — it runs out under the phase, its result is on
-// the failure record, and the CLI is answered neither.
+// the failure record, and the harness is answered neither.
 func TestARefusalMidRunRecordsTheCallStillInFlight(t *testing.T) {
 	t.Parallel()
 	// Room for the response's own 120 tokens, and not for the tool's 200.
@@ -203,7 +203,7 @@ func TestARefusalMidRunRecordsTheCallStillInFlight(t *testing.T) {
 		t.Fatalf("err = %v, want the refusal", err)
 	}
 	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model %d time(s) after the refusal", late)
+		t.Errorf("the harness asked its model %d time(s) after the refusal", late)
 	}
 	snap := prog.Snapshot()
 	byName := map[string]toolloop.Execution{}
@@ -215,7 +215,7 @@ func TestARefusalMidRunRecordsTheCallStillInFlight(t *testing.T) {
 	}
 	for _, r := range prov.Results() {
 		if r.Output == "slow ok" || r.Output == "charge ok" {
-			t.Errorf("the CLI read %+v after the refusal", r)
+			t.Errorf("the harness read %+v after the refusal", r)
 		}
 	}
 }
@@ -261,11 +261,11 @@ func TestARefusedChargeLeavesItsRoundOnTheFailureRecord(t *testing.T) {
 	}
 }
 
-// AN UNOBSERVED CLI IS CHARGED ONCE, AT THE END, FOR THE WHOLE RUN: its record
+// AN UNOBSERVED HARNESS IS CHARGED ONCE, AT THE END, FOR THE WHOLE RUN: its record
 // shows no request, so the host learns its cost only when it is over — one
 // charge of the run's total, on the round the run is, on the run's own record
 // and on the phase's.
-func TestAnUnobservedCLIsSpendIsChargedOnceAtTheEnd(t *testing.T) {
+func TestAnUnobservedHarnessSpendIsChargedOnceAtTheEnd(t *testing.T) {
 	t.Parallel()
 	m := &weekMeter{}
 	prov := &llmtest.Script{Unobserved: true, Runs: []llmtest.Run{runOf(
@@ -360,7 +360,7 @@ func TestARunIsChargedFromItsAnswerOnlyWhenNothingWasReported(t *testing.T) {
 
 // A REQUEST THE METER PAID FOR RUNS ALL ITS CALLS, even when its own charge
 // filled the window exactly: the refusal that is now certain refuses the
-// request the CLI would make NEXT, as their answers go back — not the calls of
+// request the harness would make NEXT, as their answers go back — not the calls of
 // one already paid for, which is where the irreversible things it decided
 // happen. And a submission among them still finishes the phase, since nothing
 // follows it for the refusal to refuse.
@@ -383,7 +383,7 @@ func TestARequestThatFillsTheWindowRunsItsCallsAndASubmissionStands(t *testing.T
 			t.Errorf("tools ran %v, want both calls of the request the meter paid for", got)
 		}
 		if late := prov.Late(); late != 0 {
-			t.Errorf("the CLI asked its model %d time(s) after the refusal", late)
+			t.Errorf("the harness asked its model %d time(s) after the refusal", late)
 		}
 	})
 	t.Run("a submission finishes the phase", func(t *testing.T) {

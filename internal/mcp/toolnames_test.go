@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // A TOOL NO MODEL CAN BE HANDED IS REFUSED, NEVER FILED, AND SAID: a prefixed
@@ -24,7 +24,7 @@ func TestAToolNoModelCanBeHandedIsRefusedAndNeverFiled(t *testing.T) {
 	b := NewBridge(log, Supervision{})
 	t.Cleanup(func() { _, _ = b.StopAll(context.Background()) })
 
-	most := cliprofile.ToolNameMax()
+	most := harnessprofile.ToolNameMax()
 	fits := strings.Repeat("f", most-len("docs_"))      // exactly the limit, prefixed
 	tooLong := strings.Repeat("l", most-len("docs_")+1) // one over, prefixed: fits bare
 	spec := helperSpec(t, "docs", "serve", map[string]string{helperToolsEnv: toolsJSON(
@@ -135,7 +135,7 @@ func TestEveryNameRefusalSaysWhyAndWhatOffersIt(t *testing.T) {
 		t.Error("a reason this build does not send reports Valid")
 	}
 
-	most := cliprofile.ToolNameMax()
+	most := harnessprofile.ToolNameMax()
 	long := "pre_" + strings.Repeat("x", most-2)
 	if s := NameTooLong.Sentence(long, "pre_"); !strings.Contains(s, `Shorten the tool_prefix "pre_" by 2`) {
 		t.Errorf("a name the prefix pushes over says %q, want it to say how much to shorten the prefix", s)

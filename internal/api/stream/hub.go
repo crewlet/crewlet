@@ -539,7 +539,7 @@ func (a Audience) Equal(b Audience) bool {
 // seats' bodies it reads — so two audiences given one variant receive
 // byte-identical frames and a broadcast encodes once per variant rather than
 // once per client. withRecord adds the reader's own record, for a payload that
-// shows something to a person by who they are (a coding run's question).
+// shows something to a person by who they are (an executor's question).
 //
 // THE APPS BY NAME, in [iam.Apps] order, so an app added to the vocabulary
 // splits the variants it should with no edit here.
@@ -656,7 +656,7 @@ func (r SpendRollup) For(audience Audience) (string, any) {
 	return "overview", tokens.Rollup(r).WithoutEntries()
 }
 
-// ExecutorRows are the in-flight coding runs as a [Shaped] payload: each masked
+// ExecutorRows are the in-flight executors as a [Shaped] payload: each masked
 // to the reach its reader has over the seat that launched it.
 type ExecutorRows []livestate.ExecutorEntry
 

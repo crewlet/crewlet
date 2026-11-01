@@ -10,7 +10,7 @@ import (
 
 // A RUN ASKS A PERSON IN THE SHAPE A DECISION IS ASKED: ADR-0068.
 //
-// A coding run that cannot go on without a person's answer asks through one
+// An executor that cannot go on without a person's answer asks through one
 // tool over its bridge (`ask_and_wait`, internal/agent/builtin), and what it
 // asked is an [Ask]: the question in one sentence, its context in Markdown,
 // and, where the person is to choose, a [decision.Decision] whose options the
@@ -37,7 +37,7 @@ const (
 	// written whole on every status flip and every listing of active runs
 	// for as long as it waits; the park's announcement; the pane a person
 	// answers it from; and, once answered, the prompt of the run that
-	// carries the work on, which that run's CLI re-sends with every request
+	// carries the work on, which that run's harness re-sends with every request
 	// it makes from then on. 16 KiB is about four thousand tokens: a page of
 	// prose, the bound a run's whole free-text question was held to before
 	// asks were structured, so no context that fitted then is refused now.
@@ -61,7 +61,7 @@ const (
 	AskToManager   = "manager"
 )
 
-// Ask is what a coding run asked a person.
+// Ask is what an executor asked a person.
 type Ask struct {
 	// Question is what the run needs answered, in one sentence: the title
 	// a person reads first. Held to [decision.MaxQuestion], the bound a
@@ -195,7 +195,7 @@ type AskOutcome string
 
 const (
 	// AskRecorded is an ask on the job's row, which the run parks on once
-	// its CLI ends.
+	// its harness ends.
 	AskRecorded AskOutcome = "recorded"
 	// AskAlreadyAsked is a job that asked a question already, which stands.
 	// A run asks one question at a time, because one answer resumes it.

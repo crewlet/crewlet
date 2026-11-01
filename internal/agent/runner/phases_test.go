@@ -27,10 +27,10 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// scriptedProvider is the model behind every phase's CLI runs that the engine
+// scriptedProvider is the model behind every phase's harness runs that the engine
 // drives — which the executor is not: its run is played by a [playLauncher] —
 // scripted PER PHASE: each phase reads its own stream of responses, one per
-// model request, and a run is told which phase it is by the tools its CLI was
+// model request, and a run is told which phase it is by the tools its harness was
 // offered.
 //
 // Not a flat sequence: each phase runs its own loop and a phase that calls a
@@ -40,7 +40,7 @@ import (
 // distinguishes the phases.
 //
 // A STREAM OF RESPONSES, NOT A LIST OF RUNS, because the runs are not the
-// model's to choose: its CLI asks it again after every call it makes, and the
+// model's to choose: its harness asks it again after every call it makes, and the
 // engine ends a run when the phase finishes, parks or is corrected. So a run
 // plays the phase's next responses until one calls nothing — the model's
 // answer — or the engine ends it, and the next run of the phase picks the
@@ -48,7 +48,7 @@ import (
 // model that keeps answering the same way.
 //
 // THROUGH THE REAL SESSION: every response reaches the phase's dispatcher as a
-// CLI's record does, and every call reaches the phase's tools over MCP
+// harness's record does, and every call reaches the phase's tools over MCP
 // (llmtest.Conn).
 type scriptedProvider struct {
 	review, onboarding []llmtest.Response
@@ -58,13 +58,13 @@ type scriptedProvider struct {
 	n    map[string]int
 }
 
-// scriptedRun is one CLI run the provider played.
+// scriptedRun is one harness run the provider played.
 type scriptedRun struct {
 	which string
 	req   llm.Request
 	conn  *llmtest.Conn
 
-	// offered is the tool list the CLI read before each response it played
+	// offered is the tool list the harness read before each response it played
 	// — one per model request, an activation's effect included.
 	offered [][]llm.ToolDef
 }
@@ -101,7 +101,7 @@ func (p *scriptedProvider) Complete(ctx context.Context, req llm.Request) (*llm.
 	})
 }
 
-// phaseOffering names the phase a run is from the tools its CLI was offered.
+// phaseOffering names the phase a run is from the tools its harness was offered.
 func phaseOffering(offered []string) string {
 	switch {
 	case slices.Contains(offered, runner.SubmitReviewTool):
@@ -109,8 +109,8 @@ func phaseOffering(offered []string) string {
 	case slices.Contains(offered, toolname.MarkOnboarded):
 		return "onboarding"
 	default:
-		// Nothing else runs a CLI through the engine's loop on a seat's
-		// turn: the executor is its CLI's own run. A run landing here is a
+		// Nothing else runs a harness through the engine's loop on a seat's
+		// turn: the executor is its harness's own run. A run landing here is a
 		// phase this fixture does not know, and it is answered with nothing
 		// a phase could mistake for a decision.
 		return "other"
@@ -128,7 +128,7 @@ func (p *scriptedProvider) scriptOf(which string) []llmtest.Response {
 	}
 }
 
-// runsFor is every CLI run one phase made, in order.
+// runsFor is every harness run one phase made, in order.
 func (p *scriptedProvider) runsFor(which string) []*scriptedRun {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -141,14 +141,14 @@ func (p *scriptedProvider) runsFor(which string) []*scriptedRun {
 	return out
 }
 
-// allRuns is every CLI run, of every phase, in order.
+// allRuns is every harness run, of every phase, in order.
 func (p *scriptedProvider) allRuns() []*scriptedRun {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return slices.Clone(p.runs)
 }
 
-// requestsFor returns the request each of one phase's CLI runs was handed, in
+// requestsFor returns the request each of one phase's harness runs was handed, in
 // order: the conversation a run opens on.
 func (p *scriptedProvider) requestsFor(which string) []llm.Request {
 	var out []llm.Request
@@ -180,7 +180,7 @@ func (p *scriptedProvider) offeredFor(which string) [][]string {
 	return out
 }
 
-// answered is what every call one phase's CLI made was answered, in order:
+// answered is what every call one phase's harness made was answered, in order:
 // what the model read back from its tools.
 func (p *scriptedProvider) answered(which string) []llmtest.Result {
 	var out []llmtest.Result
@@ -781,7 +781,7 @@ func TestTheReviewerRunsOnItsOwnBudgetNotTheExecutors(t *testing.T) {
 
 // A RUNNER NEEDS ITS REGISTRIES, ITS SESSION HOST AND ITS LAUNCHER, and
 // refuses at assembly without one: every phase the engine drives reaches its
-// CLI's tools through the host, and every executor is a launched run — so a
+// harness's tools through the host, and every executor is a launched run — so a
 // runner missing either cannot run a phase every turn has, and finding that
 // out at the first one fails a turn on a mistake made where the runner was
 // built.

@@ -380,7 +380,8 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
-| `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential). **Takes `admin`** (see [below](#get-mcp-servers)) |
+| `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Takes `admin`** (see [below](#get-mcp-servers)) |
+| `GET` | `/mcp-servers/catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-serverscatalogue)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -2581,7 +2582,7 @@ each. Every answer that depends on the node names it (`node`).
 |--------|------|-------|-------------|
 | `GET` | `/llm/entries` | anybody | Every model's condition across the fleet (query `llm_entries`): an administrator's reading, or a member's with nothing that names a credential |
 | `GET` | `/llm/runners` | `admin` | Whether each executor cell (`direct`, `container`, `e2b`) can start a box on each node (query `llm_runners`) |
-| `GET` | `/llm/models?agent=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
+| `GET` | `/llm/models?harness=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
 | `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
 | `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` with a draft `entity` or when it re-activates | Test candidate credential values with the model's own CLI, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
 | `POST` | `/llm/providers/{key}/check` | `models.check`; with a draft `entity`, also `config.write` and `secrets.write` | The doctor over the API, on this node |
@@ -2630,7 +2631,7 @@ node knows".
   "node": "node-1",
   "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": false}],
   "entries": [{
-    "key": "default", "agent": "claude-code", "model": "claude-opus-5-5",
+    "key": "default", "harness": "claude-code", "model": "claude-opus-5-5",
     "health": "expiring", "plan": "3f9a1c0e22b1",
     "sign_in": {"route": "token", "mode": "subscription", "variable": "CLAUDE_CODE_OAUTH_TOKEN",
       "source": "store", "resolves": true, "hint": "sk-ant-oat01-…Qm4x",
@@ -2671,7 +2672,7 @@ node knows".
 - `alarms` is this node's latest evaluation of the five model alarms.
 
 **A member's reading** (`"reading": "member"`) keeps each entry's `key`,
-`agent`, `model`, `health`, `sign_in.route` and `sign_in.resolves`,
+`harness`, `model`, `health`, `sign_in.route` and `sign_in.resolves`,
 `sitting_out` without `said` and `nodes`, `last_success`, `waiting` and
 `used_by`, and answers `alarms: null`: nothing in it names a credential, an
 account, a vendor's sentence or a cost.
@@ -2707,14 +2708,14 @@ one is what the test call says. Claude Code reads provider `anthropic` and Codex
 is kept for a day and revalidated; a catalogue that cannot be read keeps the
 last copy and says how old it is in `reason`, and with no copy the answer is
 `"source": "none"` with `models: []` and the `reason`. `400 bad_params` for an
-unknown `agent` or OpenCode without `provider`; `422 unknown_provider` for a
+unknown `harness` or OpenCode without `provider`; `422 unknown_provider` for a
 provider the catalogue does not list.
 
 #### `PUT /llm/providers/{key}/credential`
 
 ```json
 {"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-…"},
- "entity": {"agent": "claude-code", "model": "sonnet",
+ "entity": {"harness": "claude-code", "model": "sonnet",
    "auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}
 ```
 
@@ -2761,7 +2762,7 @@ provider the catalogue does not list.
    The CLI's own words stay on the check's lines, and a failing line carries
    `meaning` (`refused` or `unread`) beside its `kind`; a vendor that did not answer is
    `502 credential_untested`; a CLI that cannot run (no binary) is
-   `422 validation_error` at `providers.llm.<key>.agent` with the doctor's
+   `422 validation_error` at `providers.llm.<key>.harness` with the doctor's
    remedy. A `429` passes: it proves the credential authenticated, and the
    answer's `limited` says so, `{"until", "resets_at", "window", "said"}`, with
    `until` null, since a test sits nothing out, and `resets_at` the vendor's
@@ -4283,7 +4284,7 @@ reported one (`cost_usd`), which the dashboard never reads
 executor's run is a row of its own, an `executor_collected`, published when it
 is collected: **no phase** — it names none, and is the work of the `execute`
 round that launched it (`iteration`) — with its tokens, its CLI's own turns
-(`cli_turns`), its `launch_id` (a round can launch twice, so the launch is part
+(`harness_turns`), its `launch_id` (a round can launch twice, so the launch is part
 of that row's identity), its report as `response` and its
 `activity_transcript` — see
 [each launch is published as its own record](../concepts/code-sandbox.md#a-run-is-bounded-by-its-rounds-each-launch-is-published-as-its-own-record).
@@ -4571,7 +4572,7 @@ shaped the same way.
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
   "executors": [ { /* an executor run in flight: turn_id, role,
-                      agent_handle, agent_id, coding_agent, provider_key
+                      agent_handle, agent_id, harness, provider_key
                       (the executor-chain member it was launched on, to an
                       admin alone) and model, sandbox_id, task, status (the
                       run record's own word), started_at, question,
@@ -5435,7 +5436,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedules` | `{}` | `GET /schedules` |
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each node's newest backup, each log's newest acknowledgement and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
-| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
+| `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section, and the built-in tools by group. **Takes `admin`**. See [below](#get-mcp-servers) |
 | `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
@@ -6486,7 +6487,7 @@ signed under the fleet keyring and bound to that one request, and a note on a
 run's record is sealed under the same keyring, bound to its turn and its id —
 so nothing else reaches a turn
 ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md),
-[ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
+[ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)).
 An answer the asking node cannot believe is no answer, so it reads as
 `unknown`. A running node that does not hold the key the note is signed under
 takes nothing and says so, and a run's record whose seat is sealed under a key
@@ -9080,7 +9081,8 @@ shared knowledge backend, reachable by all members via query-time search.
 ### `GET /mcp-servers`
 
 Backs the **Servers** section of **Settings › MCP Tools**: every MCP server,
-what the configuration declares for it and what each live node did with it.
+what the configuration declares for it and what each live node did with it,
+and the engine's built-in tools beside them.
 **It takes `admin`**, as `GET /config` does — it names the nodes, the
 launch commands and the first line of each failure, which is what the
 configuration it reports on carries.
@@ -9104,7 +9106,11 @@ that are not credentials — `transport`, `command`, `args`, `url`; `env` and
 `headers` are never here. `enabled` is whether the configuration runs the
 server at all (`mcp_servers[].enabled`, true on a server it does not carry),
 and `description` what it says the server is for, the line each agent's
-prompt lists beside the server's name (`""` when it says nothing). `started`, `failed` and `waiting` are summed over
+prompt lists beside the server's name (`""` when it says nothing). `title`, `catalogue` and `vendor` are what the
+[curated catalogue](#get-mcp-serverscatalogue) recognises the server as, by
+its address or its command: the entry's title, its key and the vendor mark
+the dashboard draws. A server the catalogue does not know is titled by its
+name, with `catalogue` and `vendor` empty. `started`, `failed` and `waiting` are summed over
 the nodes, `tools` is the most one started instance serves, and `state` is
 decided here so no screen re-derives it. `waiting` counts a seat's instances
 held back, unstarted, for a credential a
@@ -9173,7 +9179,8 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
 {
   "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": true}],
   "servers": [
-    {"name": "github", "configured": true, "shared": false, "transport": "http",
+    {"name": "github", "title": "GitHub", "catalogue": "github", "vendor": "github",
+     "configured": true, "shared": false, "transport": "http",
      "command": "", "args": [], "url": "https://api.githubcopilot.com/mcp/",
      "state": "partial", "started": 3, "failed": 1, "waiting": 0, "tools": 26,
      "unlisted_annotations": [],
@@ -9188,12 +9195,107 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
        {"node": "node-2", "reported": true, "started": 1, "failed": 1, "waiting": 0, "tools": 26,
         "error": "401 Bad credentials", "error_seat": "backend-dev", "wait": "", "wait_seat": ""}
      ]}
+  ],
+  "builtin": [
+    {"key": "work", "label": "Work items",
+     "description": "Worklet, the company's tracker: read, file, discuss and move work.",
+     "tools": [
+       {"name": "list_work_items", "description": "…", "source": "builtin",
+        "annotations": {"read_only": "yes", "destructive": "unknown",
+                        "idempotent": "yes", "open_world": "unknown"},
+        "delivers": "", "input_schema": {"type": "object", "properties": {"…": {}}},
+        "group": "work", "gate": "worklet"}
+     ]}
   ]
 }
 ```
 
+`builtin` is the engine's own tools as an agent is offered them, group by group
+in the order the catalogue lists them, each tool a
+[catalogue row](#the-tool-catalogue) whose `gate` says who may call it (the
+words are in
+[Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one)).
+It is the built-ins of the registry this node applied, which every node
+applies alike, plus `list_mcp_server_tools` and `activate_tool`, which the
+engine hands every executor and onboarding pass and no registry holds. A group
+the company offers nothing of is left out: a company on Jira gets no `work`
+group, and one on Slack no `chat` group. A node with no active revision sends
+an empty list.
+
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
+
+### `GET /mcp-servers/catalogue`
+
+What a server is added from, for the add flow of **Settings › MCP & tools**.
+It is decided by `config.read`, so **it takes `admin`**, as adding a server
+does: an entry is the draft of a launch line every engine host runs, and the
+answer names the registry the company's configuration does. A plain read
+rather than a question: nothing in it is live, so the socket does not carry
+it.
+
+`curated` is the curated catalogue whole, in its order, whatever `q` says: a
+table compiled into the engine and reviewed in pull requests, so it answers
+the same on a node with no egress. Each entry is a vendor's server as its own
+page described it on `read_at`, and a local server launched through a package
+runner names the `package` it fetches at the exact `release` its facts were
+read against. The curated catalogue is also what the engine
+[recognises a configured server by](../guides/tools-and-mcp.md#the-curated-catalogue-and-a-community-registry).
+
+`community` is empty unless `q` is given and the company names a registry
+(`mcp_registry.url`), and then holds what that registry answered for `q`:
+the newest version of each server whose name holds `q`, at most 20, in the
+registry's order. The registry speaks the [MCP Registry](https://registry.modelcontextprotocol.io)
+v0.1 API. Every listing is `community: true` and is a draft for the same add
+flow an address typed by hand goes through: it carries no `read_at`, no
+`integration`, no `prerequisite` and no fixed `value`, and its `vendor` is set
+only when its remote address is a host the curated catalogue recognises. A
+listing is offered with a Streamable HTTP remote at a fixed https address, or
+else an npm or PyPI package from the public registry at an exact release,
+launched as `npx -y <package>@<release>` or `uvx <package>==<release>`. A
+listing the engine cannot read whole (a field past its bound, a direction
+override in its text, a templated address, a runner argument, a package from
+another registry, a deprecated or deleted listing) is left out and counted in
+`left_out`. The engine dials the registry alone, never anything a listing
+names, and follows no redirect.
+
+`registry` is the address the company names, or `""`. `reason` says why a
+search found nothing to offer: the company names no registry, or the
+registry could not be reached, refused, or answered something that is not the
+v0.1 server list. A search that fails is that `reason` beside the curated
+half, never an error in its place; only `q` itself (empty after trimming,
+over 200 characters, or holding a control character) is refused, as
+`bad_params`.
+
+```json
+{
+  "curated": [
+    {"id": "linear", "name": "linear", "title": "Linear", "vendor": "linear",
+     "description": "Issues, projects, cycles and documents.", "transport": "http",
+     "url": "https://mcp.linear.app/mcp", "command": "", "args": [],
+     "headers": [{"name": "Authorization", "description": "A Linear API key.", "required": true,
+                  "secret": true, "value": "", "format": "Bearer <API key>", "from_integration": false}],
+     "env": [], "tool_prefix": "", "tool_annotations": {}, "auth": ["oauth", "headers"],
+     "oauth_client": "cimd", "integration": "", "prerequisite": "",
+     "docs": "https://linear.app/docs/mcp", "read_at": "2026-11-01", "package": "", "release": "",
+     "community": false, "publisher": "", "version": "", "updated_at": null}
+  ],
+  "community": [
+    {"id": "com.example/weather", "name": "weather", "title": "Weather", "vendor": "",
+     "description": "Forecasts and alerts for a place.", "transport": "http",
+     "url": "https://mcp.weather.example.com/mcp", "command": "", "args": [],
+     "headers": [{"name": "X-API-Key", "description": "Your API key.", "required": true,
+                  "secret": true, "value": "", "format": "", "from_integration": false}],
+     "env": [], "tool_prefix": "", "tool_annotations": {}, "auth": ["headers"], "oauth_client": "",
+     "integration": "", "prerequisite": "", "docs": "https://weather.example.com/docs/mcp",
+     "read_at": "", "package": "", "release": "", "community": true,
+     "publisher": "com.example", "version": "2.1.0", "updated_at": "2026-10-27T08:00:00Z"}
+  ],
+  "registry": "https://registry.modelcontextprotocol.io",
+  "reason": "",
+  "left_out": 1
+}
+```
 
 ### `GET /fleet`
 
@@ -9576,7 +9678,7 @@ reclaimed, work preserved on a pushed branch) is listed on both.
   "runs": [
     {
       "turn_id": "<uuid>", "launch_id": "<uuid>", "agent_handle": "eng", "role": "Engineer",
-      "status": "awaiting_clarification", "coding_agent": "claude-code",
+      "status": "awaiting_clarification", "harness": "claude-code",
       "provider_key": "default", "model": "sonnet",
       "task_description": "Add retry to the webhook client",
       "question": "Which backoff ceiling should I use?",
@@ -9932,8 +10034,13 @@ deployment control. Refusals:
   store the fleet already uses, or fails the bucket's probe; a node holding no
   copy of the company's records (run it against a data node); and for the
   final pass, a node not in `maintenance` mode, any node still admitted to
-  publish, an estate this node has not applied to the end, or one it holds
-  incomplete.
+  publish, an estate this node has not applied to the end, one it holds
+  incomplete, or rows it cannot read that may name a file: a data node the
+  fleet counts running a state log this build does not, or this node's copy
+  of the estate migrated by a newer build ([What a build cannot
+  see](../concepts/object-store.md#what-a-build-cannot-see)). A final pass
+  copies only what this build's tables name, and the store it leaves behind
+  is deleted after it.
 - **503 `objects_migration_failed`**, with a `Retry-After`: the fleet's store
   or the bucket stopped answering. The body's `report` counts what was copied;
   the stores' own words are in this node's log. Run it again.
@@ -10382,7 +10489,7 @@ Notes:
   `skill_promotion`, `provider_probe`, `answer_knowledge`, and `condense_<kind>` for each kind of
   text a compaction rewrites. Its rows sum to that phase.
 - `calls` is PROVIDER CALLS on every bucket: a phase's model rounds, a
-  launch's own CLI turns as its CLI reported them (`cli_turns`, one for a
+  launch's own CLI turns as its CLI reported them (`harness_turns`, one for a
   launch whose CLI reports none — OpenCode reports none), an auxiliary record's
   coalesced calls. The executor's own record counts none: its run's calls are
   its launches'. It counted records once, which made a forty-turn run one call.
@@ -10558,13 +10665,14 @@ is read again rather than recorded.
 ## The Tool Catalogue
 
 Carried by `GET /tools`, by the `tools` push, and inside the socket snapshot.
-One row per registered tool:
+One row per registered tool, in the same shape as each tool on
+[`GET /mcp-servers`](#get-mcp-servers)'s built-in groups:
 
 ```json
 {
   "name": "post_message",
   "description": "Post a message to a channel",
-  "source": "slack",
+  "source": "mcp:slack",
   "title": "Post message",
   "annotations": {
     "read_only": "no",
@@ -10573,7 +10681,9 @@ One row per registered tool:
     "open_world": "yes"
   },
   "delivers": "slack",
-  "input_schema": { "type": "object", "properties": { "…": {} }, "required": ["…"] }
+  "input_schema": { "type": "object", "properties": { "…": {} }, "required": ["…"] },
+  "group": "",
+  "gate": ""
 }
 ```
 
@@ -10595,6 +10705,13 @@ One row per registered tool:
 - `input_schema` is the JSON Schema the model is offered, verbatim. It is
   **absent** when the tool takes no arguments, which is not the same as `{}`:
   only the first means this build did not send one.
+- `group` and `gate` are, on one of the engine's own tools, the group it is
+  filed in and who may call it: what its row in the authority table asks of
+  the caller, since holding a tool is not being allowed to call it. The words
+  are listed in
+  [Groups, and who may call each one](../guides/tools-and-mcp.md#groups-and-who-may-call-each-one).
+  Both are present and empty on an MCP server's tool, whose calls no
+  authority row decides.
 
 ---
 

@@ -14,7 +14,7 @@ recommends and why, the evidence it looked at, the role the person is asked in
 and, optionally, the chat channel the asker will report the outcome in — and
 the answer is a comment that names **one of those options by id**. The type,
 its caps and its structural validation are `internal/decision`, shared with the
-question a coding run parks on
+question an executor parks on
 ([ADR-0068](0068-a-run-asks-a-person-in-the-shape-a-decision-is-asked.md)); the
 checks that need the tracker are `internal/worklet/decision.go`; the writing
 tools are `comment_on_work_item` and `create_work_item` in `agent/builtin`,

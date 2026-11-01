@@ -8,7 +8,7 @@ import (
 
 // The local backend is POSIX-only, and deliberately so: every local placement
 // property it offers is a POSIX primitive with no equivalent elsewhere —
-// process groups and killpg for reaching a coding agent's whole tree,
+// process groups and killpg for reaching a harness's whole tree,
 // SIGSTOP/SIGCONT for the clarification pause, and a process's start time from
 // the kernel's own record for the pid-reuse guard. A partial port would offer
 // the same interface with none of the guarantees, which is worse than not

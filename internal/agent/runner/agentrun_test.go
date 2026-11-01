@@ -38,7 +38,7 @@ func agentFixture(t *testing.T, launcher runner.AgentLauncher, resume *runner.Re
 
 // THE EXECUTOR SPENDS NO MODEL CALL OF ITS OWN.
 //
-// This is the whole shape: the CLI's loop drives the model, so the engine's
+// This is the whole shape: the harness's loop drives the model, so the engine's
 // job is to hand it a brief and park. A launch that also called a model here
 // would run the phase twice — once on the engine's tokens and once in the box
 // on the subscription's — and only the second would have the tools.
@@ -73,10 +73,10 @@ func TestTheExecutorLaunchesItsRunAndParks(t *testing.T) {
 	if !strings.Contains(req.System, "CTO") {
 		t.Errorf("the system prompt does not carry the seat's identity: %q", req.System)
 	}
-	// The SUBMISSION is on the surface, because that is how the CLI ends
+	// The SUBMISSION is on the surface, because that is how the harness ends
 	// its run — over the bridge. Read off the tool DEFINITIONS, which is
 	// what the bridge serves to a tools/list: a submission the surface holds
-	// but does not publish is one the CLI can never call.
+	// but does not publish is one the harness can never call.
 	if !slices.Contains(toolNames(req.Surface.ToolDefs()), runner.SubmitWorkTool) {
 		t.Error("the bridged surface does not publish submit_work, so the run cannot say what it did")
 	}
@@ -85,10 +85,10 @@ func TestTheExecutorLaunchesItsRunAndParks(t *testing.T) {
 // THE PROMPT TRAVELS IN TWO HALVES: the seat's standing instructions as system
 // text, the turn's ask as the brief.
 //
-// The coding CLI appends the first to its own system prompt and runs the
+// The harness appends the first to its own system prompt and runs the
 // second. Joined into one brief, as they once were, the seat's identity,
 // policies and memory reached the model as the opening of the user's request,
-// and the CLI's system prompt said nothing of whose work it was doing.
+// and the harness's system prompt said nothing of whose work it was doing.
 func TestTheExecutorsPromptTravelsInItsTwoHalves(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
@@ -101,7 +101,7 @@ func TestTheExecutorsPromptTravelsInItsTwoHalves(t *testing.T) {
 		t.Errorf("the system half is not the seat's contract and identity:\n%s", req.System)
 	}
 	if strings.Contains(req.Brief, "CTO") || strings.Contains(req.Brief, "## Your turn") {
-		t.Errorf("the seat's standing instructions ride the prompt the CLI runs:\n%s", req.Brief)
+		t.Errorf("the seat's standing instructions ride the prompt the harness runs:\n%s", req.Brief)
 	}
 	if strings.Contains(req.System, "post the weekly summary") {
 		t.Errorf("the turn's ask rides the system half:\n%s", req.System)
@@ -516,7 +516,7 @@ func TestTheLastSubmissionAnAgentRunMadeWins(t *testing.T) {
 
 // THE CORRECTION IS THE CALL MADE LAST, NOT THE ONE THAT FINISHED LAST. The
 // row holds a run's calls in the order they finished — each is appended once
-// it returns — and a CLI that makes calls at once finishes them in whatever
+// it returns — and a harness that makes calls at once finishes them in whatever
 // order their tools take. So the collection reads them in the order the bridge
 // admitted them, and states each with when it ran, for how long and who
 // answered, as the phase record of any other phase does.
@@ -636,8 +636,8 @@ func TestAnAgentRunPublishesThePromptItWasLaunchedWith(t *testing.T) {
 // half of the prompt contains it.
 //
 // The launcher is handed the system and user text and the surface separately:
-// the definitions reach the coding CLI over the MCP bridge, not in the prompt.
-// The CLI's own model is billed for every one of them all the same, so a
+// the definitions reach the harness over the MCP bridge, not in the prompt.
+// The harness's own model is billed for every one of them all the same, so a
 // meter that counted only the text would report the engine's most tool-heavy
 // phase as its slimmest — and the argument for leaving them out ("they are not
 // in the prompt") is exactly the one a reader will make when deleting the
@@ -705,7 +705,7 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 				}}},
 			},
 			Run: runner.RunRecord{
-				CodingAgent: "claude-code", SandboxID: "box-7",
+				Harness: "claude-code", SandboxID: "box-7",
 				ProviderKey: "fallback-plan", Model: "claude-sonnet-5",
 				DeliveredRefs: []string{"https://example.com/pr/9"},
 			},
@@ -740,10 +740,10 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	if done.RoundNarration[0]["content"] == "" {
 		t.Error("the round carries no content, so its tool rows have nothing above them")
 	}
-	// AND WHICH BOX: the CLI that did the work and the box it ran in, which
+	// AND WHICH BOX: the harness that did the work and the box it ran in, which
 	// only the run knows and nothing on the resuming side could re-derive.
-	if done.CodingAgent != "claude-code" || done.SandboxID != "box-7" {
-		t.Errorf("the box is unnamed: agent=%q id=%q", done.CodingAgent, done.SandboxID)
+	if done.Harness != "claude-code" || done.SandboxID != "box-7" {
+		t.Errorf("the box is unnamed: agent=%q id=%q", done.Harness, done.SandboxID)
 	}
 	if len(done.DeliveredRefs) != 1 {
 		t.Errorf("delivered_refs = %v, want what the run produced", done.DeliveredRefs)
@@ -814,7 +814,7 @@ func TestACollectedRunListsTheToolsItActivated(t *testing.T) {
 	}
 }
 
-// A PHASE THAT RAN HERE NAMES NO BOX. The CLI and the box are facts about the
+// A PHASE THAT RAN HERE NAMES NO BOX. The harness and the box are facts about the
 // run an executor collected, not something the collection stamps on every
 // record it touches: the reviewer runs in this process's own loop.
 func TestAPhaseThatRanHereNamesNoBox(t *testing.T) {
@@ -829,7 +829,7 @@ func TestAPhaseThatRanHereNamesNoBox(t *testing.T) {
 		t.Fatalf("Review: %v", err)
 	}
 	done := completedPhase(t, pub, "review")
-	if done.CodingAgent != "" || done.SandboxID != "" {
-		t.Errorf("a phase that ran here named a box: agent=%q id=%q", done.CodingAgent, done.SandboxID)
+	if done.Harness != "" || done.SandboxID != "" {
+		t.Errorf("a phase that ran here named a box: agent=%q id=%q", done.Harness, done.SandboxID)
 	}
 }

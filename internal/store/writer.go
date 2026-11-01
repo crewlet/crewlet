@@ -68,7 +68,7 @@ var tagKeys = map[string]string{
 	// through disagreed about a dimension Append reads back out of the
 	// tags. One map is what makes that disagreement unrepresentable.
 	"turn_id": "turn_id",
-	// WHO ANSWERED a coding run's question: the one dimension a person's
+	// WHO ANSWERED an executor's question: the one dimension a person's
 	// answered decisions select the answers' records by (ADR-0068), before
 	// reading the few that are theirs whole. A listing never selects the
 	// payload, so without it every answer in the window was read whole to
@@ -167,8 +167,9 @@ var tagKeys = map[string]string{
 	"dir":         "dir",
 	// And a model gesture's (types.ModelActed): which gesture, and on which
 	// providers.llm entry. `provider_key` means that entry wherever a
-	// payload carries it (a phase's record, a fallback, a sandbox run), so
-	// "what ran on, and what was done to, this model" is one filter.
+	// payload carries it (a phase's record, a fallback, an executor's
+	// launch), so "what ran on, and what was done to, this model" is one
+	// filter.
 	"action":       "action",
 	"provider_key": "provider_key",
 	// The Dashboard Assistant's CONVERSATION a runtime audit row belongs to
@@ -269,9 +270,9 @@ func SpendFor(eventType string, payload []byte) *Spend {
 		// THE EXECUTOR'S SPEND, filed where every reader already looks for
 		// it: phase `execute`, under the round that launched it — the
 		// record's own `iteration` — and nested under nothing. Its calls are
-		// its CLI's own turns, by the rule the live projection counts it by.
+		// its harness's own turns, by the rule the live projection counts it by.
 		spend.Phase, spend.HostPhase, spend.Worker = phaseExecute, "", ""
-		spend.Calls = tokens.LaunchCalls(jsonInt(body["cli_turns"]))
+		spend.Calls = tokens.LaunchCalls(jsonInt(body["harness_turns"]))
 	case auxiliarySpendType:
 		// THE AUXILIARY MODEL'S SPEND, filed where every reader already
 		// looks for it: phase `auxiliary`, its purpose as the worker. The

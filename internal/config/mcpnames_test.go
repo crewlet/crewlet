@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // namedDoc is a company with one server whose entry lines the case writes,
@@ -96,7 +96,7 @@ func TestEveryNameTheEngineReadsAServerByIsOneTheRuleTakes(t *testing.T) {
 
 // A TOOL PREFIX IS A MODEL'S TOOL-NAME CHARACTERS AND LEAVES ROOM FOR A NAME:
 // every tool of the server is filed under the prefix and its own name run
-// together, held to cliprofile.ToolNameMax, so a prefix that a model's name
+// together, held to harnessprofile.ToolNameMax, so a prefix that a model's name
 // cannot hold, or that leaves no room, would refuse every tool the server
 // lists.
 //
@@ -107,7 +107,7 @@ func TestAToolPrefixLeavesRoomForAName(t *testing.T) {
 	prefixed := func(prefix string) string {
 		return "  - name: docs\n    command: server\n    tool_prefix: \"" + prefix + "\"\n"
 	}
-	room := cliprofile.ToolNameMax() - 1
+	room := harnessprofile.ToolNameMax() - 1
 	if room != MaxMCPToolPrefix() {
 		t.Fatalf("MaxMCPToolPrefix() = %d, want %d: one less than the longest tool name", MaxMCPToolPrefix(), room)
 	}
@@ -378,7 +378,7 @@ func TestTheSchemaStatesANameAndAPrefixAsTheValidatorDoes(t *testing.T) {
 		}
 	}
 	for _, prefix := range []string{"docs_", "Mattermost-", "gh"} {
-		if !cliprofile.ToolNameChars(prefix) {
+		if !harnessprofile.ToolNameChars(prefix) {
 			t.Errorf("the schema's prefix pattern admits %q and the validator does not", prefix)
 		}
 	}

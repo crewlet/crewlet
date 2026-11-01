@@ -92,12 +92,12 @@ func TestACollectedLaunchIsPublishedOnceWithItsTokens(t *testing.T) {
 		t.Errorf("cache = %d/%d, want the run's 6000/1500", rec.CacheReadTokens, rec.CacheWriteTokens)
 	}
 	if rec.CostUSD != 0.42 {
-		t.Errorf("cost_usd = %v, want what the run's CLI reported", rec.CostUSD)
+		t.Errorf("cost_usd = %v, want what the run's harness reported", rec.CostUSD)
 	}
-	// AND ITS CALLS: the model turns its CLI's loop took, as it reported
+	// AND ITS CALLS: the model turns its harness's loop took, as it reported
 	// them, which every spend figure counts this record by.
-	if rec.CLITurns != 31 {
-		t.Errorf("cli_turns = %d, want the run's 31", rec.CLITurns)
+	if rec.HarnessTurns != 31 {
+		t.Errorf("harness_turns = %d, want the run's 31", rec.HarnessTurns)
 	}
 	// THE IDENTITY: the executor iteration that launched it and the job.
 	if rec.TurnID != "t1" || rec.Iteration != rigIteration || rec.LaunchID != launched.LaunchID {
@@ -111,8 +111,8 @@ func TestACollectedLaunchIsPublishedOnceWithItsTokens(t *testing.T) {
 	if rec.DurationMS != int((7 * time.Minute).Milliseconds()) {
 		t.Errorf("duration = %dms, want the 7 minutes from launch to collection", rec.DurationMS)
 	}
-	if rec.Model != "claude-sonnet-5" || rec.CodingAgent != "claude-code" || rec.SandboxID != launched.SandboxID {
-		t.Errorf("model/agent/box = %q/%q/%q", rec.Model, rec.CodingAgent, rec.SandboxID)
+	if rec.Model != "claude-sonnet-5" || rec.Harness != "claude-code" || rec.SandboxID != launched.SandboxID {
+		t.Errorf("model/agent/box = %q/%q/%q", rec.Model, rec.Harness, rec.SandboxID)
 	}
 	if rec.WorkItem == nil || *rec.WorkItem != rigItem || rec.WorkKey != launched.WorkKey {
 		t.Errorf("work item/key = %+v/%q, want the launch's", rec.WorkItem, rec.WorkKey)
@@ -127,7 +127,7 @@ func TestACollectedLaunchIsPublishedOnceWithItsTokens(t *testing.T) {
 
 // THE TRANSCRIPT RIDES THE LAUNCH'S RECORD, REDACTED.
 //
-// The runner reconstructs an activity transcript from the coding agent's own
+// The runner reconstructs an activity transcript from the harness's own
 // output, and it was collected, redacted and then thrown away: nothing the
 // resume carried included it, so the doc's promise that it is published was
 // untrue. It is the whole account of what an agent with no telemetry did —
@@ -162,7 +162,7 @@ func TestTheTranscriptRidesTheLaunchsRecordRedacted(t *testing.T) {
 
 // A BOX THAT PRINTS ITS TOKENS PERSISTS NONE OF THEM.
 //
-// A coding agent debugging its own setup prints its environment or its MCP
+// A harness debugging its own setup prints its environment or its MCP
 // configuration, and both hold its run's per-run tokens: the telemetry
 // endpoint's in the endpoint's path, the tool bridge's in the bridge's URL.
 // Either is a credential — the bridge's calls the seat's own tools as the seat
@@ -359,7 +359,7 @@ func TestEveryCollectedLaunchIsPublishedWithItsOutcome(t *testing.T) {
 
 	rig.launch("breaks")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.runner.Finish(Result{Error: "the coding agent exited with status 1: no such file"})
+	rig.runner.Finish(Result{Error: "the harness exited with status 1: no such file"})
 	payload, ev = rig.completion("breaks")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -409,7 +409,7 @@ func TestARefusedLaunchPublishIsNotRecorded(t *testing.T) {
 
 // WHAT A RUN SAYS IT SPENT IS NEVER A REFUND.
 //
-// A run's usage is parsed out of its coding CLI's last line, printed in a box
+// A run's usage is parsed out of its harness's last line, printed in a box
 // its own agent can run any command in. Taken as given, a negative count was
 // subtracted from the seat's budget counter by the charge and from every
 // rollup by the launch's record — headroom a run could print for itself. It is
@@ -446,7 +446,7 @@ func TestARunsNegativeUsageIsReadAsNothingSpent(t *testing.T) {
 	}
 	// A NEGATIVE TURN COUNT IS NONE REPORTED, which counts the run as the
 	// one call the engine asked for rather than as calls taken off.
-	if rec.CLITurns != 0 {
-		t.Errorf("cli_turns = %d, want a negative count read as none", rec.CLITurns)
+	if rec.HarnessTurns != 0 {
+		t.Errorf("harness_turns = %d, want a negative count read as none", rec.HarnessTurns)
 	}
 }

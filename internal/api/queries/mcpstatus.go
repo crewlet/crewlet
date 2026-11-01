@@ -10,9 +10,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -83,6 +85,24 @@ type MCPStatusAnswer struct {
 	// Nodes are the live nodes in id order, each saying whether it
 	// reports at all — the columns every server's row is drawn against.
 	Nodes []MCPStatusNode `json:"nodes"`
+	// Builtin is the engine's own tools as a seat is offered them, on the
+	// catalogue's shelves in its order ([builtin.Groups]), each tool a
+	// catalogue row naming who may call it. A shelf this company offers no
+	// tool of is left out: a company on Jira holds no Worklet tool, and an
+	// empty "Work items" would say its agents hold a group they do not.
+	// ALWAYS A LIST.
+	Builtin []BuiltinGroup `json:"builtin"`
+}
+
+// BuiltinGroup is one shelf of the built-in catalogue.
+type BuiltinGroup struct {
+	Key builtin.Group `json:"key"`
+	// Label and Description are the group's own words, the engine's, so a
+	// screen and the API reader name a shelf the same way.
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	// Tools are the shelf's tools in the catalogue's order. ALWAYS A LIST.
+	Tools []ToolRow `json:"tools"`
 }
 
 // MCPStatusNode is one live node.
@@ -98,6 +118,15 @@ type MCPStatusNode struct {
 // nodes did with it.
 type MCPServerRow struct {
 	Name string `json:"name"`
+	// Title, Catalogue and Vendor are what the curated catalogue recognises
+	// the server as, by its address or its command
+	// ([catalogue.Recognise]): the entry's title, its key and the vetted
+	// mark the dashboard draws. A server it does not recognise is titled by
+	// its name, with "" for the other two, which is also a server the
+	// configuration does not carry.
+	Title     string `json:"title"`
+	Catalogue string `json:"catalogue"`
+	Vendor    string `json:"vendor"`
 	// Configured is whether this node's active configuration declares
 	// it. False only for a server a node reports and the configuration no
 	// longer (or does not yet) carries.
@@ -250,6 +279,7 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	out := MCPStatusAnswer{
 		Servers: []MCPServerRow{},
 		Nodes:   make([]MCPStatusNode, 0, len(reports)),
+		Builtin: s.builtinGroups(),
 	}
 	for _, r := range reports {
 		out.Nodes = append(out.Nodes, MCPStatusNode{ID: r.node, Reported: r.reported})
@@ -276,7 +306,7 @@ func (s Sources) mcpServersStatus(ctx context.Context, _ Params) (any, error) {
 	for _, r := range reports {
 		for name, m := range r.servers {
 			if _, known := rows[name]; !known {
-				rows[name] = &MCPServerRow{Name: name, Shared: m.Shared, Enabled: true, Args: []string{}}
+				rows[name] = &MCPServerRow{Name: name, Title: name, Shared: m.Shared, Enabled: true, Args: []string{}}
 			}
 		}
 	}
@@ -388,8 +418,9 @@ func instanceSeat(organization *org.Organization, id uuid.UUID) string {
 // configuredRow is a server's launch as the configuration declares it, with
 // no credential in it.
 func configuredRow(m *config.MCPServer) *MCPServerRow {
-	return &MCPServerRow{
+	row := &MCPServerRow{
 		Name:        m.Name,
+		Title:       m.Name,
 		Configured:  true,
 		Shared:      m.IsShared(),
 		Enabled:     m.IsEnabled(),
@@ -399,6 +430,10 @@ func configuredRow(m *config.MCPServer) *MCPServerRow {
 		Args:        append([]string{}, m.Args...),
 		URL:         m.URL,
 	}
+	if entry, ok := catalogue.Recognise(m.Launch()); ok {
+		row.Title, row.Catalogue, row.Vendor = entry.Title, entry.ID, entry.Vendor
+	}
+	return row
 }
 
 // mcpState is the ONE reading of a server's counts.
@@ -428,4 +463,38 @@ func mcpState(enabled, anyReported bool, started, failed, waiting int) MCPServer
 	default:
 		return MCPNotStarted
 	}
+}
+
+// builtinGroups files this node's built-ins on the catalogue's shelves.
+//
+// A ROW THE CATALOGUE DOES NOT FILE IS LEFT OFF, because there is no shelf to
+// draw it on; internal/agent/builtin's sweep fails the build on a built-in a
+// seat is offered and the catalogue does not file, so this drops nothing a
+// build that passed its tests can offer.
+func (s Sources) builtinGroups() []BuiltinGroup {
+	out := []BuiltinGroup{}
+	if s.Builtins == nil {
+		return out
+	}
+	shelves := map[builtin.Group][]ToolRow{}
+	for _, row := range s.Builtins() {
+		if row.Group.Valid() {
+			shelves[row.Group] = append(shelves[row.Group], row)
+		}
+	}
+	for _, g := range builtin.Groups {
+		rows := shelves[g]
+		if len(rows) == 0 {
+			continue
+		}
+		slices.SortStableFunc(rows, func(a, b ToolRow) int {
+			fa, _ := builtin.FilingOf(a.Name)
+			fb, _ := builtin.FilingOf(b.Name)
+			return cmp.Compare(fa.Rank, fb.Rank)
+		})
+		out = append(out, BuiltinGroup{
+			Key: g, Label: g.Label(), Description: g.Description(), Tools: rows,
+		})
+	}
+	return out
 }

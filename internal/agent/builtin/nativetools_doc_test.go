@@ -95,7 +95,7 @@ func operatorOnlyTools(t *testing.T) []string {
 }
 
 // everyOperatorOnlyTool is [operatorOnlyTools] and the operator-only tools
-// that are not the tracker's: answering a parked coding run, pausing and
+// that are not the tracker's: answering a parked executor, pausing and
 // resuming a seat, steering a running turn and answering a question from the
 // company's knowledge — each a person's decision about the company, served on
 // the operator surface alone — and the chat gestures only a person makes.

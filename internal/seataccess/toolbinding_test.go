@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
@@ -96,7 +97,7 @@ func TestRecognisedKeysAreTheVendorsCredentialKeys(t *testing.T) {
 		"gitlab":  gitlab.CredentialKeys,
 		"github":  github.CredentialKeys,
 	}
-	for _, b := range config.SeatToolBindings() {
+	for _, b := range catalogue.Bindings() {
 		keys, ok := vendors[b.Vendor]
 		if !ok {
 			continue

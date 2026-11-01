@@ -33,10 +33,10 @@ func socket(t *testing.T) (string, *net.UnixListener) {
 }
 
 // THE ENGINE CLOSING ITS END ENDS THE RELAY, with what it sent delivered,
-// whatever the CLI is still doing with stdin — nothing it writes after that can
+// whatever the harness is still doing with stdin — nothing it writes after that can
 // reach a tool.
 //
-// The CLI's stdin here never ends (a pipe nobody closes), so a relay that waited
+// The harness's stdin here never ends (a pipe nobody closes), so a relay that waited
 // for it would hang the case.
 //
 // Mutation: wait on the stdin copy instead of the socket copy and the case never
@@ -67,12 +67,12 @@ func TestTheEngineClosingTheSocketEndsTheRelay(t *testing.T) {
 	}
 }
 
-// THE CLI FINISHING HALF-CLOSES, so the answer to a call it already sent still
+// THE HARNESS FINISHING HALF-CLOSES, so the answer to a call it already sent still
 // reaches it: the engine reads the end of the stream, answers, and closes.
 //
 // Mutation: close the whole socket when stdin ends and the engine's answer is
 // lost — stdout comes back empty.
-func TestTheCLIFinishingStillGetsTheAnswerToItsLastCall(t *testing.T) {
+func TestTheHarnessFinishingStillGetsTheAnswerToItsLastCall(t *testing.T) {
 	t.Parallel()
 	path, ln := socket(t)
 	go func() {
@@ -81,7 +81,7 @@ func TestTheCLIFinishingStillGetsTheAnswerToItsLastCall(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		// Everything the CLI sent, up to its end, then the answer.
+		// Everything the harness sent, up to its end, then the answer.
 		got, _ := io.ReadAll(conn)
 		_, _ = conn.Write([]byte("answer to " + strings.TrimSpace(string(got)) + "\n"))
 	}()
@@ -91,7 +91,7 @@ func TestTheCLIFinishingStillGetsTheAnswerToItsLastCall(t *testing.T) {
 		t.Fatalf("Run: %v (stderr %q)", err, stderr.String())
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "answer to call-7" {
-		t.Errorf("stdout = %q, want the answer to the CLI's last call", got)
+		t.Errorf("stdout = %q, want the answer to the harness's last call", got)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestTheRelayCopiesBothWays(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		// An echo with a prefix, line by line, until the CLI's end.
+		// An echo with a prefix, line by line, until the harness's end.
 		lines := bufio.NewScanner(conn)
 		for lines.Scan() {
 			_, _ = conn.Write([]byte("engine:" + lines.Text() + "\n"))
@@ -124,7 +124,7 @@ func TestTheRelayCopiesBothWays(t *testing.T) {
 }
 
 // A SOCKET NOBODY HOLDS IS SAID ON STDERR, naming it, and nothing reaches
-// stdout — which is the MCP stream, where any byte is a protocol error the CLI
+// stdout — which is the MCP stream, where any byte is a protocol error the harness
 // would report as a broken server rather than as a missing one.
 func TestAnUnreachableSocketIsNamedOnStderrAlone(t *testing.T) {
 	t.Parallel()
@@ -142,8 +142,8 @@ func TestAnUnreachableSocketIsNamedOnStderrAlone(t *testing.T) {
 }
 
 // ITS ONLY INPUT IS ONE ABSOLUTE PATH. A relative one would be resolved against
-// whatever working directory the CLI started its server in, which is the
-// call's own directory on some CLIs and the CLI's elsewhere.
+// whatever working directory the harness started its server in, which is the
+// call's own directory on some harnesses and the harness's elsewhere.
 func TestTheRelayTakesExactlyOneAbsolutePath(t *testing.T) {
 	t.Parallel()
 	for name, args := range map[string][]string{

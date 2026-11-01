@@ -341,7 +341,7 @@ func TestAPostNamesTheNewestTurnHoldingTheIndicator(t *testing.T) {
 	first.End(t.Context(), false)
 }
 
-// A turn that SUSPENDS for a detached coding run holds its session open: the
+// A turn that SUSPENDS for a detached executor holds its session open: the
 // same turn resumes when the job completes, and the person is still waiting.
 func TestASuspendedTurnKeepsItsIndicator(t *testing.T) {
 	p := newPoster()
@@ -365,7 +365,7 @@ func TestASuspendedTurnKeepsItsIndicator(t *testing.T) {
 // A RESUMED TURN TAKES ITS OWN HOLD BACK rather than raising a second
 // indicator over the one it kept alive.
 //
-// It cannot do what a fresh turn does: a parked coding run's row carries no
+// It cannot do what a fresh turn does: a parked executor's row carries no
 // chat metadata — the message that woke the suspended turn may be days gone —
 // so the resume knows its seat and its turn id and nothing about the
 // conversation. And the hold it is taking back is ONE, not two: the pair is a
@@ -436,7 +436,7 @@ func TestRejoiningWhatThisNodeDoesNotHoldIsNil(t *testing.T) {
 // A NODE THAT STOPS RUNNING A SEAT TAKES THAT SEAT'S INDICATORS DOWN, and the
 // kept-alive session is why it has to.
 //
-// A turn suspended into a detached coding run leaves its indicator up on
+// A turn suspended on a detached executor leaves its indicator up on
 // purpose, and the resume lands on whichever node holds the seat when the box
 // reports. Without this, a node that handed the seat on goes on re-asserting
 // "is thinking…" every refresh interval, for a turn it is not running, for as

@@ -7,7 +7,7 @@ import "time"
 //
 // A DERIVED id ([DeriveOpID]) carries the instant its unit of work began, and a
 // retry reproduces it: a turn re-run after a crash, or the resumed half of a
-// turn a coding run parked, derives the ids its first attempt derived, and the
+// turn its executor parked, derives the ids its first attempt derived, and the
 // ledger collapses each repeated write onto the first copy. That holds only
 // while the ledger can VOUCH for the instant ([Publisher.vouches]). Every node's
 // sweep deletes the rows it applied more than [OpsRetention] ago and records

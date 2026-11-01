@@ -237,6 +237,18 @@ func (e *Engine) fenced(ctx context.Context) error {
 			"their logs, so the pass could miss an object; wait for it to catch up and " +
 			"run this again")
 	}
+	// WHAT THIS BUILD CANNOT SEE, as the collector asks it ([Engine.unseen]):
+	// a final pass copies every object this build's declarations name, and
+	// the store it leaves behind is the operator's to delete, so a newer
+	// build's objects it never copied would go with it.
+	why, err := e.unseen(ctx)
+	if err != nil {
+		return fmt.Errorf("engine: read what this node cannot see that may name an object: %w", err)
+	}
+	if why != "" {
+		return migrationRefused("the final pass would leave objects behind in the store it is "+
+			"leaving: %s. Run the migration from a build that knows every log the fleet runs", why)
+	}
 	return nil
 }
 

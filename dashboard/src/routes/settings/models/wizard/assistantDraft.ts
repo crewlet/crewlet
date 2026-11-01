@@ -10,7 +10,10 @@
  */
 
 import type { DraftFieldSpec } from "~/app/assistant/draft.ts";
-import { DEFAULT_CLI_MAX_CONCURRENT, DEFAULT_CLI_TIMEOUT_SECONDS } from "~/contract/models.ts";
+import {
+  DEFAULT_HARNESS_MAX_CONCURRENT,
+  DEFAULT_HARNESS_TIMEOUT_SECONDS,
+} from "~/contract/models.ts";
 import { listed } from "~/lib/format.ts";
 import { CATEGORY_ORDER, categoryState } from "~/lib/modelUses.ts";
 import { CATEGORY_WORDS, RUN_IN, product } from "../words.ts";
@@ -35,7 +38,7 @@ function seatsFor(draft: Draft, seats: readonly string[]): string {
 export function modelDraftFields(seats: readonly string[]): readonly DraftFieldSpec<Draft>[] {
   return [
     { path: "name", label: "Name", read: (d) => d.key },
-    { path: "cli", label: "Coding CLI", read: (d) => product(d.agent) },
+    { path: "harness", label: "Coding CLI", read: (d) => product(d.harness) },
     { path: "method", label: "Method", read: (d) => METHOD_WORDS[d.method].label },
     { path: "model", label: "Model", read: (d) => d.model },
     {
@@ -47,12 +50,12 @@ export function modelDraftFields(seats: readonly string[]): readonly DraftFieldS
     {
       path: "processes_at_once",
       label: "Processes at once",
-      read: (d) => d.concurrent || String(DEFAULT_CLI_MAX_CONCURRENT),
+      read: (d) => d.concurrent || String(DEFAULT_HARNESS_MAX_CONCURRENT),
     },
     {
       path: "timeout_seconds",
       label: "Timeout, in seconds",
-      read: (d) => d.timeout || String(DEFAULT_CLI_TIMEOUT_SECONDS),
+      read: (d) => d.timeout || String(DEFAULT_HARNESS_TIMEOUT_SECONDS),
     },
     { path: "web_tools", label: "Web tools", read: (d) => (d.webDenied ? "Denied" : "Allowed") },
   ];

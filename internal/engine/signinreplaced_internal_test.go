@@ -62,7 +62,7 @@ func TestARunRefusedAfterARotationIsRelaunchedOnce(t *testing.T) {
 	}
 }
 
-// THE LAUNCH STAMPS THE SIGN-IN THE JOB'S CLI IS HANDED on the job's record,
+// THE LAUNCH STAMPS THE SIGN-IN THE JOB'S HARNESS IS HANDED on the job's record,
 // so whichever node collects the job can tell a refusal on a replaced
 // credential from an ordinary one.
 //

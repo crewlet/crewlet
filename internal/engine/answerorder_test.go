@@ -31,7 +31,7 @@ import (
 
 // THE R1/R2 RACE, end to end through a seat's inbox, on BOTH backends.
 //
-//  1. A coding run parks with a question in a chat thread.
+//  1. An executor parks with a question in a chat thread.
 //  2. The first reply, R1, arrives; the run's resume fails on something
 //     transient.
 //  3. The person's next message, R2, arrives before anything retries.
@@ -319,7 +319,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 
 	// THE PARKED RUN: launched from the thread, its question asked now.
 	run := sandbox.PendingRun{
-		TurnID: "t1", AgentHandle: "swe", AgentID: fixtureSeat("swe").String(), Role: "SWE", CodingAgent: "claude-code",
+		TurnID: "t1", AgentHandle: "swe", AgentID: fixtureSeat("swe").String(), Role: "SWE", Harness: "claude-code",
 		ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0",
 	}
 	if _, err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {

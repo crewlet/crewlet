@@ -248,7 +248,7 @@ export function UseItFor({
     const job = jobsOf(draft.intent)[0];
     return job ? draft.uses.jobs[job] : [];
   }, [draft.uses, draft.intent]);
-  const noCoding = `${product(draft.agent)} cannot run a seat's executor. Choose Claude Code or OpenCode to code.`;
+  const noCoding = `${product(draft.harness)} cannot run a seat's executor. Choose Claude Code or OpenCode to code.`;
   const slow = draft.model.trim() !== "" && !isFastModel(draft.model);
   const denyWeb = (
     <Button size="small" variant="secondary" onClick={() => onChange({ webDenied: true })}>

@@ -47,7 +47,7 @@ type FleetAsker interface {
 // SteerDeps are steer_turn's dependencies.
 type SteerDeps struct {
 	// Asker reaches every node, one of which runs a turn that has not
-	// launched its coding run yet. Nil omits the tool.
+	// launched its executor yet. Nil omits the tool.
 	Asker FleetAsker
 
 	// Wire signs every request the tool scatters and verifies every reply,
@@ -59,7 +59,7 @@ type SteerDeps struct {
 	// not verify could name whichever seat the caller leads.
 	Wire *signedask.Channel[steer.Request, steer.Reply]
 
-	// Runs is where a turn's notes wait once it has launched its coding run:
+	// Runs is where a turn's notes wait once it has launched its executor:
 	// the run's record, which every node reads ([RunSteers]). Required with
 	// Asker — a surface that asked only the scatter would send every note to
 	// a turn whose run is out to nobody.
@@ -74,7 +74,7 @@ type SteerDeps struct {
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
 }
 
-// RunSteers is where a turn's notes wait from the launch of its coding run to
+// RunSteers is where a turn's notes wait from the launch of its executor to
 // the turn's end: the run's own record in the coordination store, sealed
 // (internal/engine, runsteer.go, and ADR-0067). Declared here, by the consumer.
 type RunSteers interface {
@@ -117,7 +117,7 @@ type RunFiled struct {
 // # Where the note goes
 //
 // A turn's notes wait in one of two places, one after the other. Once the turn
-// has launched its coding run, on the RUN'S RECORD, which every node reads: the
+// has launched its executor, on the RUN'S RECORD, which every node reads: the
 // tool reads it first, and files the note there itself. Before that, in the box
 // the turn's first segment holds on the node running it, which nothing here can
 // read — so the note is SCATTERED to the fleet ([steer.Request]), and the node
@@ -145,7 +145,7 @@ type RunFiled struct {
 //
 // `pending`: the turn took the note, and `reads` says when it will be read —
 // `next_step`, at the turn's next step, or `after_answer`, once the person its
-// coding run asked has answered and whatever resumes the turn reads it. What
+// executor asked has answered and whatever resumes the turn reads it. What
 // became of it is recorded where the turn reads it, as `agent_turn_steered` —
 // `delivered` where it was read, or `expired` if the turn ended first. This node
 // sees no further.

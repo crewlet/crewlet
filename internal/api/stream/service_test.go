@@ -60,7 +60,7 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 		opts.Org = func() any { return map[string]any{} }
 	}
 	if opts.Tools == nil {
-		opts.Tools = func() []map[string]any { return nil }
+		opts.Tools = func() any { return nil }
 	}
 	if opts.Schedules == nil {
 		opts.Schedules = func() any { return []any{} }

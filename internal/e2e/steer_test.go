@@ -15,10 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A PERSON STEERS A LIVE CODING RUN, END TO END.
+// A PERSON STEERS A LIVE EXECUTOR, END TO END.
 //
 // The run is the stand-in Claude Code in a real `direct` box, held open, its
 // hooks the settings file the runner wrote. A person sends a note through the
@@ -28,13 +28,13 @@ import (
 // PostToolBatch hook calls steer_take over the run's own bridge session, which
 // takes the note: recorded read by the run's job, published delivered at the
 // `tool_batch` boundary under that job, and printed into the run's transcript
-// by the CLI's own line. The run completes, the turn resumes, and its review
+// by the harness's own line. The run completes, the turn resumes, and its review
 // opens with the note — so the work is judged against the correction.
 //
 // Mutations: write no settings file and no hook asks, so the note is read by the
 // review alone and the delivered record names no job; drop the informational
 // line from the transcript decoder and the run's record never shows it arrive;
-// answer no version probe and the held process is the probe, not the CLI.
+// answer no version probe and the held process is the probe, not the harness.
 func TestAPersonSteersALiveCodingRun(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
@@ -59,12 +59,12 @@ func TestAPersonSteersALiveCodingRun(t *testing.T) {
 		return false
 	}, n.diagnose)
 	running := n.runFor(t, sandbox.StatusRunning)
-	waitFor(t, "the CLI to start", func() bool {
+	waitFor(t, "the harness to start", func() bool {
 		_, err := os.Stat(argv)
 		return err == nil
 	}, n.diagnose)
 
-	// THE CLI IS WHAT WORKS, started on a release that reads its notes: with
+	// THE HARNESS IS WHAT WORKS, started on a release that reads its notes: with
 	// its hooks, and its standing instructions told of them. The version
 	// probe the run's script makes first is answered and gone.
 	args := n.agentArgv(t)
@@ -73,10 +73,10 @@ func TestAPersonSteersALiveCodingRun(t *testing.T) {
 		system = args[i+1]
 	}
 	if !slices.Contains(args, "--settings") || filepath.Base(system) != "system-notes.md" {
-		t.Fatalf("the held run is not the CLI started with its hooks and told of notes: %q", args)
+		t.Fatalf("the held run is not the harness started with its hooks and told of notes: %q", args)
 	}
 	if text, err := os.ReadFile(system); err != nil || //nolint:gosec // the run's own box, under the case's state dir
-		!strings.Contains(string(text), codingagent.ClaudeCodeSteerInstruction) {
+		!strings.Contains(string(text), executor.ClaudeCodeSteerInstruction) {
 		t.Errorf("the run's standing instructions are not told of notes (%v):\n%s", err, text)
 	}
 
@@ -96,7 +96,7 @@ func TestAPersonSteersALiveCodingRun(t *testing.T) {
 			"execute phase", delivered, running.LaunchID)
 	}
 
-	// AND THE LAUNCH'S OWN RECORD SAYS IT ARRIVED, in the CLI's own words.
+	// AND THE LAUNCH'S OWN RECORD SAYS IT ARRIVED, in the harness's own words.
 	waitFor(t, "the run's transcript to show the note arrive", func() bool {
 		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
 		if err != nil {
@@ -150,7 +150,7 @@ func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 		return false
 	}, n.diagnose)
 	running := n.runFor(t, sandbox.StatusRunning)
-	waitFor(t, "the CLI to start", func() bool {
+	waitFor(t, "the harness to start", func() bool {
 		_, err := os.Stat(argv)
 		return err == nil
 	}, n.diagnose)
@@ -172,7 +172,7 @@ func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the run's system text: %v", err)
 	}
-	if strings.Contains(string(text), codingagent.ClaudeCodeSteerInstruction) {
+	if strings.Contains(string(text), executor.ClaudeCodeSteerInstruction) {
 		t.Errorf("a run started without its hooks was told of notes:\n%s", text)
 	}
 	said, err := os.ReadFile(filepath.Join(filepath.Dir(system), "err.log")) //nolint:gosec // as above
@@ -201,7 +201,7 @@ func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 	waitFor(t, "the steered run to settle", func() bool { return len(n.activeRuns(t)) == 0 })
 }
 
-// steerRunningTurn sends a person's note to the turn whose coding run is out,
+// steerRunningTurn sends a person's note to the turn whose executor is out,
 // through the route the dashboard presses, and returns its id: answered
 // pending, read at the run's next step, and waiting on the run's record.
 func steerRunningTurn(t *testing.T, n *codingNode, turnID, note string) string {

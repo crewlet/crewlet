@@ -144,7 +144,7 @@ function fromLiveBox(box: ExecutorEntry): ExecutorRow {
     // The live projection types its status as a plain string because it
     // mirrors whatever the executor reported; it is the same vocabulary.
     status: box.status as ExecutorStatus,
-    coding_agent: box.coding_agent,
+    harness: box.harness,
     ...(box.provider_key ? { provider_key: box.provider_key } : {}),
     ...(box.model ? { model: box.model } : {}),
     placement: "",
@@ -235,7 +235,7 @@ function runFacts(run: ExecutorRow, nameOf: NameOf): Fact[] {
       path: run.agent_handle ? ["company", "org", "seats", run.agent_handle] : undefined,
     },
     { label: "Runs in", value: run.placement },
-    { label: "Coding agent", value: run.coding_agent },
+    { label: "Harness", value: run.harness },
     // THE MEMBER IT WAS LAUNCHED ON, and its model: a fallback at launch runs
     // it on an entry other than the chain's head, and which entry's plan a
     // long launch is spending is the first thing an admin watching it asks.
@@ -684,11 +684,11 @@ export function Executors() {
                 header: "Coding agent",
                 shrink: true,
                 drop: 1,
-                sortValue: (r) => r.coding_agent,
+                sortValue: (r) => r.harness,
                 cell: (r) =>
-                  r.coding_agent ? (
+                  r.harness ? (
                     <Tag appearance="outline" monospace>
-                      {r.coding_agent}
+                      {r.harness}
                     </Tag>
                   ) : (
                     <EmptyValue label="Not recorded" />
@@ -880,7 +880,7 @@ export function ExecutorScreen({ turnId }: { turnId: string }) {
             : settled
               ? [
                   { label: "Seat", value: nameOf(seat) },
-                  { label: "Coding agent", value: last?.codingAgent ?? "" },
+                  { label: "Harness", value: last?.harness ?? "" },
                   { label: "Launches", value: String(collected.length) },
                 ]
               : []
@@ -1046,7 +1046,7 @@ function CollectedRun({
           groups={[
             {
               properties: [
-                { label: "Coding agent", value: record.codingAgent },
+                { label: "Harness", value: record.harness },
                 {
                   label: "Box",
                   value: record.sandboxId ? <InlineCode>{record.sandboxId}</InlineCode> : "",

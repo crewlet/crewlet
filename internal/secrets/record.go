@@ -98,7 +98,7 @@ const (
 	// same command's row is [SourceAPI].
 	SourceCLI Source = "cli"
 
-	// SourceLLMLogin is a coding CLI's login — `crewlet llm login`'s headless
+	// SourceLLMLogin is a harness's login — `crewlet llm login`'s headless
 	// token, or `crewlet llm export -secret-store`'s bundle — written to the
 	// fleet's store directly, with the node's engine stopped.
 	SourceLLMLogin Source = "llm-login"

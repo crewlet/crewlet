@@ -40,7 +40,7 @@
 //
 // # Deep work
 //
-// A turn may hand its task to a deep-work run (ADR-0054): a coding CLI with
+// A turn may hand its task to a deep-work run (ADR-0054): a harness with
 // its own harness, in a box or confined on the engine host, whose one way into
 // Crewlet is this turn's own surface, bridged ([DeepWork], deep.go). Quick
 // mode's model keeps no tool of its own.

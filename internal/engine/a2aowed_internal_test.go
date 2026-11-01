@@ -23,7 +23,7 @@ import (
 // spent budget window — and closes one nothing holds, as it closed every idle
 // channel before.
 
-// fakeSeatRuns is the fleet's coding-run records as [colleagueOwed] reads them.
+// fakeSeatRuns is the fleet's executor records as [colleagueOwed] reads them.
 type fakeSeatRuns struct {
 	runs []sandbox.PendingRun
 	err  error

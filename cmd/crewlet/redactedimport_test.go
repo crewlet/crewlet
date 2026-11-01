@@ -91,7 +91,7 @@ func TestARedactedReadImportsOverTheCompanyItWasReadFrom(t *testing.T) {
 // A MASK NO REVISION ANSWERS IS REFUSED, NAMING ITS FIELD, and nothing is
 // stored. With no active revision there is nothing to restore from, and an
 // entry renamed in the copy has no prior value of its own; storing either
-// would hand the CLI the literal marker as its key, found hours later as a
+// would hand the harness the literal marker as its key, found hours later as a
 // sign-in failure that names nothing about where it came from.
 func TestAMaskNoRevisionAnswersIsRefusedNamingItsField(t *testing.T) {
 	t.Parallel()
@@ -211,7 +211,7 @@ func TestARedactedSeedIsRestoredFromThisNodesActiveRevision(t *testing.T) {
 }
 
 // AND WITH NOTHING TO RESTORE FROM, A NODE REFUSES TO START ON THE MASK rather
-// than boot a CLI on the literal marker.
+// than boot a harness on the literal marker.
 func TestARedactedSeedOnAnEmptyStoreIsRefusedNamingItsField(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

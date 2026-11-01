@@ -80,7 +80,7 @@ type Fleet struct {
 	maintRev    uint64
 
 	// pauseWatchers are the open seat-pause watches, runWatchers the open
-	// watches of each sandbox run by its turn id, and chatReadWatchers the
+	// watches of each executor's row by its turn id, and chatReadWatchers the
 	// open watches of the chat read state, each told of every change under
 	// the lock that made it.
 	pauseWatchers    map[*watcher[coord.SeatPauseUpdate]]struct{}

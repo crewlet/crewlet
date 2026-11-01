@@ -69,7 +69,7 @@ func TestTheApproximationCoversEveryTermMeasured(t *testing.T) {
 // {name, description, parameters} object per tool.
 //
 // The compact form is the definitions' own JSON in no vendor's wrapping, which
-// is what makes the figure comparable across CLIs: each one reads them over
+// is what makes the figure comparable across harnesses: each one reads them over
 // MCP, annotations and all, and hands them to its model in its own vendor's
 // shape, so the model is sent strictly more — which is why the choice is
 // written down rather than left to be inferred from a number.
@@ -168,7 +168,7 @@ func TestTheTallyNamesThePhaseThatFailed(t *testing.T) {
 }
 
 // A BOX THAT COULD NOT BE STARTED IS NAMED BY ITS CLASS. Every executor
-// runs in a coding sandbox, as its coding CLI's own run, and a box its
+// runs in a coding sandbox, as its harness's own run, and a box its
 // provider would not start failed the phase and the turn as `error`, while
 // the backend that met it had said what clears it. The kind is the sandbox's
 // class, read before a deadline its chain carries; a provider's own kind and

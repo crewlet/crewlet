@@ -4235,18 +4235,7 @@ func (e *Engine) counted(ctx context.Context, s *stateLog, now time.Time) ([]str
 	if nodes, err := e.watchedHolders().LiveData(ctx); err == nil {
 		live = nodes
 	}
-	var db *store.DB
-	if e.backends != nil {
-		db = e.backends.Store
-	}
-	counted := map[string]bool{}
-	for _, domain := range registeredDomains() {
-		tombs, _ := logTombstones(ctx, db, domain, 0)
-		for _, n := range statelog.CountedSet(now, reportedPositions(rows, domain.Name()), live, tombs) {
-			counted[n.NodeID] = true
-		}
-	}
-	return slices.Sorted(maps.Keys(counted)), nil
+	return slices.Sorted(maps.Keys(e.countedOn(ctx, rows, live, now))), nil
 }
 
 // recipients is how many nodes OTHER THAN THIS ONE the fleet counts on the

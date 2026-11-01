@@ -195,7 +195,7 @@ func sandboxState(t *testing.T) *livestate.LiveState {
 func sandboxPayload(turnID string) map[string]any {
 	return map[string]any{
 		"turn_id": turnID, "role": "Coder", "agent_handle": "coder",
-		"agent_id": "a-9", "coding_agent": "claude", "sandbox_id": "sb-1",
+		"agent_id": "a-9", "harness": "claude", "sandbox_id": "sb-1",
 		"task": "fix the build", "provider_key": "spare", "model": "claude-haiku",
 	}
 }
@@ -522,7 +522,7 @@ func TestASandboxEventDoesNotCreateASeatTheCompanyLacks(t *testing.T) {
 	// A run moves its seat's state, so a run starting pushes that seat — but
 	// only a seat the company HAS. Minting an entry for any seat a run names
 	// would put a row on screen for a seat the roster may not contain, the
-	// moment a coding run of a removed seat started.
+	// moment an executor of a removed seat started.
 	s := sandboxState(t)
 	change := s.Apply(env("executor_launched", sandboxPayload("tn-1")))
 

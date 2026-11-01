@@ -18,7 +18,7 @@ import (
 // A PERSON'S STOP ENDS THE SEAT'S RUNNING WORK AT ONCE.
 //
 // A pause with `stop_running` used to reach a seat's running turn at its next
-// round and nothing else: a run that turn had launched is its coding CLI's own
+// round and nothing else: a run that turn had launched is its harness's own
 // process in a box, with no rounds the engine sees, so it ran on to its end —
 // minutes or hours — still acting as the seat through its tool bridge, and only
 // the turn that came back to collect it was stopped. These cases hold the stop
@@ -115,7 +115,7 @@ func TestAStopEndsTheSeatsRunningRunAtOnce(t *testing.T) {
 		t.Fatal("the stopped run's record is still there, so its box and its seat are still held")
 	}
 	if !slices.Contains(rig.provider.KilledIDs(), running.SandboxID) {
-		t.Fatalf("killed %v, want the stopped run's box %s: its CLI is still working", rig.provider.KilledIDs(),
+		t.Fatalf("killed %v, want the stopped run's box %s: its harness is still working", rig.provider.KilledIDs(),
 			running.SandboxID)
 	}
 	if !slices.Contains(spies.endedRuns(), "t1") {
@@ -132,7 +132,7 @@ func TestAStopEndsTheSeatsRunningRunAtOnce(t *testing.T) {
 	payload := types.ExecutorFinished{
 		Agent: running.AgentID, AgentHandle: running.AgentHandle, RoleName: running.Role,
 		TurnID: running.TurnID, LaunchID: running.LaunchID,
-		SandboxID: running.SandboxID, CodingAgent: running.CodingAgent,
+		SandboxID: running.SandboxID, Harness: running.Harness,
 	}
 	ev := events.New(payload, events.TraceContext{TraceID: running.TraceID})
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -573,7 +573,7 @@ func TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost(t *testi
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	relaunch, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
-		TurnID: "t1", AgentHandle: "swe", AgentID: sweID, Role: "SWE", CodingAgent: "claude-code",
+		TurnID: "t1", AgentHandle: "swe", AgentID: sweID, Role: "SWE", Harness: "claude-code",
 		TraceID: "tr-1", CreatedAt: rig.now, LaunchNode: "node-b",
 	}, rigLease)
 	if err != nil {

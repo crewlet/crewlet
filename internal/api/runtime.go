@@ -37,6 +37,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -221,73 +222,16 @@ type NodeRuntime interface {
 	//
 	// A nil slice is "this node serves none", which is a real claim: a
 	// node with no active revision has no catalogue.
-	Tools() []ToolInfo
-}
+	Tools() []queries.ToolRow
 
-// ToolInfo is one catalogue entry on the wire.
-//
-// The field names are the CLIENT's — name, description, source — because the
-// dashboard is the compatibility reference for a frame's shape and it
-// groups the tool screen by `source`.
-type ToolInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-
-	// Source is the registry's ORIGIN GRAMMAR verbatim — `builtin`, or
-	// `mcp:` and the bare server name — which is what the tool screen
-	// groups on and what the API reference documents.
+	// Builtins is the engine's own tools as this node's seats are offered
+	// them: the registry's built-ins and the discovery pair the runner
+	// hands every phase that discovers, which no registry holds. The MCP
+	// page's built-in catalogue, nil on a node with no active revision.
 	//
-	// The prefix is load-bearing and was once stripped here: a reader
-	// cannot tell a server called `builtin` from the engine's own tools
-	// without it, and every consumer that tests for it — the screen's
-	// origin column, its per-origin counts — silently read a company
-	// running MCP servers as one running none.
-	Source string `json:"source"`
-
-	// Annotations are the behavioural hints recorded at REGISTRATION —
-	// what the engine's own delivery fence, the operator MCP surface and
-	// the sandbox bridge all read, and what the tool screen could not show
-	// because the catalogue on the wire carried three strings.
-	//
-	// It is the difference between a list of names and a surface an
-	// operator can audit: which of a fresh server's tools can write, which
-	// can write IRREVERSIBLY, and which reach outside the company at all.
-	Annotations ToolAnnotations `json:"annotations"`
-
-	// Delivers names WHERE calling this tool puts something in front of
-	// somebody outside the turn, and is empty for a tool that reaches
-	// nobody. The registry's own predicate, never re-derived here: a tool
-	// that delivers through the fence and not on the screen is the drift
-	// this field exists to make visible.
-	Delivers string `json:"delivers"`
-
-	// InputSchema is the tool's JSON Schema, exactly as the model is
-	// offered it. Carried whole rather than summarised, because the screen
-	// that renders "how would I call this" substitutes an object's ids
-	// into the schema's OWN field names — a summary would be a second,
-	// drifting description of the one thing the engine already states.
-	InputSchema map[string]any `json:"input_schema,omitempty"`
-}
-
-// ToolAnnotations is one tool's behavioural hints on the wire.
-//
-// EVERY HINT IS THREE-VALUED and rendered as a word, never as a bool. "The
-// server did not advertise this" and "the server said no" are different facts
-// — the whole reason [mcp.Hint] exists — and a JSON bool cannot hold the
-// difference: an absent hint would arrive as `false` and read as a positive
-// denial, which is exactly how a fresh MCP server's unannotated tools would
-// come to look like proven reads on the one screen an operator audits them on.
-//
-// Words rather than `true | false | null` for the client's sake: all three
-// values are truthy, so a careless `if (!ann.read_only)` cannot silently mean
-// "not read-only" for a tool nobody annotated.
-type ToolAnnotations struct {
-	// Title is the human-readable name a server advertised, empty when it
-	// advertised none.
-	Title string `json:"title,omitempty"`
-
-	ReadOnly    string `json:"read_only"`
-	Destructive string `json:"destructive"`
-	Idempotent  string `json:"idempotent"`
-	OpenWorld   string `json:"open_world"`
+	// NOT Tools filtered by origin, because that is the registry alone,
+	// and a catalogue of what an agent holds that left out the two tools
+	// every executor reaches its MCP servers through would be short by
+	// exactly the pair a reader of the MCP page asks about.
+	Builtins() []queries.ToolRow
 }

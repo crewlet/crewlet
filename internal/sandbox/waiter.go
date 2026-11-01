@@ -214,7 +214,7 @@ type WaiterOptions struct {
 // credential behind them is renewed.
 //
 // ON THE POLL, because nothing else reaches a running box and the poll
-// already does, every interval, for as long as the job runs: a coding job is
+// already does, every interval, for as long as the job runs: a launched job is
 // never stopped on a clock, so a credential issued at launch can outlive its
 // own expiry by hours, and the job's git push is then refused halfway through
 // the work. The box's environment cannot be changed under a running process,
@@ -232,7 +232,7 @@ type WaiterOptions struct {
 // through.
 type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box Sandbox)
 
-// Waiter is the completion poll and pause reaper for detached sandbox jobs.
+// Waiter is the completion poll and pause reaper for executors' detached jobs.
 //
 // TWO OF THEM, one per kind of box ([Drives]): the fleet's, under a duty, for
 // the boxes every node reaches, and every node's own, for the boxes on its
@@ -261,7 +261,7 @@ type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box
 // coordinator claims once.
 //
 // The same tick is also the PAUSE REAPER. A run blocked on a person's answer
-// parks its box paused so a quick reply resumes exactly where the coding agent
+// parks its box paused so a quick reply resumes exactly where the harness
 // stopped — but a paused box has no provider-side TTL, and the keepalive
 // deliberately does not touch it. Left alone, one unanswered question strands a
 // box forever.
@@ -686,7 +686,7 @@ func (w *Waiter) order(manager *Manager, runs []PendingRun) []task {
 		// executing, but the turn that started it has not yet written the
 		// conversation a resume re-enters. Firing there hands the
 		// coordinator a claim it cannot resume, and the coordinator's only
-		// honest answer to that is to fail the run — so a coding job that
+		// honest answer to that is to fail the run — so a job that
 		// finished inside the window destroyed the turn. The next pass finds
 		// it suspended.
 		//
@@ -999,7 +999,7 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 	}
 	w.succeed(run.TurnID)
 
-	// KEEPALIVE. The engine imposes NO run-time TTL on a coding job, so
+	// KEEPALIVE. The engine imposes NO run-time TTL on a launched job, so
 	// refresh the box's kill timer every tick to keep a running job alive for
 	// as long as it needs. The box is bounded only by how long the engine can
 	// go WITHOUT this heartbeat, never by a fixed run deadline: completion is
@@ -1011,12 +1011,12 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 		w.refresh(ctx, manager, run, box)
 	}
 
-	runner, err := manager.RunnerFor(run.CodingAgent)
+	runner, err := manager.RunnerFor(run.Harness)
 	if err != nil {
 		// A misconfigured runner cannot be polled, and retrying forever
 		// would hold the seat busy for the life of the deployment.
 		log.ErrorContext(ctx, "sandbox_poll_runner_missing",
-			"turn_id", run.TurnID, "coding_agent", run.CodingAgent, "error", err.Error())
+			"turn_id", run.TurnID, "harness", run.Harness, "error", err.Error())
 		return pollGone
 	}
 	state, err := runner.Poll(ctx, box, run.Handle())
@@ -1232,9 +1232,9 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 		WorkKey:     run.WorkKey,
 		// The job this tick saw finish, and the only one the completion
 		// may claim: see [Tail].
-		LaunchID:    run.LaunchID,
-		SandboxID:   run.SandboxID,
-		CodingAgent: run.CodingAgent,
+		LaunchID:  run.LaunchID,
+		SandboxID: run.SandboxID,
+		Harness:   run.Harness,
 	}
 	// Carry the original trace so the completion turn nests under the turn
 	// that started the job rather than opening a root of its own.

@@ -12,7 +12,7 @@ import (
 
 // DefaultBoxTimeout is a box's TTL and keepalive window.
 //
-// NOT a run-time limit: a coding job is never force-stopped on a timer, and
+// NOT a run-time limit: a launched job is never force-stopped on a timer, and
 // the waiter refreshes a running box's TTL to this value every tick so the
 // clock never kills it. It is effectively the ORPHAN-RECLAIM GRACE — how long
 // a box outlives an engine that stops heart-beating before the provider
@@ -32,7 +32,7 @@ const DefaultBoxTimeout = 900 * time.Second
 const DefaultPauseTTL = 1800 * time.Second
 
 // ConfigError reports providers.sandbox being misconfigured — a placement
-// with no backend behind it, or a coding agent with no registered runner.
+// with no backend behind it, or a harness with no registered runner.
 type ConfigError struct{ msg string }
 
 func (e *ConfigError) Error() string { return e.msg }
@@ -52,11 +52,11 @@ type ManagerOptions struct {
 	// DefaultPlacement is where a seat that names none runs. It MUST be a
 	// key of Providers: a default naming a backend nobody configured is
 	// the failure this whole reshape exists to make impossible, and it is
-	// checked here rather than at the first coding run.
+	// checked here rather than at the first launch.
 	DefaultPlacement Placement
 
-	// Runners are the coding agents a box can run, by CLI name. A launch
-	// names its own — the CLI of the executor-chain member it launches on —
+	// Runners are the harnesses a box can run, by harness name. A launch
+	// names its own — the harness of the executor-chain member it launches on —
 	// so there is no default among them to fall back to.
 	Runners map[string]Runner
 
@@ -144,7 +144,7 @@ func NewManager(opts ManagerOptions) (*Manager, error) {
 		}
 	}
 	if len(opts.Runners) == 0 {
-		return nil, &ConfigError{msg: "providers.sandbox: no coding-agent runners registered"}
+		return nil, &ConfigError{msg: "providers.sandbox: no harness runners registered"}
 	}
 	m := &Manager{
 		providers: maps.Clone(opts.Providers),
@@ -361,12 +361,12 @@ func (m *Manager) DefaultSetup() []SetupStep { return slices.Clone(m.setup) }
 // BoxTimeout is the TTL the waiter refreshes a running box to on every tick.
 func (m *Manager) BoxTimeout() time.Duration { return m.timeout }
 
-// RunnerFor returns the runner for a coding agent.
+// RunnerFor returns the runner for a harness.
 func (m *Manager) RunnerFor(codingAgent string) (Runner, error) {
 	runner, ok := m.runners[codingAgent]
 	if !ok {
 		return nil, &ConfigError{msg: fmt.Sprintf(
-			"no coding-agent runner registered for %q (have: %s)",
+			"no harness runner registered for %q (have: %s)",
 			codingAgent, words.And(slices.Sorted(maps.Keys(m.runners))))}
 	}
 	return runner, nil
@@ -382,14 +382,14 @@ type SpecInput struct {
 	// provider default.
 	Placement Placement
 
-	// CodingAgent is the runner the box runs: the CLI of the executor-chain
+	// Harness is the runner the box runs: the harness of the executor-chain
 	// member the launch picked. REQUIRED, and passed through as given — a
 	// runner chosen apart from the entry whose login and model the run
 	// carries is a run that cannot read either, so there is nothing to
 	// default it to. An empty one is refused at the launch.
-	CodingAgent string
-	Timeout     time.Duration
-	PauseTTL    *time.Duration
+	Harness  string
+	Timeout  time.Duration
+	PauseTTL *time.Duration
 
 	// MaxTurns is the seat's round cap. Nil inherits the provider default;
 	// an explicit 0 is uncapped, which is how a seat escapes a company-wide
@@ -422,7 +422,7 @@ func (m *Manager) CommitAttribution(run string) *CommitAttribution {
 func (m *Manager) BuildSpec(in SpecInput) Spec {
 	spec := Spec{
 		Placement:       in.Placement,
-		CodingAgent:     in.CodingAgent,
+		Harness:         in.Harness,
 		TimeoutSec:      m.timeout.Seconds(),
 		PauseTTLSec:     m.pauseTTL.Seconds(),
 		MaxTurns:        m.maxTurns,
@@ -454,7 +454,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 	return spec
 }
 
-// Acquire provisions a box for spec, installs the coding agent, and applies
+// Acquire provisions a box for spec, installs the harness, and applies
 // the launch's setup steps.
 //
 // On install OR setup failure the box is torn down before the error
@@ -463,7 +463,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 // the failure that got us here is often the caller's context expiring — and a
 // close that skips because the context is already dead leaks the box.
 func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, Runner, error) {
-	runner, err := m.RunnerFor(spec.CodingAgent)
+	runner, err := m.RunnerFor(spec.Harness)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -498,7 +498,7 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	}
 	log.DebugContext(ctx, "sandbox_acquired",
 		"sandbox_id", box.ID(), "placement", string(spec.Placement),
-		"coding_agent", spec.CodingAgent, "setup_steps", names)
+		"harness", spec.Harness, "setup_steps", names)
 	return box, runner, nil
 }
 
@@ -524,7 +524,7 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 // Reconnect reattaches to an existing (possibly paused) box: Connect
 // auto-resumes a paused one. No re-Install and no setup re-apply — the box
 // already carries its bin directory, the work dir and the launch's provisioning,
-// which is why a box is only ever reattached for the CLI it was installed for.
+// which is why a box is only ever reattached for the harness it was installed for.
 func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(codingAgent)
 	if err != nil {
@@ -539,7 +539,7 @@ func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID,
 		return nil, nil, err
 	}
 	log.DebugContext(ctx, "sandbox_reconnected", "sandbox_id", sandboxID,
-		"placement", string(placement), "coding_agent", codingAgent)
+		"placement", string(placement), "harness", codingAgent)
 	return box, runner, nil
 }
 

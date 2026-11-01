@@ -15,13 +15,13 @@ two. The item is resolved by four rules, tried in order — `trigger`,
 answer as `work_item` and `work_item_basis`.
 
 The charge is made **per completed segment**, not per turn. A turn that
-detaches a coding run completes once when it parks and again each time a run
-it launched is collected, so each segment charges what it spent under an
+detaches its executor completes once when it parks and again each time one of
+its launches is collected, so each segment charges what it spent under an
 operation id naming the segment — `turn/<run>/dispatch` or
 `turn/<run>/resume/<launch>` — which is also the id of the turn's row on the
 task. Only the dispatch segment counts a turn. A segment's tokens are its own
 phases as their records state them, its delegated workers, the round-cap judge
-and, on a resumed segment, the coding run it collected; learning after the turn
+and, on a resumed segment, the launch it collected; learning after the turn
 is not charged to the item. A parked segment charged to nothing hands what it
 spent on with the suspended conversation, and the segment that finishes the
 turn pays it when a sole write charges the turn.
@@ -74,10 +74,10 @@ a task's cost does not depend on how much its seat had to remember. It is in
 the seat's day and the company's history.
 
 Two kinds of the turn's own spend happen while **no segment is running**, and
-the segment that resumes from the coding run pays them, as it pays the run's
-own tokens: an executor run's calls through the tool bridge, which go on
-after the segment that launched the run has suspended and charged — the
-auxiliary rewrites its tools ask for and the workers it delegates to — and the
+the segment that resumes from the executor pays them, as it pays the
+executor's own tokens: its calls through the tool bridge, which go on after
+the segment that launched it has suspended and charged — the auxiliary
+rewrites its tools ask for and the workers it delegates to — and the
 condensation of a collected run's report, failure or question, which the
 coordinator makes between two segments on whichever node collects. Each is
 counted on a tally of its own rather than a segment's: the bridge session's

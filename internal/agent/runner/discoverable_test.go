@@ -75,7 +75,7 @@ func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 			t.Errorf("the system prompt lacks %q", want)
 		}
 	}
-	// Not a heading of its own for the definitions the CLI already lists.
+	// Not a heading of its own for the definitions the harness already lists.
 	if strings.Contains(system, "## Available tools") {
 		t.Error("the system prompt has a second `## Available tools` section")
 	}

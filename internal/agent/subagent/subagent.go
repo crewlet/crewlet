@@ -230,7 +230,7 @@ func (l Limits) validate() error {
 	return nil
 }
 
-// sessionTitle is how a worker's tool session names itself to its CLI.
+// sessionTitle is how a worker's tool session names itself to its harness.
 func sessionTitle(parent prompts.Seat, task string) string {
 	if parent.Role == nil {
 		return "worker " + task
@@ -304,7 +304,7 @@ type Config struct {
 	// charging entirely, which is the embedded single-node case.
 	Budget toolloop.BudgetMeter
 
-	// Sessions is where the worker's tools are served to its CLI: the
+	// Sessions is where the worker's tools are served to its harness: the
 	// parent's own host. Required.
 	Sessions *toolsession.Host
 
@@ -341,7 +341,7 @@ type Config struct {
 	//
 	// STATED BY THE CALLER rather than read off the call's context: the
 	// tool is offered only on an executor run's surface, whose calls arrive
-	// over the bridge from the run's coding CLI — no engine loop is
+	// over the bridge from the run's harness — no engine loop is
 	// iterating when they do, so there is no frame to ask, and the caller
 	// is the one that knows which round of its phase the run's calls are
 	// recorded on.
@@ -761,7 +761,7 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		Provider: provider,
 		Host:     cfg.Sessions,
 		// The worker names itself after its task and its parent seat, in
-		// the CLI's own logs.
+		// the harness's own logs.
 		ServerTitle: sessionTitle(cfg.Seat, task.ID),
 		// The resolved head, until a completion names the entry that
 		// actually served — which, on a seat's chain, can be a later one.

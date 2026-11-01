@@ -320,7 +320,7 @@ func TestABoxCommandsOtherExitsAreTheBoxs(t *testing.T) {
 	}
 }
 
-// ONLY THE RUN WORKING IN ITS BOX READS IT. A seat's executor is its CLI's own
+// ONLY THE RUN WORKING IN ITS BOX READS IT. A seat's executor is its harness's own
 // run in the box, and every call naming a box source is that run's, made while
 // it works: a row that is another seat's, has no box yet, is launching, parked
 // on a question, collected or reaped is no box. And the run's own box, read
@@ -356,7 +356,7 @@ func TestOnlyTheRunWorkingInItsBoxIsABox(t *testing.T) {
 		{"the run working in it", sandbox.PendingRun{AgentHandle: "analyst", SandboxID: box.ID(), Status: sandbox.StatusRunning}, true},
 	} {
 		row := tc.row
-		row.TurnID, row.Placement, row.CodingAgent = turn.RunID, string(sandbox.E2B), "claude-code"
+		row.TurnID, row.Placement, row.Harness = turn.RunID, string(sandbox.E2B), "claude-code"
 		e := artifactBoxEngine(t, "node-a", row, manager)
 		got, err := (artifactBoxes{engine: e}).Box(t.Context(), turn)
 		switch {
@@ -388,7 +388,7 @@ func TestARunningRecordsBoxIsAttachedNeverWoken(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "analyst", SandboxID: box.ID(),
-		Placement: string(sandbox.E2B), CodingAgent: "claude-code", Status: sandbox.StatusRunning}
+		Placement: string(sandbox.E2B), Harness: "claude-code", Status: sandbox.StatusRunning}
 	e := artifactBoxEngine(t, "node-a", row, manager)
 	if _, err := (artifactBoxes{engine: e}).Box(t.Context(), turn); !errors.Is(err, builtin.ErrNoBox) {
 		t.Errorf("a paused box under a running record answered %v, want ErrNoBox", err)
@@ -517,7 +517,7 @@ func TestARunsBoxOnAnotherNodesHostIsNoBoxHere(t *testing.T) {
 		box        bool
 	}{{"node-a", false}, {"node-b", true}} {
 		row := sandbox.PendingRun{TurnID: turn.RunID, AgentHandle: "analyst", SandboxID: box.ID(),
-			Placement: string(sandbox.Direct), CodingAgent: "claude-code",
+			Placement: string(sandbox.Direct), Harness: "claude-code",
 			Status: sandbox.StatusRunning, LaunchNode: tc.launchedBy}
 		e := artifactBoxEngine(t, "node-b", row, manager)
 		got, err := (artifactBoxes{engine: e}).Box(t.Context(), turn)

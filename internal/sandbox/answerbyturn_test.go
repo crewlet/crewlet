@@ -30,13 +30,13 @@ func launchScheduled(t *testing.T, rig *coordRig, turnID string) {
 	}
 	if _, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: sweID, Role: "SWE",
-		CodingAgent: "claude-code", TraceID: "tr-1", CreatedAt: rig.now,
+		Harness: "claude-code", TraceID: "tr-1", CreatedAt: rig.now,
 		Requester: "ada",
 	}, Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := rig.pending.AttachSandbox(t.Context(), turnID, BoxRef{
-		SandboxID: box.ID(), CommandID: "cmd-1", CodingAgent: "claude-code",
+		SandboxID: box.ID(), CommandID: "cmd-1", Harness: "claude-code",
 		PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
@@ -119,7 +119,7 @@ func (r *coordRig) answeredRecords() []types.ExecutorAnswered {
 }
 
 // THE PARK PUTS THE QUESTION TO WHOM THE CHART SAYS, and writes it with the
-// question. The label the coding agent chose is resolved for the run that
+// question. The label the harness chose is resolved for the run that
 // asked — its requester is on the row — and a row read back carries the seats
 // and whether they are a fallback.
 func TestTheParkRecordsWhomTheQuestionIsPutTo(t *testing.T) {
@@ -777,7 +777,7 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 	seat := uuid.MustParse("0198f3a4-1c2b-7d3e-8f40-5a6b7c8d9e0f")
 	opened, err := rig.pending.BeginLaunch(t.Context(), PendingRun{
 		TurnID: "t9", AgentHandle: "swe", AgentID: seat.String(), Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: rig.now,
+		Harness: "claude-code", CreatedAt: rig.now,
 	}, Fence{})
 	if err != nil {
 		t.Fatalf("BeginLaunch: %v", err)

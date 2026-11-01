@@ -113,7 +113,7 @@ export interface ModelDevice {
 /** One model in an admin's reading. */
 export interface ModelEntry {
   key: string;
-  agent: string;
+  harness: string;
   model: string;
   health: ModelHealth;
   /** The sign-in the model shares a plan with others on; "" where none. */
@@ -131,7 +131,7 @@ export interface ModelEntry {
 /** One model in a member's reading: nothing that names a credential, an account or a vendor's sentence. */
 export interface MemberModelEntry {
   key: string;
-  agent: string;
+  harness: string;
   model: string;
   health: ModelHealth;
   sign_in: { route: ModelSignInRoute; resolves: boolean };

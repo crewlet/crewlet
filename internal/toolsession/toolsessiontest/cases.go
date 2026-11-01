@@ -114,7 +114,7 @@ func testAToolThatPanicsFailsAndEndsTheRun(t *testing.T, factory Factory) {
 	}
 }
 
-// A CALL IS THE RUN'S, NOT THE REQUEST'S. A CLI that gives up on a call — its
+// A CALL IS THE RUN'S, NOT THE REQUEST'S. A harness that gives up on a call — its
 // own timeout — or dies under it cancels its request, and nothing a tool is
 // half-way through writing: the tool runs to its end under the run's own
 // context, with that context's values, and its call is recorded.
@@ -172,7 +172,7 @@ func testACallRunsUnderTheRunsContextNotTheRequests(t *testing.T, factory Factor
 // ARGUMENTS THAT DO NOT PARSE ARE ANSWERED, NOT RUN: running the call on an
 // empty object is a write the model never asked for. The answer says why in
 // the one set of words both places use — a model would otherwise learn to fix
-// the same mistake differently depending on where its CLI ran — and the run
+// the same mistake differently depending on where its harness ran — and the run
 // goes on, so the model's corrected call runs.
 func testArgumentsThatDoNotParseAreAnsweredNotRun(t *testing.T, factory Factory) {
 	f := newFixture(t, factory)
@@ -222,7 +222,7 @@ func testACallAfterTheRunEndedIsRefused(t *testing.T, factory Factory) {
 	}
 }
 
-// CALLS MADE AT ONCE COUNT IN THE ORDER THEY ARRIVED. A CLI makes a response's
+// CALLS MADE AT ONCE COUNT IN THE ORDER THEY ARRIVED. A harness makes a response's
 // calls together, and they return in whatever order their tools take; the
 // repeat count an operation id carries is read against the calls ADMITTED
 // before, so the second call counts the first though the first is still
@@ -255,8 +255,8 @@ func testCallsCountInTheOrderTheyArrived(t *testing.T, factory Factory) {
 }
 
 // AN ACTIVATION IS ANSWERED ONCE THE CLIENT HAS RE-LISTED. A client that
-// re-reads its tool list when told it changed — every CLI that runs in a box,
-// and every host CLI that re-lists — asks its model again the moment the
+// re-reads its tool list when told it changed — every harness that runs in a box,
+// and every host harness that re-lists — asks its model again the moment the
 // answer lands; answered before its re-list, it offers the tool it just
 // activated a request late. So the answer waits for the re-list (at most two
 // seconds), and the tool is then listed and callable.
@@ -295,7 +295,7 @@ func testAnActivationIsAnsweredOnceTheClientHasRelisted(t *testing.T, factory Fa
 // A SUSPEND THE RUN CANNOT RESUME IS REFUSED. A tool whose work outlives its
 // call asks the run to park with the call unanswered, so the conversation can
 // be persisted and re-entered once the work is done. A run that can never be
-// re-entered would strand the CLI waiting on an answer nobody will give, so the
+// re-entered would strand the harness waiting on an answer nobody will give, so the
 // call is answered refused — and the run goes on. The tool ran, so it is on the
 // record as a call that ran, failed.
 func testASuspendTheRunCannotResumeIsRefused(t *testing.T, factory Factory) {

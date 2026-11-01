@@ -889,7 +889,7 @@ func TestAFailedTurnSaysWhyOnItsRow(t *testing.T) {
 		store.EventRecord{ID: "ended-done", Type: "agent_turn_completed",
 			Time:    at.Add(time.Second),
 			Tags:    map[string]string{"turn_id": "ended", "failed": "true"},
-			Payload: payload(map[string]any{"failed": true, "error": "the CLI never reached the seat's tools", "error_kind": "server"})},
+			Payload: payload(map[string]any{"failed": true, "error": "the harness never reached the seat's tools", "error_kind": "server"})},
 		store.EventRecord{ID: "chain-x", Type: "llm_unavailable", Time: at.Add(time.Minute),
 			Tags:    map[string]string{"turn_id": "chain"},
 			Payload: payload(map[string]any{"last_error": "every model was down"})},
@@ -910,7 +910,7 @@ func TestAFailedTurnSaysWhyOnItsRow(t *testing.T) {
 		got[row.TurnID] = [2]string{row.Error, row.ErrorKind}
 	}
 	want := map[string][2]string{
-		"ended":   {"the CLI never reached the seat's tools", "server"},
+		"ended":   {"the harness never reached the seat's tools", "server"},
 		"chain":   {"every model was down", "llm_unavailable"},
 		"stopped": {"", ""},
 		"clean":   {"", ""},
@@ -945,7 +945,7 @@ func TestTheFailureReasonCombinesAcrossLogs(t *testing.T) {
 }
 
 // A TURN A PERSON STOPPED SAYS SO, AND IS NOT FAILED. A stop ends a turn
-// parked on its coding run as surely as one running a round: the parked
+// parked on its executor as surely as one running a round: the parked
 // segment completed `suspended`, and the stop's completion — the newer — ends
 // the turn, carrying `stopped`. Read off the agent's completion, because that
 // is the record that says how the turn ended for a person, and never as a

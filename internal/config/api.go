@@ -57,9 +57,9 @@ type API struct {
 	// the same two routes there, and one Tier A file keeps working for both
 	// shapes. 0 binds nothing at all, on any node.
 	//
-	// THE BRIDGE IS THE EXECUTOR'S ALONE. A seat's executor is its CLI's own
+	// THE BRIDGE IS THE EXECUTOR'S ALONE. A seat's executor is its harness's own
 	// run in a box, which may be another machine, so it reaches the seat's
-	// tools over HTTP; every other phase runs its CLI beside the engine and
+	// tools over HTTP; every other phase runs its harness beside the engine and
 	// reaches them through a unix socket in the engine's own session
 	// directory (internal/toolsession), so those need no port at all. A
 	// direct box is a process of this host, so on every node that runs

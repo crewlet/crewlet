@@ -54,7 +54,7 @@ type colleagueOwed struct {
 	runs   seatRunLister
 }
 
-// seatRunLister is the one read colleagueOwed makes of the fleet's coding-run
+// seatRunLister is the one read colleagueOwed makes of the fleet's executor
 // records: a seat's unfinished runs, by the handle a channel names its target
 // by. [sandbox.CoordStore] is the implementation.
 type seatRunLister interface {

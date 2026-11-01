@@ -137,7 +137,7 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 	if o.collectorStopped || o.collector != nil {
 		return nil
 	}
-	c, err := collect.New(collect.Options{Store: o.store, References: refs})
+	c, err := e.newCollector(o.store, refs)
 	if err != nil {
 		return fmt.Errorf("engine: the object collector: %w", err)
 	}
@@ -149,6 +149,17 @@ func (e *Engine) startObjectCollector(ctx context.Context, refs collect.Referenc
 		return collectorPoll
 	})
 	return nil
+}
+
+// newCollector is the collector this engine runs over refs in store: the one
+// constructor the duty and its tests share, so a case holds the duty to what
+// it runs.
+//
+// WHAT THIS BUILD CANNOT SEE is asked before every pass judges anything
+// ([Engine.unseen]): a newer build's log, or tables a newer build migrated
+// this node's copy to, may name objects this build's declarations do not.
+func (e *Engine) newCollector(store *objstore.Store, refs collect.References) (*collect.Collector, error) {
+	return collect.New(collect.Options{Store: store, References: refs, Unseen: e.unseen})
 }
 
 // collectorTurn is one turn of the duty: claim it, and run whichever pass is

@@ -77,7 +77,7 @@ func (b answerBudget) basis() budgetBasis { return basisOf(b.engine.Company(), n
 // AND RECORDS THE REFUSAL ([meter.turnAway]): the tool asks this immediately
 // before an answer's first call and refuses the question on yes, so a yes is
 // the gate turning that call away, and the company's window says so in its
-// `refused_at`. A company whose day a person's answers, a coding run or a
+// `refused_at`. A company whose day a person's answers, an executor launch or a
 // background pass had filled used to refuse every question asked of it while
 // every screen said it had refused nothing.
 func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool, error) {

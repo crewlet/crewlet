@@ -697,7 +697,7 @@ func annotationsFor(name string) tools.Annotations {
 		}
 	case AnswerExecutorTool:
 		// A WRITE SOMEBODY ELSE ACTS ON: the answer resumes a seat's
-		// coding run, whose next moves reach the company, so OpenWorld
+		// executor, whose next moves reach the company, so OpenWorld
 		// is Yes. Not destructive — it supplies what a run asked for and
 		// replaces nothing — and NOT idempotent: a second call with other
 		// words is a second answer, which the run declines once the first
@@ -706,7 +706,7 @@ func annotationsFor(name string) tools.Annotations {
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case PauseSeatTool:
 		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight, and the
-		// coding run it has out with its box, and neither is run again —
+		// executor it has out with its box, and neither is run again —
 		// what they had not yet done is lost. Otherwise
 		// reversible, and IDEMPOTENT: a second pause of a paused seat changes
 		// nothing. Closed-world: it changes whether one of the company's own
@@ -801,7 +801,7 @@ func feedReads(deps WorkDeps) bool {
 // the engine serves published every tool with a name, a description and a
 // schema and nothing else: [internal/api/operator] hands a company's whole
 // tracker to an operator's own assistant, and [internal/api/mcpbridge] hands a
-// seat's tools to a sandboxed coding agent, and neither client could tell a
+// seat's tools to a sandboxed harness, and neither client could tell a
 // read from an irreversible write. The registry has carried these hints the
 // whole time; nothing outside this process had ever been told one.
 //
