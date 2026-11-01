@@ -1,6 +1,7 @@
 package code_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -62,7 +63,12 @@ func hunk(oldStart, oldLines, newStart, newLines int) code.Hunk {
 
 // A HUNK HEADER IS READ AS GIT WRITES IT: a count left out for one line, a
 // section heading after the closing marks, a pure insertion's and a pure
-// deletion's zero — and anything else is no header, never a hunk of zeros.
+// deletion's zero — and anything else is no header, never a hunk of zeros: a
+// sign, a leading zero, or a number past what an int holds, which would wrap
+// into a line no file has.
+//
+// Mutation: drop hunkNumber's bound on what an int holds — the past-an-int
+// row reads a wrapped number, red.
 func TestAHunkHeaderIsReadAsGitWritesIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -82,8 +88,11 @@ func TestAHunkHeaderIsReadAsGitWritesIt(t *testing.T) {
 		{"@@ -1, +1 @@", code.Hunk{}, false},
 		{"@@ -1 +1", code.Hunk{}, false},
 		{"+@@ -1 +1 @@", code.Hunk{}, false},
+		{"@@ -+1 +1 @@", code.Hunk{}, false},
+		{"@@ -0 +9223372036854775807 @@", hunk(0, 1, math.MaxInt64, 1), true},
+		{"@@ -1 +9223372036854775808 @@", code.Hunk{}, false},
 	} {
-		got, ok := code.ParseHunk(tc.line)
+		got, ok := code.ParseHunk([]byte(tc.line))
 		if ok != tc.ok || got != tc.want {
 			t.Errorf("ParseHunk(%q) = %+v, %t; want %+v, %t", tc.line, got, ok, tc.want, tc.ok)
 		}
