@@ -106,7 +106,9 @@ type ArtifactsWriter interface {
 
 // ArtifactsHalf is the artifacts estate a data node serves: its reader and its
 // writer, which every data node runs. A nil half is one this node's core runtime
-// has not built, answered like any half a node does not run.
+// has not built, answered like any half a node does not run — and a nil writer
+// beside a reader is a node that publishes nothing (a maintenance mode), whose
+// reads are served and whose writes move on to a node that publishes.
 type ArtifactsHalf struct {
 	Reader ArtifactsReader
 	Writer ArtifactsWriter

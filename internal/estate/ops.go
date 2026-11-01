@@ -339,7 +339,8 @@ type Backend struct {
 
 	// Artifacts is the artifacts estate, which every data node runs from
 	// boot whatever its company keeps: its reader and its writer, each nil
-	// only where the node's core runtime is not up yet ([ArtifactsHalf]).
+	// where the node's core runtime is not up yet, and the writer nil too
+	// where the node publishes nothing ([ArtifactsHalf]).
 	Artifacts ArtifactsHalf
 
 	// ArtifactData is the artifact datastore, which every data node runs

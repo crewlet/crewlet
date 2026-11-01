@@ -361,7 +361,10 @@ func (l *localEstate) refresh(ctx context.Context, c *core, done chan struct{}) 
 // mode is the evidence a capacity operation is established from, and a write
 // it took on anybody's behalf would be the publish the mode exists to rule
 // out — so its writers are absent ([Engine.writeSide] hands none out) and
-// every write is answered "not here".
+// every write is answered "not here". The CORE's writers included, which the
+// core builds in every mode because its logs run in every mode: a reader of
+// them is served there, and a writer handed out beside it would take a peer's
+// artifacts write as surely as a native one.
 func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	b := estate.Backend{
 		Committed: e.WaitCommitted,
@@ -383,13 +386,22 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	// THE ARTIFACTS ESTATE, which every data node runs from boot whatever its
 	// company keeps, so a node without `data` reaches it through any data
 	// node's copy. Set only where both sides are, for the identity
-	// directory's reason: a typed nil reads as a half that is there.
+	// directory's reason: a typed nil reads as a half that is there. Its
+	// WRITER only while this node publishes, so a write asked of a node in a
+	// maintenance mode is answered "not here" and moves on to one that does.
+	publishes := e.mode.Publishes()
 	if c.artifactsReader != nil && c.artifactsWriter != nil {
-		b.Artifacts = estate.ArtifactsHalf{Reader: c.artifactsReader, Writer: c.artifactsWriter}
+		b.Artifacts = estate.ArtifactsHalf{Reader: c.artifactsReader}
+		if publishes {
+			b.Artifacts.Writer = c.artifactsWriter
+		}
 	}
 	// AND ITS DATASTORE, run beside it on every data node.
 	if c.artifactDataReader != nil && c.artifactDataWriter != nil {
-		b.ArtifactData = estate.ArtifactDataHalf{Reader: c.artifactDataReader, Writer: c.artifactDataWriter}
+		b.ArtifactData = estate.ArtifactDataHalf{Reader: c.artifactDataReader}
+		if publishes {
+			b.ArtifactData.Writer = c.artifactDataWriter
+		}
 	}
 	if n == nil {
 		return b
