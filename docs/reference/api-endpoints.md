@@ -380,9 +380,9 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/integrations` | Every inbound surface, how it is wired, whether a signing secret is present, and what has arrived through it (see [below](#get-integrations)) |
 | `GET` | `/link-hosts` | Where the company's own apps live in a browser: one `{kind, url}` per configured GitHub, GitLab, Mattermost, Jira and Confluence, and on a code host its `owners`. **Everybody's**, unlike `/integrations`: it carries no repository, project, team, credential or health, and each `url` is reduced to scheme, host, port and path (user information, query and fragment dropped). `owners` are the organizations or top-level groups the company works in (GitHub's `provisioning.org`, GitLab's `provisioning.group`, and the owner part of every repository or project the integration and the seats name), lower case and sorted, never the repositories themselves. The dashboard reads it to put an app's mark beside a link to that app, to link a bare `owner/repo#14`, and to read a bare `owner/repo` as a repository only under one of the owners. A Jira or Confluence on a cloud id with no `site_url` has no browser address, so it adds no row |
 | `GET` | `/backups` | What the fleet has backed up: each node's newest point and the operator's newest acknowledgement of each log, as each log's trim reads them, and every backup a person asked a node for, failures included. **Takes `admin`** (see [below](#get-backups)) |
+| `GET` | `/mcp-catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-catalogue)) |
 | `GET` | `/mcp-servers` | What each configured MCP server is doing on each live node — serving, failed, tools served and the first failure — read off every node's presence heartbeat, beside what the configuration declares (never a credential), and the engine's built-in tools by group, each naming who may call it. **Takes `admin`** (see [below](#get-mcp-servers)) |
 | `GET` | `/mcp-servers/{name}` | One MCP server whole: its row as `/mcp-servers` answers it, every tool the fleet's live nodes list for it (per-agent servers included) with its hints, risk and arguments, what the server said of itself in its handshake, and what removing it would take with it. **Takes `admin`** (see [below](#get-mcp-serversname)) |
-| `GET` | `/mcp-servers/catalogue` | What an MCP server is added from: the curated catalogue whole, and with `q=` the company's community registry (`mcp_registry.url`) searched for it, each listing marked as not reviewed. **Takes `admin`** (see [below](#get-mcp-serverscatalogue)) |
 | `GET` | `/worklet` | Worklet: a filtered listing of work items, plus the last key number minted per project. Served only where `tracker.backend` is `worklet`; a company on Jira gets `404 unknown_query`, not an empty board (see [below](#worklet-and-doclet)) |
 | `GET` | `/worklet/retention` | What the state log is holding, what the trim concluded and which term is stopping it, every data node's position, and what this node costs to replace. **Takes `admin`, reads included** (see [below](#get-workletretention-what-the-log-is-holding)) |
 | `POST` | `/worklet/retention/ack` | Publish an operator backup floor, for `backup_floor: operator` |
@@ -9210,7 +9210,7 @@ that are not credentials — `transport`, `command`, `args`, `url`; `env` and
 server at all (`mcp_servers[].enabled`, true on a server it does not carry),
 and `description` what it says the server is for, the line each agent's
 prompt lists beside the server's name (`""` when it says nothing). `title`, `catalogue` and `vendor` are what the
-[curated catalogue](#get-mcp-serverscatalogue) recognises the server as, by
+[curated catalogue](#get-mcp-catalogue) recognises the server as, by
 its address or its command: the entry's title, its key and the vendor mark
 the dashboard draws. A server the catalogue does not know is titled by its
 name, with `catalogue` and `vendor` empty. `started`, `failed` and `waiting` are summed over
@@ -9328,14 +9328,16 @@ an empty list.
 To add a server, `PUT /config/mcp-servers/{name}` with `If-None-Match: *` —
 see [Per-entity read and write](#per-entity-read-and-write).
 
-### `GET /mcp-servers/catalogue`
+### `GET /mcp-catalogue`
 
 What a server is added from, for the add flow of **Settings › MCP & tools**.
 It is decided by `config.read`, so **it takes `admin`**, as adding a server
 does: an entry is the draft of a launch line every engine host runs, and the
 answer names the registry the company's configuration does. A plain read
 rather than a question: nothing in it is live, so the socket does not carry
-it.
+it. It sits outside `/mcp-servers/`, whose next segment is always a server's
+name, so a server may be called `catalogue` and still have its own
+[detail](#get-mcp-serversname).
 
 `curated` is the curated catalogue whole, in its order, whatever `q` says: a
 table compiled into the engine and reviewed in pull requests, so it answers

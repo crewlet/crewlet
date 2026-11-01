@@ -1,6 +1,6 @@
 // Package mcpapi is Settings › MCP & tools' own routes, each mounted through
-// [authz.Router] with the verb it is decided by: `GET /mcp-servers/catalogue`,
-// what a server is added from, and `GET /mcp-servers/{name}`, one server whole.
+// [authz.Router] with the verb it is decided by: `GET /mcp-catalogue`, what a
+// server is added from, and `GET /mcp-servers/{name}`, one server whole.
 //
 // # Routes, not registry questions
 //
@@ -103,9 +103,10 @@ func New(opts Options) (*Service, error) {
 // [authz.Router] with the verb it is decided by.
 func (s *Service) Routes(mux authz.Mux) error {
 	router := authz.NewRouter(mux, s.guard)
-	// A LITERAL SEGMENT under /mcp-servers, so it is never read as a
-	// server named "catalogue" by the route that takes a name there.
-	if err := router.Handle("GET /mcp-servers/catalogue", authz.Policy{Action: authz.ActionConfigRead},
+	// OUTSIDE /mcp-servers/, whose next segment is a server's name and any
+	// name a company gives one: a literal segment there would win over the
+	// server it spells, and a server named "catalogue" would have no detail.
+	if err := router.Handle("GET /mcp-catalogue", authz.Policy{Action: authz.ActionConfigRead},
 		http.HandlerFunc(s.serveCatalogue)); err != nil {
 		return err
 	}
@@ -153,7 +154,7 @@ func (s *Service) serveCatalogue(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, answer)
 }
 
-// CatalogueAnswer is `GET /mcp-servers/catalogue`: the curated catalogue
+// CatalogueAnswer is `GET /mcp-catalogue`: the curated catalogue
 // whole, and with `q` the company's community registry searched for it.
 type CatalogueAnswer struct {
 	// Curated is every server the curated catalogue offers, in its order,

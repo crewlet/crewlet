@@ -680,8 +680,8 @@ reads, how a static credential's value is spelled, the sign-ins its vendor
 offers, what an admin has to do at the vendor first, and the day its facts
 were last read from the vendor (`read_at`). It is a table compiled into the
 engine and reviewed in pull requests, so every node answers it the same, with
-or without egress. `GET /mcp-servers/catalogue` serves it (see the
-[API reference](../reference/api-endpoints.md#get-mcp-serverscatalogue)).
+or without egress. `GET /mcp-catalogue` serves it (see the
+[API reference](../reference/api-endpoints.md#get-mcp-catalogue)).
 
 | Entry | Server | Sign-in |
 |---|---|---|
