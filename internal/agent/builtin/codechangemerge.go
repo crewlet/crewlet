@@ -432,9 +432,11 @@ func (t *codeDequeueChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	op := opIDFor(g.c.actor, tool, queueVerb, g.repo.ID, args)
 	asker := writer(ctx, turn, g.c)
 	// AN ENTRY IS ITS ENQUEUER'S, NEVER A TURN'S: the committer judges the
-	// asker as a party, so the dequeue names no run, as the enqueue does.
+	// asker as a party, so the dequeue names no run, as the enqueue does —
+	// but it carries whom the turn works for (the write's ceiling), which
+	// the committer holds the dequeue to beside the seat itself.
 	asker.Run = code.RunProvenance{}
-	p := code.QueueProposal{OpID: op, Asker: asker, Seen: cv.at,
+	p := code.QueueProposal{OpID: op, Asker: asker, Seen: cv.at, Ceiling: g.c.write,
 		Dequeue: &code.Dequeue{RepoID: g.repo.ID, EntryID: entry}}
 	if err := p.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, g.c.actor, g.repo.Name, err), nil

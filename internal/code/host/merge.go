@@ -35,7 +35,9 @@ import (
 // is refused before anything is built, and so — for a merge its gate holds —
 // is one whose readiness, judged with its asker as the merger, names a
 // precondition unmet besides the merge its build proves (gate_unmet, every one
-// named), and a seat's override (not_person). Every such refusal is judged
+// named), a seat's override (not_person), and a seat's merge — or enqueue —
+// that whoever its turn works for may not make (not_permitted,
+// [writing.mergeCeiling]). Every such refusal is judged
 // again at the log's head before it is answered, as every write's is, and a
 // change found merged is first looked up as this write's own merge (its push
 // id names the merge's push row): found, it is answered from that row, nothing
@@ -256,6 +258,11 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 			"into %s, which does not exist", named, w.Ref)}, nil
 	}
 	j := mergeJudgement{change: c, tip: tip}
+	if w.Ceiling != nil {
+		if v, err := wr.mergeCeiling(ctx, floor, named); err != nil || v.refusal != "" {
+			return mergeJudgement{}, v, err
+		}
+	}
 	if w.Override != "" {
 		return j, mergeVerdict{}, nil
 	}
@@ -279,6 +286,72 @@ func (wr *writing) mergeVerdict(ctx context.Context, gone bool) (mergeJudgement,
 			detail: fmt.Sprintf("%s does not meet %s's merge gate: %s", named, w.Ref, unmet[0].Detail)}, nil
 	}
 	return j, mergeVerdict{}, nil
+}
+
+// mergeCeiling is why a seat's merge may not be made for whoever its turn
+// works for (code.EngineWrite.Ceiling, M3-decisions U40 (a)), as a refusal,
+// or none where it may — judged here, from this node's chart and the synced
+// row, as every engine write's ceiling is (write.go's rules), and before the
+// merge is built or enqueued, since an enqueue is the gate (M5-D8) and its
+// landing lands it as its enqueuer:
+//
+//   - THE SEAT'S OWN WORK — a target under its own namespace, or any target
+//     of a repository its seat owns (code.Grant.OwnWork) — is steered by
+//     whoever woke the turn, nobody included, as every write's is;
+//   - NOBODY (code.WriteCeilingNobody) steers nothing else;
+//   - a COLLEAGUE SEAT is held to the merge authority the colleague itself
+//     holds into the target — the change's readiness read AS the colleague,
+//     whose merge_authority precondition the reader judges by the target's
+//     gate and the company's floor from its own chart (M5-D2) — so a seat
+//     never merges for a colleague a merge the colleague could not make, and
+//     one the colleague may not read is refused as one it may not merge.
+func (wr *writing) mergeCeiling(ctx context.Context, floor statelog.Freshness, named string) (mergeVerdict,
+	error) {
+
+	s, w, repo := wr.s, wr.w, wr.synced.Repo
+	roster := s.o.Roster()
+	if roster == nil {
+		return mergeVerdict{}, wr.unready(code.UnreadyNoChart, fmt.Sprintf("%s holds no chart yet to judge "+
+			"whom seat %q's merge is made for; a git node holding one builds it", s.o.NodeID, w.Principal.Seat))
+	}
+	if code.GrantOf(w.Principal, repo, roster).OwnWork(code.Command{Ref: w.Ref}) {
+		return mergeVerdict{}, nil
+	}
+	if w.Ceiling.Kind != code.WriteCeilingSeat {
+		return mergeVerdict{refusal: code.MergeRefusalNotPermitted, detail: fmt.Sprintf("this work is for "+
+			"whoever started its turn, who may change nothing of this company's code; a merge of %s into %s is "+
+			"not this seat's own work — its own namespace (%s<its handle>/) and the repositories it owns",
+			named, w.Ref, code.SeatNamespaceRoot)}, nil
+	}
+	colleague := code.Principal{Kind: code.PrincipalAgent, Seat: w.Ceiling.Seat}
+	ans, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadChange, Asker: colleague, Repo: repo.Name,
+		Change: w.Change, Fresh: floor})
+	switch {
+	case errors.Is(err, code.ErrNotPermitted):
+		return mergeVerdict{refusal: code.MergeRefusalNotPermitted, detail: fmt.Sprintf("this work is for "+
+			"seat %s, whose ask started its turn and who may not read %s, so may not merge it", w.Ceiling.Seat,
+			named)}, nil
+	case err != nil:
+		return mergeVerdict{}, err
+	case ans.Change == nil || ans.Change.Readiness == nil:
+		return mergeVerdict{}, fmt.Errorf("host: the read of %s as seat %s answered no readiness", named,
+			w.Ceiling.Seat)
+	}
+	for _, p := range ans.Change.Readiness.Preconditions {
+		switch {
+		case p.Kind != code.PreconditionMergeAuthority:
+		case p.State == code.PreconditionMet:
+			return mergeVerdict{}, nil
+		default:
+			return mergeVerdict{refusal: code.MergeRefusalNotPermitted, detail: fmt.Sprintf("this work is for "+
+				"seat %s, whose ask started its turn, and it may not make this merge itself: %s",
+				w.Ceiling.Seat, p.Detail)}, nil
+		}
+	}
+	// A READINESS NAMING NO MERGE AUTHORITY judged nothing of the colleague:
+	// never taken for an allow.
+	return mergeVerdict{}, fmt.Errorf("host: the readiness of %s read as seat %s names no merge authority",
+		named, w.Ceiling.Seat)
 }
 
 // queueTarget reports a target whose merges land through its queue: one some

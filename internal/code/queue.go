@@ -231,14 +231,29 @@ type QueueProposal struct {
 	// record: an enqueue, a dequeue, an eject, a green and a broken move no
 	// ref onto anything a build made. NEVER RECORDED, as Seen is not, so no
 	// record's format moves for it.
-	DropEpoch int64      `json:"drop_epoch,omitempty"`
-	Enqueue   *Enqueue   `json:"enqueue,omitempty"`
-	Dequeue   *Dequeue   `json:"dequeue,omitempty"`
-	Candidate *Candidate `json:"candidate,omitempty"`
-	Eject     *Eject     `json:"eject,omitempty"`
-	Land      *Land      `json:"land,omitempty"`
-	Green     *Green     `json:"green,omitempty"`
-	Broken    *Broken    `json:"broken,omitempty"`
+	DropEpoch int64 `json:"drop_epoch,omitempty"`
+	// Ceiling is a seat's DEQUEUE's requester ceiling (M3-decisions U40 (a)):
+	// whom the turn that asks it works for, judged by the committer beside
+	// the seat's own standing, from the same chart and snapshot — the seat's
+	// own work spared (an entry it enqueued, its own change's, or one into a
+	// branch of its own namespace or of a repository it owns), a colleague
+	// held to what it may take out itself, nobody refused the rest
+	// ([decideDequeue]). An enqueue carries none: the git node that forms it
+	// has judged its merge's ceiling already (internal/code/host's merge.go).
+	//
+	// A proposal is no record — the record is what the committer stamps from
+	// it — so this field takes no versionedFields row; it crosses the
+	// estate's wire to whichever data node decides it under the code domain's
+	// stated condition — no build carrying the domain has run without it,
+	// none of the domain being on main — so every node asked it reads it.
+	Ceiling   *WriteCeiling `json:"ceiling,omitempty"`
+	Enqueue   *Enqueue      `json:"enqueue,omitempty"`
+	Dequeue   *Dequeue      `json:"dequeue,omitempty"`
+	Candidate *Candidate    `json:"candidate,omitempty"`
+	Eject     *Eject        `json:"eject,omitempty"`
+	Land      *Land         `json:"land,omitempty"`
+	Green     *Green        `json:"green,omitempty"`
+	Broken    *Broken       `json:"broken,omitempty"`
 }
 
 // engines reports a proposal of one of the queue's OWN records, which its home
@@ -408,7 +423,9 @@ const (
 	MergeRefusalNotQueued MergeRefusal = "not_queued"
 	// MergeRefusalNotPermitted is a dequeue by a principal that is neither
 	// the entry's enqueuer, its change's owner, a principal that maintains
-	// the repository, nor a person.
+	// the repository, nor a person — or a seat's merge, or enqueue, that
+	// whoever its turn works for may not make (its git node judges the
+	// write's ceiling, internal/code/host's merge.go).
 	MergeRefusalNotPermitted MergeRefusal = "not_permitted"
 	// MergeRefusalNotGreen is a pre_land landing whose tip, or a green row
 	// whose landing, some required check of its target has not passed on —
@@ -554,6 +571,15 @@ func (p QueueProposal) validFields() error {
 		return p.Green.validate()
 	case p.Broken != nil:
 		return p.Broken.validate()
+	}
+	if p.Ceiling != nil {
+		switch {
+		case p.Dequeue == nil:
+			return badField("ceiling", "only a seat's dequeue carries its requester's ceiling: an enqueue's "+
+				"is judged by the git node that forms it")
+		case p.Ceiling.invalid(p.Asker) != "":
+			return fmt.Errorf("%w: %s", ErrInvalidProposal, p.Ceiling.invalid(p.Asker))
+		}
 	}
 	if d := p.Dequeue; d != nil {
 		if err := bareUUIDv7("dequeue.entry_id", d.EntryID); err != nil {
@@ -941,16 +967,49 @@ func decideDequeue(ctx context.Context, tx *sql.Tx, p QueueProposal, repo pushRe
 			"leaves it", q.EntryID, entry.TargetRef, entry.State))
 	}
 	handle, kind := p.Asker.party()
-	if kind != PartyPerson && (kind == "" || Party{Handle: handle, Kind: kind} != entry.EnqueuedBy) {
-		owner, ownerKind, err := changeOwnerIn(ctx, tx, entry.ChangeID)
-		if err != nil {
-			return queueDecision{}, err
+	if kind == PartyPerson {
+		_, d.payload = p.stamped()
+		return d, nil
+	}
+	ownerHandle, ownerKind, err := changeOwnerIn(ctx, tx, entry.ChangeID)
+	if err != nil {
+		return queueDecision{}, err
+	}
+	owner := Party{Handle: ownerHandle, Kind: ownerKind}
+	// mine is whether party, a principal of standing grant, may take the
+	// entry out: its enqueuer, its change's owner, or one that maintains the
+	// repository.
+	mine := func(party Party, grant Grant) bool {
+		return party.Kind != "" && (party == entry.EnqueuedBy || party == owner) || grant.Access >= AccessMaintain
+	}
+	asker := Party{Handle: handle, Kind: kind}
+	grant := GrantOf(p.Asker, repo.grantRef(q.RepoID), seats.Roster)
+	if !mine(asker, grant) {
+		return d.refuse(MergeRefusalNotPermitted, fmt.Sprintf("an entry leaves its queue at its enqueuer's "+
+			"ask, its change's owner's, a principal's that maintains the repository or a person's, and "+
+			"this asker holds %s on %s", grant.Access, repo.name))
+	}
+	// THE SEAT'S DEQUEUE, HELD TO WHOEVER ITS TURN WORKS FOR (Ceiling): its
+	// own work — an entry it enqueued, its own change's, or one into a branch
+	// of its own namespace or of a repository it owns — steered by anybody,
+	// as every write's is; a colleague held to what it may take out itself;
+	// nobody steering nothing else.
+	if c := p.Ceiling; c != nil && asker != entry.EnqueuedBy && asker != owner &&
+		!grant.OwnWork(Command{Ref: entry.TargetRef}) {
+
+		if c.Kind != WriteCeilingSeat {
+			return d.refuse(MergeRefusalNotPermitted, "this work is for whoever started its turn, who may "+
+				"change nothing of this company's code; an entry this seat did not enqueue, of a change it does "+
+				"not own, is not its own work")
 		}
-		grant := GrantOf(p.Asker, repo.grantRef(q.RepoID), seats.Roster)
-		if (kind == "" || owner != handle || ownerKind != kind) && grant.Access < AccessMaintain {
-			return d.refuse(MergeRefusalNotPermitted, fmt.Sprintf("an entry leaves its queue at its enqueuer's "+
-				"ask, its change's owner's, a principal's that maintains the repository or a person's, and "+
-				"this asker holds %s on %s", grant.Access, repo.name))
+		colleague := Principal{Kind: PrincipalAgent, Seat: c.Seat}
+		if cg := GrantOf(colleague, repo.grantRef(q.RepoID), seats.Roster); !mine(Party{Handle: c.Seat,
+			Kind: PartyAgent}, cg) {
+
+			return d.refuse(MergeRefusalNotPermitted, fmt.Sprintf("this work is for seat %s, whose ask started "+
+				"its turn, and an entry leaves its queue at its enqueuer's ask, its change's owner's or a "+
+				"principal's that maintains the repository: that seat is none of them, holding %s on %s",
+				c.Seat, cg.Access, repo.name))
 		}
 	}
 	_, d.payload = p.stamped()

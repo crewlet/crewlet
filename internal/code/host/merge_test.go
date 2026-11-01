@@ -290,6 +290,52 @@ func TestAnUnreadyMergeBuildsNothing(t *testing.T) {
 	}
 }
 
+// A SEAT'S MERGE IS HELD TO WHOEVER ITS TURN WORKS FOR, on the git node that
+// judges it (code.EngineWrite.Ceiling, M3-decisions U40 (a)): alice, who may
+// merge into main, merges a ready change for the unit's lead, who may too,
+// and not for bob, who only reads the repository, nor for nobody — a
+// stranger, or a person who may not act — each refused not_permitted in
+// words saying whom the work is for, nothing built and the change left open.
+//
+// Mutation: mergeVerdict ignoring the write's ceiling — bob's and nobody's
+// merges land, red.
+func TestASeatsMergeIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
+	t.Parallel()
+	c := newMergeCase(t, codetest.SoloOptions{}, codetest.Settings(), map[string]string{"README.md": "one\n"})
+	n := c.open(featureRef, map[string]string{"x.md": "x\n"}, "Merged for somebody")
+	c.meetGate(n, lead())
+	head := c.change(n).Head
+	before := len(c.objects())
+	for _, tc := range []struct {
+		name    string
+		ceiling *code.WriteCeiling
+		says    string
+	}{
+		{"a colleague who only reads", &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureBob},
+			"this work is for seat bob"},
+		{"nobody", &code.WriteCeiling{Kind: code.WriteCeilingNobody}, "may change nothing of this company's code"},
+	} {
+		w := merge(c.repo, alice(), n, head, code.MergeMethodMerge)
+		w.Ceiling = tc.ceiling
+		res, err := c.write(w)
+		if err != nil || res.Merge == nil || res.Merge.Refusal != code.MergeRefusalNotPermitted ||
+			!strings.Contains(res.Merge.Detail, tc.says) || res.Outcome != "" || res.Commit != "" {
+			t.Errorf("alice's merge for %s answered %+v %v (%+v), want not_permitted saying %q", tc.name, res, err,
+				res.Merge, tc.says)
+		}
+	}
+	if after := len(c.objects()); after != before {
+		t.Errorf("refused merges stored %d objects", after-before)
+	}
+	if ch := c.change(n); ch.State != code.ChangeStateOpen {
+		t.Fatalf("change %d is %s after merges its requesters may not make", n, ch.State)
+	}
+	w := merge(c.repo, alice(), n, head, code.MergeMethodMerge)
+	w.Ceiling = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: codetest.FixtureLead}
+	res, err := c.write(w)
+	c.requireMerged(n, res, err)
+}
+
 // movingMain moves main under every merge record it is asked to decide, the
 // first moves times — a person's push landing between the merge's build and
 // its decide — and counts the records asked.

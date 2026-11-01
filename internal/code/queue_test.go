@@ -329,3 +329,64 @@ func TestAClosedChangeLeavesTheQueue(t *testing.T) {
 		}
 	})
 }
+
+// A SEAT'S DEQUEUE IS HELD TO WHOEVER ITS TURN WORKS FOR (QueueProposal.
+// Ceiling, M3-decisions U40 (a)): cto, who maintains the repository and so
+// may take dev's entry out itself, does not for nobody — a stranger, or a
+// person who may not act — nor for reader, a colleague who is neither the
+// entry's enqueuer, its change's owner nor a maintainer, each refused
+// not_permitted in words saying whom the work is for, appending nothing; and
+// dev takes its own entry out for nobody, since its own work is steered by
+// whoever woke it. A ceiling rides a seat's dequeue alone.
+//
+// Mutations: decide a dequeue without its ceiling — cto's dequeues for nobody
+// and reader apply, red; refuse the seat's own entry under a ceiling — dev's
+// dequeue is refused, red.
+func TestASeatsDequeueIsHeldToWhoeverItsTurnWorksFor(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := queueRepo(t, n, c, "web")
+	ready(t, n, w, repo, change)
+	enqueue := enqueueing(repo, change, dev, oidOf("B"))
+	res, err := c.ProposeQueue(t.Context(), enqueue)
+	requireQueued(t, res, err, code.QueueWaiting, 1)
+	entry := enqueue.Enqueue.EntryID
+	nobody := &code.WriteCeiling{Kind: code.WriteCeilingNobody}
+	for _, tc := range []struct {
+		name    string
+		ceiling *code.WriteCeiling
+		says    string
+	}{
+		{"nobody", nobody, "may change nothing of this company's code"},
+		{"a colleague who only reads", &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "reader"},
+			"this work is for seat reader"},
+	} {
+		p := dequeueing(repo, entry, agent("cto"))
+		p.Ceiling = tc.ceiling
+		before := n.end()
+		res, err := c.ProposeQueue(t.Context(), p)
+		requireQueueRefused(t, n, before, res, err, code.MergeRefusalNotPermitted, tc.says)
+	}
+
+	for name, p := range map[string]code.QueueProposal{
+		"an enqueue's":    enqueueing(repo, change, dev, oidOf("B")),
+		"a person's":      dequeueing(repo, entry, ada),
+		"for the asker's": dequeueing(repo, entry, dev),
+	} {
+		p.Ceiling = nobody
+		if name == "for the asker's" {
+			p.Ceiling = &code.WriteCeiling{Kind: code.WriteCeilingSeat, Seat: "dev"}
+		}
+		if err := p.Validate(); err == nil {
+			t.Errorf("%s ceiling validated: only a seat's dequeue, made for somebody else, carries one", name)
+		}
+	}
+
+	own := dequeueing(repo, entry, dev)
+	own.Ceiling = nobody
+	res, err = c.ProposeQueue(t.Context(), own)
+	requireQueued(t, res, err, code.QueueDequeued, 0)
+}

@@ -248,7 +248,7 @@ func (g Grant) Within(run Access) Grant {
 //     repository ([Grant.MayRead], [Grant.ReadRefusal]);
 //   - a COMMAND needs both — the holder's [Grant.RefRule], and the
 //     colleague's RefRule for the very same command — EXCEPT on the holder's
-//     OWN WORK ([Grant.ownWork]): under its own namespace, and in a
+//     OWN WORK ([Grant.OwnWork]): under its own namespace, and in a
 //     repository its seat owns. Anybody who can message a seat steers its own
 //     work, as authz.DecideWithin lets a steerable verb on what an agent owns
 //     skip the requester, so a colleague who only reads a repository may
@@ -614,7 +614,7 @@ func (g Grant) RefRule(c Command) (Refusal, string) {
 	if refusal != "" || g.ceiling == nil {
 		return refusal, sentence
 	}
-	if g.ownWork(c) {
+	if g.OwnWork(c) {
 		// THE SEAT'S OWN WORK, which whoever messages it steers.
 		return "", ""
 	}
@@ -633,13 +633,16 @@ func (g Grant) RefRule(c Command) (Refusal, string) {
 	return "", ""
 }
 
-// ownWork reports whether c is the holder's OWN WORK, which whoever its turn
+// OwnWork reports whether c is the holder's OWN WORK, which whoever its turn
 // works for steers ([Grant.Under]): a seat's command under its own namespace,
 // or any command in a repository its seat owns — which a scratch repository
 // always is, and a project repository a seat owns is until it is handed on.
 // Judged on the row the grant was read from, so a repository handed to a
-// unit since is the unit's, and steered no more.
-func (g Grant) ownWork(c Command) bool {
+// unit since is the unit's, and steered no more. EXPORTED for the git node's
+// merge (internal/code/host's merge.go), which holds a seat's merge to its
+// ceiling itself: a merge moves its target by a merge record, never by a
+// command [Grant.RefRule] judges, and its authority is the merge gate's.
+func (g Grant) OwnWork(c Command) bool {
 	if g.Principal.Kind != PrincipalAgent {
 		return false
 	}
@@ -691,7 +694,7 @@ func (k WriteCeilingKind) Valid() bool { return slices.Contains(WriteCeilingKind
 //
 // THE SEAT'S OWN WORK IS STEERED by whoever woke the turn, nobody included,
 // as DecideWithin spares a steerable verb on what an agent owns: a command
-// under its own namespace or in a repository it owns ([Grant.ownWork]), and
+// under its own namespace or in a repository it owns ([Grant.OwnWork]), and
 // the lifecycle requests that edit a repository it owns and hand it to
 // nobody (lifecycle.go's ceilingLifecycleRefusal), and the writes of a change
 // it owns, opens from its own namespace or holds in a repository it owns
@@ -748,7 +751,7 @@ func (c WriteCeiling) Grant(repo RepoRef, r Roster) Grant {
 //     included, as authz.DecideWithin spares a steerable verb on what an
 //     agent owns: own is a change the seat owns, an open of a branch under
 //     its own namespace (the change it makes is its own), and every change of
-//     a repository the seat owns, as [Grant.ownWork] spares every command
+//     a repository the seat owns, as [Grant.OwnWork] spares every command
 //     there.
 //   - NOBODY ([WriteCeilingNobody]) steers nothing else.
 //   - A COLLEAGUE SEAT is held at need, its own grant's access on the

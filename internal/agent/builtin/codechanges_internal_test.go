@@ -74,16 +74,17 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 	}
 	// The change writes a git node decides as a branch move, and nothing else.
 	pushes := []string{CodeRebaseChangeTool, CodeRevertChangeTool}
-	// And the writes whose committer judges its asker's merge authority
-	// from its own chart (M5-D2), carrying no ceiling its decide reads.
+	// And the writes whose deciding node judges its asker's merge authority
+	// from its own chart (M5-D2) — and a requester's by the same relation,
+	// never by an access this table names.
 	merging := []string{CodeMergeChangeTool, CodeDequeueChangeTool}
 	for _, name := range ChangeWrites() {
 		write, ok := sends[name]
 		switch {
 		case slices.Contains(merging, name):
 			if ok || changeToolNeeds[name] != code.AccessRead {
-				t.Errorf("%s is judged by its committer's merge authority, so its row is read and no ceiling's "+
-					"access names it: row %s", name, changeToolNeeds[name])
+				t.Errorf("%s is judged by its deciding node's merge authority, so its row is read and no "+
+					"ceiling's access names it: row %s", name, changeToolNeeds[name])
 			}
 		case slices.Contains(pushes, name):
 			if ok || changeToolNeeds[name] != code.AccessRead {

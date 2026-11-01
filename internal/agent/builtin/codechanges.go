@@ -147,11 +147,13 @@ var changeToolNeeds = map[string]code.Access{
 	// git node's and the committer's — and, in a turn a colleague woke, the
 	// colleague's too, on that git node (code.EngineWrite.Ceiling).
 	CodeRebaseChangeTool: code.AccessRead,
-	// A merge and a dequeue are the committer's to decide from its own
-	// chart — who may merge into the target is its gate's merge_by (M5-D2),
-	// who may take an entry out its enqueuer, its change's owner, a
-	// maintainer or a person — so read, the least access at which it may
-	// admit the call; neither carries a ceiling its decide reads.
+	// A merge and a dequeue are decided from the deciding node's own chart —
+	// who may merge into the target is its gate's merge_by (M5-D2), who may
+	// take an entry out its enqueuer, its change's owner, a maintainer or a
+	// person — so read, the least access at which it may admit the call. In
+	// a turn somebody woke each carries the turn's ceiling, held to that
+	// same relation for the requester where it is decided (the git node for
+	// a merge, the committer for a dequeue), never to an access alone.
 	CodeMergeChangeTool:   code.AccessRead,
 	CodeDequeueChangeTool: code.AccessRead,
 	// A revert creates a branch — a full_access seat's own namespace — and
