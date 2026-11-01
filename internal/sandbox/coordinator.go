@@ -470,7 +470,9 @@ type CoordinatorOptions struct {
 	// person stopped ([Coordinator.StopSeat]): the turn's `stopped`
 	// completion and its [types.AgentTurnStopped], the shape a turn stopped
 	// at its next round takes, with the turn's work item charged what the run
-	// had spent ([RunStop.Collected]). The engine implements it, because
+	// had spent ([RunStop.Collected]) — and its end on the executor log
+	// ([Coordinator.EndTurn]), whether its reply had reached anybody read off
+	// the run's own calls. The engine implements it, because
 	// only the agent layer reads the parked turn's state
 	// ([PendingRun.ExecuteState]) and publishes the records a turn ends with.
 	//
@@ -496,7 +498,9 @@ type CoordinatorOptions struct {
 	// its seat retired, its resume broken before the turn began — for the
 	// engine to settle what the turn that parked on it still owed somebody
 	// outside the run: the colleague whose a2a_ask woke it
-	// ([PendingRun.ColleagueAsk]) is told the turn was lost, and why.
+	// ([PendingRun.ColleagueAsk]) is told the turn was lost, and why, and the
+	// executor log how the turn ended ([Coordinator.EndTurn]), which the next
+	// turn on its conversation is told.
 	//
 	// THE ONE TERMINAL OF A PARKED TURN THAT NO FRAME OF THE TURN ENDS. A
 	// collected run's turn is ended by its resume, a person's stop by
@@ -691,6 +695,21 @@ type CoordinatorOptions struct {
 	// the poll tries again. Nil refreshes nothing.
 	Refresh RefreshFunc
 
+	// Sessions is the executor log's writes every capture of a run's harness
+	// session and every turn's end are recorded through: THE ESTATE ROUTER'S
+	// (internal/estate's ExecutorWrites), never a data node's own writer,
+	// because a seat's box is wherever its seat runs — a seats-only node,
+	// which holds no log, included. See session.go.
+	//
+	// Keep is the engine's part of keeping a session: the company's policy,
+	// the secrets the scrub takes out, the instant a turn's operations are
+	// minted at, and the sealed upload.
+	//
+	// Both or neither: either nil keeps no session and records no end — a
+	// coordinator built without an engine (a test's).
+	Sessions SessionWrites
+	Keep     SessionKeep
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -762,7 +781,15 @@ type Coordinator struct {
 	nudge func(ctx context.Context, n Nudge)
 	// refresh is [CoordinatorOptions.Refresh].
 	refresh RefreshFunc
-	now     func() time.Time
+	// sessions and keep are [CoordinatorOptions.Sessions] and Keep;
+	// sessionRetry is the first wait between two attempts at one of their
+	// records ([sessionRetryBase]) and recordBudget all of a record's
+	// attempts together ([sessionRecordBudget]) — a test's shorter.
+	sessions     SessionWrites
+	keep         SessionKeep
+	sessionRetry time.Duration
+	recordBudget time.Duration
+	now          func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
 	// on every delivery, and attempts beside them.
@@ -914,6 +941,10 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		boxes:         opts.Boxes,
 		nudge:         opts.Nudge,
 		refresh:       opts.Refresh,
+		sessions:      opts.Sessions,
+		keep:          opts.Keep,
+		sessionRetry:  sessionRetryBase,
+		recordBudget:  sessionRecordBudget,
 		now:           opts.Now,
 		runs:          map[string]seatRuns{},
 		moves:         map[string]uint64{},
@@ -1659,9 +1690,10 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 // readBox is the part of a collection that touches the box, made on the node
 // whose host it is on: the box reconnected, its job asked whether it finished
 // where its turn's cap has passed, its result read back and floored, its
-// transcript and refs held to their bounds ([boundBox]), and — for a
-// completion's collection — the box paused and the pause recorded. ENDED is
-// the run its turn's cap ended: see [Coordinator.collect].
+// transcript and refs held to their bounds ([boundBox]), the job's harness
+// session kept ([Coordinator.keepSession]), and — for a completion's
+// collection — the box paused and the pause recorded. ENDED is the run its
+// turn's cap ended: see [Coordinator.collect].
 //
 // A STOPPED RUN'S READ ([BoxReadStop]) PAUSES NOTHING: its ending reclaims the
 // box next, and a pause would only be one more call to a box about to go.
@@ -1689,6 +1721,15 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 				"is read as nothing spent rather than subtracted from the seat's budget")
 	}
 	result = boundBox(result)
+	// THE JOB'S SESSION, KEPT HERE, on the box's host and before the box is
+	// paused or reclaimed — a paused box cannot be read, and a reclaimed one is
+	// gone — whichever node asked for the read (session.go). A stop's read is
+	// the last anything makes of the box.
+	at := stopCapture
+	if read == BoxReadCollect {
+		at = collectionCapture(result, ended)
+	}
+	result.Kept = c.keepSession(ctx, run, box, runner, at)
 	if read != BoxReadCollect {
 		return result, ended, nil
 	}
@@ -1893,6 +1934,17 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		// than dropped — see [MaxDeliveredRefBytes].
 		DeliveredRefsElided: result.DeliveredRefsElided,
 		ConversationKey:     run.ConversationKey,
+		// THE SESSION THE LAUNCH RAN, as its own script recorded it — not
+		// the one it was asked to continue, which a run that fell back to a
+		// new one did not run — and the harness's release; and what the
+		// read kept of it, so the record of a launch says whether a later
+		// one can continue it.
+		HarnessSession: result.SessionID,
+		HarnessVersion: result.HarnessVersion,
+	}
+	if kept := result.Kept; kept != nil {
+		rec.SessionKeptBytes = kept.Bytes
+		rec.SessionNotKept = redact.Secrets(kept.NotKept)
 	}
 	rec.StartedAt = facts.StartedAt.UTC()
 	if took := collected.Sub(facts.StartedAt); took > 0 {
@@ -3674,13 +3726,18 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 //     read it after. A box on another node's host is read there, and only
 //     where mayAsk says this frame may wait on that host: anywhere else the
 //     ending stops here, decided and with its session closed, and is handed
-//     to this node's retry ([errAskAway]);
-//  4. the box is reclaimed, where the ending reclaims it after its decision;
+//     to this node's retry ([errAskAway]) — and the job's harness session is
+//     kept, by the read itself ([Coordinator.readBox]);
+//  4. for a LOSS whose box is still on this node's host, the job's session
+//     is kept before the box goes ([Coordinator.keepLostSession]), and the
+//     box is reclaimed, where the ending reclaims it after its decision;
 //  5. the announcement is published, under the ending's own identity;
 //  6. for a loss, the run is handed to the engine, which answers the
-//     colleague whose ask its turn took up ([CoordinatorOptions.TurnLost]);
+//     colleague whose ask its turn took up and records on the executor log
+//     that the turn was lost ([CoordinatorOptions.TurnLost]);
 //  7. for a stop, the turn that was parked on the run is closed on the record
-//     as stopped ([CoordinatorOptions.CloseStopped]);
+//     as stopped, and its end recorded on the executor log
+//     ([CoordinatorOptions.CloseStopped]);
 //  8. every note a person sent the turn that no job ran with — still waiting on
 //     the record, or read by the brief of a job that never started — is
 //     published expired ([CoordinatorOptions.SteersExpired]);
@@ -3746,6 +3803,11 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 				return err
 			}
 			run = collected
+		}
+		if run.lost() && run.Ending.Reclaim && !reclaimed {
+			// THE LAST READ OF THE BOX ANYTHING MAKES, before the reclaim
+			// below takes it (session.go).
+			c.keepLostSession(ctx, run)
 		}
 		if run.Ending.Reclaim && !reclaimed {
 			// THE BOX THE ROW NAMES, under a context of its own: a teardown

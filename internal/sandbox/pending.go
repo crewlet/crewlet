@@ -748,6 +748,27 @@ type PendingRun struct {
 	// and again in every relaunch.
 	LaunchID string `json:"launch_id,omitempty"`
 
+	// LaunchSeq is the launch's ORDINAL in its turn, from 1: minted by the
+	// write that opens each launch ([PendingStore.BeginLaunch]) in the same
+	// write as its LaunchID, one past the launch before it — so every capture
+	// of the turn's session carries a (launch, capture) pair that only grows,
+	// which the executor log orders the turn's captures by and refuses a late
+	// one with ([SessionCapture]). LaunchID cannot: the store mints it at
+	// random. A row an older build wrote reads 0 here, and its next launch
+	// under this build is 1; a job launched under 0 is never captured, since
+	// nothing could order it.
+	LaunchSeq int64 `json:"launch_seq,omitempty"`
+
+	// Capture is the newest capture of the turn's harness session the row
+	// records — begun, landed, refused or unresolved — and Kept the newest
+	// that LANDED, the one the executor log's row names; both nil until the
+	// turn's first ([Coordinator.keepSession]). The TURN'S, kept by every
+	// relaunch: a later launch continues the turn's newest kept capture, and
+	// reads the newest attempt to know whether one after it was refused.
+	// Each is a section of its own with an Extra (wirekeys.go).
+	Capture *SessionCapture `json:"session_capture,omitempty"`
+	Kept    *SessionCapture `json:"session_kept,omitempty"`
+
 	// Launch is what the launch's own record needs about the job named by
 	// LaunchID — see [LaunchRecord]. Written with LaunchID, whole, on every
 	// launch.
@@ -1464,6 +1485,26 @@ type PendingStore interface {
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
+
+	// StampCapture records one capture of the turn's harness session on its
+	// row ([PendingRun.Capture], [PendingRun.Kept]), answering whether it was
+	// taken.
+	//
+	// THE PLACE ONLY GROWS, which is what reserves it. A capture placed after
+	// the row's newest is taken, whatever its state — that is how a capture
+	// reserves its place before its archive leaves the box, so two reads of
+	// one run at once never take the same one. A capture at the newest's own
+	// place is taken only where it moves that capture on — begun to an
+	// outcome, unresolved to an answer — so a late write never takes an
+	// answer back. Anything older is refused. And a capture that LANDED is
+	// the turn's kept one wherever it is newer than the kept one, so an
+	// unresolved capture answered after a newer one began still counts.
+	//
+	// ON A ROW IN ANY STATE, its ending decided included: a stop's capture is
+	// taken after the stop is decided and before the box is reclaimed, and
+	// what it came to is a fact about the turn whoever holds the row. A row
+	// that is gone takes nothing and is no error.
+	StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error)
 
 	// ClaimForResume atomically flips a run to resumed, when it holds the
 	// tail's launch in one of the tail's statuses.

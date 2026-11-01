@@ -95,10 +95,17 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // [pollBound] — sixty seconds, the control plane's whole-request budget — for
 // the reason the poll is bounded by it: what the host does is the poll's own
 // work (a reconnect, a probe) and the run's own files read back and its box
-// paused, all of it on its own host. A read that has not finished in that
+// paused, all of it on its own host. And [SessionCaptureBudget] beside it,
+// because the read is where the job's harness session is kept, on the host and
+// before the box is paused: the session is packed, streamed out sealed and
+// recorded inside the read, and a host still uploading a session at its bound
+// at the object store's slowest pace must not be taken for a silent one.
+// Ordinary reads answer in seconds, a session of a day's work being a
+// mebibyte or two; the bound is what a host that has truly stopped costs
+// before the asker hands the claim back. A read that has not finished in that
 // is a host that is not answering, and is answered as one ([ErrBoxHostSilent]);
 // it announces the completion again from its own next poll.
-const BoxReadBudget = pollBound
+var BoxReadBudget = pollBound + SessionCaptureBudget
 
 // BoxReadAnswerShare is the part of [BoxReadBudget] a host's read may take,
 // leaving the rest for its answer to cross the broker before the asker stops

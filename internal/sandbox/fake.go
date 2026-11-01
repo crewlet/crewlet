@@ -480,6 +480,14 @@ type FakeRunner struct {
 	// before it answers — a box that takes a while to read.
 	LiveGate chan struct{}
 
+	// Session, when set, is the harness session every box this runner is
+	// asked about holds: what [FakeRunner.TakeSession] hands a capture,
+	// and what makes this fake a [SessionTaker]. Set it before the first
+	// collection.
+	Session *FakeSession
+	// takes is every capture asked of this runner, in order.
+	takes []SessionTake
+
 	// The job's live account: what it has said, under which origin and
 	// from which source. See [FakeRunner.Say].
 	account string
@@ -778,6 +786,57 @@ func (r *FakeRunner) lostJob(handle RunHandle) (Result, bool) {
 		return Result{}, false
 	}
 	return r.lost.partial, true
+}
+
+// FakeSession is a session a [FakeRunner]'s boxes hold, as a capture takes it.
+type FakeSession struct {
+	// Archive describes it, and Body is its archive's bytes — what the
+	// capture is handed as they are, the fake scrubbing nothing.
+	Archive SessionArchive
+	Body    []byte
+
+	// TakeErr fails the take, as a box whose session cannot be read does,
+	// and KeepErr the record of its digest in the box.
+	TakeErr, KeepErr error
+
+	// kept counts the digests recorded.
+	kept atomic.Int32
+}
+
+// Kept is how many captures of the session recorded their digest in the box.
+func (s *FakeSession) Kept() int { return int(s.kept.Load()) }
+
+// TakeSession hands a capture the runner's [FakeRunner.Session], recording what
+// it was asked ([FakeRunner.Takes]); a runner with none holds no session.
+func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionTake) (TakenSession, error) {
+	r.mu.Lock()
+	r.takes = append(r.takes, SessionTake{Pack: take.Pack, Scrub: slices.Clone(take.Scrub)})
+	session := r.Session
+	r.mu.Unlock()
+	if session == nil {
+		return TakenSession{}, nil
+	}
+	if session.TakeErr != nil {
+		return TakenSession{}, session.TakeErr
+	}
+	return TakenSession{
+		Archive: session.Archive,
+		Body:    io.NopCloser(bytes.NewReader(session.Body)),
+		Keep: func(context.Context) error {
+			if session.KeepErr != nil {
+				return session.KeepErr
+			}
+			session.kept.Add(1)
+			return nil
+		},
+	}, nil
+}
+
+// Takes is every capture asked of this runner, in order.
+func (r *FakeRunner) Takes() []SessionTake {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.takes)
 }
 
 // Installed reports whether the agent was installed in this box.

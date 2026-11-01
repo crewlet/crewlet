@@ -127,6 +127,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// Nor is the name of the job, and it is new on every launch, the
 	// reset below included: a completion claims only the job it names.
 	run.LaunchID = uuid.NewString()
+	// NOR ITS ORDINAL: the first launch of a turn is 1, and the reset below
+	// numbers each later one past the row's ([PendingRun.LaunchSeq]).
+	run.LaunchSeq = 1
 	run.UpdatedAt = now
 	// And the job's own record starts here: the instant the launch exists
 	// is the instant it began, and a previous job's record — its start, its
@@ -210,6 +213,10 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		continuesAnswer := run.Continues && existing.asked()
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
+		// ONE PAST THE ROW'S, in the write that names the job, so the
+		// launch's ordinal and its name are never apart: a row an older build
+		// wrote holds none, and this launch is its 1.
+		existing.LaunchSeq++
 		existing.Launch = run.Launch
 		// The turn's cap is the turn's, the same on every launch of it —
 		// written anyway, so the row says what this launch was told.
@@ -319,6 +326,45 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
 	run, _, found, err := s.read(ctx, turnID)
 	return run, found, err
+}
+
+// StampCapture records one capture of the turn's session on its row. See the
+// contract on [PendingStore].
+//
+// THROUGH THE WRITE EVERY STATE TAKES ([CoordStore.mutateAny]), as a bridged
+// call's append is: a capture is a fact about what left the box, and a stop's is
+// stamped once its ending is decided.
+func (s *CoordStore) StampCapture(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {
+	if capture.LaunchSeq <= 0 || capture.CaptureSeq <= 0 || !capture.State.Valid() {
+		return false, fmt.Errorf("sandbox: a capture of run %s is placed at (%d, %d) in state %q, and "+
+			"every capture is placed from (1, 1) in one of %v", turnID, capture.LaunchSeq,
+			capture.CaptureSeq, capture.State, CaptureStates)
+	}
+	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		took := false
+		newest := run.Capture
+		switch {
+		case newest == nil || capture.newerThan(*newest):
+			took = true
+		case capture.samePlace(*newest):
+			took = newest.State.advancesTo(capture.State)
+		}
+		if took {
+			stamped := capture
+			run.Capture = &stamped
+		}
+		// LANDED, and not a place the row already answered otherwise: an
+		// older capture's answer that comes after a newer one began is the
+		// kept one where it is newer than what is kept, and a place the row
+		// holds refused is never kept, whatever a late write says.
+		landed := capture.State == CaptureLanded && (took || !capture.samePlace(*newest))
+		if landed && (run.Kept == nil || capture.newerThan(*run.Kept)) {
+			kept := capture
+			run.Kept, took = &kept, true
+		}
+		return took
+	})
+	return won, err
 }
 
 // ClaimForResume flips a run holding the tail's launch, in one of the tail's
