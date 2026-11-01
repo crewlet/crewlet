@@ -157,6 +157,12 @@ func TestADeepRunReachesCrewletOnlyThroughItsSurface(t *testing.T) {
 	if len(req.MCPServers) != 1 {
 		t.Fatalf("the job was handed %d MCP servers, want the bridge alone", len(req.MCPServers))
 	}
+	// ITS COMMITS CREDIT CREWLET AND NAME NO RUN: deep work has no page a
+	// `Crewlet-Run:` could lead to, and the company left the credit on.
+	if req.Attribution == nil || req.Attribution.Run != "" {
+		t.Errorf("the job was started asking for attribution %+v, want the co-author alone",
+			req.Attribution)
+	}
 	for name, value := range req.Env {
 		if strings.HasPrefix(name, "CREWLET_") || strings.Contains(value, "test-key") {
 			t.Errorf("the run's environment carries %s", name)

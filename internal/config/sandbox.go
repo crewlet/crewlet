@@ -174,6 +174,23 @@ type SandboxProvider struct {
 	// said nothing would run without the one bound its turns have.
 	DefaultMaxTurns *int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset = 96; 0 = uncapped."`
 
+	// CommitAttribution says whether every commit a coding run authors as
+	// itself credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.ai>`,
+	// and `Crewlet-Run:` naming the run's turn. Git adds it, through a hook
+	// the run's box is given (internal/sandbox/codingagent), so it holds
+	// whatever the model remembers, and only on the run's own commits: a
+	// person's commit the run amends, cherry-picks or rebases keeps no
+	// credit. Read it through [SandboxProvider.AttributesCommits].
+	//
+	// ON UNLESS TURNED OFF, because a commit that says where it came from is
+	// what a reader of the history needs by default, and the credit changes
+	// nothing a commit does. A company that does not want Crewlet named in
+	// its repositories' history sets false.
+	//
+	// A POINTER, because unset is "on": a plain bool's zero would turn the
+	// credit off for every company that said nothing.
+	CommitAttribution *bool `yaml:"commit_attribution,omitempty" json:"commit_attribution,omitempty" desc:"Credit Crewlet on every commit a coding run authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, and Crewlet-Run naming the run. Unset = true; false = credit nothing."`
+
 	// Setup is the engine-wide provisioning applied to every box before
 	// each seat's own extras. The engine ships NO steps of its own — git
 	// auth included: the documented recipe is config, so an operator can
@@ -256,6 +273,14 @@ func (s *SandboxProvider) MaxTurns() int {
 		return defaultSandboxMaxTurns
 	}
 	return *s.DefaultMaxTurns
+}
+
+// AttributesCommits reports whether a coding run's own commits credit Crewlet
+// ([SandboxProvider.CommitAttribution]): unless the company set false.
+// Nil-safe, as [SandboxProvider.MaxTurns] is: a company with no catalogue
+// runs no box, so nothing reads the answer.
+func (s *SandboxProvider) AttributesCommits() bool {
+	return s == nil || s.CommitAttribution == nil || *s.CommitAttribution
 }
 
 // PauseTTL is the paused-box TTL as configured, or nil when the field is

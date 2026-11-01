@@ -404,9 +404,13 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 		return assistant.DeepOutcome{}, placeErr
 	}
 	started := d.e.now()
+	// THE CREDIT ON ITS COMMITS NAMES NO RUN: deep work has no page a
+	// `Crewlet-Run:` could lead a reader of the history to, so a commit it
+	// makes carries the co-author line alone.
 	handle, err := runner.Start(ctx, box, sandbox.RunRequest{System: r.System, Brief: r.Brief,
 		Env: run.env, Limits: sandbox.Limits{MaxTurns: r.Steps}, Model: run.model,
-		Resume: session, MCPServers: bridgeServer(endpoint)})
+		Resume: session, MCPServers: bridgeServer(endpoint),
+		Attribution: t.manager.CommitAttribution("")})
 	if err != nil {
 		d.discard(ctx, t, placement, box.ID())
 		return assistant.DeepOutcome{}, fmt.Errorf("the deep-work run could not start: %w", err)

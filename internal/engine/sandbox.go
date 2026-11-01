@@ -100,6 +100,7 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 		DefaultTimeout:   seconds(spec.Timeout()),
 		DefaultPauseTTL:  secondsPtr(spec.PauseTTL()),
 		DefaultMaxTurns:  spec.MaxTurns(),
+		AttributeCommits: spec.AttributesCommits(),
 		DefaultSetup:     setupSteps(spec.Setup),
 		Telemetry:        otel,
 	})
