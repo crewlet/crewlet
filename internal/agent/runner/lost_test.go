@@ -51,8 +51,7 @@ func lostRound(t *testing.T, before run, lost runner.Lost, opts buildOpts,
 // resumed from a conversation cut off mid-call.
 func TestALostJobsRoundIsCarriedOnInAFreshSession(t *testing.T) {
 	t.Parallel()
-	before := run{calls: []llm.ToolCall{activate("slack_post"),
-		call(t, "slack_post", `{"text":"starting on it"}`)}}
+	before := run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"starting on it"}`)}}
 	lost := runner.Lost{Why: "the engine it ran under restarted, which killed it", BoxKept: true,
 		Losses: 1, Limit: 2}
 	relauncher, _, err := lostRound(t, before, lost, buildOpts{})
@@ -90,8 +89,7 @@ func TestALostJobsRoundIsCarriedOnInAFreshSession(t *testing.T) {
 // to deliver again.
 func TestALostJobThatHadSubmittedIsCollected(t *testing.T) {
 	t.Parallel()
-	before := run{calls: []llm.ToolCall{activate("slack_post"),
-		call(t, "slack_post", `{"text":"fixed the flake"}`),
+	before := run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"fixed the flake"}`),
 		call(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"fixed the flake","deliveries":["slack_post"]}`)}}
 	relauncher, collector, err := lostRound(t, before,

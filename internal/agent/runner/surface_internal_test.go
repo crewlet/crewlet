@@ -50,7 +50,7 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 	if strings.Contains(universe.Discoverable(nil), toolname.MarkOnboarded) {
 		t.Error("the executor's catalogue lists mark_onboarded")
 	}
-	if slices.Contains(executorActive(universe), toolname.MarkOnboarded) {
+	if slices.Contains(executorActive(universe, nil), toolname.MarkOnboarded) {
 		t.Error("the executor's run is offered mark_onboarded")
 	}
 }
@@ -123,6 +123,13 @@ func TestTheSurfaceHandedToTheTurnCarriesWhatLeavesTheProcess(t *testing.T) {
 // sent the seat to `list_mcp_server_tools`, and a seat woken on Worklet
 // (whose tools no discovery call lists) went to the only MCP
 // server it held and posted in chat instead. See [turn.Remedy].
+//
+// AND A SURFACE WITH NO WAY TO DISCOVER HAS NOTHING BEHIND DISCOVERY: the
+// executor's, which holds every tool it can reach, and whose refusals once
+// sent it to a pair of tools it does not hold.
+//
+// Mutation: report the universe's MCP tools whatever the surface holds, and the
+// executor's surface says it has tools to discover.
 func TestTheSurfaceHandedToTheTurnSaysWhichToolsSitBehindDiscovery(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()
@@ -134,15 +141,28 @@ func TestTheSurfaceHandedToTheTurnSaysWhichToolsSitBehindDiscovery(t *testing.T)
 		tools.Annotations{}); err != nil {
 		t.Fatal(err)
 	}
-	surface := tools.NewSurface("execute", reg.Snapshot(), []string{"comment_on_work_item"})
+	snapshot, err := reg.Snapshot().With(tools.Entry{Tool: stubTool(toolname.Activate),
+		Origin: tools.OriginBuiltin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	surface := tools.NewSurface("onboarding", snapshot,
+		[]string{"comment_on_work_item", toolname.Activate})
 
 	got := describe(surface)
 	if !slices.Contains(got.Discoverable, "mattermost_post_message") {
 		t.Errorf("Discoverable = %v, want the MCP tool in it", got.Discoverable)
 	}
 	if slices.Contains(got.Discoverable, "comment_on_work_item") {
-		t.Error("a first-party tool the executor already holds was reported as one " +
+		t.Error("a first-party tool the phase already holds was reported as one " +
 			"it has to discover")
+	}
+
+	held := tools.NewSurface("execute", reg.Snapshot(),
+		[]string{"comment_on_work_item", "mattermost_post_message"})
+	if got := describe(held).Discoverable; len(got) != 0 {
+		t.Errorf("Discoverable = %v on a surface that holds every tool and no way to discover one",
+			got)
 	}
 }
 

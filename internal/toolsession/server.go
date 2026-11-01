@@ -121,10 +121,18 @@ type Server struct {
 const relistWait = 2 * time.Second
 
 // NewServer builds the server for one dispatcher, named as the harness will list
-// it. title is shown in the handshake, for a harness's own logs.
-func NewServer(name, title string, d Dispatcher) *Server {
+// it. title is shown in the handshake, for a harness's own logs. instructions,
+// where there are any, are the server's own MCP instructions — what it is for —
+// which a harness puts in front of its model beside the server's tools: the
+// channel a server says what it is for on, where a prompt would be the
+// engine's guess at where a harness reads it.
+func NewServer(name, title, instructions string, d Dispatcher) *Server {
 	s := &Server{d: d, listed: make(chan struct{}), relisted: make(chan struct{})}
-	s.srv = mcp.NewServer(&mcp.Implementation{Name: name, Title: title, Version: "1"}, nil)
+	var opts *mcp.ServerOptions
+	if instructions != "" {
+		opts = &mcp.ServerOptions{Instructions: instructions}
+	}
+	s.srv = mcp.NewServer(&mcp.Implementation{Name: name, Title: title, Version: "1"}, opts)
 	s.srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			if method != "tools/list" {

@@ -137,6 +137,7 @@ var publishedRoutes = []string{
 	"GET /webhooks/github-app",
 	"POST " + auth.OTLPPrefix + "{token}/v1/{signal}",
 	mcpbridge.PathPrefix + "{token}",
+	mcpbridge.ServerPattern,
 	mcpbridge.SteerPattern,
 }
 

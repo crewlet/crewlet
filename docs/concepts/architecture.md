@@ -538,12 +538,18 @@ pass of its own that runs before the executor. The reviewer's question is narrow
 prompt is smaller: is this round's work right, given the record. A frontier model can do the work while a cheap one
 reviews; see [Turn Engine](turn-engine.md).
 
-**Tools are discovered, not enumerated.** A role with 50–150 MCP tools would
-send 15–25 KB of tool definitions with every model request, so the executor sees
-*server names* and walks `list_mcp_server_tools` → `activate_tool` to promote
-what it actually needs. From the model's side a builtin and an MCP tool are the
-same thing: two tools of the one `crewlet` server its harness lists, which the
-engine answers ([Tool calls on this host](llm-backends.md#tool-calls-on-this-host)).
+**Tools are held, not enumerated.** A role with 50–150 MCP tools would send
+15–25 KB of tool definitions with every model request. The executor holds every
+one of them from its launch anyway, and no prompt lists them: the tool bridge
+serves the engine's own tools as one MCP server, `crewlet`, and each of the seat's
+MCP servers under its own name, and the harness keeps a large server's tools out
+of the requests that do not need them itself — Claude Code's tool search,
+OpenCode's Code Mode — as it does for a person ([The tool
+bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)). The
+phases on this host that reach their MCP tools by discovery walk
+`list_mcp_server_tools` → `activate_tool` instead. Either way a builtin and an
+MCP tool are the same thing to the engine: every call is decided and recorded as
+the seat's ([Tool calls on this host](llm-backends.md#tool-calls-on-this-host)).
 
 **A parked turn is the reason there is no parked goroutine anywhere.** Every
 executor launch parks its turn: the run is detached in its box, and the turn's

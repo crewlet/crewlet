@@ -577,17 +577,29 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 // An empty `env` or `headers` is OMITTED rather than written as an empty
 // object, which is what the harness's own examples show and what this wrote
 // before.
+//
+// `alwaysLoad` ONLY WHERE THE ENGINE ASKS ([sandbox.MCPServer.AlwaysLoaded]):
+// the engine's own tools. Claude Code defers every MCP server's tools behind
+// its tool search by default (the vendor's MCP page, "Configure tool search"),
+// which is what keeps a seat's MCP servers out of each request — and kept
+// submit_work there too, so a run had to search for the call that ends it.
+// The key exempts the one server ("Exempt a server from deferral"), and is
+// available on every transport.
 func claudeCodeMCP(s sandbox.MCPServer) map[string]any {
+	var out map[string]any
 	if s.Transport == sandbox.TransportHTTP {
-		out := map[string]any{"type": string(sandbox.TransportHTTP), "url": s.URL}
+		out = map[string]any{"type": string(sandbox.TransportHTTP), "url": s.URL}
 		if len(s.Headers) > 0 {
 			out["headers"] = s.Headers
 		}
-		return out
+	} else {
+		out = map[string]any{"command": s.Command, "args": s.Args}
+		if len(s.Env) > 0 {
+			out["env"] = s.Env
+		}
 	}
-	out := map[string]any{"command": s.Command, "args": s.Args}
-	if len(s.Env) > 0 {
-		out["env"] = s.Env
+	if s.AlwaysLoaded {
+		out["alwaysLoad"] = true
 	}
 	return out
 }

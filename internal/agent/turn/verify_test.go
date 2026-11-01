@@ -449,6 +449,17 @@ func TestTheRemedyNamesTheToolsThatDeliverWhereTheAskerIs(t *testing.T) {
 			t.Errorf("Remedy(%s) = %q, want the general instruction", r, got)
 		}
 	}
+
+	// AN EXECUTOR'S SURFACE HAS NOTHING TO DISCOVER — it holds every tool it
+	// can reach — so its general instruction sends it to no discovery tool,
+	// which is on no executor's surface.
+	held := trackerSurface()
+	held.Discoverable = nil
+	if got := turn.Remedy(held, turn.ToolReply("")); strings.Contains(got, "list_mcp_server_tools") ||
+		!strings.Contains(got, "Call the tool that delivers") {
+		t.Errorf("Remedy on a surface with nothing to discover = %q, want the general "+
+			"instruction and no discovery tool", got)
+	}
 }
 
 // THE CORRECTION SAYS THE TURN REACHED SOMEBODY ONLY WHEN IT DID. It said so

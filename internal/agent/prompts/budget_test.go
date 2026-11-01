@@ -1,14 +1,11 @@
 package prompts
 
 import (
-	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // The measure is part of the contract: someone "simplifying" it to len(s)/4
@@ -44,8 +41,8 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 //
 // The budget covers the identity scaffold, the turn contract (act with tool
 // calls, finish the arc and discover what is missing, stay reachable) and
-// EVERY section a tool on the surface turns on: the escalation guidance, the
-// workers list and the tools to discover. Measured with
+// EVERY section a tool on the surface turns on: the escalation guidance and
+// the workers list. Measured with
 // all of them rendered, because that is the seat the budget is for: a lead on
 // the default work tracker holds `comment_on_work_item` and so carries the
 // escalation section on every turn, and a budget measured on a seat without
@@ -54,9 +51,9 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 //
 // It used to be measured against a synthetic catalogue of a hundred one-line
 // tools, which measured nothing production sends: the executor holds every
-// first-party tool from its first round, whose definitions reach the model
-// with the request, so what its system prompt lists is its MCP servers and
-// nothing else.
+// tool its seat holds from its first round, whose definitions reach the model
+// through its harness, each under the server it comes from, so its system
+// prompt lists no tool and no server.
 //
 // 2200 -> 870 when the prompt stopped saying what the model gets elsewhere:
 // the first-party tool catalogue (every description a second time), the rules
@@ -66,7 +63,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // own run now, and a section about handing code work to a box is a section
 // about a box the run is already in.
 //
-// Measured at ~734, so this leaves ~8%: enough that a sentence can be added,
+// Measured at ~733, so this leaves ~8%: enough that a sentence can be added,
 // tight enough that a section cannot. The plain contract alone — no tracker,
 // no workers — measures ~486 of it.
 //
@@ -90,7 +87,7 @@ func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t))
-	for _, key := range []string{"escalation", "workers", KeyDiscoverableTools} {
+	for _, key := range []string{"escalation", "workers"} {
 		if _, ok := slice(p, key); !ok {
 			t.Errorf("the reference executor renders no %q section, so the budgets "+
 				"below are measured on a smaller prompt than production's", key)
@@ -142,23 +139,21 @@ func sectionText(sections ...[]string) string {
 }
 
 // referenceExecutor is the executor input the budgets measure: a lead's
-// surface with every tool that gates a section on it, the workers the
-// shipped example company configures, and the tools to discover a production
-// snapshot renders.
+// surface with every tool that gates a section on it, and the workers the
+// shipped example company configures.
 //
 // The surface is NAMES, because that is all a gate reads — what each tool
-// says reaches the model with the request, never through this prompt. The
+// says reaches the model with the request, never through this prompt, and
+// that holds for every MCP server's tool as much as a first-party one: the
+// executor lists none, and its harness defers a server's tools itself. The
 // names are the ones production's surface carries: `comment_on_work_item`
 // and `create_work_item` from the default work tracker, `delegate` for a
-// seat with workers, and the tools every executor adds (`submit_work` and
-// the discovery pair).
+// seat with workers, and `submit_work`, which every executor adds.
 func referenceExecutor(t *testing.T) ExecutorInput {
 	t.Helper()
 	return ExecutorInput{
-		Discoverable: referenceDiscoverable(t),
 		AvailableTools: []string{
-			"activate_tool", escalationTool, "create_work_item", "delegate",
-			"list_mcp_server_tools", "submit_work",
+			escalationTool, "create_work_item", "delegate", "submit_work",
 		},
 		Workers: referenceWorkers(),
 	}
@@ -193,56 +188,6 @@ func referenceWorkers() string {
 	return strings.Join(lines, "\n")
 }
 
-// referenceDiscoverable is the reference executor's tools to discover,
-// rendered by the renderer production uses over a snapshot shaped like
-// production's: first-party tools with real-length descriptions, every one of
-// them ACTIVE, as the executor holds them from its first round — and the
-// three MCP servers an engineering lead typically carries (a tracker, a code
-// host, a chat), several tools each.
-//
-// What renders is one line per server, and the case checks that it is: a
-// first-party description in this text would mean the prompt is paying for a
-// definition the request already carries, which is the regression this
-// fixture exists to catch.
-func referenceDiscoverable(t *testing.T) string {
-	t.Helper()
-	reg := tools.NewRegistry()
-	var active []string
-	for i := range 45 {
-		name := fmt.Sprintf("first_party_%02d", i)
-		desc := strings.Repeat("What this first-party tool does and when to call it. ", 8)
-		if err := reg.Register(stubTool{name, desc}, tools.OriginBuiltin); err != nil {
-			t.Fatal(err)
-		}
-		active = append(active, name)
-	}
-	for _, server := range []string{"atlassian", "github", "slack"} {
-		for i := range 30 {
-			name := fmt.Sprintf("%s_tool_%02d", server, i)
-			if err := reg.Register(stubTool{name, "A vendor's tool."}, tools.Origin(server)); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	out := reg.Snapshot().Discoverable(active)
-	if strings.Contains(out, "first_party_") || strings.Count(out, "\n") != 2 {
-		t.Fatalf("the reference executor's tools to discover are not its three "+
-			"servers alone:\n%s", out)
-	}
-	return out
-}
-
-// stubTool is a name and a description and nothing else: what a budget
-// measures is what a catalogue renders, never what a tool does.
-type stubTool struct{ name, desc string }
-
-func (s stubTool) Name() string               { return s.name }
-func (s stubTool) Description() string        { return s.desc }
-func (s stubTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
-func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
-	return tools.Result{}, nil
-}
-
 // THE WHOLE TURN, which is the number that actually bills.
 //
 // Two prompts where there were three, and the executor's is the only one that
@@ -259,11 +204,11 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 // 4000 -> 2430 when the prompts stopped saying what the model gets elsewhere.
 // 2430 -> 2385 when the executor's sandbox section and the review's gated
 // sandbox rule went, and the review's unconditional rule on a run's local
-// work came in: the turn's own prose measures ~1,202 with every gated section
+// work came in: the turn's own prose measures ~1,200 with every gated section
 // of both prompts rendered (referenceExecutor, and the review's `a2a_ask`),
 // the roster allowance is 1000 (see rosterAllowanceTokens) and spends ~998 of
 // it here, and a mixed company pays another ~93 for the `## Human colleagues`
-// note this fixture triggers. Measured at ~2,293, so ~4% headroom —
+// note this fixture triggers. Measured at ~2,291, so ~4% headroom —
 // deliberately tighter than the ~8% the prose budgets carry, because the next
 // thing that wants room here should take it out of the allowance rather than
 // out of the budget.

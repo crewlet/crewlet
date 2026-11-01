@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -208,7 +207,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// spent — see [BridgedSpend].
 	bridged := NewBridgedSpend()
 	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, round, snapshot, submit,
-		executorActive(snapshot))
+		executorActive(snapshot, r.boxServers()))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
@@ -219,7 +218,7 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	// that reaches no run's record ([Runner.steerReturn]), and recorded
 	// delivered only once the launch has opened its job ([Runner.steerBriefed]).
 	fresh := r.steerBrief(ctx)
-	system, user := r.executorPrompt(ctx, notes, history, snapshot, built, fresh)
+	system, user := r.executorPrompt(ctx, notes, history, built, fresh)
 	// AND ASKED AGAIN once the brief exists, before anything is on the
 	// record: assembling it rewrites the prior rounds' payloads past their
 	// budgets with the seat's auxiliary model, charged to the same counters,
@@ -352,7 +351,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// asking run's own session after the answer alone, since that session
 	// already holds every note it read.
 	fresh := r.steerBrief(ctx)
-	system, user := r.executorPrompt(ctx, "", history, snapshot, built, fresh)
+	system, user := r.executorPrompt(ctx, "", history, built, fresh)
 	if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
@@ -500,10 +499,10 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 // ([Runner.continueAgentRun]) and one that reopens it while it works
 // ([Runner.ReopenAgentRun]).
 //
-// AS THE RUN LEFT IT: the tools its launch recorded and the skills its guard
-// held then, and what the run did to both since over the bridge, read off
-// called — every tool a successful activation named ([replayedActive]) and
-// every skill it loaded ([Runner.observeLoads]). AND ITS PLACE IN THE TURN:
+// AS THE RUN LEFT IT: the tools its launch recorded — every tool it can reach,
+// so nothing a run does over the bridge adds one — and the skills its guard
+// held then, with every skill the run loaded since over the bridge read off
+// called ([Runner.observeLoads]). AND ITS PLACE IN THE TURN:
 // the closed rounds in history and the run's calls, seeded into the call log
 // through the rebuilt surface ([seedCalls]), so a count read from here sees
 // every call made before it.
@@ -512,17 +511,14 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 // own: the collection rebuilt the launch's record alone, on the reasoning that
 // it makes no gated call. That much is true, and it is beside the point,
 // because the collected surface is also what the round's record states the
-// run held (tools_available) and could still have discovered
-// (tool_catalogue). Every tool the run had activated over the bridge was
-// published as one it never found, and the record contradicted the run's own
-// calls listed beside it. The guard is replayed too, although nothing calls
-// through the collection's surface: a rebuild that replays half of what the
-// run did is the drift this rule exists to stop.
+// run held (tools_available). The guard is replayed too, although nothing
+// calls through the collection's surface: a rebuild that replays half of what
+// the run did is the drift this rule exists to stop.
 func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.State,
 	snapshot tools.Snapshot, submit tools.Callable, history []ledger.Iteration, called []ledger.Call,
 ) (*tools.Surface, error) {
 	surface, err := r.surfaceWith(ctx, m, phase.Execute, state.Round, snapshot, submit,
-		replayedActive(state, called), state.LoadedSkills...)
+		state.ActiveTools, state.LoadedSkills...)
 	if err != nil {
 		return nil, err
 	}
@@ -531,24 +527,11 @@ func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.St
 	return surface, nil
 }
 
-// replayedActive is the tools a run's surface holds once its bridged calls
-// are replayed onto the one its launch recorded: those, and every tool a
-// successful activation named.
-func replayedActive(state execstate.State, called []ledger.Call) []string {
-	active := slices.Clone(state.ActiveTools)
-	for _, call := range called {
-		if call.Name == toolname.Activate && !call.Failed {
-			active = append(active, activationTarget(call.Args))
-		}
-	}
-	return active
-}
-
 // observeLoads tells the guard the surface was just armed with every skill a
 // run's bridged calls loaded, by the guard's own reading of a call — the one
 // rule for which call unlocks what. Called once the surface is built, because
-// whether a guard is armed at all depends on the loader being active, which an
-// activation over the bridge may be what made it. A call is read by its
+// whether a guard is armed at all depends on the loader being active. A call is
+// read by its
 // canonical arguments, made through the surface ([tools.Surface.ArgsOf]), as
 // the guard reads every call the surface admits.
 func (r *Runner) observeLoads(surface *tools.Surface, called []ledger.Call) {
@@ -648,11 +631,10 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	res.StartedAt = began.UTC()
 	res.Elapsed = time.Duration(state.LaunchMS)*time.Millisecond + time.Since(began)
 	work, described := r.finishWork(ctx, state.Round, work{
-		submit:   submit,
-		res:      res,
-		surface:  surface,
-		snapshot: snapshot,
-		run:      run,
+		submit:  submit,
+		res:     res,
+		surface: surface,
+		run:     run,
 	})
 	// The RUN's calls, not this process's surface's — see the doc above —
 	// and every one an EARLIER ATTEMPT's ([turn.Work.Inherited]): the run

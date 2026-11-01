@@ -19,18 +19,20 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE EXECUTOR'S SYSTEM PROMPT LISTS NOTHING IT HOLDS.
+// THE EXECUTOR'S SYSTEM PROMPT LISTS NOTHING IT HOLDS, AND IT HOLDS EVERY TOOL.
 //
-// Every first-party tool is on the executor's surface from its launch, and an
-// offered tool's whole definition reaches the run over the tool bridge. The
-// system prompt used to list each of them again, description and all: with
-// every builtin wired that copy was ~17 KB, most of the prompt, paid on every
-// turn of every run. What it lists now is what the model can learn
-// nowhere else — the MCP servers it can still discover.
+// Every tool — first-party and every MCP server's — is on the executor's
+// surface from its launch, and an offered tool's whole definition reaches the
+// run over the tool bridge, under the server it comes from. The system prompt
+// used to list each first-party tool again, description and all — with every
+// builtin wired that copy was ~17 KB, most of the prompt, paid on every turn of
+// every run — and later the MCP servers left for the run to discover. Its
+// harness keeps a large server's tools out of the requests that do not need
+// them by itself now, so the prompt lists neither.
 //
 // REAL BUILTINS, registered by the builtin package itself, so the
 // descriptions a regression would duplicate are the ones production sends.
-func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
+func TestTheExecutorsPromptListsNothingItHolds(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	got := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{
@@ -59,8 +61,10 @@ func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 	defs := got.launch.Surface.ToolDefs()
 
 	offered := toolNames(defs)
-	if !slices.Contains(offered, builtin.SearchKnowledgeTool) {
-		t.Fatalf("the real builtin was not offered (%v), so this case proves nothing", offered)
+	for _, held := range []string{builtin.SearchKnowledgeTool, "slack_post", "jira_create"} {
+		if !slices.Contains(offered, held) {
+			t.Fatalf("%s was not offered (%v)", held, offered)
+		}
 	}
 	for _, def := range defs {
 		if strings.Contains(system, "- "+def.Name+":") || strings.Contains(system, "- "+def.Name+"\n") {
@@ -70,26 +74,21 @@ func TestTheExecutorsPromptListsOnlyWhatItCanStillDiscover(t *testing.T) {
 			t.Errorf("the system prompt repeats %s's description: %q", def.Name, first)
 		}
 	}
-	for _, want := range []string{"\n## Tools to discover\n", "- MCP server `slack`", "- MCP server `jira`"} {
-		if !strings.Contains(system, want) {
-			t.Errorf("the system prompt lacks %q", want)
+	for _, unwanted := range []string{"## Tools to discover", "MCP server `slack`",
+		"MCP server `jira`", "## Available tools"} {
+		if strings.Contains(system, unwanted) {
+			t.Errorf("the system prompt carries %q, which the request already defines", unwanted)
 		}
-	}
-	// Not a heading of its own for the definitions the harness already lists.
-	if strings.Contains(system, "## Available tools") {
-		t.Error("the system prompt has a second `## Available tools` section")
 	}
 
-	// AND THE RECORD SAYS THE SAME: what the phase could still discover,
-	// disjoint from what it was offered, so a reader counts no tool twice.
+	// AND THE RECORD SAYS THE SAME: every tool held, nothing left to discover.
 	done := completedPhase(t, pub, "execute")
-	for _, name := range done.ToolCatalogue {
-		if slices.Contains(done.ToolsAvailable, name) {
-			t.Errorf("the record lists %s as both offered and still to discover", name)
-		}
+	if !slices.Contains(done.ToolsAvailable, "slack_post") {
+		t.Errorf("the record's tools held = %v, want the MCP tool among them", done.ToolsAvailable)
 	}
-	if !slices.Contains(done.ToolCatalogue, "slack_post") {
-		t.Errorf("the record's tools to discover = %v, want the MCP tool never activated", done.ToolCatalogue)
+	if len(done.ToolCatalogue) != 0 {
+		t.Errorf("the record lists %v as still to discover, on a run that held every tool",
+			done.ToolCatalogue)
 	}
 }
 

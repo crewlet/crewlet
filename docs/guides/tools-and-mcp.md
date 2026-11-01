@@ -418,7 +418,7 @@ group, and names the **gate** its authority row decides:
 | Artifacts | `artifacts` | Documents, slides, sheets and dashboards agents make and share, and the data behind them |
 | Colleagues | `colleagues` | Finding a colleague, and asking another agent a question |
 | Memory and skills | `memory` | The agent's own notes, past turns and skills |
-| MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, which the engine hands every executor and onboarding pass so it can reach its MCP servers' tools |
+| MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, which the engine hands the onboarding pass and a worker so it can reach its MCP servers' tools (an executor holds every tool its seat does from its launch, and its harness defers a server's tools itself) |
 
 | `gate` | Who may call it |
 |---|---|
@@ -603,9 +603,11 @@ and leaves its values to you. The whole request and its answers are in
 ### Saying what a server is for
 
 `description` is one line, at most 200 characters with no line breaks or tabs,
-saying what the server is for. Each agent's prompt names its MCP servers under
-`## Tools to discover` before it shows any of their tools, and prints the
-description beside the name:
+saying what the server is for. A seat's executor is handed it as the server's own
+MCP instructions, which its harness puts in front of its model beside the server's
+tools; the onboarding pass and a worker, which reach their MCP tools by discovery,
+see their MCP servers named under `## Tools to discover` before any of their
+tools, with the description beside each name:
 
 ```text
 - MCP server `handbook`: Searches the engineering handbook and the runbooks

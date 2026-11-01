@@ -219,7 +219,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 
 | Phase | Tool surface seen | Notes |
 |---|---|---|
-| **Execute** | every tool the executor can reach, its first-party tools and every MCP server's tool alike, whether or not it is active yet, and the names of the MCP servers whose tools reach the seat | Matched once, when the phase opens, and the guard is armed over the same names, so a required skill for an MCP tool the executor activates later is enforced as the catalogue said. |
+| **Execute** | every tool the executor can reach, its first-party tools and every MCP server's tool alike, and the names of the MCP servers whose tools reach the seat | Matched once, when the phase opens, and the guard is armed over the same names, so a required skill for an MCP tool is enforced as the catalogue said. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
 | **Sub-agent** | the delegated task's allowlist | Same matching as Execute, against the worker's narrower surface. `subagent` is the wire name of the worker phase |
 
@@ -227,7 +227,7 @@ A skill is **catalogued** in a phase's prompt when its declared `phases` include
 
 Within a phase, catalogue entries are sorted in **alphabetical key order** so the prompt prefix stays byte-stable across turns (LLM prefix-cache stability).
 
-Catalogue position: skills land **immediately before the `## Tools to discover` block** in Execute — one conceptual section, how-to then what else the seat can reach — and **immediately after the review header** in Review, so guidance precedes the evidence it is meant to be weighed against. Review's catalogue has its own header: it asks the reviewer to weigh the work against the conventions listed and names no loader, because the reviewer's only tool is its submission.
+Catalogue position: skills are the **last section** of Execute's prompt, after the workers it may delegate to — it lists no tool, so how to use the seat's tools is the last thing it reads before the task — and land **immediately after the review header** in Review, so guidance precedes the evidence it is meant to be weighed against. Review's catalogue has its own header: it asks the reviewer to weigh the work against the conventions listed and names no loader, because the reviewer's only tool is its submission.
 
 **Every rendered catalogue is recorded.** Each prompt that carries a catalogue — the executor's, the reviewer's, and each delegate worker's — publishes one [`knowledge_read`](knowledge-system.md#what-agents-read) with `via: skill_injected`, naming the page behind every skill it listed, so "which skill pages reach our agents" counts the pages a catalogue shows as well as the ones a model loads.
 
@@ -241,7 +241,7 @@ Catalogue entries carry only the summary. The full body reaches the LLM via `loa
 load_tool_skill(key="mcp:github") → returns the full body as a tool result
 ```
 
-Available in **Execute** (always-on: it is a builtin, so it needs no `activate_tool` promotion) and **Sub-agent** (same as Execute). A key that does not exist is refused `not_found` with the keys that hold it first ("did you mean `skill:artifacts`?" for `artifacts`) and then every registered key, at most 30, so the LLM recovers in one step rather than guessing again.
+Available in **Execute** (a builtin, held from the launch like every tool the executor holds) and **Sub-agent** (same as Execute). A key that does not exist is refused `not_found` with the keys that hold it first ("did you mean `skill:artifacts`?" for `artifacts`) and then every registered key, at most 30, so the LLM recovers in one step rather than guessing again.
 
 Review intentionally doesn't have it — Review's contract is the decision enum, not domain action.
 

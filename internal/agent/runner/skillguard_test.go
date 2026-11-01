@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -228,16 +227,15 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 }
 
 // A REQUIRED SKILL ON AN MCP TOOL IS ENFORCED as the catalogue promised it.
-// An executor starts with no MCP tool on its active list and activates one by
-// name, while its prompt lists the skills for every tool in its universe — so
-// a guard armed over the active list alone let the activated tool through
-// unread, under a catalogue that had called its skill required.
-func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
+// An executor holds every MCP tool its seat does from its launch, and its
+// prompt lists the skills for every tool in its universe — so the guard is
+// armed over the same universe, and the tool is refused until its skill is
+// read.
+func TestARequiredSkillOnAnMCPToolIsEnforced(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	req := guardedLaunch(t, pub, tools.Origin("slack"), 1)
 	play(t, req, run{calls: []llm.ToolCall{
-		call(t, toolname.Activate, `{"name":"slack_post"}`),
 		call(t, "slack_post", `{"text":"hi"}`),
 	}})
 	if !strings.Contains(req.System, "`chat-conventions` (required") {
@@ -245,7 +243,7 @@ func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
 	}
 	blocked := pub.blocked()
 	if len(blocked) != 1 || blocked[0].ToolName != "slack_post" {
-		t.Fatalf("the activated MCP tool ran without its required skill: refusals %+v", blocked)
+		t.Fatalf("the MCP tool ran without its required skill: refusals %+v", blocked)
 	}
 }
 

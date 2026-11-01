@@ -1062,12 +1062,18 @@ func openCodeReferable(path string) error {
 // every value a server is configured with — its url, each header value, each
 // environment value — a reference to a file of values ([openCodeValueFiles]).
 //
-// EVERY SERVER'S TOOLS ARE OFFERED DIRECTLY (`codemode: false`). 2.0's default
-// is Code Mode, where a server's tools are reachable only from JavaScript the
-// model writes for the `execute` tool: the transcript then records every call
-// as `execute`, never the tool the agent reached, and a model that does not
-// take to writing the script cannot reach the seat's tools at all. Offered
-// directly, a call is `<server>_<tool>`, as it was on 1.x.
+// THE ENGINE'S OWN TOOLS ARE OFFERED DIRECTLY (`codemode: false`), and every
+// other server is left to Code Mode, OpenCode 2's default
+// ([sandbox.MCPServer.AlwaysLoaded]). Code Mode is how this harness keeps a large
+// tool list out of each request: its model is handed one `execute` tool, a
+// catalogue of about two thousand tokens and a `search()` over the rest, and
+// calls a server's tools from the short JavaScript it writes — each one still
+// its own MCP call, so the bridge decides and records every call it makes to a
+// seat's server. The engine's own server stays out of it, so what a run reports
+// through (submit_work) and asks a person through (ask_and_wait) is a call
+// `crewlet_<tool>` on every model, whether or not it takes to writing the
+// script. A server's calls through Code Mode read as `execute` in the run's
+// own transcript; the engine's record of the run names each call.
 //
 // A REMOTE SERVER NEVER STARTS OAUTH (`oauth: false`): 2.0 tries it by default
 // on a remote server that refuses a request, and a headless run has nobody to
@@ -1079,7 +1085,10 @@ func openCodeMCP(servers map[string]sandbox.MCPServer, values *openCodeValueFile
 	out := make(map[string]any, len(servers))
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		s := servers[name]
-		entry := map[string]any{"codemode": false, "disabled": false}
+		entry := map[string]any{"disabled": false}
+		if s.AlwaysLoaded {
+			entry["codemode"] = false
+		}
 		if s.Transport == sandbox.TransportHTTP {
 			entry["type"] = "remote"
 			entry["url"] = values.ref(s.URL)

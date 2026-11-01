@@ -164,21 +164,6 @@ func TestCatalogueSubstitutesSkillVariables(t *testing.T) {
 	excludes(t, p, "${wiki_base_url}")
 }
 
-// The skills catalogue and the tools to discover are conceptually one section:
-// "how to use these" directly above "here is what else you can reach".
-func TestSkillCatalogueLandsImmediatelyBeforeTheToolsToDiscover(t *testing.T) {
-	t.Parallel()
-	cat := &fakeCatalogue{skills: []fakeSkill{{key: "tool:x", tool: "x", summary: "Tight summary of X."}}}
-	p := BuildExecutor(engineer(), ExecutorInput{
-		Discoverable: "- x: does x", AvailableTools: []string{"x"}, Skills: cat,
-	}).Text
-	order(t, p, "## Tool skills", "## Tools to discover")
-	between := p[strings.Index(p, "## Tool skills"):strings.Index(p, "## Tools to discover")]
-	if n := strings.Count(between, "##"); n != 1 {
-		t.Errorf("%d headings sit between the two catalogues, want only the Tool skills one", n)
-	}
-}
-
 // A required skill carries a visible marker and an enforcement note, so the
 // model learns the contract up front. The guard's error message is the
 // recovery path, not the discovery path.
