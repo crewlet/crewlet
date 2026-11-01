@@ -1181,22 +1181,30 @@ type DomainDelivery struct {
 	Nak func(time.Duration) error
 }
 
-// Group opens (or creates) a fleet-wide consumer over this log.
+// Group opens (or creates) a fleet-wide consumer over this log, and reports
+// whether this call created it.
 //
-// DELIVER ALL, always. A group created at the head exists and still discards
-// everything published before its first consumer — which for a wake feed is
-// every notification the company owed while nothing was watching.
-func (l *DomainLog) Group(ctx context.Context, name string) (*DomainGroup, error) {
+// AN EXISTING GROUP IS OPENED WHERE IT STANDS, and from says nothing to it:
+// the durable consumer is the fleet's position, and a node opening it resumes
+// from that.
+//
+// A GROUP CREATED HERE STARTS AT from, the record after the last one the group
+// is known to have acknowledged (the caller's own record of it), or at the
+// log's first retained record when from is zero. Never at the head: a group
+// created at the head discards everything published before its first consumer,
+// which for a wake feed is every notification the company owed while nothing
+// was watching. And never at the first retained record when the caller knows
+// better: a group that had been consumed and is created again after its
+// consumer went replayed the log's whole retention (a week of a company's
+// chat) as wakes.
+func (l *DomainLog) Group(ctx context.Context, name string, from uint64) (*DomainGroup, bool, error) {
 	if name == "" {
-		return nil, fmt.Errorf("jetstream: a domain group has no name — it is " +
-			"the durable consumer's identity, and an unnamed one would be a " +
+		return nil, false, fmt.Errorf("jetstream: a domain group has no name, and it is " +
+			"the durable consumer's identity: an unnamed one would be a " +
 			"fresh consumer per process that replays the whole log on restart")
 	}
 	safe := domainGroupName(l.name, name)
-	// THROUGH THE PACKAGE'S ONE DURABLE-CONSUMER PATH, so a group every
-	// node of a fleet ensures at boot survives a peer winning the race —
-	// see [Queue.ensureDurableConsumer].
-	cons, _, err := l.q.ensureDurableConsumer(ctx, l.name, jetstream.ConsumerConfig{
+	cfg := jetstream.ConsumerConfig{
 		Durable:       safe,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		AckWait:       domainConsumerAckWait,
@@ -1205,14 +1213,26 @@ func (l *DomainLog) Group(ctx context.Context, name string) (*DomainGroup, error
 		// record nobody could handle yet is a retry rather than a poison
 		// message, and a budget that ran out would drop a wake silently.
 		MaxDeliver: -1,
-	})
+	}
+	if from > 0 {
+		// A START BELOW THE LOG'S FIRST RECORD starts at that record, and
+		// one past its last waits for the next: the broker clamps both, so
+		// a mark from before a trim, or the moment before a publish,
+		// starts where it means to.
+		cfg.DeliverPolicy, cfg.OptStartSeq = jetstream.DeliverByStartSequencePolicy, from
+	}
+	// THROUGH THE PACKAGE'S ONE DURABLE-CONSUMER PATH, so a group every
+	// node of a fleet ensures at boot survives a peer winning the race, and
+	// a group that exists is opened as it stands whatever start this call
+	// asked for: see [Queue.ensureDurableConsumer].
+	cons, created, err := l.q.ensureDurableConsumer(ctx, l.name, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("jetstream: open the group %s on %s: %w",
+		return nil, false, fmt.Errorf("jetstream: open the group %s on %s: %w",
 			safe, l.name, err)
 	}
 	messages, err := cons.Messages()
 	if err != nil {
-		return nil, fmt.Errorf("jetstream: consume %s on %s: %w", safe, l.name, err)
+		return nil, false, fmt.Errorf("jetstream: consume %s on %s: %w", safe, l.name, err)
 	}
 	group := &DomainGroup{
 		cons: cons, messages: messages, stream: l.name, name: safe,
@@ -1229,7 +1249,7 @@ func (l *DomainLog) Group(ctx context.Context, name string) (*DomainGroup, error
 		case <-group.closed:
 		}
 	}()
-	return group, nil
+	return group, created, nil
 }
 
 // domainGroupName escapes a group's name the way every derived consumer name
