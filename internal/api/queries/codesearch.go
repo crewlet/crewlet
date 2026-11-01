@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -131,22 +130,12 @@ func codeSearchQuery(p Params) (codesearch.Query, error) {
 	if search.IgnoreCase, err = boolParam(p, "ignore_case", false); err != nil {
 		return codesearch.Query{}, err
 	}
-	// A FILTER BESIDE THE TEXT IS ONE MORE FILTER: a repository or a path
-	// widens the search, named once however often it is named, and one ref
-	// is read — a ref beside a different ref: is the two refs the grammar
-	// refuses.
-	if repo := strings.TrimSpace(p.String("repo")); repo != "" && !slices.Contains(search.Repos, repo) {
-		search.Repos = append(search.Repos, repo)
-	}
-	if path := strings.TrimSpace(p.String("path")); path != "" && !slices.Contains(search.Paths, path) {
-		search.Paths = append(search.Paths, path)
-	}
-	if ref := strings.TrimSpace(p.String("ref")); ref != "" {
-		if search.Ref != "" && search.Ref != ref {
-			return codesearch.Query{}, fmt.Errorf("%w: ref %q beside ref:%s: a search reads one ref",
-				ErrBadParams, ref, search.Ref)
-		}
-		search.Ref = ref
+	// A FILTER BESIDE THE TEXT IS ONE MORE FILTER, by the grammar's own
+	// rule (codeindex.Query.Beside), which the seat tool's arguments take
+	// too: a repository or a path widens the search, and a ref beside a
+	// different ref: is the two refs the grammar refuses.
+	if err := search.Beside(p.String("repo"), p.String("path"), p.String("ref")); err != nil {
+		return codesearch.Query{}, fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
 	if err := search.Validate(); err != nil {
 		return codesearch.Query{}, fmt.Errorf("%w: %w", ErrBadParams, err)
