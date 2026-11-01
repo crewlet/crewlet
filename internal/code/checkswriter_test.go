@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"maps"
@@ -1107,6 +1108,9 @@ func checksOfEveryShape(t *testing.T) (*node, code.ChangeResult, map[string]chec
 			Checks: &code.CheckQuery{Since: harnessAt}}, []string{"unit", "lint"}},
 		"the window past the first ending": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Fresh: stale,
 			Checks: &code.CheckQuery{Since: harnessAt.Add(90 * time.Second)}}, []string{"unit"}},
+		"the window ending before the second ending": {code.ReadQuery{Kind: code.ReadChecks, Asker: ada,
+			Limit: 1, Fresh: stale, Checks: &code.CheckQuery{Since: harnessAt,
+				Until: harnessAt.Add(90 * time.Second)}}, []string{"lint"}},
 	}
 }
 
@@ -1141,8 +1145,10 @@ func checkNames(rows []code.CheckRow) []string {
 // A REPOSITORY'S CHECKS ARE READ BY EVERY SHAPE: a commit's attempts for
 // every target and for the one it names, a change's — its head's, checked
 // for ITS target — each also at its checks' latest attempts, the
-// repository's newest ended first and the window's — each a keyset that
-// resumes where its page ended — and one attempt whole, with the failures its
+// repository's newest ended first and the window's, with an end or none —
+// each a keyset that resumes where its page ended, a window with an end
+// served from inside it, its first page of one row the newest ending before
+// the end — and one attempt whole, with the failures its
 // ending named and its repository's name; and a reader the repository's grant
 // shuts out reads none of them.
 //
@@ -1154,7 +1160,9 @@ func checkNames(rows []code.CheckRow) []string {
 // Mutations: read a change's attempts at its head for every target — the
 // backport's change reads main's three beside its own unit — red; read a
 // commit's for the target it names by every target (the reader's Target case
-// dropped) → release's unit among main's, red.
+// dropped) → release's unit among main's, red; seek the window with no end
+// (checksWindowSQL's `finished_at < ?2` dropped) → its first page is unit,
+// which ended after the end, red.
 func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 	t.Parallel()
 	n, backport, shapes := checksOfEveryShape(t)
@@ -1288,7 +1296,10 @@ func TestALatestListingAnswersWhatEachCheckStandsAtInOnePage(t *testing.T) {
 // latest listing of a repository's attempts or of the window, which walk the
 // endings in time and hold a check's attempts anywhere in them; a branch
 // beside no commit, beside a change — whose own target its listing reads —
-// or that is no branch; and a latest `check` read, which names its attempt.
+// or that is no branch; an end beside a repository, or at its window's
+// start; a cursor of the window at or past the window's end, which no page
+// of it names; and a latest `check` read and one with an end, which name
+// their attempt.
 //
 // Mutation: drop the refusal of a latest listing beside no change and no
 // commit → the repository's latest answers every attempt, red.
@@ -1309,11 +1320,25 @@ func TestAChecksListingRefusesWhatItsWalkCannotAnswer(t *testing.T) {
 			Checks: &code.CheckQuery{OID: oidOf("B"), Target: "refs/tags/v1"}},
 		"one attempt at its latest": {Kind: code.ReadCheck, Repo: "web", Checks: &code.CheckQuery{
 			OID: oidOf("B"), Target: mainRef, Name: "unit", Attempt: 1, Latest: true}},
+		"a repository's with an end": {Kind: code.ReadChecks, Repo: "web",
+			Checks: &code.CheckQuery{Until: harnessAt}},
+		"a window ending as it starts": {Kind: code.ReadChecks,
+			Checks: &code.CheckQuery{Since: harnessAt, Until: harnessAt}},
+		"one attempt with an end": {Kind: code.ReadCheck, Repo: "web", Checks: &code.CheckQuery{
+			OID: oidOf("B"), Target: mainRef, Name: "unit", Attempt: 1, Until: harnessAt}},
 	} {
 		q.Asker, q.Fresh = ada, stale
 		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) {
 			t.Errorf("%s answered %v, want code.ErrInvalid", name, err)
 		}
+	}
+	past := strconv.FormatInt(store.EncodeTime(harnessAt.Add(time.Hour)), 10) + "/" +
+		"0190f3c4-0000-7000-8000-0000000000aa/" + oidOf("B") + "/" +
+		base64.RawURLEncoding.EncodeToString([]byte(mainRef)) + "/unit/1"
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChecks, Asker: ada, Fresh: stale,
+		Cursor: past, Checks: &code.CheckQuery{Since: harnessAt, Until: harnessAt.Add(time.Minute)}}); !errors.Is(
+		err, code.ErrBadCursor) {
+		t.Errorf("a cursor past the window's end answered %v, want code.ErrBadCursor", err)
 	}
 }
 

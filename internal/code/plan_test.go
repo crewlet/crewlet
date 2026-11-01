@@ -1204,8 +1204,9 @@ func registeredStatements() map[string]statement {
 		// keeping each check's latest attempt, each row tested by one seek of
 		// its check's later attempts on the key; a
 		// repository's newest ended first, from the top or after a place, on
-		// code_checks_finished_idx; the window's above its moment, on
-		// code_checks_recent_idx; and the home's due work — the due
+		// code_checks_finished_idx; the window's between its start and its
+		// end, or a cursor's place, on code_checks_recent_idx; and the home's
+		// due work — the due
 		// listing's statements, a head tested by its dispatch's key and its
 		// target's, and a target's reading by its key.
 		"check listed":       {checkRowSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
@@ -1222,7 +1223,7 @@ func registeredStatements() map[string]statement {
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt>?)"}},
 		"checks of a repo":      {checksOfRepoSQL, []any{"repo-1", 50}, []string{checksEndedKey + " (repo_id=?)"}},
 		"checks of a repo next": {checksOfRepoAfterSQL, []any{"repo-1", 1000, oid("c"), "refs/heads/main", "unit", 1, 50}, []string{checksEndedKey + " (repo_id=? AND finished_at<=?)"}},
-		"checks window":         {checksWindowSQL, []any{1, 50}, []string{"code_checks_recent_idx (finished_at>=?)"}},
+		"checks window":         {checksWindowSQL, []any{1, 1000, 50}, []string{"code_checks_recent_idx (finished_at<? AND finished_at>=?)"}},
 		"checks window next":    {checksWindowAfterSQL, []any{1, 1000, "repo-1", oid("c"), "refs/heads/main", "unit", 1, 50}, []string{"code_checks_recent_idx (finished_at<=? AND finished_at>=?)"}},
 		// THE HOME'S CHECK WORK (checksread.go, checksdispatch.go): a head's
 		// dispatch by the two rows' keys, its requeue by the partial index

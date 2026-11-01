@@ -162,14 +162,15 @@ func TestAnAttemptIsNamedBesideItsBranch(t *testing.T) {
 
 // A CHECKS LISTING HANDS THE READER ITS NARROWING AS ASKED: the repository,
 // a change's number, a commit and the branch it was checked for, each
-// check's latest attempt alone, the window's bound, a check's name and a
-// state, each on the read the reader holds to the grant — and a state that
+// check's latest attempt alone, the window's two bounds, a check's name and
+// a state, each on the read the reader holds to the grant — and a state that
 // is no check's, a bound that is no instant, or a `latest` that is neither
 // true nor false is refused before it is asked.
 //
 // Mutations: drop `state` from the narrowing → the reader is asked for every
 // state, red; drop `latest` → the reader is asked for every attempt, red;
-// drop `target` → the reader is asked for every branch's, red.
+// drop `target` → the reader is asked for every branch's, red; drop
+// `until` → the window is asked with no end, red.
 func TestAChecksListingNamesItsNarrowing(t *testing.T) {
 	t.Parallel()
 	stub := &stubCode{}
@@ -193,13 +194,15 @@ func TestAChecksListingNamesItsNarrowing(t *testing.T) {
 			stubOID)
 	}
 	if _, err := askNative(t, queries.Sources{Code: stub}, "code_checks", map[string]any{
-		"since": "2026-10-01T00:00:00Z"}); err != nil || stub.last().Repo != "" || stub.last().Checks == nil ||
-		stub.last().Checks.Since.IsZero() {
-		t.Errorf("the window asked %+v (%v), want every repository's since 2026-10-01", stub.last(), err)
+		"since": "2026-10-01T00:00:00Z", "until": "2026-10-02T00:00:00Z"}); err != nil || stub.last().Repo != "" ||
+		stub.last().Checks == nil || !stub.last().Checks.Since.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) ||
+		!stub.last().Checks.Until.Equal(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("the window asked %+v (%v), want every repository's on 2026-10-01", stub.last(), err)
 	}
 	for name, args := range map[string]map[string]any{
 		"a state that is no check's":  {"state": "green"},
 		"a bound that is no instant":  {"since": "yesterday"},
+		"an end that is no instant":   {"until": "tomorrow"},
 		"a latest that is no boolean": {"repo": "web", "change": "42", "latest": "newest"},
 	} {
 		stub := &stubCode{}

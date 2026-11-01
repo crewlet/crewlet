@@ -30,7 +30,8 @@ import (
 //     code_checks' key), each of those also as each check's LATEST attempt
 //     alone ([CheckQuery.Latest]: what a check stands at, one page); or
 //     the WINDOW — no repository named — every repository's attempts that
-//     ended at or after a moment, newest ended first (code_checks_recent_idx),
+//     ended at or after a moment and, where it names one, before its end,
+//     newest ended first (code_checks_recent_idx, sought from the end down),
 //     each kept only where its repository is one the asker reads, so a page
 //     is the rows it READ and may be short, as a listing of changes across
 //     repositories is. Every shape takes a check's name and a state as
@@ -201,6 +202,8 @@ func (q ReadQuery) validateChecks() error {
 			return refused("checks.change", "a check read names its attempt by its commit, never a change")
 		case !c.Since.IsZero():
 			return refused("checks.since", "only a window of checks is bounded by a moment")
+		case !c.Until.IsZero():
+			return refused("checks.until", "only a window of checks is bounded by a moment")
 		case c.State != "":
 			return refused("checks.state", "a check read names one attempt, whatever its state; a listing of "+
 				"checks is narrowed by one")
@@ -250,6 +253,12 @@ func (q ReadQuery) validateChecks() error {
 	case q.Repo != "" && !c.Since.IsZero():
 		return refused("checks.since", "only the window of every repository's checks is bounded by a moment; "+
 			"a repository's lists its own attempts newest ended first")
+	case q.Repo != "" && !c.Until.IsZero():
+		return refused("checks.until", "only the window of every repository's checks is bounded by a moment; "+
+			"a repository's lists its own attempts newest ended first")
+	case !c.Until.IsZero() && !c.Until.After(c.Since):
+		return refused("checks.until", fmt.Sprintf("%s is not after the window's start %s: a window ends after "+
+			"it starts", c.Until.Format(time.RFC3339Nano), c.Since.Format(time.RFC3339Nano)))
 	}
 	return nil
 }
@@ -678,24 +687,30 @@ func checksOfTarget(ctx context.Context, tx *sql.Tx, cursor string, latest bool,
 }
 
 // checksWindow serves one page of the window: every repository's attempts
-// that ended at or after c.Since, newest ended first, each kept where its
-// repository is one the asker — and the seat it reads for — may read.
+// that ended at or after c.Since and before c.Until, newest ended first, each
+// kept where its repository is one the asker — and the seat it reads for —
+// may read. A page after a cursor is bounded by the cursor's place, which a
+// page of this window names only below its end, so a cursor at or past the
+// end is no place in it and is refused.
 func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c CheckQuery, chart Roster,
 	limit int, out *ReadAnswer) error {
 
-	since := int64(1)
+	since, until := int64(1), int64(math.MaxInt64)
 	if !c.Since.IsZero() {
 		since = max(store.EncodeTime(c.Since), 1)
+	}
+	if !c.Until.IsZero() {
+		until = store.EncodeTime(c.Until)
 	}
 	var (
 		rows *sql.Rows
 		err  error
 	)
 	if q.Cursor == "" {
-		rows, err = tx.QueryContext(ctx, checksWindowSQL, since, limit)
+		rows, err = tx.QueryContext(ctx, checksWindowSQL, since, until, limit)
 	} else {
 		at, repo, oid, target, name, attempt, ok := cutWindowCursor(q.Cursor)
-		if !ok {
+		if !ok || at >= until {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
 		rows, err = tx.QueryContext(ctx, checksWindowAfterSQL, since, at, repo, oid, target, name, attempt, limit)
@@ -1238,9 +1253,10 @@ func cutWindowCursor(s string) (int64, string, string, string, string, int, bool
 // a (name, attempt) — what a change's attempts are — and the same two walks
 // keeping each check's latest attempt alone; a repository's newest ended
 // first, from the top or after a place, on code_checks_finished_idx read
-// backwards; and the window's, on code_checks_recent_idx read backwards above
-// its moment. Each keyset's >= beside its OR is what keeps the index's range
-// seek (planner.go).
+// backwards; and the window's, on code_checks_recent_idx read backwards from
+// its end, or from a cursor's place below it, down to its start. Each
+// keyset's >= beside its OR is what keeps the index's range seek
+// (planner.go).
 const (
 	checkRowSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
@@ -1285,9 +1301,9 @@ const (
 				OR (target_ref = ?4 AND (name < ?5 OR (name = ?5 AND attempt < ?6))))))
 		ORDER BY finished_at DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC LIMIT ?7`
 	checksWindowSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY code_checks_recent_idx
-		WHERE finished_at > 0 AND finished_at >= ?1
+		WHERE finished_at > 0 AND finished_at >= ?1 AND finished_at < ?2
 		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC
-		LIMIT ?2`
+		LIMIT ?3`
 	checksWindowAfterSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY code_checks_recent_idx
 		WHERE finished_at > 0 AND finished_at >= ?1 AND finished_at <= ?2
 			AND (finished_at < ?2 OR repo_id < ?3 OR (repo_id = ?3 AND (commit_oid < ?4

@@ -2209,6 +2209,20 @@ type CheckQuery struct {
 	// is the whole of what the rows keep ([CheckHistory]). Refused beside a
 	// repository, whose listing is its own attempts newest ended first.
 	Since time.Time `json:"since,omitzero"`
+	// Until is the window's END: the attempts that ended BEFORE it, so a
+	// window over a past interval is a seek of code_checks_recent_idx from
+	// its end down, as a cursor's next page is from its place, and its first
+	// page is that interval's newest ending — never the newest of every
+	// attempt that ended since, which a reader would page through to reach
+	// it. Zero is no end: up to the newest ending. Refused beside a
+	// repository, as Since is, at or before Since, and on a `check` read.
+	//
+	// AN ESTATE REQUEST'S FIELD, as State is, under the same STATED
+	// CONDITION (M3-O84 §2 item 5): no build carrying the code domain has run
+	// without it. A build that predated it would decode and ignore it and
+	// answer the window up to its newest ending; were such a build ever to
+	// run first, a window with an end would move to a kind of its own.
+	Until time.Time `json:"until,omitzero"`
 }
 
 // keeps reports whether row is one a `checks` listing narrowed by c keeps:
