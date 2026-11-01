@@ -267,7 +267,7 @@ per session; after that the tool works normally.
 
 The blocked call never executes; the LLM loads the skill on the next round and retries.
 
-**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and the executor, the reviewer and each worker are separate message histories — so a skill loaded by one is genuinely not in front of the others, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too. A **parked** executor run is the exception in the other direction: its guard outlives the segment that launched it. The parked turn's state carries the keys the guard held at the launch, and every rebuild of the run's guard starts from them. The skills the run loaded over the bridge are read off its bridged calls, which its row records, and replayed onto the guard by every rebuild: when a person's answer carries the run on, when a node reopens a working run's session after a restart or a seat move, and when the run is collected — possibly on another node. The collection makes no gated call, so its guard refuses nothing; it is rebuilt the same way all the same, because one rebuild for every segment is what keeps them from drifting apart. A person's answer that continues the run in the box it parked in continues its CLI's own session too, which still holds what it loaded.
+**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and the executor, the reviewer and each worker are separate message histories — so a skill loaded by one is genuinely not in front of the others, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too. A **parked** executor run is the exception in the other direction: its guard outlives the segment that launched it. The parked turn's state carries the keys the guard held at the launch, and every rebuild of the run's guard starts from them. The skills the run loaded over the bridge are read off its bridged calls, which its row records, and replayed onto the guard by every rebuild: when a person's answer carries the run on, when a node reopens a working run's session after a restart or a seat move, and when the run is collected — possibly on another node. The collection makes no gated call, so its guard refuses nothing; it is rebuilt the same way all the same, because one rebuild for every segment is what keeps them from drifting apart. A person's answer that continues the run in the box it parked in continues its harness's own session too, which still holds what it loaded.
 
 **The exempt set is about deadlock, not policy.** `load_tool_skill` itself, the discovery meta-tools, and the phase submitters are never blocked, whatever a trigger says: gating the unlock would make a session unrecoverable, gating discovery would add rounds without protecting anything, and gating a submitter would brick the phase. A misauthored trigger can cost a phase some tools; it can never cost the phase. Every block also publishes a `phase.tool_skill_blocked` event (agent, phase, tool, skill keys, turn id) so operators can see agents attempting to skip required practices.
 
@@ -345,7 +345,7 @@ engine's own boot-time sync picks up the pages that are already there.
 
 ### Edit at runtime
 
-Open the page in your browser, edit, save. The Confluence page webhook reaches one node, which reads that page back into its registry and tells the rest of the fleet, and each of them reads the page into its own. The next agent turn on any node sees the new body. No restart, no CLI invocation, no deploy.
+Open the page in your browser, edit, save. The Confluence page webhook reaches one node, which reads that page back into its registry and tells the rest of the fleet, and each of them reads the page into its own. The next agent turn on any node sees the new body. No restart, no harness invocation, no deploy.
 
 ### Who a skill reached
 
@@ -423,5 +423,5 @@ The container is also **excluded from notification routing**. Webhooks for tool-
 
 - [Agent Runtime](agent-runtime.md) — where the per-phase prompt builders live; how the registry is threaded into the turn engine.
 - [Turn Engine](turn-engine.md) — phase contracts and the tool surface each one gets.
-- [CLI Reference](../reference/cli.md) — full flag reference for `crewlet confluence import` / `crewlet confluence resync`.
+- [harness Reference](../reference/cli.md) — full flag reference for `crewlet confluence import` / `crewlet confluence resync`.
 - [Environment Variables](../reference/environment-variables.md) — `CREWLET_TOOL_SKILLS_SPACE` (import/resync flag default; the engine reads `knowledge.skills_container`).

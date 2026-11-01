@@ -77,7 +77,7 @@ token_budget:
 
 providers:
   llm:
-    # Every model is reached through a coding CLI the engine drives — the
+    # Every model is reached through a harness the engine drives — the
     # vendor's own harness, not an HTTP client of Crewlet's.  This company
     # runs on OpenCode, which reaches any model on any provider it speaks
     # to: open models through OpenRouter here, set LLM_MODEL to
@@ -89,7 +89,7 @@ providers:
     #     harness: claude-code
     #     model: sonnet
     #     auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
-    # Every seat's executor is its CLI's own run, which only claude-code and
+    # Every seat's executor is its harness's own run, which only claude-code and
     # opencode have.  OpenAI's models (`harness: codex`, `model: gpt-5`, the
     # same `auth`, reading CODEX_API_KEY) serve a seat's reviewer, workers
     # and side passes, through llm_review / llm_subagent / llm_auxiliary.
@@ -114,7 +114,7 @@ providers:
     # Ask Crewlet's own entry, for the assistant block below.
     # Its own slots keep a person in the drawer from queueing behind a
     # seat's long call, its timeout is sized for one interactive round, and
-    # it turns the CLI's web tools off, which Ask Crewlet requires (seats
+    # it turns the harness's web tools off, which Ask Crewlet requires (seats
     # keep theirs).  Prove the denial with `crewlet llm doctor assistant`.
     # assistant:
     #   harness: claude-code
@@ -131,8 +131,8 @@ providers:
     model: text-embedding-3-large
     api_key: "${OPENAI_API_KEY}"
   # Code sandbox — where every agent seat's executor runs.  A seat's
-  # executor is its coding CLI's own run (OpenCode, the default entry's
-  # CLI, with that SAME model and OPENROUTER_API_KEY), in a box from this
+  # executor is its harness's own run (OpenCode, the default entry's
+  # harness, with that SAME model and OPENROUTER_API_KEY), in a box from this
   # catalogue; an engineering seat's run implements the work and opens a
   # merge request under the agent's OWN GitLab identity (the token the
   # engine mints and seals for the seat as GITLAB_TOKEN_<HANDLE>, which the
@@ -154,7 +154,7 @@ providers:
     # as a process tree on the machine running `crewlet run` — no remote
     # account, no API key, nothing to provision — as a first run on your own
     # machine while its seats take work from you alone.  Every executor is
-    # its coding CLI, fully permissioned, as the engine's user, so before a
+    # its harness, fully permissioned, as the engine's user, so before a
     # seat takes work from anyone else (a chat other people are in, a shared
     # tracker or code host), or on a host others share, move the executors
     # into `container` (below) or `e2b`.
@@ -162,15 +162,15 @@ providers:
     # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
     # self-hosted cluster) and give the entry those seats run on
     # `run_in: e2b`.
-    # A `template` there must carry the coding agent (opencode here) as well
+    # A `template` there must carry the harness (opencode here) as well
     # as the toolchains those seats' setup steps check for (Go, Node with
     # corepack, uv): naming one replaces E2B's prebuilt per-agent template
     # for every e2b box in the company, and a step only checks for its tool,
     # so nothing installs either into the template.
     # (`fake: true` is in-process stubs for a demonstration — it runs no
-    # real coding agent.)
+    # real harness.)
     #
-    # PREREQUISITE for the local backend: the coding agent the entries drive
+    # PREREQUISITE for the local backend: the harness the entries drive
     # must be installed on that machine, since `direct` runs it as a child
     # process. `opencode` here — OpenCode 2, the @opencode/cli package; a
     # 1.x install is refused by name — and `claude-code` is the other
@@ -194,12 +194,12 @@ providers:
       #                      on a host others share.
       #
       #   run_in: container  real host isolation. Needs an image carrying
-      #                      the coding-agent CLI, and is where a local box
+      #                      the harness harness, and is where a local box
       #                      is SIZED (run_args takes --cpus/--memory,
       #                      mirroring how a remote box is sized by its
       #                      template):
       #
-      #                        image: "your-registry/coding-agent:latest"
+      #                        image: "your-registry/harness:latest"
       #                        runtime: auto      # auto | docker | podman
       #                        run_args: ["--cpus", "2", "--memory", "4g"]
       state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
@@ -208,7 +208,7 @@ providers:
     # WHERE A RUN ON AN ENTRY THAT NAMES NO run_in HAPPENS. Required whenever the catalogue
     # offers more than one cell — and `local:` alone is two, because it
     # serves `direct` and `container`. There is deliberately no implicit
-    # answer: `direct` runs the coding agent as the engine's user, which is
+    # answer: `direct` runs the harness as the engine's user, which is
     # a trade to make deliberately and never one to inherit by accident.
     default_run_in: direct                       # direct | container | e2b
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
@@ -230,7 +230,7 @@ providers:
       # submodule URL; without a token it stays silent so public clones
       # fall through to anonymous.  For PAT basic-auth GitLab ignores the
       # username, so `oauth2` is just a conventional placeholder.  The
-      # `brief` below is what tells the coding agent about all of this.
+      # `brief` below is what tells the harness about all of this.
       #
       # An engine-wide step reaches EVERY agent seat's box, the CEO's,
       # CTO's, PM's and DevRel's too, and those seats declare no
@@ -308,7 +308,7 @@ providers:
           `git clone https://gitlab.com/<group>/<project>.git`. SSH-style
           remotes (`git@gitlab.com:...`) are rewritten to HTTPS for you.
           Never embed the token in a URL. To open a merge request, use
-          GitLab push options — no CLI needed:
+          GitLab push options — no harness needed:
           `git push -o merge_request.create -o merge_request.target=main
           -o merge_request.title="<title>" origin HEAD:<your-branch>`
           creates the MR under your own identity. Without $GITLAB_TOKEN
@@ -327,7 +327,7 @@ providers:
 # Ask Crewlet: a drawer in the dashboard that answers questions
 # and prepares changes for approval, acting only as the signed-in person.
 # Off unless enabled.  Every model in its chain must be an entry whose
-# CLI's local and web tools are denied (the `assistant` entry above);
+# harness's local and web tools are denied (the `assistant` entry above);
 # anything else is refused.  The four bounds below are their defaults, and
 # token_budget caps each person on top of the company's own budget.  See
 # docs/getting-started/configuration.md#ask-crewlet.
@@ -1083,12 +1083,12 @@ units:
               # `run_in: container` or `e2b`, and the catalogue then has to
               # serve it:
               # `container` needs providers.sandbox.local.image, an image
-              # carrying the coding agent AND this seat's toolchain (the go
+              # carrying the harness AND this seat's toolchain (the go
               # step below checks for Go inside it), and `e2b` needs an
               # `e2b:` block with its api_key and a `template` carrying the
               # same — Go 1.21 or later here: the engine installs nothing
               # into a template, and E2B's prebuilt per-agent one is built
-              # for the coding agent rather than for this seat's repos.
+              # for the harness rather than for this seat's repos.
               # No `mcp:` scope, deliberately: every box gets the seat's
               # tool bridge, which already serves this seat's LIVE tool set
               # under the reserved `crewlet` server — its mattermost tools,
@@ -1099,7 +1099,7 @@ units:
               # seat itself does not hold.  No code-host server either: the
               # run pushes and opens the MR with git push options.
               # This seat's own PAT, injected into the box run env — the
-              # engine-wide git-auth step (and the coding agent, per that
+              # engine-wide git-auth step (and the harness, per that
               # step's brief) uses it. Explicit per seat, so MRs land under
               # THIS agent's GitLab identity; the engine itself knows
               # nothing about GitLab.
@@ -1108,7 +1108,7 @@ units:
               # Per-seat provisioning (role.sandbox.setup): each step
               # declares files to write, commands to run (a non-zero exit
               # fails the box acquisition), env to merge into the run env,
-              # and a `brief` paragraph telling the coding agent what the
+              # and a `brief` paragraph telling the harness what the
               # step made true about its box.  Steps apply in order:
               # providers.sandbox.setup (engine-wide — the git-auth +
               # nimbus-conventions steps above) → these role steps.
@@ -1200,7 +1200,7 @@ units:
               # seat itself does not hold.  No code-host server either: the
               # run pushes and opens the MR with git push options.
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_FRONTEND_SWE}"   # this seat's own PAT, for the git-auth step and the coding agent
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_FRONTEND_SWE}"   # this seat's own PAT, for the git-auth step and the harness
               setup:
                 - name: node
                   # console / website are Node repos (React + Vite + TS).
@@ -1213,7 +1213,7 @@ units:
                   # instead, `corepack pnpm …` runs the exact manager each
                   # repo's `packageManager` pins, cached in the box's home.
                   # CI=1 keeps installs/tests non-interactive (no watch
-                  # modes, no prompts) for a headless coding agent.
+                  # modes, no prompts) for a headless harness.
                   commands:
                     - "command -v node >/dev/null 2>&1 && command -v corepack >/dev/null 2>&1 || { echo 'no node or corepack on PATH: install Node with corepack on the engine host (run_in direct), in the image (container) or in the E2B template (e2b)' >&2; exit 1; }"
                   env:
@@ -1236,7 +1236,7 @@ units:
 
           - name: Agent AI Systems Engineer
             handle: agent-ai-systems-engineer
-            goal: "Design and build the Phase-2 Nimbus AI framework — a Python-first, open-source framework that runs on Nimbus clusters and unifies distributed training, fine-tuning, batch inference, and online serving for AI/ML teams.  Own the framework's runtime, SDK, CLI, and cluster-side integration with nimbuscore"
+            goal: "Design and build the Phase-2 Nimbus AI framework — a Python-first, open-source framework that runs on Nimbus clusters and unifies distributed training, fine-tuning, batch inference, and online serving for AI/ML teams.  Own the framework's runtime, SDK, harness, and cluster-side integration with nimbuscore"
             backstory: >
               Distributed-systems engineer who has built large-scale AI workload runtimes
               (Ray, KubeRay, Dask, cluster-scale job schedulers, vLLM/TGI-style serving
@@ -1255,7 +1255,7 @@ units:
               delete a feature than ship one that surprises a researcher at 2am.
             responsibilities:
               - "Found and own the Phase-2 framework repo (propose a name — e.g. ``nimbus-hq/nimbusflow`` — and create it once the CTO/CEO approve)"
-              - "Design and ship the framework's core surfaces: Python SDK (``@nimbus.remote`` / ``nimbus.train`` / ``nimbus.serve``), CLI, runtime scheduler, worker protocol, and the nimbuscore-side integration"
+              - "Design and ship the framework's core surfaces: Python SDK (``@nimbus.remote`` / ``nimbus.train`` / ``nimbus.serve``), harness, runtime scheduler, worker protocol, and the nimbuscore-side integration"
               - "Write ADR pages in the ENG project for every architectural choice (actor model, scheduler design, GPU scheduling strategy, dataloader pipeline, serving stack choice)"
               - "Propose new nimbuscore endpoints to the SWE as joint design docs — never bypass nimbuscore by talking to the cluster directly"
               - "Build a working end-to-end example (``examples/hello-train``, ``examples/hello-serve``) before declaring v0.1 ready, so DevRel can build docs on top"
@@ -1274,8 +1274,8 @@ units:
               gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
             # Executor box: this seat's executor is OpenCode's own run —
-            # the CLI the default entry drives, so a Python framework change
-            # needs no extra coding-agent secret — which implements the
+            # the harness the default entry drives, so a Python framework change
+            # needs no extra harness secret — which implements the
             # framework story in the Phase-2 repo and opens an MR as Agent
             # AI Systems Engineer's own GitLab identity (${GITLAB_TOKEN_AI}).
             sandbox:
@@ -1289,7 +1289,7 @@ units:
               # seat itself does not hold.  No code-host server either: the
               # run pushes and opens the MR with git push options.
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT, for the git-auth step and the coding agent
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT, for the git-auth step and the harness
               setup:
                 - name: python
                   # The Phase-2 framework repo is Python-first, managed with

@@ -481,7 +481,7 @@ There is no runtime to install and nothing to point a DSN at.
 
 The image is `debian:trixie-slim` with `ca-certificates`, `git` and `tini`
 rather than `distroless` or `scratch`, because the engine **spawns process
-trees** — the local sandbox backend runs a coding agent as a child process,
+trees** — the local sandbox backend runs a harness as a child process,
 setup recipes are shell, and stdio MCP servers are child processes launched by
 whatever the config names. On `scratch` all three fail at the moment they are
 used, from an image that started perfectly happily. The reasoning is at the top
