@@ -11,7 +11,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -371,13 +370,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	// grants a repository on the row, which the code host's box admission
 	// reads on every request. Its environment is the launch's own, over the
 	// run environment just assembled, never the spec's or the row's.
-	var boxGit func(launchID string) (map[string]string, error)
-	if e.boxGitURL != "" && e.CodeUnserved() == nil {
-		seat, base, turnID, item, env := l.seat, e.boxGitURL, l.turn.RunID, l.turn.WorkItem, run.env
-		boxGit = func(launchID string) (map[string]string, error) {
-			return e.boxGitEnv(seat, base, host.BoxRunRef{TurnID: turnID, LaunchID: launchID}, item, env)
-		}
-	}
+	boxGit := e.launchBoxGit(l.seat, l.turn.RunID, l.turn.WorkItem, run.env)
 
 	holds := launchHolds(l.turn.Holding(), pending, l.turn.RunID)
 	var (
