@@ -90,6 +90,24 @@ import (
 // index orders a repository's changes by when their merge was recorded
 // without one written by the records of two subjects.
 //
+// MEASURED (BenchmarkChangesDue: 1 000 repositories of 10 live changes each,
+// every one's facts and merge held and nothing due, beside ONE repository of
+// 10 000 live changes behind a moved target; -benchtime 3x and one count on
+// the runner's two E-cores of a Core Ultra 7 265U, the machine loaded;
+// 2026-11-01): a backstop pass's listing of the repositories, every page, is
+// 215 ms — some 10 µs a live change of the company, each checked by its facts'
+// key, its mergeability's and its conversation's; that repository's due
+// changes, every page, 168 ms; and its first page asking 64 rechecks, the
+// oldest merge first, 226 ms — the one sort, of every change behind the moved
+// target, some 58 ms of it. EVERY GIT NODE LISTS EVERY REPOSITORY once a
+// Backstop (internal/code/home), so a fleet of G git nodes asks its data nodes
+// G × 215 ms of reads a minute at this size — about 1 % of one core for three
+// — and a busy repository's home pays its 226 ms once a turn, a nudge's or a
+// pass's. Both grow with the live changes, the walk being
+// code_changes_open_idx whole: a pass's listing nearing a tenth of a Backstop
+// (6 s, some 600 000 live changes at this rate) is what moves it off the walk
+// of every live change.
+//
 // READ STALE BY DEFAULT, as every duty listing is: a change listed a moment
 // behind the head costs a record the decide refuses superseded, and one a
 // moment early is listed again at the next pass — the decide holds every guard

@@ -24,6 +24,13 @@ import (
 // (internal/code/compact's Poll), so a home's background work runs at one
 // cadence on every git node. A pass is one indexed listing a worker, and a
 // minute is what a nudge lost costs its repository's work at the most.
+//
+// WHAT A PASS COSTS THE FLEET: the change work's listing walks every live
+// change of the company, 215 ms at 21 000 of them (BenchmarkChangesDue,
+// internal/code's changesdue.go, whose head states the measure), and every
+// git node lists every repository each Backstop — G × 215 ms of its data
+// nodes' reads a minute for a fleet of G git nodes, about 1 % of one core for
+// three.
 const Backstop = time.Minute
 
 // Concurrency is how many repositories one home works at once: TWO. A turn
