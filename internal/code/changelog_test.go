@@ -64,10 +64,15 @@ import (
 //     theirs; and, the check passed, the train's tested prefix landed in one
 //     land record, routed to the change's authors, whom it tells the change
 //     merged, its source's deletion stamped by the decide;
-//   - check_queued, check_dispatched, check_started, check_named and
-//     check_finished: one check of a head, as its home queues it (its
-//     definition carried) and records the head's dispatch, its runner claims
-//     it and names its box, and the runner ends it passed;
+//   - check_dispatched: a head's dispatch as its home records it, naming
+//     the head and carrying the attempts it queues — the reference
+//     company's three checks, each its definition carried and required by
+//     the target's gate — in that one record: a head's check is queued in a
+//     record of its own only when it is queued again, requeued after its
+//     runner was lost or its box or its setup failed, or rerun by hand,
+//     and the reference company's checks pass;
+//   - check_started, check_named and check_finished: one of those checks
+//     claimed by its runner, its box named, and ended passed;
 //   - check_dispatched_empty: a moved target's checks file read again with
 //     no head to dispatch, at most one a moved target per pass of its home;
 //   - tip_check_queued: one check of a landing's tip, as its home's tip work
@@ -111,8 +116,7 @@ var changeRecordBytes = map[string]int64{
 	"candidate":              1_290,
 	"candidate_check_queued": 1_010,
 	"land":                   1_530,
-	"check_queued":           970,
-	"check_dispatched":       970,
+	"check_dispatched":       2_290,
 	"check_started":          780,
 	"check_named":            840,
 	"check_finished":         840,
@@ -269,9 +273,12 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 		requireQueued(t, res, err, code.QueueWaiting, 1)
 	})
 
-	// ONE CHECK OF A HEAD, its records built as their writers build them:
-	// the home's queue of it and its dispatch, its runner's claim and the
-	// box it names, and its ending, passed.
+	// A HEAD'S CHECKS, their records built as their writers build them: the
+	// home's dispatch of the head, which queues every check its target's
+	// checks file defines in the record naming the head — the reference
+	// company's three, each a command and its timeout, which main's gate
+	// requires — then one of them claimed by its runner, the box it names,
+	// and its ending, passed.
 	key := code.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: "unit", Attempt: 1}
 	tip, at := n.tip(repo, mainRef)
 	defs := oidOf("the checks file")
@@ -282,12 +289,19 @@ func TestAChangesRecordsCostTheLogWhatTheCodeLogsDayPricesThemAt(t *testing.T) {
 			}
 		})
 	}
-	checked("check_queued", code.OpCheckQueued, code.CheckQueued{CheckKey: key, Purpose: code.PurposeHead,
-		ChangeID: change, Revision: 1, DefsOID: defs, Def: &code.CheckDef{Name: "unit",
-			Run: "go test ./...", TimeoutSeconds: 600}, Required: true, Reason: code.QueueDispatch})
+	var attempts []code.CheckQueued
+	for _, def := range []code.CheckDef{{Name: "unit", Run: "go test ./...", TimeoutSeconds: 600},
+		{Name: "vet", Run: "go vet ./...", TimeoutSeconds: 600},
+		{Name: "build", Run: "go build ./...", TimeoutSeconds: 600}} {
+		head := key
+		head.Name = def.Name
+		attempts = append(attempts, code.CheckQueued{CheckKey: head, Purpose: code.PurposeHead, ChangeID: change,
+			Revision: 1, DefsOID: defs, Def: &def, Required: true, Reason: code.QueueDispatch, QueuedAt: harnessAt})
+	}
 	checked("check_dispatched", code.OpCheckDispatched, code.CheckDispatched{RepoID: repo, Target: mainRef,
 		Tip: tip, TipPosition: at, DefsOID: defs,
-		Heads: []code.DispatchedHead{{OID: oidOf("B"), ChangeID: change, Revision: 1}}, DispatchedAt: harnessAt})
+		Heads:    []code.DispatchedHead{{OID: oidOf("B"), ChangeID: change, Revision: 1}},
+		Attempts: attempts, DispatchedAt: harnessAt})
 	started := code.CheckStarted{CheckKey: key, Runner: "git-a", Placement: code.PlacementContainer,
 		StartedAt: harnessAt}
 	checked("check_started", code.OpCheckStarted, started)
