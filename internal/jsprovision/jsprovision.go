@@ -206,7 +206,8 @@ const LookupBudget = 30 * time.Second
 
 // Lookup asks one, a metadata read of an object that should exist (a bucket's,
 // a stream's, a consumer's), the way every lookup is asked: through [Read],
-// re-asked while nobody answers, for at most [LookupBudget] of ctx.
+// re-asked while nobody answers, for at most [LookupBudget] of ctx, and it
+// returns the value of the request that answered.
 //
 // ONE FUNCTION FOR EVERY CALLER, because a single request is the defect this
 // budget's own doc records: on a cluster only an object's leader answers its
@@ -215,31 +216,32 @@ const LookupBudget = 30 * time.Second
 // one request on the client's five-second default fails a lookup of an
 // object that is there. That held for the cluster tests too, which bound
 // their buckets with one bare request and failed the same way under CI load.
-func Lookup(ctx context.Context, one func(context.Context) error) error {
-	return Clustered(false).Timing().lookup(ctx, one)
+//
+// THE ANSWER COMES BACK THROUGH THE READ, never through a variable one
+// assigns. A read keeps a request it has presumed lost outstanding while it
+// asks the next, and when one is answered it cancels the rest and hears each
+// of them end ([ReadWith]). So a request presumed lost, cut off by that
+// cancellation, ends AFTER the one that answered. A one that stored its
+// result in a variable it shared with every request would let that late
+// request write its nil over the answer. That handed observeBucket a nil
+// bucket on a partitioned cluster, and its first call on the bucket was a
+// nil dereference that stopped the whole test binary.
+func Lookup[T any](ctx context.Context, one func(context.Context) (T, error)) (T, error) {
+	return lookupWith(ctx, Clustered(false).Timing(), one)
 }
 
-// lookup is [Lookup] at t's cadences: [ReadWith] within t.Lookup of ctx, for
-// a question whose answer one keeps itself.
-func (t Timing) lookup(ctx context.Context, one func(context.Context) error) error {
-	ctx, cancel := context.WithTimeout(ctx, t.Lookup)
-	defer cancel()
-	_, err := ReadWith(ctx, t, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, one(ctx)
-	}, nil)
-	return err
+// lookupWith is [Lookup] at t's cadences: [ReadWith], which holds every read
+// to t.Lookup of ctx, with nobody told of a request presumed lost.
+func lookupWith[T any](ctx context.Context, t Timing, one func(context.Context) (T, error)) (T, error) {
+	return ReadWith(ctx, t, one, nil)
 }
 
 // LookupBucket binds the key-value bucket named bucket through js, looked up
 // as [Lookup] asks.
 func LookupBucket(ctx context.Context, js jetstream.JetStream, bucket string) (jetstream.KeyValue, error) {
-	var kv jetstream.KeyValue
-	err := Lookup(ctx, func(ctx context.Context) error {
-		var e error
-		kv, e = js.KeyValue(ctx, bucket)
-		return e
+	return Lookup(ctx, func(ctx context.Context) (jetstream.KeyValue, error) {
+		return js.KeyValue(ctx, bucket)
 	})
-	return kv, err
 }
 
 // LookupStream is the info of the stream named name AS ITS LEADER ANSWERED
@@ -251,14 +253,16 @@ func LookupBucket(ctx context.Context, js jetstream.JetStream, bucket string) (j
 // answer is asked again like no answer at all ([leaderAnswered]), so what
 // comes back is the leader's. A stream on one server always names it.
 func LookupStream(ctx context.Context, js jetstream.JetStream, name string) (*jetstream.StreamInfo, error) {
-	var info *jetstream.StreamInfo
-	err := Lookup(ctx, func(ctx context.Context) error {
-		stream, e := js.Stream(ctx, name)
-		if e != nil {
-			return e
+	info, err := Lookup(ctx, func(ctx context.Context) (*jetstream.StreamInfo, error) {
+		stream, err := js.Stream(ctx, name)
+		if err != nil {
+			return nil, err
 		}
-		info = stream.CachedInfo()
-		return leaderAnswered(name, info)
+		info := stream.CachedInfo()
+		if err := leaderAnswered(name, info); err != nil {
+			return nil, err
+		}
+		return info, nil
 	})
 	if err != nil {
 		return nil, err
@@ -268,7 +272,7 @@ func LookupStream(ctx context.Context, js jetstream.JetStream, name string) (*je
 
 // errNoLeaderAnswer is a stream's info that a member answered from its own
 // copy, naming no leader. It wraps [nats.ErrTimeout], so [Unanswered] reads
-// it as no answer and [Timing.Read] asks again.
+// it as no answer and [ReadWith] asks again.
 var errNoLeaderAnswer = fmt.Errorf("answered by a member while the stream has no leader: %w", nats.ErrTimeout)
 
 // leaderAnswered is nil for info its leader answered (or a stream with no
