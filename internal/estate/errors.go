@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -214,6 +215,23 @@ var sentinels = []sentinel{
 	{"query.ErrInvalid", query.ErrInvalid},
 	{"query.ErrNotIndexed", query.ErrNotIndexed},
 
+	// THE EXECUTOR LOG'S, answered by a data node for the engine on a node
+	// holding no data ([ExecutorReads], [ExecutorWrites]): a capture refused
+	// for an ended turn, a stale ordinal or the seat's budget, a retention
+	// delete no longer due, a listing a node cannot answer whole — each a
+	// different next step for the engine, so each crosses as itself.
+	{"executordomain.ErrConflict", executordomain.ErrConflict},
+	{"executordomain.ErrIncomplete", executordomain.ErrIncomplete},
+	{"executordomain.ErrInvalid", executordomain.ErrInvalid},
+	{"executordomain.ErrNotDue", executordomain.ErrNotDue},
+	{"executordomain.ErrNotFound", executordomain.ErrNotFound},
+	{"executordomain.ErrOverBudget", executordomain.ErrOverBudget},
+	{"executordomain.ErrSessionTooLarge", executordomain.ErrSessionTooLarge},
+	{"executordomain.ErrStaleCapture", executordomain.ErrStaleCapture},
+	{"executordomain.ErrTurnEnded", executordomain.ErrTurnEnded},
+	{"executordomain.ErrUnreadable", executordomain.ErrUnreadable},
+	{"executordomain.ErrUploadStale", executordomain.ErrUploadStale},
+
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 }
 
@@ -286,6 +304,8 @@ var typedKinds = []typedKind{
 
 	{"artifactdata.ErrFutureVersion", reflect.TypeFor[*artifactdata.ErrFutureVersion]()},
 	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
+
+	{"executordomain.ErrFutureVersion", reflect.TypeFor[*executordomain.ErrFutureVersion]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
 

@@ -194,9 +194,10 @@ var floorless = map[string]string{
 // floor names its domain, the domain is one whose log a floor can be on, and
 // the stream it waits on is that domain's own log — the tracker's
 // CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, the identity
-// directory's CREWLET_IAM_LOG or chat's CREWLET_CHAT_LOG. One that named none
-// would carry no floor at all, and one that named another domain's would wait
-// on an applier it does not depend on ([ready]).
+// directory's CREWLET_IAM_LOG, chat's CREWLET_CHAT_LOG or the executor's
+// CREWLET_EXECUTOR_LOG among them. One that named none would carry no floor at
+// all, and one that named another domain's would wait on an applier it does not
+// depend on ([ready]).
 func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	t.Parallel()
 	logs := map[string]string{
@@ -206,6 +207,7 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		artifactsDomain:    "CREWLET_ARTIFACTS_LOG",
 		artifactDataDomain: "CREWLET_ARTIFACT_DATA_LOG",
 		chatDomain:         "CREWLET_CHAT_LOG",
+		executorDomain:     "CREWLET_EXECUTOR_LOG",
 	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]

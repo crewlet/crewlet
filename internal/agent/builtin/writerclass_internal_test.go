@@ -33,28 +33,32 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// EVERY DOMAIN THE ESTATE ROUTER CARRIES A WRITE FOR IS DECLARED TO THE
+// EVERY DOMAIN A SURFACE WRITES THROUGH THE ESTATE ROUTER IS DECLARED TO THE
 // SURFACES, and nothing else is.
 //
 // The person's write surface classes a tool-less writer's refusal and names a
 // failed call's object from [nativeDomains] alone, so a domain routed and not
 // declared there answers every content refusal its tool-less verbs meet as a
 // 500 and names nothing a failed call was about. Read off the router's own
-// operation table ([estate.WriteDomains]), so the first write a new domain
-// declares makes this red until the domain is declared.
+// operation table ([estate.SurfaceWriteDomains]), so the first surface write a
+// new domain declares makes this red until the domain is declared. The
+// ENGINE's own writes are not in that list and so not here: the executor log
+// records what the engine's runs did, which no tool, person or operator
+// surface makes, so no surface has a refusal of it to class or an object of it
+// to name (internal/estate's engine-originated class).
 //
 // Mutation: drop any row of nativeDomains and this goes red.
 func TestEveryRoutedDomainIsDeclaredToTheSurfaces(t *testing.T) {
 	t.Parallel()
-	routed := estate.WriteDomains()
+	routed := estate.SurfaceWriteDomains()
 	if len(routed) == 0 {
-		t.Fatal("the router names no write domain, so this gate compares nothing")
+		t.Fatal("the router names no domain a surface writes, so this gate compares nothing")
 	}
 	declared := slices.Sorted(maps.Keys(nativeDomains))
 	if !slices.Equal(declared, routed) {
-		t.Errorf("nativeDomains declares %v and the estate router carries writes "+
-			"for %v: declare each routed domain's refusal classes and object "+
-			"arguments, and nothing it does not route", declared, routed)
+		t.Errorf("nativeDomains declares %v and surfaces write %v through the estate "+
+			"router: declare each such domain's refusal classes and object "+
+			"arguments, and nothing no surface writes", declared, routed)
 	}
 	for name, d := range nativeDomains {
 		if d.class == nil || d.sentence == nil || len(d.objects) == 0 {

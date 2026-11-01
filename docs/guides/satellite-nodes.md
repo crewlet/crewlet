@@ -436,7 +436,8 @@ the dependency surface before choosing a host for it:
 - **For a stateless satellite, a data node that answers.** Its seats' tracker,
   knowledge-base and chat tools, their searches and its tool-skill walks
   are each a request to a data node over the broker — no inbound port, the
-  same link. It is admitted to claim seats only once a data node answers
+  same link — and so is the engine's record of the session each of its seats'
+  executor boxes leaves, which that seat's next launch reads back. It is admitted to claim seats only once a data node answers
   that its own copy is level with its logs, and while none answers its tools
   fail naming the estate nobody served rather than answering from nothing. What it publishes about its
   own turns is handed to a data node's event log (the audit trail cannot live
