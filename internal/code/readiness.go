@@ -87,14 +87,16 @@ import (
 // record's decide judges it too, over its own snapshot with the merge it
 // records ([ReadinessRows.With]), and STAMPS the answer on the record, which
 // the applier stores (code_mergeability.ready and waits_person) beside the
-// versions of the inputs it was judged at: what a wake that a change became
-// ready reads, and what the needs=person listing seeks. A change whose inputs
-// moved since — its row (code_changes.version) or its conversation's
-// readiness inputs (code_conversations.readiness_version) — is due a REFRESH
-// from its home (changesdue.go), which records the answer again over the
-// merge the row holds, running no merge. The chart moves no version: a
-// stored answer is as of the chart that judged it, until the change's next
-// record — which is why no reader of a change's readiness reads it.
+// versions of the inputs it was judged at and the activation of the chart
+// that judged it: what a wake that a change became ready reads, and what the
+// needs=person listing seeks. A change whose inputs moved since — its row
+// (code_changes.version), its conversation's readiness inputs
+// (code_conversations.readiness_version), its head's checks, or the chart, a
+// later one held by its home — is due a REFRESH from its home
+// (changesdue.go), which records the answer again over the merge the row
+// holds, running no merge; and a change that ends stores no answer
+// (clearReadiness). A stored answer is still as of the record that stored
+// it — which is why no reader of a change's readiness reads it.
 
 // PreconditionKind is one thing a live change must be before it merges: a
 // precondition its readiness judges ([ReadinessOf], [JudgeGate]). A closed

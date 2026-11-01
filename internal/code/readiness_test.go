@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -823,5 +824,103 @@ func TestAnEndedChangeWaitsOnNobody(t *testing.T) {
 				t.Fatalf("needs=person lists %q over %d pages, want nothing on one page", got, pages)
 			}
 		})
+	}
+}
+
+// A CHART CHANGE ALONE MAKES A CHANGE DUE A REFRESH (M4-D24's fourth input):
+// web!1, asked of plat-lead and of founder, is approved by plat-lead, whose
+// review tier counts; merged clean by a writer on the chart of activation e1,
+// its stored answer is ready, waits on nobody and names e1. No record moves
+// when a configuration lowers plat-lead to read_only (activation e2), yet the
+// approval no longer counts and the first unmet precondition waits on
+// founder, a person, alone. A home holding e1 finds the change due nothing;
+// one holding e2 finds it due a refresh, the listing of repositories naming
+// web, and a writer on e2 records it: the stored answer waits on a person,
+// the record names e2, and needs=person lists the change. A writer still on
+// e1, asked the same refresh, is superseded and records nothing — with
+// nothing else moved, an older chart does not overwrite a later one's
+// answer — and the home on e2 finds the change due nothing more.
+//
+// Mutations: drop the chart term from refreshDue → the home on e2 finds
+// nothing due; leave the chart out of the decide's guard → the writer on e1
+// overwrites the answer; stamp no chart on the record → the change stays due
+// at e2 after its refresh.
+func TestAChartChangeAloneMakesAChangeDueARefresh(t *testing.T) {
+	t.Parallel()
+	const e1, e2 = int64(1_762_000_000_000), int64(1_762_000_060_000)
+	lowered := testChart()
+	plat := lowered.seats["plat-lead"]
+	plat.Tier = code.TierReadOnly
+	lowered.seats["plat-lead"] = plat
+	n := newNode(t)
+	n.chart = lowered
+	repo, change := discussed(t, n, "web")
+	on := func(roster code.Roster, epoch int64) func(*code.ChangeWriterOptions) {
+		return func(o *code.ChangeWriterOptions) {
+			o.SeatRules = func() (code.SeatRules, bool) {
+				return code.SeatRules{Roster: roster, Zone: time.UTC, Epoch: epoch}, true
+			}
+		}
+	}
+	due := func(epoch int64) ([]code.ChangeDue, []string) {
+		t.Helper()
+		changes, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+			ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: harnessAt, ChartEpoch: epoch}})
+		if err != nil {
+			t.Fatalf("Read(changes_due) of web at %d: %v", epoch, err)
+		}
+		repos, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+			ChangesDue: &code.ChangesDueQuery{RecheckBefore: harnessAt, ChartEpoch: epoch}})
+		if err != nil {
+			t.Fatalf("Read(changes_due) of the repositories at %d: %v", epoch, err)
+		}
+		return changes.DueChanges, repos.DueRepos
+	}
+
+	w1, _ := writerOn(t, n, n.pub, on(testChart(), e1))
+	converse(t, w1, asking(repo, change, dev, "plat-lead", "founder"))
+	converse(t, w1, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
+	converse(t, w1, reviewing(repo, change, platLead, 1, code.VerdictApprove, nil))
+	converse(t, w1, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	if stored := n.storedReadiness(change); !stored.ready || stored.waitsPerson {
+		t.Fatalf("the merge on e1 stored %+v, want ready: plat-lead's approval counts on e1", stored)
+	}
+	if changes, repos := due(e1); len(changes) != 0 || len(repos) != 0 {
+		t.Fatalf("a home on the chart that judged the stored answer finds %+v due in %v, want nothing", changes,
+			repos)
+	}
+	changes, repos := due(e2)
+	if len(changes) != 1 || changes[0].ID != change || !changes[0].RefreshDue || changes[0].FactsDue ||
+		changes[0].MergeDue || !slices.Equal(repos, []string{repo}) {
+		t.Fatalf("a home on a later chart finds %+v due in %v, want web!1 owing a refresh alone", changes, repos)
+	}
+
+	refresh := code.ConversationWrite{OpID: statelog.NewOpID(harnessAt, ""), Mergeability: &code.Mergeability{
+		RepoID: repo, ChangeID: change, Revision: 1, HeadOID: oidOf("B"), TargetRef: mainRef, Refresh: true,
+		Node: n.id}}
+	w2, _ := writerOn(t, n, n.pub, on(lowered, e2))
+	res := converse(t, w2, refresh)
+	if stored := n.storedReadiness(change); stored.ready || !stored.waitsPerson {
+		t.Fatalf("the refresh on e2 stored %+v, want waiting on a person: the approval no longer counts, and "+
+			"founder alone is asked", stored)
+	}
+	if record := string(n.recordAt(res.Position).Mutation); !strings.Contains(record,
+		`"chart_epoch":`+strconv.FormatInt(e2, 10)) {
+		t.Fatalf("the refresh's record carries %s, want it stamped with chart %d", record, e2)
+	}
+	if got, _ := listChanges(t, n, code.ReadQuery{Asker: ada, Needs: code.NeedPerson}, 0); !slices.Equal(got,
+		[]string{"web!1"}) {
+		t.Fatalf("needs=person lists %q after the refresh, want web!1", got)
+	}
+
+	before := n.end()
+	stale1, err := w1.Converse(t.Context(), code.ConversationWrite{OpID: statelog.NewOpID(harnessAt, ""),
+		Mergeability: refresh.Mergeability})
+	requireConversationRefused(t, n, before, stale1, err, code.ConversationRefusalSuperseded, "chart of activation")
+	if stored := n.storedReadiness(change); !stored.waitsPerson {
+		t.Fatalf("the writer on the earlier chart left %+v, want e2's answer standing", stored)
+	}
+	if changes, repos := due(e2); len(changes) != 0 || len(repos) != 0 {
+		t.Fatalf("a refreshed change is still due %+v in %v at the chart that refreshed it", changes, repos)
 	}
 }

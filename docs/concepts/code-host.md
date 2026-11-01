@@ -1548,8 +1548,11 @@ answer that holds every record the code log had committed when it was asked.
   whoever asks, a seat included. It reads the changes whose stored readiness
   waits on a person, newest first, and keeps those whose readiness the read
   judges itself still does; a change that came to wait on one since its last
-  record is listed once its home refreshes it, a minute later at the most. A
-  change that closed or merged stores no answer, so it is never read here.
+  record — a review, an ask, or a configuration that changed who may approve
+  it — is listed once its home refreshes it, at the home's next pass: a
+  minute later at the most, once the home's node and the repository's
+  committing data node have applied that configuration. A change that closed
+  or merged stores no answer, so it is never read here.
 - A need lists **live** changes alone, and is refused beside a closed or
   merged state.
 - **One change**, by its number on its repository — `web!42` — with its row
@@ -5791,14 +5794,23 @@ merges nothing, judging the readiness again over the merge the row holds,
 which leaves the merge's own instant — what a moved target's recheck is paced
 by — as it was. A review is a record on the change's own subject, which no
 nudge names, so its refresh comes at the home's next pass, a minute later at
-the most. A refresh whose readiness is judged at its inputs already, or of a
-change whose head revision its home has not merged yet, is refused
-`superseded`, recorded nowhere. The chart moves no version: a stored answer
-is as of the chart that judged it, until the change's next record. A change
-that closes or merges keeps no answer: the record that ends it — a close, a
-landing, a merge, a push that merges it or deletes its source — clears it in
-the same apply, and a mergeability that lands after it stores none, since an
-ended change is ready for nobody and waits on nobody.
+the most. **The chart is an input too** — who may approve a change and who
+maintains its repository, and so clears a blocker — and no record moves it,
+so the stored answer also names the configuration activation whose chart
+judged it, and a home holding a later one finds the change due a refresh:
+every live change whose merge its home has recorded is judged again once
+after a configuration is applied, a record each, at the home's next pass. A
+refresh whose readiness is judged at its inputs already, by the same chart
+or a later one, or of a change whose head revision its home has not merged
+yet, is refused `superseded`, recorded nowhere. While the committing data
+node still holds an earlier configuration than the home, its refresh is
+judged by its own chart — or refused, where nothing else moved — and the
+home finds the change due again at its next pass, until that node holds the
+later configuration too. A change that closes or
+merges keeps no answer: the record that ends it — a close, a landing, a
+merge, a push that merges it or deletes its source — clears it in the same
+apply, and a mergeability that lands after it stores none, since an ended
+change is ready for nobody and waits on nobody.
 
 ### The merge gate
 

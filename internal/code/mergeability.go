@@ -93,11 +93,12 @@ import (
 // # Its tables
 //
 // code_mergeability, one row a change (replicated 0077, created again by 0078
-// with the readiness it stores and by 0089 with the checks position it was
-// judged at), written by the applier (apply_mergeability.go) from the records
-// on the change's own subject — its answer cleared by the record on the
-// repository's subject that closes or merges the change ([clearReadiness]) —
-// and removed only with the change by its repository's purge. Its conflicted
+// with the readiness it stores, by 0089 with the checks position it was
+// judged at and by 0101 with the chart), written by the applier
+// (apply_mergeability.go) from the records on the change's own subject — its
+// answer cleared by the record on the repository's subject that closes or
+// merges the change ([clearReadiness]) — and removed only with the change by
+// its repository's purge. Its conflicted
 // paths' bytes count in the change's conversation's text_bytes, as its
 // revisions' facts do, so a purge part weighs them by that one narrow row.
 
@@ -290,6 +291,22 @@ type Mergeability struct {
 	// which an older build defers the record by rather than store a readiness
 	// whose checks it could not say it read.
 	ChecksPosition statelog.Position `json:"checks_position,omitzero"`
+	// ChartEpoch is the activation of the chart the decide judged the
+	// readiness by (configplane.ActivationStamp: [SeatRules.Epoch]), 0 for a
+	// chart of no known activation — the fourth input M4-D24's guard holds a
+	// refresh to, since the chart is an input of the readiness (who may
+	// approve, who maintains the repository and clears a blocker) that no
+	// record of the log moves: a change whose stored answer an older chart
+	// judged is due a refresh from a home holding a later one
+	// ([ChangesDueQuery.ChartEpoch]). STAMPED BY THE WRITER, as the versions
+	// are; the home sends none.
+	//
+	// BASE FORMAT, under the condition [OpMergeability] states: once a build
+	// without it has run it takes {Name: "Mergeability.ChartEpoch", Since: 2,
+	// Op: "mergeability", Path: []string{"mutation", "chart_epoch"}}, which an
+	// older build defers the record by rather than store a readiness whose
+	// chart it could not say it judged by.
+	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 	// Routing is whom the record concerns ([ChangeRouting]) — the change's
 	// authors where it TURNED the merge into a conflict, its owner where the
 	// stored answer goes from not ready to ready — STAMPED BY THE WRITER from
@@ -379,9 +396,11 @@ func (m *Mergeability) validFields() error {
 	if why := branchProblem(m.TargetRef); why != "" {
 		return badField("mergeability.target_ref", "%s", why)
 	}
-	if m.ChangeVersion != 0 || m.ReadinessVersion != 0 || m.Ready || m.WaitsPerson || !m.ChecksPosition.IsZero() {
-		return badField("mergeability.ready", "the writer stamps the change's readiness and the versions and "+
-			"the checks position it judged it at, from its own snapshot, and the home sends none of them")
+	if m.ChangeVersion != 0 || m.ReadinessVersion != 0 || m.Ready || m.WaitsPerson || !m.ChecksPosition.IsZero() ||
+		m.ChartEpoch != 0 {
+		return badField("mergeability.ready", "the writer stamps the change's readiness and the versions, the "+
+			"checks position and the chart it judged it at, from its own snapshot and epoch, and the home sends "+
+			"none of them")
 	}
 	if err := stampedRouting("mergeability", m.Routing); err != nil {
 		return err
@@ -447,13 +466,13 @@ func (m *Mergeability) validFields() error {
 }
 
 // stampedMergeabilityBytes is what the writer stamps on m, at its widest: the
-// readiness, both versions and the checks position it was judged at, at the
-// most digits each takes, and a refresh's tip, its position and its state from the row, at the
+// readiness, both versions, the checks position and the chart it was judged
+// at, at the most digits each takes, and a refresh's tip, its position and its state from the row, at the
 // widest each is. EXACT — the stamped record's encoding less m's own — so a
 // record is held to [MaxConversationBytes] as the writer will publish it.
 func stampedMergeabilityBytes(m Mergeability) int {
 	widest := m
-	widest.ChangeVersion, widest.ReadinessVersion = math.MaxInt64, math.MaxInt64
+	widest.ChangeVersion, widest.ReadinessVersion, widest.ChartEpoch = math.MaxInt64, math.MaxInt64, math.MaxInt64
 	widest.Ready, widest.WaitsPerson = true, true
 	widest.ChecksPosition = statelog.Position{Stream: topics.CodeLogStream, Generation: math.MaxUint32,
 		Seq: math.MaxUint64}
@@ -491,6 +510,7 @@ type mergeRow struct {
 	changeVersion    int64
 	readinessVersion int64
 	checksPosition   int64
+	chartEpoch       int64
 	// ready is the stored answer, which the record's own is announced
 	// against: from not ready to ready is the one transition that tells
 	// anybody ([ReasonReadyToMerge]); waitsPerson, conflictsOmitted and
@@ -508,8 +528,8 @@ func mergeabilityIn(ctx context.Context, tx *sql.Tx, changeID string) (mergeRow,
 		state, conflicts string
 	)
 	err := tx.QueryRowContext(ctx, mergeabilitySQL, changeID).Scan(&m.revision, &m.targetRef, &m.targetOID,
-		&m.targetPosition, &state, &m.bytes, &m.changeVersion, &m.readinessVersion, &m.checksPosition, &m.ready,
-		&m.waitsPerson, &m.conflictsOmitted, &conflicts)
+		&m.targetPosition, &state, &m.bytes, &m.changeVersion, &m.readinessVersion, &m.checksPosition,
+		&m.chartEpoch, &m.ready, &m.waitsPerson, &m.conflictsOmitted, &conflicts)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return mergeRow{}, false, nil
@@ -529,12 +549,13 @@ func mergeabilityIn(ctx context.Context, tx *sql.Tx, changeID string) (mergeRow,
 // than the row's for that revision against that branch, and a later one or an
 // undecided row where it is the same (superseded); for a refresh, the row's
 // merge of that revision against that branch, and readiness inputs moved past
-// the versions and the checks position the row's answer was judged at
-// (superseded). Then the readiness, judged over the snapshot's rows with the
-// record's merge and the chart roster, stamped on the record with the versions
-// and the checks position it was judged at. Pure over (the rows, w, roster).
-func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster Roster, repo RepoRef,
-	row changeRow, named string, d conversationDecision) (conversationDecision, error) {
+// the versions, the checks position and the chart the row's answer was judged
+// at — a chart later than the row's (superseded). Then the readiness, judged
+// over the snapshot's rows with the record's merge and the chart roster,
+// stamped on the record with the versions, the checks position and the chart
+// epoch it was judged at. Pure over (the rows, w, roster, epoch).
+func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster Roster, epoch int64,
+	repo RepoRef, row changeRow, named string, d conversationDecision) (conversationDecision, error) {
 
 	m := *w.Mergeability
 	switch row.state {
@@ -571,10 +592,14 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s holds no merge of revision %d into %s to "+
 			"refresh: its home merges it, and the merge records its readiness", named, m.Revision, m.TargetRef))
 	case m.Refresh && prior.changeVersion == row.version && prior.readinessVersion == d.readiness &&
-		prior.checksPosition == checksAt:
+		prior.checksPosition == checksAt && prior.chartEpoch >= epoch:
+		// A CHART NO LATER THAN THE ROW'S moves nothing either: an older
+		// one, a node behind the activation that judged the row, would
+		// store an answer the later chart does not give.
 		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s's readiness is judged at its row's "+
-			"version %d, its conversation's readiness version %d and its head's checks at %s already, and "+
-			"nothing it reads has moved since", named, row.version, d.readiness, unpacked(checksAt)))
+			"version %d, its conversation's readiness version %d, its head's checks at %s and the chart of "+
+			"activation %d already, and nothing it reads has moved since", named, row.version, d.readiness,
+			unpacked(checksAt), prior.chartEpoch))
 	case m.Refresh:
 		// THE MERGE IT REFRESHES, stamped from the row: the record says what
 		// it judged the readiness over, and its apply touches no merge.
@@ -604,7 +629,7 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 		return conversationDecision{}, err
 	}
 	readiness := JudgeGate(f, gate)
-	m.ChangeVersion, m.ReadinessVersion = row.version, d.readiness
+	m.ChangeVersion, m.ReadinessVersion, m.ChartEpoch = row.version, d.readiness, epoch
 	if checksAt > 0 {
 		m.ChecksPosition = unpacked(checksAt)
 	}
@@ -681,6 +706,7 @@ type MergeabilityRow struct {
 	ChangeVersion    int64             `json:"change_version"`
 	ReadinessVersion int64             `json:"readiness_version"`
 	ChecksPosition   statelog.Position `json:"checks_position,omitzero"`
+	ChartEpoch       int64             `json:"chart_epoch,omitempty"`
 	Ready            bool              `json:"ready,omitempty"`
 	WaitsPerson      bool              `json:"waits_person,omitempty"`
 }
@@ -695,7 +721,7 @@ func mergeabilityRowIn(ctx context.Context, tx *sql.Tx, changeID string) (*Merge
 	)
 	err := tx.QueryRowContext(ctx, mergeabilityRowSQL, changeID).Scan(&m.Revision, &m.TargetRef, &m.TargetOID,
 		&targetPosition, &state, &m.ConflictsOmitted, &m.Node, &position, &t, &m.ChangeVersion,
-		&m.ReadinessVersion, &checks, &m.Ready, &m.WaitsPerson, &conflicts)
+		&m.ReadinessVersion, &checks, &m.ChartEpoch, &m.Ready, &m.WaitsPerson, &conflicts)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
@@ -806,10 +832,11 @@ func headChecksPositionIn(ctx context.Context, tx *sql.Tx, repoID, oid, target s
 // applier's (apply_mergeability.go).
 const (
 	mergeabilitySQL = `SELECT revision, target_ref, target_oid, target_position, state, bytes, change_version,
-			readiness_version, checks_position, ready, waits_person, conflicts_omitted, conflicts
+			readiness_version, checks_position, chart_epoch, ready, waits_person, conflicts_omitted, conflicts
 		FROM code_mergeability WHERE change_id = ?`
 	mergeabilityRowSQL = `SELECT revision, target_ref, target_oid, target_position, state, conflicts_omitted, node,
-			position, at, change_version, readiness_version, checks_position, ready, waits_person, conflicts
+			position, at, change_version, readiness_version, checks_position, chart_epoch, ready, waits_person,
+			conflicts
 		FROM code_mergeability WHERE change_id = ?`
 	headChecksPositionSQL = `SELECT COALESCE(MAX(CASE WHEN queued_position > finished_position
 			THEN queued_position ELSE finished_position END), 0)

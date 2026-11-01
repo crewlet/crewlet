@@ -281,6 +281,12 @@ type SeatRules struct {
 	// Zone is the company's clock (its timezone, ADR-0018), which the day a
 	// seat's pushes are counted on is cut by: nil is UTC.
 	Zone *time.Location
+	// Epoch is the activation Roster is of (configplane.ActivationStamp, Unix
+	// milliseconds): what a [Mergeability] stamps the readiness it judges by
+	// Roster with ([Mergeability.ChartEpoch]), so the home re-judges a change
+	// whose stored answer an older chart judged. 0 is a chart of no known
+	// activation, which no home re-judges anything for.
+	Epoch int64
 }
 
 // Committer is this node's group commit of pushes, a goroutine a repository

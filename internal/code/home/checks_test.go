@@ -124,7 +124,8 @@ func blobOf(raw string) string {
 // turns itself (home.CheckWork).
 func checkLoop(t *testing.T, e *checkEstate) *home.Loop {
 	t.Helper()
-	l, err := home.New(home.Options{Estate: e, Placement: asNode{placement: &placement{}, node: "git-a"},
+	l, err := home.New(home.Options{Chart: noChart,
+		Estate: e, Placement: asNode{placement: &placement{}, node: "git-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
 		Tasks: unqueued{t: t}, Share: units(2), NodeID: "git-a"})
 	if err != nil {

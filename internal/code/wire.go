@@ -707,6 +707,15 @@ type ChangesDueQuery struct {
 	// whose mergeability is oldest first, 0 to MaxSnapshotItems; none past
 	// its first page, and none without a repository.
 	Rechecks int `json:"rechecks,omitempty"`
+	// ChartEpoch is the activation of the chart the asking home holds
+	// (configplane.ActivationStamp), 0 for none: a change whose stored
+	// readiness an EARLIER chart judged ([Mergeability.ChartEpoch]) is due a
+	// refresh, so a chart apply re-judges every live change once — the one
+	// input of a readiness no record of the log moves. Never negative.
+	//
+	// BASE FORMAT, under the condition [OpMergeability] states: a field of a
+	// read between this build's nodes, which no record carries.
+	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 }
 
 // ChangeDue is one live change a `changes_due` read names, its target a live

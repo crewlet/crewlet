@@ -729,7 +729,8 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	case w.Mergeability != nil:
 		// THE HOME'S OWN too: its rules are the merge's guard, and the
 		// chart judges the readiness it stamps.
-		if d, err = decideMergeability(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, d); err != nil {
+		if d, err = decideMergeability(ctx, tx, w, seats.Roster, seats.Epoch, repo.grantRef(repoID), row, named,
+			d); err != nil {
 			return d, err
 		}
 		return routeConversation(ctx, tx, w, seats.Roster, repo.name, row, d)

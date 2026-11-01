@@ -34,7 +34,8 @@ func TestTheQueuePricesItsMergeRateAtTheRoundsItTimed(t *testing.T) {
 	t.Parallel()
 	c := &clock{now: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)}
 	rows := newQueueRows(oid("a"), 2, 1)
-	l, err := home.New(home.Options{Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
+	l, err := home.New(home.Options{Chart: noChart,
+		Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: &queueChains{},
 		Tasks: &queueTasks{}, NodeID: "git-a", Share: units(2), Now: c.Now})
 	if err != nil {
@@ -128,7 +129,8 @@ func TestAQueueThisNodeNoLongerTurnsIsForgotten(t *testing.T) {
 	t.Parallel()
 	c := &clock{now: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)}
 	rows := newQueueRows(oid("a"), 2, 1)
-	l, err := home.New(home.Options{Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
+	l, err := home.New(home.Options{Chart: noChart,
+		Estate: rows, Placement: asNode{placement: &placement{}, node: "git-a"},
 		Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: &queueChains{},
 		Tasks: &queueTasks{}, NodeID: "git-a", Share: units(2), Now: c.Now})
 	if err != nil {

@@ -1189,8 +1189,8 @@ func (n *node) seedMergeability(changeID string, width int64) {
 	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO code_mergeability (change_id, revision, target_ref,
 			target_oid, target_position, state, conflicts_count, node, bytes, position, at, change_version,
-			readiness_version, checks_position, ready, waits_person, conflicts)
-			VALUES (?, 1, 'refs/heads/main', '', 1, 'conflict', 1, 'node-a', ?, 1, 0, 1, 1, 0, 0, 0, ?)`, changeID,
+			readiness_version, checks_position, chart_epoch, ready, waits_person, conflicts)
+			VALUES (?, 1, 'refs/heads/main', '', 1, 'conflict', 1, 'node-a', ?, 1, 0, 1, 1, 0, 0, 0, 0, ?)`, changeID,
 			width, strings.Repeat("p", int(min(width, 1<<10)))); err != nil {
 			return err
 		}

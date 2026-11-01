@@ -700,7 +700,7 @@ func registeredStatements() map[string]statement {
 		// repository's due rechecks, the same index's range joined to its
 		// target's row and its mergeability by their keys, sorted by when the
 		// merge was recorded (sortingStatements says why).
-		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems, int64(3000)},
+		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems, int64(3000), int64(5000)},
 			[]string{"code_changes_open_idx (repo_id>?)", factsKey + " (change_id=? AND n=?)",
 				mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)",
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
@@ -719,7 +719,7 @@ func registeredStatements() map[string]statement {
 		"reopened asks": {reopenedAsksSQL, []any{"repo-1", MaxAskSettlesPerRead},
 			[]string{"code_changes_open_idx (repo_id=?)", conversationKey + " (change_id=?)"}},
 		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
+		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems, int64(5000)},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				factsKey + " (change_id=? AND n=?)", mergeabilityKey + " (change_id=?)",
 				conversationKey + " (change_id=?)",
@@ -736,7 +736,7 @@ func registeredStatements() map[string]statement {
 			[]string{mergeabilityKey + " (change_id=?)"}},
 		"mergeability row": {mergeabilityRowSQL, []any{"repo-1-change-000001"},
 			[]string{mergeabilityKey + " (change_id=?)"}},
-		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, true, false, "repo-1-change-000001",
+		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, 7000, true, false, "repo-1-change-000001",
 			2, "refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
 		"keep mergeability": {keptMergeabilitySQL, []any{true, oid("t"), 6000, 7000, true, 5, 4, 5000,
 			"repo-1-change-000001", 2}, []string{mergeabilityKey + " (change_id=?)"}},

@@ -296,6 +296,18 @@ func (e *estate) wrote() ([]code.Revise, []code.ChangeLanded) {
 	return slices.Clone(e.revises), slices.Clone(e.landings)
 }
 
+// listings is every listing of the change work asked so far, in the order it
+// was asked.
+func (e *estate) listings() []code.ChangesDueQuery {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.asked)
+}
+
+// noChart is a home holding no chart: its listings name none, so no change is
+// due a refresh for one.
+func noChart() int64 { return 0 }
+
 // merged is every mergeability asked so far.
 func (e *estate) merged() []code.Mergeability {
 	e.mu.Lock()
@@ -459,7 +471,7 @@ func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 	backstop time.Duration) (*home.Loop, *metrics.Recorder) {
 
 	t.Helper()
-	return loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
+	return loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
 		Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t}, NodeID: node,
 		Share: units(2)},
 		backstop)
@@ -756,7 +768,7 @@ func TestAWatchThatBeginsAsTheLoopStopsIsStopped(t *testing.T) {
 	t.Parallel()
 	e := newEstate()
 	n := &slowWatch{entered: make(chan struct{}), release: make(chan struct{})}
-	l, _ := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: &placement{}, node: "node-a"},
+	l, _ := loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: &placement{}, node: "node-a"},
 		Nudges: n, Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t},
 		Share: units(2), NodeID: "node-a"}, time.Hour)
 	select {
@@ -880,7 +892,7 @@ func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
 			e.mu.Unlock()
 			logs := &lines{}
 			p := &placement{homes: map[string]string{repoA: "node-a"}}
-			_, rec := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: "node-a"},
+			_, rec := loopOver(t, home.Options{Chart: noChart, Estate: e, Placement: asNode{placement: p, node: "node-a"},
 				Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
 				Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2),
 				Logger: slog.New(slog.NewTextHandler(logs, nil))},
@@ -975,6 +987,37 @@ func TestAHomeRefreshesReadinessWithoutAMerge(t *testing.T) {
 	if len(e.merged()) != 2 {
 		t.Errorf("the home asked %d mergeabilities, want the two refreshes alone: %+v", len(e.merged()),
 			e.merged())
+	}
+}
+
+// A HOME NAMES THE CHART IT HOLDS in every listing of its change work, the
+// repositories' and its repository's due changes alike: the activation of
+// its node's chart, so a change whose stored readiness an earlier chart
+// judged is listed due a refresh (code.ChangesDueQuery.ChartEpoch).
+//
+// Mutation: leave the chart off the repository's listing → it names none,
+// red.
+func TestAHomeNamesTheChartItHoldsInEveryListing(t *testing.T) {
+	t.Parallel()
+	const chart = int64(1_762_000_060_000)
+	e := newEstate()
+	e.owe(repoA, code.ChangeDue{ID: changeID(repoA, 1), Number: 1, Revision: 1, Head: oid("b"),
+		SourceRef: "refs/heads/feature-b", TargetRef: "refs/heads/main", Tip: oid("1"),
+		TipPosition: statelog.Position{Stream: topics.CodeLogStream, Seq: 30}, RefreshDue: true})
+	loopOver(t, home.Options{Chart: func() int64 { return chart }, Estate: e,
+		Placement: asNode{placement: &placement{homes: map[string]string{repoA: "node-a"}}, node: "node-a"},
+		Nudges:    newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
+		Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2)}, time.Hour)
+	e.waitDone(t, repoA, 10*time.Second)
+	listed := map[string]bool{}
+	for _, q := range e.listings() {
+		listed[q.RepoID] = true
+		if q.ChartEpoch != chart {
+			t.Errorf("the listing %+v names chart %d, want the node's, %d", q, q.ChartEpoch, chart)
+		}
+	}
+	if !listed[""] || !listed[repoA] {
+		t.Fatalf("the home asked the listings %+v, want the repositories' and repository A's", e.listings())
 	}
 }
 
