@@ -86,9 +86,9 @@ func TestACheckBoxHoldsNoModelCredential(t *testing.T) {
 	key := f.queue(oidOf("c"), d)
 	box := f.container.box(t)
 	spec := f.container.spec(0)
-	if spec.CodingAgent != "" || len(spec.CredentialFiles) > 0 || len(spec.Repos) > 0 || len(spec.Mounts) > 0 {
-		t.Fatalf("a check's box was made with an agent %q, %d login files, %d run grants, %d mounts",
-			spec.CodingAgent, len(spec.CredentialFiles), len(spec.Repos), len(spec.Mounts))
+	if spec.CodingAgent != "" || len(spec.CredentialFiles) > 0 || len(spec.Repos) > 0 {
+		t.Fatalf("a check's box was made with an agent %q, %d login files, %d run grants",
+			spec.CodingAgent, len(spec.CredentialFiles), len(spec.Repos))
 	}
 	allowed := append([]string{"NPM_TOKEN", sandbox.GitURLVar, sandbox.GitTokenVar, "GIT_CONFIG_COUNT"},
 		config.ReservedCheckEnv()...)

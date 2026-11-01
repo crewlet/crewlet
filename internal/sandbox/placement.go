@@ -93,9 +93,3 @@ func (p Placement) OnEngineHost() bool { return p == Direct || p == Container }
 // What a box may take of such a budget is decided by this, never by the box
 // ([CodingSteps]).
 func (p Placement) OwnsKernel() bool { return p.Valid() && !p.OnEngineHost() }
-
-// TakesMounts reports whether a box in this cell can be given a directory of
-// the engine host ([Mount]): a container alone, whose runtime binds one beside
-// its home. A direct box is the host itself, and a remote one another machine
-// — see [Mount] for why each refuses one rather than dropping it.
-func (p Placement) TakesMounts() bool { return p == Container }
