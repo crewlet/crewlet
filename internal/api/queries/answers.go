@@ -300,6 +300,18 @@ type Sources struct {
 	// the question unregistered.
 	ExecutorTail ExecutorTails
 
+	// ExecutorSessions is the seats' executor sessions — a row per turn whose
+	// executor captured its harness's session (ADR-0073) — read THROUGH THE
+	// ESTATE ROUTER, so a node without `data` answers as a data node does.
+	// Nil leaves `executor_sessions` and `executor_session` unregistered.
+	ExecutorSessions ExecutorSessions
+
+	// SessionObjects opens a session's sealed object in the fleet's one
+	// object store, which every node reaches. Nil — a node with no object
+	// store — leaves `executor_session` unregistered: the rows are still
+	// listed, and no node here could read a transcript.
+	SessionObjects SessionObjects
+
 	// Config serves the config family, every one of which is admin's: the
 	// document names every ${VAR} the company holds a credential under.
 	Config *configapi.Service
@@ -790,6 +802,17 @@ func Register(r *Registry, s Sources) {
 		// agent prints is its transcript, as a phase record's prompt and
 		// response are, so its lead reads it and an admin reads any.
 		r.Register("executor_tail", DecidedBy(authz.ActionSeatTrailRead), s.executorTail)
+	}
+	if s.ExecutorSessions != nil {
+		// A SEAT'S EXECUTOR SESSIONS, each turn's harness transcript kept so
+		// a later turn can continue it: the seat's TRAIL, decided per seat by
+		// the verb the run's live output is — what a harness wrote is what it
+		// printed, so the seat, its lead and an admin read it and nobody else
+		// (see executorsessions.go).
+		r.Register("executor_sessions", DecidedBy(authz.ActionSeatTrailRead), s.executorSessions)
+		if s.SessionObjects != nil {
+			r.Register("executor_session", DecidedBy(authz.ActionSeatTrailRead), s.executorSession)
+		}
 	}
 	if s.Retention != nil {
 		// THE DEPLOYMENT'S. The answer names every node in the fleet, its

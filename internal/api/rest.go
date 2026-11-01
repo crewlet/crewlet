@@ -48,6 +48,12 @@ var namedRoutes = []struct {
 	// because it is the same kind of fact — what this seat has said and
 	// remembered — rather than a company-wide listing.
 	{method: "GET", pattern: "/agents/{id}/conversations", what: "conversations", path: map[string]string{"id": "handle"}},
+	// One seat's EXECUTOR SESSIONS, beside its threads for their reason:
+	// what its harness wrote on each turn, kept so a later turn can continue
+	// it — and one turn's transcript under the listing that names it.
+	{method: "GET", pattern: "/agents/{id}/sessions", what: "executor_sessions", path: map[string]string{"id": "handle"}},
+	{method: "GET", pattern: "/agents/{id}/sessions/{turn}", what: "executor_session",
+		path: map[string]string{"id": "handle", "turn": "turn"}},
 	{method: "GET", pattern: "/agents/{id}", what: "agent", path: map[string]string{"id": "id"}},
 	// The literal segment beats the wildcard, so /events/trace/{id} is not
 	// read as an event whose id is "trace" — net/http resolves the more

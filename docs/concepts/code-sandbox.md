@@ -1168,6 +1168,50 @@ sequenceDiagram
 - **The dashboard asks every three seconds, and only while somebody is looking**: while a running run's span is open on the turn trace, or while the run's own page (Live › Executors, `#/live/executors/{turn_id}`) is open on a running job. Each request is chained after the last answer, so one open view has one request in flight; closing it or the run ending stops the poll, and so does a failed read the engine says no wait clears (a sandbox setup somebody has to fix, a refused key) until the socket reconnects or the view is opened again. The run's page asks by the `launch_id` the run board names (`executors` serves it), so it shows the job the row holds now, and when a later job replaces it the page reads the board again and follows the new one.
 - **After collection the record is the turn's.** A collected run's row is deleted, and its page reads the turn instead: every `executor_collected` the turn's launches published — what each job reported, what it delivered, its tokens and its transcript — under the task its `executor_launched` carried. A link to a run that has finished still lands on what it did.
 
+### Reading a seat's sessions
+
+**A run's session is kept after it, and read back as its transcript.** Every
+capture a collection takes — the archive the run packed when its harness
+exited ([Claude Code](#a-claude-code-runs-session),
+[OpenCode](#an-opencode-runs-session)) — is sealed into the fleet's
+[object store](object-store.md) and named by its turn's row of the `executor`
+log, so a later turn of the conversation, in any box on any node, can continue
+it
+([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md),
+and [Conversation Sessions](conversation-sessions.md#configuration) for how
+long and how much is kept). The same archive is the one whole record of what
+the run read and wrote, and a seat's **Sessions** — under its profile's Memory
+tab on the dashboard ([A seat's profile](../reference/dashboard-design.md#a-seats-profile)),
+or [`GET /agents/{id}/sessions`](../reference/api-endpoints.md#get-agentsidsessions)
+— list them, the latest first: how each turn ended (the engine's own account,
+which the transcript cannot know), what it was asked, and whether a later
+launch could take the session up.
+
+**One session opens as its transcript**
+([`GET /agents/{id}/sessions/{turn}`](../reference/api-endpoints.md#get-agentsidsessionsturn)):
+its object is streamed out of the store and opened under its own associated
+data, and the archive is read by the runner that packs it, which alone knows
+its layout — Claude Code's transcript, one record a line, then each subagent's
+own from its sidecar; OpenCode's export, a message at a time. The entries are
+what the run was briefed, what its model wrote, every tool call and what
+answered it, and the compaction summaries the harness wrote in place of what
+came before them; the model's thinking and the harness's bookkeeping are none.
+It is read a page at a time and bounded — 200 entries and 1 MiB of text a
+page, 16 KiB an entry, and 256 MiB of the archive decompressed a read, so an
+archive a box packed to inflate without end stops there — and every entry's
+text is **redacted whole at this read and only then cut**, whatever the capture
+did. An object the store no longer holds, one that does not open under the
+fleet's keyring, an archive that is not one its format describes and one this
+build does not read are each said as such, beside the turn's ending, which the
+row still holds.
+
+**It is the seat's trail.** A session is what the run's live output was,
+written down: so it is read by exactly who reads that — the seat, whoever leads
+it, and an administrator, `audit.seat.read`
+([Identity and Access](identity-and-access.md#the-authority-table-one-function-decides))
+— and by nobody the run's live output was withheld from.
+
+
 ---
 
 ## Budgets

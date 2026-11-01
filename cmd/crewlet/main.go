@@ -2436,6 +2436,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// it registered on every node is the other half of the same
 			// protocol, and a node serving no API may be the owner.
 			ExecutorTail: executorTails(e),
+			// A SEAT'S EXECUTOR SESSIONS: the rows through the estate
+			// router, so a node without `data` answers as one with it,
+			// and each session's sealed bytes through the fleet's one
+			// object store, opened under this node's keyring.
+			ExecutorSessions: executorSessionReads(e),
+			SessionObjects:   sessionObjects(e, log),
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per
@@ -3595,4 +3601,33 @@ func executorTails(e *engine.Engine) queries.ExecutorTails {
 		return r
 	}
 	return nil
+}
+
+// executorSessionReads is the executor log's reads through this node's estate
+// router, as the read surface wants them, or nil on an engine with no router —
+// which leaves the sessions questions unregistered rather than registered over
+// a reader that cannot answer.
+func executorSessionReads(e *engine.Engine) queries.ExecutorSessions {
+	if reads, ok := engine.ExecutorSessionReads(e); ok {
+		return reads
+	}
+	return nil
+}
+
+// sessionObjects is the store a session's sealed object is opened through, or
+// nil — converted for [memoryReads]'s reason — on a node with no object store,
+// and on one whose keyring cannot open a sealed stream, which is logged: the
+// sessions are still listed there, and no transcript is read.
+func sessionObjects(e *engine.Engine, log *slog.Logger) queries.SessionObjects {
+	store, err := e.ExecutorSessions()
+	if err != nil {
+		log.Warn("executor_session_transcripts_off", "error", err.Error(),
+			"detail", "this node's keyring cannot open a session's sealed stream, so it "+
+				"answers no session's transcript; the keyring's own error names what to fix")
+		return nil
+	}
+	if store == nil {
+		return nil
+	}
+	return store
 }

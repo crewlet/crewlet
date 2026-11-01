@@ -21,6 +21,8 @@ var readRoutes = []catalog.Route{
 	{Pattern: "GET /agents"},
 	{Pattern: "GET /agents/{id}"},
 	{Pattern: "GET /agents/{id}/memory"},
+	{Pattern: "GET /agents/{id}/sessions"},
+	{Pattern: "GET /agents/{id}/sessions/{turn}"},
 	{Pattern: "GET /config"},
 	{Pattern: "GET /config/revisions"},
 	{Pattern: "GET /config/roles/{id}"},
@@ -36,7 +38,8 @@ var readRoutes = []catalog.Route{
 // realAnswers are real routes' answers, in the shapes their handlers write:
 // the example company's document as GET /config encodes it, one of its roles
 // as GET /config/{kind}/{id} answers the entity itself, the roster's rows, a
-// page of the event log, and a project in full.
+// page of the event log, a project in full, and a seat's executor sessions —
+// a page of them, and one with the opening of its transcript.
 func realAnswers(t *testing.T) map[string]any {
 	t.Helper()
 	raw, err := os.ReadFile("../../../examples/nimbus.company.yaml")
@@ -61,7 +64,34 @@ func realAnswers(t *testing.T) map[string]any {
 	if len(company.Roles) == 0 {
 		t.Fatal("the example company holds no role outside a unit to read")
 	}
+	// A SEAT'S EXECUTOR SESSION as both sessions routes write it: a turn
+	// whose harness transcript was captured and whose turn ended.
+	session := map[string]any{
+		"turn_id": "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c11", "conversation_key": "slack:C0ENG:1700000000.000100",
+		"work_key": "", "harness": "claude-code", "harness_version": "2.1.310",
+		"captured_at": "2026-10-24T09:04:00Z", "ended_at": "2026-10-24T09:05:00Z",
+		"ending":      map[string]any{"outcome": "completed", "completed_work": "Filed ENG-7."},
+		"ask_excerpt": "Ana asked: fix the flaky cache test", "kept": true, "object_bytes": 41234,
+		"continuable": true,
+	}
 	return map[string]any{
+		"GET /agents/{id}/sessions": map[string]any{
+			"handle": "eng-lead", "sessions": []any{session}, "next": "", "read_level": "stale",
+			"position": map[string]any{"stream": "CREWLET_EXECUTOR_LOG", "generation": 1, "seq": 42},
+			"complete": true,
+		},
+		"GET /agents/{id}/sessions/{turn}": map[string]any{
+			"handle": "eng-lead", "session": session, "state": "read",
+			"entries": []any{
+				map[string]any{"kind": "brief", "at": "2026-10-24T09:00:00Z",
+					"text": "Fix the flaky cache test.", "bytes": 25},
+				map[string]any{"kind": "tool_call", "tool": "Bash",
+					"text": `{"command":"go test ./cache/..."}`, "bytes": 33},
+			},
+			"from": 0, "next": "",
+			"bounds": map[string]any{"entries": 200, "bytes": 1 << 20, "entry_bytes": 16 << 10,
+				"line_bytes": 32 << 20, "read_bytes": 256 << 20},
+		},
 		"GET /config":            roundTrip(company.Redact()),
 		"GET /config/roles/{id}": roundTrip(company.Roles[0]),
 		"GET /agents": []any{
@@ -218,11 +248,14 @@ func TestAGenericReadIsCardedAsTheThingItReads(t *testing.T) {
 
 // A GENERIC READ IS FENCED AT THE TRUST ITS ROUTE EARNS (ADR-0040): the event
 // log, which carries what integrations and vendors' chats sent, is external,
-// and the company's own document a colleague's, by the one rule for a surface
-// the engine hosts; an answer with no body carries nobody's words, and is the
-// read's own trust whatever its route. Mutation: drop the generic read's
-// TrustOf, or read the event log by the hosted rule, and the event log reads as
-// a colleague's; label the read itself external and the empty answer does.
+// and so is a seat's executor sessions — the listing and one transcript —
+// which carry everything its harness read; the company's own document is a
+// colleague's, by the one rule for a surface the engine hosts; an answer with
+// no body carries nobody's words, and is the read's own trust whatever its
+// route. Mutation: drop the generic read's TrustOf, read the event log by the
+// hosted rule, or drop `/agents/{id}/sessions` from outsideRoutes, and that
+// route reads as a colleague's; label the read itself external and the empty
+// answer does.
 func TestAGenericReadIsFencedAtTheTrustItsRouteEarns(t *testing.T) {
 	t.Parallel()
 	table, err := catalog.NewRouteTable(readRoutes)
@@ -239,6 +272,11 @@ func TestAGenericReadIsFencedAtTheTrustItsRouteEarns(t *testing.T) {
 		{"GET /config", true, provenance.TrustColleague},
 		{"GET /events", true, provenance.TrustExternal},
 		{"HEAD /events", false, provenance.TrustColleague},
+		// A SEAT'S EXECUTOR SESSIONS ARE A HARNESS'S WHOLE RECORD of a run,
+		// every file it read and every command's output: the listing, whose
+		// asks and endings quote it, and the transcript alike.
+		{"GET /agents/{id}/sessions", true, provenance.TrustExternal},
+		{"GET /agents/{id}/sessions/{turn}", true, provenance.TrustExternal},
 	} {
 		resp := exec.Response{Status: 200}
 		if c.body {

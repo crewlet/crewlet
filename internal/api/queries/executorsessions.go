@@ -1,0 +1,434 @@
+package queries
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/executordomain"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// A SEAT'S EXECUTOR SESSIONS, read by a person (ADR-0073).
+//
+// Every turn whose executor captured its harness's session leaves a row in the
+// executor log naming the sealed object that holds it, so a later turn of the
+// conversation can continue it — and that object is the only whole record of
+// what the run read and wrote. Two questions read it: `executor_sessions`, a
+// seat's rows newest first, a page at a time, each with how its turn ended and
+// whether a later launch could continue it; and `executor_session`, one turn's
+// transcript, its object opened and read as the entries its harness recorded.
+//
+// # The seat's trail, decided as the run's live output is
+//
+// What a harness wrote is its transcript, as what it prints while it runs is
+// (`executor_tail`): so both questions are decided per seat by
+// [authz.ActionSeatTrailRead] — the seat itself, whoever leads it, or an
+// admin — through [Sources.trailSeat], the one place every question about a
+// seat's trail decides it. A session holds what a run's live output holds and
+// nothing a lead could not already watch, so reading it widens nothing.
+//
+// # From any node, and never a 500 for an object that is gone
+//
+// The rows are read through the estate router ([ExecutorSessions]), so a node
+// without `data` answers as a data node does, and the object through the
+// fleet's one object store ([SessionObjects]). An object the store no longer
+// holds, one that does not open under this fleet's keyring, an archive that is
+// not one its format describes, and one this build does not read are each an
+// ANSWER saying so — the row is still the turn's account of how it ended —
+// never a failure: only a store that did not answer is `unavailable`.
+//
+// # Bounded, and redacted at this read
+//
+// A transcript is read a page at a time, held to the bounds the runner states
+// ([executor.TranscriptReadBounds]) — entries and bytes per page, each entry's
+// text, and the archive's decompressed bytes one read takes — and the answer
+// says why its page ends where it does. Every entry's text, the ask's excerpt
+// and the ending's prose are passed through [redact.Secrets] here, whatever the
+// capture did: a session is everything a run read and printed.
+
+// ExecutorSessions is the seats' executor sessions as this surface reads them:
+// the two reads of the domain's reader a person asks, answered through the
+// estate router so every node answers (estate.ExecutorReads).
+//
+// Consumer-defined like every other seam here, and over the domain's own row
+// type for the reason [SeatMemory] is over memread's: the row stays one shape.
+type ExecutorSessions interface {
+	Sessions(ctx context.Context, handle, cursor string, limit int,
+		fresh statelog.Freshness) (executordomain.Page, error)
+	Session(ctx context.Context, handle, turn string,
+		fresh statelog.Freshness) (executordomain.Session, error)
+}
+
+// SessionObjects opens a session's sealed object, streaming, its associated
+// data binding it to the seat, the turn and the object's key
+// (executordomain.SessionStore): what the transcript is read from.
+type SessionObjects interface {
+	Open(ctx context.Context, session executordomain.Session) (io.ReadCloser, error)
+}
+
+// SessionRow is one turn's executor session as this surface shows it.
+type SessionRow struct {
+	Turn            string `json:"turn_id"`
+	ConversationKey string `json:"conversation_key"`
+	WorkKey         string `json:"work_key"`
+
+	// Harness is the harness that wrote the session, and HarnessVersion its
+	// release as the box's harness printed it — the box's words.
+	Harness        string `json:"harness"`
+	HarnessVersion string `json:"harness_version" untrusted:"name"`
+
+	// CapturedAt is when the turn's newest capture was recorded, null where
+	// nothing was captured; EndedAt when the turn's end was, null while the
+	// turn runs.
+	CapturedAt *time.Time `json:"captured_at"`
+	EndedAt    *time.Time `json:"ended_at"`
+
+	// Ending is the engine's account of how the turn ended — its outcome,
+	// the reviewer's decision, whether a reply reached anybody, who stopped
+	// it, what failed — its model- and person-written fields declared
+	// somebody's words on the type itself; null while the turn runs.
+	Ending *executordomain.Ending `json:"ending"`
+
+	// AskExcerpt is the opening of what the turn was asked, redacted.
+	AskExcerpt string `json:"ask_excerpt" untrusted:"fence"`
+
+	// Kept says the row still names a session's object, and ObjectBytes is
+	// that object's sealed size: zero where the turn captured nothing, or
+	// the seat's budget released it.
+	Kept        bool  `json:"kept"`
+	ObjectBytes int64 `json:"object_bytes"`
+
+	// Continuable says a later launch could take the session up: it is kept,
+	// in a format this build restores, on a conversation a later turn
+	// continues — whether a box's own harness release can take it is decided
+	// as that run starts. NotContinuable says why not, in a person's words.
+	Continuable    bool   `json:"continuable"`
+	NotContinuable string `json:"not_continuable,omitempty"`
+}
+
+// SessionsAnswer is one page of a seat's executor sessions, the latest begun
+// first.
+type SessionsAnswer struct {
+	Handle   string       `json:"handle"`
+	Sessions []SessionRow `json:"sessions"`
+
+	// Next is the cursor of the page after this one, empty on the last.
+	Next string `json:"next"`
+
+	// ReadLevel is the level the page was read at, Position where, and
+	// Complete false where a record of the log the answering copy could not
+	// decode may hold rows missing from it.
+	ReadLevel statelog.ReadLevel `json:"read_level"`
+	Position  statelog.Position  `json:"position"`
+	Complete  bool               `json:"complete"`
+}
+
+// TranscriptState is what reading a session's object came to.
+type TranscriptState string
+
+const (
+	// TranscriptRead is a session read: the answer holds its entries.
+	TranscriptRead TranscriptState = "read"
+
+	// TranscriptNone is a row naming no object: its turn captured nothing,
+	// or the seat's session budget released it.
+	TranscriptNone TranscriptState = "none"
+
+	// TranscriptMissing is an object the store no longer holds.
+	TranscriptMissing TranscriptState = "missing"
+
+	// TranscriptUnreadable is an object that does not open: sealed under a
+	// key the keyring no longer holds, or bytes that are not the ones sealed
+	// for this turn.
+	TranscriptUnreadable TranscriptState = "unreadable"
+
+	// TranscriptMalformed is an object that opened and is not an archive its
+	// format describes.
+	TranscriptMalformed TranscriptState = "malformed"
+
+	// TranscriptUnsupported is an archive of a harness or a format this build
+	// does not read.
+	TranscriptUnsupported TranscriptState = "unsupported"
+)
+
+// TranscriptStates are every state a transcript's read can come to.
+var TranscriptStates = []TranscriptState{
+	TranscriptRead, TranscriptNone, TranscriptMissing, TranscriptUnreadable,
+	TranscriptMalformed, TranscriptUnsupported,
+}
+
+// Valid reports whether a state off the wire is one this build answers.
+func (s TranscriptState) Valid() bool { return slices.Contains(TranscriptStates, s) }
+
+// SessionAnswer is one turn's executor session and a page of its transcript.
+type SessionAnswer struct {
+	Handle  string     `json:"handle"`
+	Session SessionRow `json:"session"`
+
+	// State is what reading the session's object came to, and Why says it in
+	// a person's words wherever it is not `read`.
+	State TranscriptState `json:"state"`
+	Why   string          `json:"why,omitempty"`
+
+	// Entries are the transcript's entries from From on, in the order the
+	// harness recorded them; empty wherever State is not `read`.
+	Entries []executor.TranscriptEntry `json:"entries"`
+	From    int                        `json:"from"`
+
+	// Cut is why Entries ends before the transcript does, empty where it
+	// does not; Next is the cursor a read of the entries after them takes,
+	// empty where none follow.
+	Cut  executor.TranscriptCut `json:"cut,omitempty"`
+	Next string                 `json:"next"`
+
+	// Bounds are what every read of a transcript is held to.
+	Bounds executor.TranscriptBounds `json:"bounds"`
+}
+
+// executorSessions answers a page of a seat's executor sessions, the latest
+// begun first, after `cursor`, `limit` to a page (the domain's default and
+// ceiling: executordomain.DefaultPageSize and MaxPageSize), at the caller's
+// freshness.
+func (s Sources) executorSessions(ctx context.Context, p Params) (any, error) {
+	// A SEAT'S TRAIL, decided before anything is read — see
+	// [Sources.trailSeat]. An absent handle is the caller's own seat.
+	seat, err := s.trailSeat(ctx, strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	page, err := s.ExecutorSessions.Sessions(ctx, seat.Handle, strings.TrimSpace(p.String("cursor")),
+		p.Int("limit", 0), fresh)
+	if err != nil {
+		return nil, executorRefusal(err)
+	}
+	rows := make([]SessionRow, 0, len(page.Sessions))
+	for _, row := range page.Sessions {
+		rows = append(rows, sessionRowOf(row))
+	}
+	return SessionsAnswer{Handle: seat.Handle, Sessions: rows, Next: page.Next,
+		ReadLevel: fresh.Level, Position: page.Position, Complete: page.Complete}, nil
+}
+
+// executorSession answers one turn's session and a page of its transcript from
+// `cursor` on — the first page where it is absent.
+func (s Sources) executorSession(ctx context.Context, p Params) (any, error) {
+	seat, err := s.trailSeat(ctx, strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
+	}
+	turn := strings.TrimSpace(p.String("turn"))
+	if turn == "" {
+		return nil, badParams("turn", "", nil)
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	row, err := s.ExecutorSessions.Session(ctx, seat.Handle, turn, fresh)
+	switch {
+	case errors.Is(err, executordomain.ErrNotFound):
+		return nil, fmt.Errorf("%w: %s keeps no executor session of the turn %s", ErrNotFound,
+			seat.Handle, turn)
+	case err != nil:
+		return nil, executorRefusal(err)
+	}
+	from, err := transcriptFrom(strings.TrimSpace(p.String("cursor")), row)
+	if err != nil {
+		return nil, err
+	}
+	answer, err := s.readTranscript(ctx, row, SessionAnswer{
+		Handle: seat.Handle, Session: sessionRowOf(row), Entries: []executor.TranscriptEntry{},
+		From: from, Bounds: executor.TranscriptReadBounds(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return answer, nil
+}
+
+// readTranscript reads a page of row's transcript into out: its object opened
+// and read through the runner's own format knowledge, or what kept it from
+// being read.
+func (s Sources) readTranscript(ctx context.Context, row executordomain.Session,
+	out SessionAnswer) (SessionAnswer, error) {
+
+	if !row.HasObject() {
+		out.State, out.Why = TranscriptNone, notKept(row)
+		return out, nil
+	}
+	if ok, why := executor.Carries(row.Harness, row.ArchiveFormat); !ok {
+		out.State, out.Why = TranscriptUnsupported, why
+		return out, nil
+	}
+	body, err := s.SessionObjects.Open(ctx, row)
+	if err != nil {
+		return transcriptUnread(out, row, err)
+	}
+	defer func() { _ = body.Close() }()
+	page, err := executor.ReadTranscript(row.Harness, row.ArchiveFormat, body, out.From)
+	if err != nil {
+		return transcriptUnread(out, row, err)
+	}
+	out.State, out.Entries, out.Cut = TranscriptRead, page.Entries, page.Cut
+	if page.More() {
+		out.Next = transcriptCursor(row.Object.Key, page.Next)
+	}
+	return out, nil
+}
+
+// transcriptUnread is what kept a session's object from being read, as the
+// answer says it: gone, sealed out of reach, malformed or of a format this
+// build does not read are each a state of the answer; anything else is a store
+// that did not answer, which a caller retries.
+func transcriptUnread(out SessionAnswer, row executordomain.Session,
+	err error) (SessionAnswer, error) {
+	switch {
+	// GONE BEFORE UNREADABLE: the store's own absence is wrapped in the
+	// domain's unreadable, and a reader acts on the two differently.
+	case errors.Is(err, objstore.ErrNotFound):
+		out.State, out.Why = TranscriptMissing, "the object store no longer holds this "+
+			"session's object: the row named it, and the collector, a retention or a newer "+
+			"capture of the turn took it since"
+	case errors.Is(err, executordomain.ErrUnreadable):
+		out.State, out.Why = TranscriptUnreadable, "this session's object does not open: it "+
+			"is sealed under a key this fleet's keyring no longer holds, or its bytes are "+
+			"not the ones sealed for this turn"
+	case errors.Is(err, executor.ErrMalformedArchive):
+		out.State, out.Why = TranscriptMalformed, "this session opened, and is not an archive "+
+			"of its harness's format: "+errorTail(err, executor.ErrMalformedArchive)
+	case errors.Is(err, executor.ErrUnsupportedArchive):
+		out.State, out.Why = TranscriptUnsupported, errorTail(err, executor.ErrUnsupportedArchive)
+	default:
+		return SessionAnswer{}, fmt.Errorf("%w: the object store did not answer for %s's "+
+			"session of the turn %s: %w", ErrUnavailable, row.Handle, row.Turn, err)
+	}
+	out.Entries = []executor.TranscriptEntry{}
+	return out, nil
+}
+
+// errorTail is what err says after sentinel's own words, which name a package
+// rather than what happened.
+func errorTail(err, sentinel error) string {
+	text := err.Error()
+	if at := strings.LastIndex(text, sentinel.Error()+": "); at >= 0 {
+		return text[at+len(sentinel.Error())+2:]
+	}
+	return text
+}
+
+// executorRefusal is a failed read of the executor log in this surface's words:
+// a request the domain refused — a cursor no page handed out, a turn id that is
+// none — is the caller's to change, told in the domain's own sentence; anything
+// else is returned as it came, for the registry to class.
+func executorRefusal(err error) error {
+	if !errors.Is(err, executordomain.ErrInvalid) {
+		return err
+	}
+	return refusedBy(err, errorTail(err, executordomain.ErrInvalid))
+}
+
+// transcriptCursor is the cursor a transcript's next page is read from: the
+// object the page was read from and the ordinal of the entry after it.
+//
+// THE OBJECT IS IN IT because a live turn's row moves to a newer object with
+// every capture, and a page read from one archive continued in another would
+// skip or repeat entries with nothing saying so.
+func transcriptCursor(key objstore.Key, next int) string {
+	return key.String() + "." + strconv.Itoa(next)
+}
+
+// transcriptFrom is the ordinal a page of row's transcript starts at: 0 for no
+// cursor, and the cursor's own for one the row's object handed out. A cursor of
+// an object the row no longer names is refused, saying to read again from the
+// start.
+func transcriptFrom(cursor string, row executordomain.Session) (int, error) {
+	if cursor == "" {
+		return 0, nil
+	}
+	key, at, found := strings.Cut(cursor, ".")
+	from, err := strconv.Atoi(at)
+	switch {
+	case !found || err != nil || from < 0:
+		return 0, fmt.Errorf("%w: the cursor parameter is one a page of this transcript "+
+			"handed out, and %q isn't", ErrBadParams, cursor)
+	case !row.HasObject() || key != row.Object.Key.String():
+		return 0, fmt.Errorf("%w: the turn %s's session was captured again since the cursor "+
+			"%q was handed out: read its transcript again from the start", ErrBadParams,
+			row.Turn, cursor)
+	}
+	return from, nil
+}
+
+// sessionRowOf is a row as this surface shows it, the text somebody wrote in it
+// redacted.
+func sessionRowOf(s executordomain.Session) SessionRow {
+	row := SessionRow{
+		Turn: s.Turn, ConversationKey: s.ConversationKey, WorkKey: s.WorkKey,
+		Harness: s.Harness, HarnessVersion: s.HarnessVersion,
+		CapturedAt: sessionInstant(s.CapturedAt), EndedAt: sessionInstant(s.EndedAt),
+		AskExcerpt: redact.Secrets(s.AskExcerpt), Kept: s.HasObject(),
+	}
+	if row.Kept {
+		row.ObjectBytes = s.Object.Size
+	}
+	if s.Ending != nil {
+		// A COPY, redacted: the row is the domain's, and the ending's prose
+		// is a model's or a person's words.
+		ending := *s.Ending
+		ending.CompletedWork = redact.Secrets(ending.CompletedWork)
+		ending.BlockedOn = redact.Secrets(ending.BlockedOn)
+		ending.StopReason = redact.Secrets(ending.StopReason)
+		ending.Failure = redact.Secrets(ending.Failure)
+		row.Ending = &ending
+	}
+	row.Continuable, row.NotContinuable = continuable(s)
+	return row
+}
+
+// continuable reports whether a later launch could take s's session up, and
+// why not where it could not.
+func continuable(s executordomain.Session) (bool, string) {
+	switch {
+	case !s.HasObject():
+		return false, notKept(s)
+	case s.Ended() && s.ConversationKey == "":
+		// A TURN ON NO CONVERSATION IS CONTINUED ONLY BY ITS OWN NEXT
+		// LAUNCH, which an ended turn has none of: no later turn reads the
+		// head of a conversation that has no key.
+		return false, "the turn was on no conversation, and no later turn continues the " +
+			"session of a turn on none"
+	}
+	return executor.Carries(s.Harness, s.ArchiveFormat)
+}
+
+// notKept is why a row names no object.
+func notKept(s executordomain.Session) string {
+	if s.CapturedAt.IsZero() {
+		return "nothing of this turn's session was captured: its run ended before its harness " +
+			"packed one, or its harness carries none"
+	}
+	return "the seat's session budget released this session's object to make room for newer " +
+		"ones; how the turn ended is kept"
+}
+
+// sessionInstant is an instant of a row, or null for one it has not got.
+func sessionInstant(at time.Time) *time.Time {
+	if at.IsZero() {
+		return nil
+	}
+	at = at.UTC()
+	return &at
+}
