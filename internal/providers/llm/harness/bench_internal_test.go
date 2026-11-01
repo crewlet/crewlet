@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
-	"unsafe"
 
+	"github.com/crewlet/crewlet/internal/clocktest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -295,40 +295,6 @@ func TestAWindowIsKeptOnTheWallClock(t *testing.T) {
 	}
 }
 
-// afterSleep is at as a clock reads it once the host has slept for d, a whole
-// number of seconds: its wall reading d later and its monotonic reading where
-// it was, since the monotonic clock stops while the host sleeps
-// (mach_absolute_time on macOS, CLOCK_MONOTONIC on Linux).
-//
-// NO EXPORTED CALL MOVES ONE READING WITHOUT THE OTHER, so the wall reading is
-// moved in place. An instant that carries a monotonic reading keeps its wall
-// seconds above bit 30 of its first word, its nanoseconds below, and the
-// monotonic reading in its second; the forgery checks that it moved exactly
-// the wall reading, and fails naming the assumption if a Go release lays the
-// type out otherwise.
-func afterSleep(t *testing.T, at time.Time, d time.Duration) time.Time {
-	t.Helper()
-	type layout struct {
-		wall uint64
-		ext  int64
-		loc  *time.Location
-	}
-	const wallSecondsShift = 30
-	if unsafe.Sizeof(layout{}) != unsafe.Sizeof(time.Time{}) || d%time.Second != 0 ||
-		!strings.Contains(at.String(), " m=") {
-		t.Fatalf("afterSleep needs an instant read from time.Now and whole seconds, "+
-			"on the time.Time layout it was written for (got %s and %s)", at, d)
-	}
-	woke := at
-	(*layout)(unsafe.Pointer(&woke)).wall += uint64(d/time.Second) << wallSecondsShift
-	if woke.Sub(at) != 0 || !woke.Round(0).Equal(at.Round(0).Add(d)) {
-		t.Fatalf("the forged clock reads %s, %s on the monotonic clock and %s on the wall "+
-			"after %s: the time.Time layout afterSleep assumes has changed", woke,
-			woke.Sub(at), woke.Round(0).Sub(at.Round(0)), at)
-	}
-	return woke
-}
-
 // A HOST THAT SLEPT THROUGH A WINDOW'S END WAKES WITH THE ENTRY TRIED AGAIN,
 // and no refusal names a next try the wall clock has already passed.
 //
@@ -338,7 +304,7 @@ func afterSleep(t *testing.T, at time.Time, d time.Duration) time.Time {
 // end, was due at once and asked again as fast as the refusal returned: on
 // 2026-11-01 one node renewed its parks 20 834 times in a minute, every flood
 // beginning just after the host woke. The case reads the entry through a clock
-// that slept (afterSleep), inside the window and past its end.
+// that slept (clocktest.AfterSleep), inside the window and past its end.
 //
 // Mutation: store the report's own instant in record, and after two hours'
 // sleep the entry still refuses, naming a next try two hours past.
@@ -361,7 +327,7 @@ func TestAHostThatSleptThroughAWindowWakesWithTheEntryTriedAgain(t *testing.T) {
 		"a sleep past the window":    {2 * time.Hour, false},
 		"a sleep exactly to its end": {limitBackoff[0], false},
 	} {
-		woke := afterSleep(t, opened, tc.slept)
+		woke := clocktest.AfterSleep(t, opened, tc.slept)
 		clock.mu.Lock()
 		clock.now = woke
 		clock.mu.Unlock()
