@@ -12,12 +12,12 @@ import (
 //
 // A tool is filed under its server's `tool_prefix` and its own name, run
 // together, in one namespace with the engine's built-ins and every other
-// server's tools, and every coding CLI puts a prefix of its own in front of
+// server's tools, and every harness puts a prefix of its own in front of
 // that before its model sees it. Three things keep a name from reaching a
 // model, and each is decided where the engine can see it:
 //
 //   - a name holding characters no model's tool name can, or one too long
-//     to fit beside the longest CLI prefix ([harnessprofile.ToolNameMax]), is
+//     to fit beside the longest harness prefix ([harnessprofile.ToolNameMax]), is
 //     REFUSED here, when the bridge builds the server's tools from a listing:
 //     it is never filed, so it is neither offered nor callable, and never
 //     shadows a tool that could be. Never cut short to fit: a shortened name
@@ -99,16 +99,16 @@ func (r NameRefusal) Sentence(tool, prefix string) string {
 		switch {
 		case prefix != "" && over < len(prefix):
 			return fmt.Sprintf("%q is not offered: it is %d characters, and %d fit beside the "+
-				"longest prefix a coding CLI gives the engine's tools. Shorten the tool_prefix "+
+				"longest prefix a harness gives the engine's tools. Shorten the tool_prefix "+
 				"%q by %d to offer it", tool, len(tool), most, prefix, over)
 		case prefix != "" && over == len(prefix):
 			return fmt.Sprintf("%q is not offered: it is %d characters, and %d fit beside the "+
-				"longest prefix a coding CLI gives the engine's tools. Take off the tool_prefix "+
+				"longest prefix a harness gives the engine's tools. Take off the tool_prefix "+
 				"%q to offer it", tool, len(tool), most, prefix)
 		}
 		return fmt.Sprintf("%q is not offered: it is %d characters, and %d fit beside the "+
-			"longest prefix a coding CLI gives the engine's tools. The server's own name for "+
-			"it is too long for any coding CLI to call", tool, len(tool), most)
+			"longest prefix a harness gives the engine's tools. The server's own name for "+
+			"it is too long for any harness to call", tool, len(tool), most)
 	case NameBuiltin:
 		return fmt.Sprintf("%q is not offered: a built-in tool has the name, and built-ins are "+
 			"filed first. Give the server a tool_prefix to offer it under another name", tool)

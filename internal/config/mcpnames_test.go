@@ -345,7 +345,7 @@ func TestEveryDocumentedServerKeepsTheEntryRules(t *testing.T) {
 // THE SCHEMA STATES A NAME AND A PREFIX AS THE VALIDATOR HOLDS THEM: the js
 // tags on MCPServer.name and tool_prefix are a second spelling of the rules,
 // for an editor to underline what `crewlet validate` would refuse. A prefix's
-// bound follows the longest CLI prefix, which a tag cannot compute, so this is
+// bound follows the longest harness prefix, which a tag cannot compute, so this is
 // what moves it: a profile with a longer prefix fails here until the tag does.
 //
 // Mutation: loosen either tag's pattern or bound, and this is red.

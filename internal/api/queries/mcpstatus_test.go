@@ -123,7 +123,7 @@ func mcpFleet(t *testing.T) coord.Backend {
 }
 
 // longGitHubTool is a name github's tool_prefix pushes one character over
-// the longest a coding CLI can hand its model.
+// the longest a harness can hand its model.
 var longGitHubTool = "gh_" + strings.Repeat("x", harnessprofile.ToolNameMax()-2)
 
 // A SERVER'S TOOLS LOST TO THEIR NAMES ARE ONE LIST ACROSS THE FLEET, each

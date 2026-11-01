@@ -955,7 +955,7 @@ type CallPaths struct {
 	// NamePrefix is what the record writes before every call's name that is
 	// no part of the name the model called: Muse Code files a call under the
 	// operation `tool:<name>`. Cut off before the name is read, so
-	// [Requests.HostPrefix] is the model's own spelling on every CLI, which
+	// [Requests.HostPrefix] is the model's own spelling on every harness, which
 	// is what the engine's longest tool name is computed from
 	// ([ToolNameMax]). A name the record writes without it is read whole.
 	NamePrefix string `yaml:"name_prefix,omitempty"`

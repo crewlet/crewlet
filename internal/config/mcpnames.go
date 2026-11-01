@@ -38,7 +38,7 @@ import (
 // The name is spelled in more places than any other key of the entry: the
 // origin of every tool it serves (`mcp:<name>`), the key seats declare its
 // credentials under, a path segment of the routes that act on it, and, for a
-// server an executor's box runs, the middle of every tool name the box's CLI
+// server an executor's box runs, the middle of every tool name the box's harness
 // hands its model (`mcp__<name>__<tool>` for Claude Code), under the same 64
 // characters [harnessprofile.ModelToolNameMax] counts. 32 keeps it a short
 // identifier in all of them, and leaves such a box tool 25 characters of its
@@ -49,7 +49,7 @@ const MaxMCPServerName = 32
 // hyphens, starting and ending with a letter or a digit. The one spelling
 // every place the name lands takes as it is: an origin, a path segment, a
 // header or variable name once its hyphens are underscores, and a key in each
-// CLI's server list.
+// harness's server list.
 var mcpServerName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // headerName is an HTTP field name, RFC 9110's token: the characters an
@@ -120,7 +120,7 @@ func (m *MCPServer) validateName(p *problems, path Path) {
 	case len(m.Name) > MaxMCPServerName:
 		p.add(path, ErrOutOfRange,
 			"is %d characters, and a server name is at most %d: it is spelled inside "+
-				"every tool name a box's coding CLI hands its model, which a model "+
+				"every tool name a box's harness hands its model, which a model "+
 				"holds to 64 characters", len(m.Name), MaxMCPServerName)
 	}
 }
@@ -139,7 +139,7 @@ func (m *MCPServer) validateToolPrefix(p *problems, path Path) {
 	case len(prefix) > MaxMCPToolPrefix():
 		p.add(path, ErrOutOfRange,
 			"is %d characters, and a tool's whole name, prefix included, is at most %d "+
-				"beside the longest prefix a coding CLI gives the engine's tools: a "+
+				"beside the longest prefix a harness gives the engine's tools: a "+
 				"prefix of at most %d leaves room for a name. Keep it short",
 			len(prefix), harnessprofile.ToolNameMax(), MaxMCPToolPrefix())
 	}

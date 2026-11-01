@@ -11,7 +11,7 @@ import (
 
 // A TOOL NO MODEL CAN BE HANDED IS REFUSED, NEVER FILED, AND SAID: a prefixed
 // name holding a character a model's tool name cannot, or longer than the
-// room the longest CLI prefix leaves, is not in the server's contribution, so
+// room the longest harness prefix leaves, is not in the server's contribution, so
 // it is neither offered nor callable, and never cut short to fit. The rest of
 // the server's tools are filed as ever, and the refusal is the instance's
 // record, with its reason, until a listing says otherwise.

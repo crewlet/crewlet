@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// THE LONGEST TOOL NAME FOLLOWS THE LONGEST CLI PREFIX: it is what the longest
+// THE LONGEST TOOL NAME FOLLOWS THE LONGEST HARNESS PREFIX: it is what the longest
 // prefix a built-in profile puts in front of the engine's tools leaves of a
 // model's 64 characters, computed from the table rather than written down, so
 // a profile that spells the tools longer lowers it with nothing else told.
@@ -48,7 +48,7 @@ func TestTheToolNameLimitFollowsTheLongestCLIPrefix(t *testing.T) {
 	}
 }
 
-// EVERY CLI SPELLS THE ENGINE'S TOOLS IN A MODEL'S OWN CHARACTERS: the prefix a
+// EVERY HARNESS SPELLS THE ENGINE'S TOOLS IN A MODEL'S OWN CHARACTERS: the prefix a
 // profile declares is the one its model reads, so it is held to what a model's
 // tool name may hold. A record's own spelling (Muse Code's operation is
 // `tool:<name>`) is its call rule's name_prefix; written into host_prefix it

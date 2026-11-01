@@ -132,7 +132,7 @@ interface BuiltinGroup {
 /**
  * Why a tool is not offered under its name. `characters`: the name holds one
  * a model's tool name cannot (only letters, digits, `_` and `-`). `too_long`:
- * with the server's `tool_prefix`, it is longer than a coding CLI's prefix
+ * with the server's `tool_prefix`, it is longer than a harness's prefix
  * leaves room for. `builtin`: a built-in tool has the name, and built-ins are
  * filed first.
  */

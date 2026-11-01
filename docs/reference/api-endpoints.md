@@ -9186,7 +9186,7 @@ is offered. The node's own log names each one too (`mcp_tool_refused`,
      "unlisted_annotations": [],
      "refused_tools": [
        {"tool": "gh_add_pull_request_review_comment_to_pending_review", "reason": "too_long",
-        "message": "\"gh_add_pull_request_review_comment_to_pending_review\" is not offered: it is 52 characters, and 50 fit beside the longest prefix a coding CLI gives the engine's tools. Shorten the tool_prefix \"gh_\" by 2 to offer it"}
+        "message": "\"gh_add_pull_request_review_comment_to_pending_review\" is not offered: it is 52 characters, and 50 fit beside the longest prefix a harness gives the engine's tools. Shorten the tool_prefix \"gh_\" by 2 to offer it"}
      ],
      "refused_count": 1, "shadowed_tools": [], "shadowed_count": 0,
      "nodes": [

@@ -549,7 +549,7 @@ write that breaks one is refused at the field, saying what to write instead:
 
 | Field | Rule | Why |
 |---|---|---|
-| `name` | Lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 32 characters; not `crewlet` | It is the origin of every tool the server serves (`mcp:<name>`), the key seats declare its credentials under, a segment of the routes that act on it, and, for a server an executor's box runs, the middle of every tool name the box's coding CLI hands its model (`mcp__<name>__<tool>`) |
+| `name` | Lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 32 characters; not `crewlet` | It is the origin of every tool the server serves (`mcp:<name>`), the key seats declare its credentials under, a segment of the routes that act on it, and, for a server an executor's box runs, the middle of every tool name the box's harness hands its model (`mcp__<name>__<tool>`) |
 | `tool_prefix` | Letters, digits, `_` and `-`, at most 49 characters | It is put in front of every tool the server serves, and a tool's whole name is at most 50 characters ([below](#a-tools-name)) |
 | A key of an http server's `headers`, of a seat's or a unit's `mcp_env` block for it, or of its `seat_credentials` | An HTTP header name (RFC 9110's token): letters, digits and `-`, and no space, colon or quote | The value is sent as a request header |
 | A key of a stdio server's `env`, of a block for it, or of its `seat_credentials` | An environment variable name: letters, digits and `_`, not starting with a digit | The value is an environment variable of the server's process |
@@ -574,7 +574,7 @@ path a write keeping it is refused at.
 
 Every tool is filed under the server's `tool_prefix` and its own name, run
 together, in one namespace with the built-ins and every other server's tools.
-Each coding CLI then puts its own prefix in front before its model sees the
+Each harness then puts its own prefix in front before its model sees the
 tool (Claude Code's `mcp__crewlet__`), and a model takes a tool name of at most
 64 characters, of letters, digits, `_` and `-` alone. So a tool is not
 offered, and never shortened to fit, since a shortened name is a new name two
@@ -583,7 +583,7 @@ tools can share, when:
 | `reason` | The tool |
 |---|---|
 | `characters` | holds any other character in its name |
-| `too_long` | is longer than 50 characters with the prefix: what the longest prefix a built-in CLI profile puts in front of the engine's tools leaves of 64. A profile with a longer prefix lowers it, for every company |
+| `too_long` | is longer than 50 characters with the prefix: what the longest prefix a built-in harness profile puts in front of the engine's tools leaves of 64. A profile with a longer prefix lowers it, for every company |
 | `builtin` | has a built-in tool's name, and built-ins are filed first |
 
 And a tool is **shadowed** where another server's tool of the same name is
