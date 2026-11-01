@@ -218,8 +218,9 @@ type Skill struct {
 // so a skill the prompt offers is a skill the guard holds the seat to, and the
 // other way round. NEVER the keys of the seat's mcp_env: a block there says
 // which credentials the seat holds, not which servers it reaches. A shared
-// server reaches every agent with no block at all, and a vendor's block is read
-// by the engine with no server behind it, so a catalogue read off the keys
+// server reaches every agent with no block at all, a vendor's block is read by
+// the engine with no server behind it, and a server the company turned off
+// keeps its blocks while it reaches nobody, so a catalogue read off the keys
 // offered skills for servers the seat could not call and missed the shared
 // servers it could.
 type Surface struct {

@@ -8880,7 +8880,7 @@ arguments, or the address — never an `env` value or a header), who it
 **reaches** (every agent seat, *n seats* or *No seat*, from each agent seat's
 `tool_sources` on the pushed org — the engine's own grant), the engine's
 **state** (*Running*, *Partly failing*, *Failing*, *Waiting for credentials*,
-*Not started*, *Not reported*) and **one chip per live node** with what that
+*Not started*, *Not reported*, *Disabled* for a server turned off) and **one chip per live node** with what that
 node started, and under THAT chip the first failure it reported, in secondary
 ink with the seat it was launched for — the chip carries the danger tone and
 names the node, so the reason does not repeat either. A seat's instance held
@@ -8897,7 +8897,8 @@ is one line cut at its end, never broken inside a token. A node whose last
 heartbeat carried no status is named once above the grid and its chips read
 *not reported*, never *none*. The **From MCP servers** tile counts *n of m servers
 running* off the same answer — never the registry's origins, which read *0*
-over a table of failing servers. The status names nodes, commands and
+over a table of failing servers. A server turned off is in neither number:
+nobody expects it to run, and counted it read as one that should. The status names nodes, commands and
 failures, which is one more reason the section is admin's. A row opens the
 **server's page** (`servers/{name}`): its state, transport, instances, reach
 and tool count, the launch whole, the annotation overrides that match no tool,

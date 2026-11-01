@@ -10,8 +10,10 @@
  */
 
 /**
- * A server's condition across the fleet, decided by the engine. `running`:
- * every instance launched is serving — it started, listed its tools and was up
+ * A server's condition across the fleet, decided by the engine. `disabled`:
+ * the configuration turns it off (`enabled: false`), so nothing is started for
+ * it and no seat is granted it, decided before anything a node reports.
+ * `running`: every instance launched is serving: it started, listed its tools and was up
  * at its node's last beat. `partial`: some are serving and some are not — a
  * node, one seat's credentials or one child being restarted rather than the
  * server. `failing`: none that was launched is serving. `waiting`: nothing
@@ -22,7 +24,7 @@
  * heartbeat carried the report.
  */
 export type McpServerState =
-  "running" | "partial" | "failing" | "waiting" | "not_started" | "unreported";
+  "disabled" | "running" | "partial" | "failing" | "waiting" | "not_started" | "unreported";
 
 /** One live node, and whether its latest heartbeat carried its MCP servers. */
 export interface McpStatusNode {
@@ -61,6 +63,12 @@ export interface McpServerStatus {
   configured: boolean;
   /** One instance for the company, rather than one per seat granted it. */
   shared: boolean;
+  /** The configuration runs it (`enabled`, default true); false is `disabled`.
+   *  True on an unconfigured server, which a node is running. */
+  enabled: boolean;
+  /** What the configuration says it is for, the line each agent's prompt lists
+   *  beside its name; "" when it says nothing. */
+  description: string;
   /** `stdio` or `http`; "" on an unconfigured server. */
   transport: string;
   command: string;

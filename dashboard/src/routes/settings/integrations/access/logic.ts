@@ -263,6 +263,8 @@ export function toolWords(lane: Lane, saved: AccessSeatLane): string {
       return `Waiting for the credential, ${through}`;
     case "no_server":
       return `Not set up: no ${laneWords(lane.key).server} tool server is declared`;
+    case "server_off":
+      return `Not running: the ${laneWords(lane.key).server} tool server is turned off`;
     case "off":
       return "None while off";
   }

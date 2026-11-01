@@ -3978,6 +3978,13 @@ answers the name and when it was minted, never the value.
 }
 ```
 
+Each seat lane's `tool` says whether the agent can use its credential through
+a tool right now: `live`, `waiting` (a server reads it and it is not sealed
+yet), `builtin` (Jira and Confluence, whose credential the engine's own tools
+read), `no_server` (no server the company declares reads it), `server_off`
+(every server that reads it is turned off, `enabled: false`) or `off` (the
+seat or its account is off).
+
 `revision` is the company revision the answer was read at, and the `ETag` is
 the same value quoted. An entry of `options` whose vendor did not answer just
 now carries no levels: which of its levels administers is unknown, so a
@@ -9094,7 +9101,10 @@ read as "started nothing". A node that reports and started nothing is
 any a node reports that the configuration does not carry (`configured: false`
 — a node still on an older revision mid-rollout). The launch is the parts
 that are not credentials — `transport`, `command`, `args`, `url`; `env` and
-`headers` are never here. `started`, `failed` and `waiting` are summed over
+`headers` are never here. `enabled` is whether the configuration runs the
+server at all (`mcp_servers[].enabled`, true on a server it does not carry),
+and `description` what it says the server is for, the line each agent's
+prompt lists beside the server's name (`""` when it says nothing). `started`, `failed` and `waiting` are summed over
 the nodes, `tools` is the most one started instance serves, and `state` is
 decided here so no screen re-derives it. `waiting` counts a seat's instances
 held back, unstarted, for a credential a
@@ -9109,6 +9119,7 @@ failure somebody has to act on:
 
 | `state` | Means |
 |---|---|
+| `disabled` | The configuration turns the server off (`enabled: false`): nothing is started for it and no seat is granted it. Decided before anything a node reports, so a node still on an earlier revision that runs it shows only in its own cell until it applies this one |
 | `running` | Every instance any node launched is serving: it started, listed its tools and was up at its node's last beat |
 | `partial` | Some are serving and some are not — a node's environment, one seat's credentials, or one child that died and is being restarted, rather than the server |
 | `failing` | Something failed and nothing is serving — instances were launched and none serves (the server, its command or address, or credentials every seat shares), every instance went down and is being restarted, or the server was held back, unlaunched, for a value that resolves to nothing: a shared server's own, or one every seat's instance lacks |

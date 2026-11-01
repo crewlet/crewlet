@@ -159,6 +159,12 @@ func TestToolStateOf(t *testing.T) {
 		{Name: "datadog", Transport: config.TransportHTTP, URL: "https://mcp.datadoghq.com/v1/mcp", Shared: org.Off()},
 	}}
 	none := &config.Company{}
+	// TURNED OFF, the server reads nobody's credential: the lane is not
+	// live however well the credential is sealed, and says why.
+	turnedOff := &config.Company{MCPServers: []config.MCPServer{
+		{Name: "datadog", Transport: config.TransportHTTP, URL: "https://mcp.datadoghq.com/v1/mcp",
+			Shared: org.Off(), Enabled: org.Off()},
+	}}
 	live := held("a")
 	waiting := held("a")
 	waiting.Credential = nil
@@ -175,6 +181,8 @@ func TestToolStateOf(t *testing.T) {
 		{"no server declared", none, dd, on("a"), live, seataccess.ToolNoServer},
 		{"waiting for its key", perSeat, dd, on("a"), waiting, seataccess.ToolWaiting},
 		{"live", perSeat, dd, on("a"), live, seataccess.ToolLive},
+		{"its only server turned off", turnedOff, dd, on("a"), live, seataccess.ToolServerOff},
+		{"its only server turned off, still off", turnedOff, dd, seataccess.Desired{}, live, seataccess.ToolOff},
 	}
 	for _, tc := range cases {
 		if got := seataccess.ToolStateOf(tc.c, tc.lane, tc.want, tc.have); got != tc.tool {

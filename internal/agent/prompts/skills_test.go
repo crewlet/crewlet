@@ -98,14 +98,14 @@ func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
 // A SERVER SKILL FIRES ON THE SERVERS THE SURFACE HOLDS, which is the set the
 // skill guard arms its triggers against, and never on the keys of the seat's
 // mcp_env. A block there names the seat's credentials, not a server it
-// reaches: a vendor's block is read by the engine with no server behind it,
-// and a shared server reaches every agent with no block at all. Read off the
-// keys, the catalogue offered the first and missed the second.
+// reaches: a server the company turned off keeps every block that names it and
+// reaches nobody, and a shared server reaches every agent with no block at all.
+// Read off the keys, the catalogue offered the first and missed the second.
 func TestAServerSkillFiresOnTheServersTheSurfaceHolds(t *testing.T) {
 	t.Parallel()
 	cat := allSkills()
 	// The engineer declares mcp_env blocks for atlassian and github; its
-	// surface holds neither.
+	// surface holds neither, as when both are turned off.
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{Skills: cat}).Text,
 		"mcp:github", "skill:platform_mentions")
 	// The lead declares no block at all; its surface holds github, as a
