@@ -124,6 +124,9 @@ interface Acted {
   args: Record<string, unknown>;
 }
 
+/** Every `code_checks` question the engine was asked, newest last. */
+const checksAsked: URL[] = [];
+
 /** The engine: its reads by part, and each act recorded and answered as `answer` says. */
 function stubEngine(change: Record<string, unknown>, answer: () => Promise<Response> | Response) {
   const acted: Acted[] = [];
@@ -138,6 +141,28 @@ function stubEngine(change: Record<string, unknown>, answer: () => Promise<Respo
           args: (JSON.parse(String(init?.body)) as { args: Record<string, unknown> }).args,
         });
         return answer();
+      }
+      if (url.pathname === "/query/code_checks") {
+        checksAsked.push(url);
+        return json({
+          checks: [
+            {
+              repo_id: "id-web",
+              repo: "web",
+              oid: HEAD,
+              target: "refs/heads/main",
+              name: "unit",
+              attempt: 1,
+              state: "failed",
+              purpose: "head",
+              required: true,
+              duration_ms: 64_000,
+              finished_at: "2026-10-27T10:05:00Z",
+            },
+          ],
+          position: POSITION,
+          level: "session",
+        });
       }
       if (url.pathname === "/query/code_change_routing") {
         return json({
@@ -326,6 +351,24 @@ test("a finding drafted on a line is the tab's until a review, and an outdated o
   }[];
   expect(kept.map((d) => [d.title, d.line_start])).toEqual([["Name it", 2]]);
   expect(acted).toHaveLength(0);
+});
+
+// A CHANGE'S CHECKS ARE THE ATTEMPTS THAT JUDGE IT: its head's, asked by the
+// change's number on its repository — never a listing of the repository's —
+// each with its state in its verdict's words. Mutation: ask the repository's
+// listing (drop `change=`), and this fails.
+test("the Checks tab lists the attempts that judge the change, asked by its number", async () => {
+  checksAsked.length = 0;
+  stubEngine(detail(), () => json({}));
+  mount("#/code/repos/web/changes/42?tab=checks");
+  const grid = await screen.findByRole("table", { name: /Checks of 0123456/ });
+  expect(within(grid).getByText("unit")).toBeTruthy();
+  expect(within(grid).getByText("failed")).toBeTruthy();
+  expect(checksAsked.length).toBeGreaterThan(0);
+  for (const u of checksAsked) {
+    expect(u.searchParams.get("repo")).toBe("web");
+    expect(u.searchParams.get("change")).toBe("42");
+  }
 });
 
 // WHOM IT WOKE IS SAID IN SOMEBODY ELSE'S VOICE: a recipient is named with

@@ -220,6 +220,8 @@ export type FramedScreen =
   | { screen: "code-commit"; repo: string; sha: string }
   | { screen: "code-compare"; repo: string }
   | { screen: "code-pushes" }
+  | { screen: "code-queue" }
+  | { screen: "code-checks" }
   | { screen: "principles" }
   | { screen: "brand" }
   | { screen: "brand-setup" }
@@ -424,9 +426,10 @@ function work(rest: string[], screen: Make, under: Under): Route {
 /**
  * Code's sections, each a list that takes no tail: the company's changes, at
  * the bare `#/code` — the row's landing, as Work's projects are at `#/work` —
- * the repositories the engine hosts, and one repository's pushes, which
+ * the repositories the engine hosts, one repository's pushes, which
  * `repo=` names rather than a segment, since a section is a path and the
- * repository is what it is narrowed to. Under Repositories, each repository's
+ * repository is what it is narrowed to, the merge queues (narrowed the same
+ * way) and every repository's checks over a window. Under Repositories, each repository's
  * own page, `repos/{name}`, and the objects under it.
  */
 function code(rest: string[], screen: Make, under: Under): Route {
@@ -468,6 +471,10 @@ function code(rest: string[], screen: Make, under: Under): Route {
       return screen({ screen: "code-repos" });
     case "pushes":
       return screen({ screen: "code-pushes" });
+    case "queue":
+      return screen({ screen: "code-queue" });
+    case "checks":
+      return screen({ screen: "code-checks" });
     default:
       return missing("code", under("Code"));
   }

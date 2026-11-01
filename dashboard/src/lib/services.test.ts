@@ -65,7 +65,9 @@ test("a company hosting no code in the engine is offered no Code", () => {
   const places = DESTINATIONS.filter((d) => !serviceShown(d, none)).map((d) => d.key);
   expect(places.sort()).toEqual([
     "code",
+    "code-checks",
     "code-pushes",
+    "code-queue",
     "code-repos",
     "me-reviews",
     "settings-code",

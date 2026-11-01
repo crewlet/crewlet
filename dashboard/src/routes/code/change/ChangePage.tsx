@@ -42,19 +42,21 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodeChangeDetail, CodeVerdict } from "~/protocol/index.ts";
 import { ChangeStateTag } from "../Changes.tsx";
+import { Checks } from "./Checks.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { Files } from "./Files.tsx";
 import { Commits, Provenance, Woke } from "./Facts.tsx";
 import { CHANGE_POLL_MS, useStandingFindings } from "./reads.ts";
 
 /** The page's tabs, the conversation first: what a reader opens a change for. */
-const CHANGE_TABS = ["conversation", "files", "commits", "provenance", "woke"] as const;
+const CHANGE_TABS = ["conversation", "files", "commits", "checks", "provenance", "woke"] as const;
 type ChangeTab = (typeof CHANGE_TABS)[number];
 
 const CHANGE_TAB_LABELS: Readonly<Record<ChangeTab, string>> = {
   conversation: "Conversation",
   files: "Files",
   commits: "Commits",
+  checks: "Checks",
   provenance: "Provenance",
   woke: "Woke",
 };
@@ -122,6 +124,7 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
         )}
         {tab === "files" && <Files change={change} />}
         {tab === "commits" && <Commits change={change} revisions={read.data?.revisions ?? []} />}
+        {tab === "checks" && <Checks change={change} />}
         {tab === "provenance" && <Provenance change={change} />}
         {tab === "woke" && <Woke change={change} />}
       </div>

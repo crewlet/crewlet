@@ -393,22 +393,14 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // `code_repo` (which `crewlet code status -repo` reads too) and of its
 // content, `code_refs`, `code_tree`, `code_blob`, `code_log` and
 // `code_blame`, and a commit's page and a comparison those of `code_commit`,
-// `code_diff` and `code_compare`, and a seat's Code tab and My work's Reviews
-// that of `code_reviews`. And the tracker's own inbox, `work_inbox`, which
-// the Inbox reads composed with the code host's through `inbox` and a script
-// and a seat's tool read alone. And a repository's merge queues and its
-// checks — `code_queue`, `code_checks`, `code_check` and `code_check_log` —
-// read by a script on the paths api-endpoints.md prints ("Merge queues and
-// checks") until Code › Queue, Code › Checks and a change's checks tab draw
-// them, whose screens delete these four lines.
+// `code_diff` and `code_compare`, a seat's Code tab and My work's Reviews
+// that of `code_reviews`, and Code › Queue, Code › Checks and the checks
+// tabs those of a repository's merge queues and its checks, `code_queue`,
+// `code_checks`, `code_check` and `code_check_log`. And the tracker's own
+// inbox, `work_inbox`, which the Inbox reads composed with the code host's
+// through `inbox` and a script and a seat's tool read alone.
 var readOutsideTheDashboard = map[string]string{
 	"code_repo_readers": "an admin's script: GET /code/repos/{name}/readers, as docs/guides/code.md prints it",
-	"code_queue":        "a script: GET /code/queue, as docs/reference/api-endpoints.md prints it",
-	"code_checks":       "a script: GET /code/checks, as docs/reference/api-endpoints.md prints it",
-	"code_check": "a script: GET /code/repos/{name}/checks/{oid}/{check}/{attempt}, as " +
-		"docs/reference/api-endpoints.md prints it",
-	"code_check_log": "a script: GET /code/repos/{name}/checks/{oid}/{check}/{attempt}/log, as " +
-		"docs/reference/api-endpoints.md prints it",
 	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
 	// with the code host's through `inbox` since that question landed: it
 	// stays the tracker's question and its tool's (`work_inbox`, a seat's and

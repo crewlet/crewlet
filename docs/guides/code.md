@@ -715,6 +715,45 @@ it wrote, because a failure is a measurement of the code, and a seat that
 could rerun one would re-roll a flaky test until it passed. A check runs at
 most ten attempts.
 
+## The Queue and Checks
+
+The dashboard's Code workspace draws both in sections of their own, each over
+the same questions a seat's tools ask.
+
+**Code › Queue** (`#/code/queue`) is the merge queues of your gated branches:
+a band per repository and branch, its entries in the order the queue lands
+them — the place, the change, who enqueued it and where it stands (`waiting`
+for a candidate, or `testing` in one). Choose a repository (`?repo=web`) and
+each entry also shows the **train base** it is tested on, a meter of the
+**required checks** of what it is tested in — passed, failed and running, the
+rest not yet a verdict — and how long it has been queued against the slowest
+of those checks' declared `timeout_seconds`, since the queue waits for its
+slowest required check. Under each of its bands, in the danger tone, is what
+the queue **put out in the last day**: the change, why (`a required check
+failed`, `its merge conflicted`, `it no longer met the branch's gate`, `its
+head moved`, `the branch moved under the queue`) and the required checks that
+failed on what it was tested in or the paths its merge conflicted on. A branch
+with nothing queued and nothing put out lately draws no band, and a company
+with nothing queued says so. The queues are read fifty entries at a time;
+**Load more** reads the next fifty.
+
+**Code › Checks** (`#/code/checks`) is every repository's attempts that
+ended in a window — a day by default, at most the thirty days an ended
+attempt is kept — newest ended first, with a chart of when they ended (the
+failed ones the foot of each bar) and chips that narrow the listing by state
+and by a check's name; the engine narrows them, and the chart and the chips
+count the attempts loaded, as each says. A repository's page has its own
+**Checks** tab, every attempt it keeps with no window, and a change's page
+has one too: the attempts that judge it, its head's, checked for its target.
+
+Press an attempt to open it: what it was checking (a change's head, a queue's
+candidate, a branch's tip, a landing bisected), the commit and branch, how
+long it ran, its exit code and why it ended; its **failures**, each
+`path:line` a link into the diff it was checked on — the comparison of its
+base and its commit, opened on that file; its **tail**; and **Read its log**,
+which reads the log a failed run kept a page at a time, only when you ask. A
+check measures durations and exit codes, never tokens: it runs no model.
+
 ## External CI
 
 A check the engine does not run — your own CI's, on a runner of yours — is

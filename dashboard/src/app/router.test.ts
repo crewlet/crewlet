@@ -395,6 +395,8 @@ describe("the navigation grammar", () => {
       ["code"],
       ["code", "repos"],
       ["code", "pushes"],
+      ["code", "queue"],
+      ["code", "checks"],
       // NOR THE INBOX: it is composed from every native domain's notices,
       // each read under its own permission on the engine's side.
       ["inbox"],
@@ -641,12 +643,16 @@ describe("the resolver", () => {
   // bare `#/code` is the row's landing, its changes — as `#/work` is Work's
   // projects. (A repository's own page is under Repositories: below.)
   // Mutation: send the bare head to Not Found again and the row lands nowhere.
-  test("Code's sections are its three lists, and no word under them is a page", () => {
+  test("Code's sections are its five lists, and no word under them is a page", () => {
     expect(resolve(["code"])).toMatchObject({ screen: "code-changes", workspace: "code" });
     expect(resolve(["code", "repos"])).toMatchObject({ screen: "code-repos", workspace: "code" });
     expect(resolve(["code", "pushes"])).toMatchObject({ screen: "code-pushes", workspace: "code" });
+    expect(resolve(["code", "queue"])).toMatchObject({ screen: "code-queue", workspace: "code" });
+    expect(resolve(["code", "checks"])).toMatchObject({ screen: "code-checks", workspace: "code" });
     for (const path of [
       ["code", "pushes", "web"],
+      ["code", "queue", "web"],
+      ["code", "checks", "unit"],
       ["code", "changes"],
       ["code", "web"],
     ]) {
@@ -905,6 +911,8 @@ describe("the breadcrumb", () => {
     expect(pushes[0]?.path).toEqual(["code"]);
     expect(titleOf(pushes)).toBe("Pushes");
     expect(crumbsFor(["code", "repos"]).map((c) => c.label)).toEqual(["Code", "Repositories"]);
+    expect(crumbsFor(["code", "queue"]).map((c) => c.label)).toEqual(["Code", "Queue"]);
+    expect(crumbsFor(["code", "checks"]).map((c) => c.label)).toEqual(["Code", "Checks"]);
   });
 
   // EXCEPT SETTINGS', whose landing is one of the column's sections: "Settings"

@@ -376,3 +376,44 @@ func TestTheDashboardStatesTheCodePolicysDefaults(t *testing.T) {
 		}
 	}
 }
+
+// THE DASHBOARD KNOWS EVERY STATE OF A CHECK, and every purpose one checks a
+// commit for, in the engine's order.
+//
+// The Checks section's facets, its histogram's bars and every checks tab key
+// on `CHECK_STATES` and `CHECK_PURPOSES` (`contract/checks.ts`): a state the
+// engine grew that the list lacks is an attempt no facet can narrow to, and
+// one the list keeps that the engine dropped is a facet the engine refuses
+// as a `state` it does not know ([code.CheckState.Valid]). Both ways, in
+// order.
+//
+// Mutation: drop a state or a purpose from either side, or reorder the
+// dashboard's, and this fails.
+func TestTheDashboardKnowsEveryStateOfACheck(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "CHECK_STATES"), spelledOut(code.CheckStates())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHECK_STATES is %v, want the engine's, in order: %v", got, want)
+	}
+	got, want = theDashboardsList(t, "CHECK_PURPOSES"), spelledOut(code.CheckPurposes())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHECK_PURPOSES is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
+// THE DASHBOARD KNOWS EVERY STATE OF A QUEUE'S ENTRY, in the engine's order.
+//
+// The Queue section draws an entry's state in words keyed on `QUEUE_STATES`
+// (`contract/checks.ts`): a state the engine grew that the list lacks is
+// drawn as its raw word, and one the list keeps that the engine dropped is
+// words for nothing it records. Both ways, in order.
+//
+// Mutation: drop a state from either side, or reorder the dashboard's, and
+// this fails.
+func TestTheDashboardKnowsEveryStateOfAQueue(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "QUEUE_STATES"), spelledOut(code.QueueStates())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's QUEUE_STATES is %v, want the engine's, in order: %v", got, want)
+	}
+}

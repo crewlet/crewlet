@@ -73,6 +73,7 @@ function detail(extra: Record<string, unknown> = {}) {
         gate: {
           merge_by: "writers",
           approvals: "one",
+          checks: ["unit"],
           landing: { depth: 1, batch: 1 },
           delete_source: "seats",
         },
@@ -397,15 +398,17 @@ test("the history is read at the revision and the path, with who pushed each com
 });
 
 // A DECLARED REPOSITORY'S SETTINGS ARE SHOWN, NEVER EDITED: the rules and
-// their gates as the detail carries them, and the way to Settings ›
-// Configuration, where they are changed. Mutation: offer an edit, or drop
-// the link, and this fails.
+// their gates as the detail carries them — a gate requiring a check with how
+// its queue lands a change — and the way to Settings › Configuration, where
+// they are changed. Mutation: offer an edit, drop the link, or leave the
+// queue's landing out of the gate, and this fails.
 test("a declared repository's settings are shown and lead to the configuration", async () => {
   stubEngine();
   mount("#/code/repos/web?tab=settings");
 
   expect(await screen.findByText("refs/heads/main")).toBeTruthy();
   expect(screen.getByText(/one approval/)).toBeTruthy();
+  expect(screen.getByText(/landed by its queue, each change tested merged/)).toBeTruthy();
   expect(screen.getByRole("link", { name: "Open the configuration" }).getAttribute("href")).toBe(
     "#/settings/config",
   );

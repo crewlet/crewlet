@@ -775,6 +775,22 @@ export const WORKSPACES: WorkspaceRow[] = [
         hint: "One repository's pushes: who pushed what, and what landed",
         keywords: ["push", "push history", "ref", "refs"],
       },
+      {
+        key: "queue",
+        label: "Queue",
+        icon: "list-ordered",
+        path: ["code", "queue"],
+        hint: "The merge queues of gated branches: what each lands next, and what it put out",
+        keywords: ["merge queue", "train", "candidate", "ejected", "landing"],
+      },
+      {
+        key: "checks",
+        label: "Checks",
+        icon: "list-checks",
+        path: ["code", "checks"],
+        hint: "Every repository's checks over a window: which failed, and why",
+        keywords: ["check", "ci", "build", "test run", "failed check"],
+      },
     ],
   },
   {
@@ -1267,6 +1283,8 @@ export const RESERVED_SEGMENTS: string[] = [
   "repos",
   "pushes",
   "changes",
+  "queue",
+  "checks",
 ];
 
 /**

@@ -264,6 +264,9 @@ var contract = []Entry{
 	{"CODE_SCRATCH_IDLE_DAYS", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
 	{"CODE_SCRATCH_MAX_PER_SEAT", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
 	{"CODE_IDENTITY_DOMAIN", ReadScalar, "internal/code.TestTheDashboardStatesTheCodePolicysDefaults"},
+	{"CHECK_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfACheck"},
+	{"CHECK_PURPOSES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfACheck"},
+	{"QUEUE_STATES", ReadLiteral, "internal/code.TestTheDashboardKnowsEveryStateOfAQueue"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},

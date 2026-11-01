@@ -290,6 +290,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
       ];
     case "code-pushes":
       return sectionPage("pushes");
+    case "code-queue":
+      return sectionPage("queue");
+    case "code-checks":
+      return sectionPage("checks");
     case "item": {
       // AN ITEM KEY NAMES ITS PROJECT, so the trail carries the way to it
       // with no lookup. An id names nothing, and the trail is Work › item.

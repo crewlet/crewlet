@@ -50,6 +50,7 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import type { CodeOwner, CodeRepoDetail, CodeRuleGate } from "~/protocol/index.ts";
 import { PushHistory } from "../Pushes.tsx";
+import { RepoChecks } from "../checks/RepoChecks.tsx";
 import { REPO_TABS, compareHref, repoHref, type RepoTab } from "../paths.ts";
 import { Files, Readme } from "./Files.tsx";
 import { Branches, Commits } from "./History.tsx";
@@ -70,6 +71,7 @@ const REPO_TAB_LABELS: Readonly<Record<RepoTab, string>> = {
   branches: "Branches",
   commits: "Commits",
   pushes: "Pushes",
+  checks: "Checks",
   settings: "Settings",
 };
 
@@ -157,6 +159,7 @@ export function RepositoryPage({ repo }: { repo: string }) {
         {tab === "branches" && <Branches repo={detail} />}
         {tab === "commits" && <Commits repo={detail} />}
         {tab === "pushes" && <PushHistory repo={detail.name} />}
+        {tab === "checks" && <RepoChecks repo={detail.name} />}
         {tab === "settings" && <Settings repo={detail} />}
       </div>
     </>
@@ -316,7 +319,15 @@ function gateLine(gate: CodeRuleGate["gate"]): string {
   ];
   if (gate.human_paths?.length)
     parts.push(`a person approves ${plural(gate.human_paths.length, "path")}`);
-  if (gate.checks?.length) parts.push(`${plural(gate.checks.length, "check")} pass`);
+  if (gate.checks?.length) {
+    parts.push(`${plural(gate.checks.length, "check")} pass`);
+    // A GATE REQUIRING A CHECK LANDS THROUGH ITS QUEUE (the engine's rule:
+    // the queue applies to a gated branch with a required check), so that
+    // the queue tests each change before it lands is part of what the gate
+    // asks. The engine has one way a queue lands, so the line names it
+    // rather than reading a policy off the gate.
+    parts.push("landed by its queue, each change tested merged on the branch before it lands");
+  }
   if (gate.owners_approve) parts.push("its path owners approve");
   return parts.join(", ");
 }
