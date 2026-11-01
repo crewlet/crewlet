@@ -855,3 +855,70 @@ func TestRestoreKeepsTheNewerOfEachHalf(t *testing.T) {
 		t.Fatalf("a newer failed attempt took the findings with it: %+v", again.Audit)
 	}
 }
+
+// WHAT THIS NODE CANNOT SEE KEEPS EVERY OBJECT. A state log a newer build runs
+// on another data node, or tables a newer build migrated this node's copy to
+// before a rollback, may name any object, and this build reads neither: no
+// record of it is one this node met and failed to decode, so only asking
+// stops the pass. An answer that could not be had is a failed pass, tried
+// again, never a pass that went ahead.
+//
+// Mutation: drop the Unseen check, or ask it after the batch is judged, and
+// the orphan is deleted.
+func TestAnythingThisNodeCannotSeeDeletesNothing(t *testing.T) {
+	t.Parallel()
+	for name, unseen := range map[string]func(context.Context) (string, error){
+		"a log this build does not run": func(context.Context) (string, error) {
+			return "data node data-b runs the state log executor_sessions, which this build does not", nil
+		},
+		"an answer that could not be had": func(context.Context) (string, error) {
+			return "", errors.New("the coordination store did not answer")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			orphan := h.put("orphan")
+			c, err := New(Options{Store: h.store, References: References{h.source},
+				Unseen: unseen, Now: h.clock.Now})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.clock.advance(PendingGrace + time.Hour)
+			r, err := c.Collect(t.Context())
+			if r.Deleted != 0 || r.Completed || r.Skipped == "" {
+				t.Errorf("a pass that cannot see every row = %+v, %v", r, err)
+			}
+			if !h.held(orphan) {
+				t.Fatal("an object was deleted while a row naming it may be one " +
+					"this node cannot read")
+			}
+			if h.source.barriers != 0 {
+				t.Errorf("the pass took %d barriers before it stopped: a pass "+
+					"that judges nothing pins nothing", h.source.barriers)
+			}
+		})
+	}
+}
+
+// A PASS WITH NOTHING PAST THE GRACE ASKS NOTHING, as it pins nothing: the
+// question reads the fleet, and an hourly pass over a store of fresh uploads
+// has no judgement for it to guard.
+func TestAPassWithNothingToJudgeAsksNothingUnseen(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.put("fresh")
+	asked := 0
+	c, err := New(Options{Store: h.store, References: References{h.source},
+		Unseen: func(context.Context) (string, error) { asked++; return "", nil },
+		Now:    h.clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err := c.Collect(t.Context()); err != nil || !r.Completed {
+		t.Fatalf("a pass over fresh uploads = %+v, %v", r, err)
+	}
+	if asked != 0 {
+		t.Errorf("a pass with nothing to judge asked what it cannot see %d times", asked)
+	}
+}

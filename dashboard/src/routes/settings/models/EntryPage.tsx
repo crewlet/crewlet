@@ -36,7 +36,10 @@ import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { usePageMenu } from "~/app/Shell.tsx";
-import { DEFAULT_CLI_MAX_CONCURRENT, DEFAULT_CLI_TIMEOUT_SECONDS } from "~/contract/models.ts";
+import {
+  DEFAULT_HARNESS_MAX_CONCURRENT,
+  DEFAULT_HARNESS_TIMEOUT_SECONDS,
+} from "~/contract/models.ts";
 import { fmtClock, fmtCount, fmtDate, fmtExact, listed, plural, relTime } from "~/lib/format.ts";
 import {
   CATEGORY_JOBS,
@@ -47,7 +50,7 @@ import {
 } from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { ModelUse } from "~/protocol/models.ts";
-import { CliMark, MARK_SIZE } from "./CliMark.tsx";
+import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { failureWords, signInOf } from "./flows/TestDialog.tsx";
 import { HostLogin } from "./HostLogin.tsx";
@@ -311,7 +314,7 @@ function ConditionCallout({
     return (
       <Callout
         variant="warning"
-        title={`${product(model.agent)} ${WINDOW[bench.window]}`}
+        title={`${product(model.harness)} ${WINDOW[bench.window]}`}
         action={
           admin ? (
             <Button size="small" variant="primary" onClick={() => open("retry")}>
@@ -467,7 +470,7 @@ function SignInCard({
             {host ? (
               <HostLogin modelKey={model.key} logins={signIn.host_logins} onChecked={data.reload} />
             ) : null}
-            {signIn.route === "token" && model.agent === "claude-code" ? (
+            {signIn.route === "token" && model.harness === "claude-code" ? (
               <Text as="p" variant="caption" tone="tertiary">
                 A token made with <span className="mono">claude setup-token</span> on your own
                 computer, for your own subscription. The value is never shown again.
@@ -575,13 +578,13 @@ function LimitsCard({ model, open }: { model: ModelView; open: Open }) {
             [
               "Timeout",
               model.timeoutSeconds === null
-                ? `${DEFAULT_CLI_TIMEOUT_SECONDS} s (the default)`
+                ? `${DEFAULT_HARNESS_TIMEOUT_SECONDS} s (the default)`
                 : `${model.timeoutSeconds} s`,
             ],
             [
               "Processes at once",
               model.maxConcurrent === null
-                ? `${DEFAULT_CLI_MAX_CONCURRENT} (the default)`
+                ? `${DEFAULT_HARNESS_MAX_CONCURRENT} (the default)`
                 : String(model.maxConcurrent),
             ],
           ]}
@@ -632,7 +635,7 @@ export function EntryPage({
     data.admin
       ? [
           { key: "test", label: `Test ${key}`, onSelect: () => open("test") },
-          { key: "edit", label: `Edit ${key}`, onSelect: () => open("edit", { step: "cli" }) },
+          { key: "edit", label: `Edit ${key}`, onSelect: () => open("edit", { step: "harness" }) },
           { key: "remove", label: `Remove ${key}`, onSelect: () => open("remove") },
         ]
       : [],
@@ -667,9 +670,9 @@ export function EntryPage({
         </PageActions>
       ) : null}
       <ObjectHeader
-        kind={`${product(model.agent)} model`}
+        kind={`${product(model.harness)} model`}
         icon="cpu"
-        mark={<CliMark agent={model.agent} size={MARK_SIZE} />}
+        mark={<HarnessMark harness={model.harness} size={MARK_SIZE} />}
         title={key}
         facts={facts}
       />

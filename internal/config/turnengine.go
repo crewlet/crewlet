@@ -1,7 +1,7 @@
 package config
 
 // TurnEngine configures the two-stage turn: an executor that decides and acts
-// in one agentic run — the seat's coding CLI's own, in a box — and a reviewer
+// in one agentic run — the seat's harness's own, in a box — and a reviewer
 // that judges the record it left, in the engine's own tool loop.
 //
 // Almost every field here is a CAP, and every cap is a trade between a turn
@@ -20,7 +20,7 @@ type TurnEngine struct {
 	// failed with a guard-breach event.
 	//
 	// EACH ITERATION IS A WHOLE EXECUTOR RUN — a box, its setup, a fresh
-	// launch of the CLI — so this bounds what a turn may spend on
+	// launch of the harness — so this bounds what a turn may spend on
 	// re-doing its work, not merely how many reviews it gets.
 	MaxIterations int `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty" js:"min=0" desc:"Execute/review iterations per turn."`
 
@@ -55,7 +55,7 @@ type TurnEngine struct {
 	// or falls through to the rescue path.
 	//
 	// Onboarding only, because it is the one pass with a round budget the
-	// engine sets and a loop the engine runs: the executor is its CLI's own
+	// engine sets and a loop the engine runs: the executor is its harness's own
 	// run, capped by providers.sandbox.default_max_turns, and the reviewer
 	// holds a single submission tool.
 	ExtensionEnabled Toggle `yaml:"extension_enabled,omitempty" json:"extension_enabled,omitzero" desc:"Round-cap extension judge for the onboarding pass (default on)."`
@@ -95,12 +95,12 @@ type TurnEngine struct {
 const (
 	// defaultExecutorMinBudgetTokens is 25000 because the floor has to
 	// cover the FIRST REQUEST of a run, which the launch cannot shrink: the
-	// CLI's own harness prompt and tool definitions (about 15k input tokens
+	// harness's own prompt and tool definitions (about 15k input tokens
 	// for Claude Code), the seat's bridged tool array beside them, and the
 	// seat's system prompt. A floor below one such request refuses nothing
-	// it was meant to — the 2000 it replaced was sized for a delegated
-	// coding job's brief, and passed every run that then died on its first
-	// round.
+	// it was meant to — the 2000 it replaced was sized for the brief the
+	// old `run_sandbox` tool handed a second agent, and passed every run
+	// that then died on its first round.
 	defaultExecutorMinBudgetTokens = 25000
 
 	// defaultOnboardingRounds is the pass's own budget: activate the

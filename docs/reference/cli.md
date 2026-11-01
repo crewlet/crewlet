@@ -1540,7 +1540,11 @@ record the move ends with.
   with `crewlet run -mode maintenance`, so that no record naming a new file
   can be written while it runs. It copies what is left, seals the NATS
   bucket so a node not yet restarted cannot store anything there, and moves
-  the fleet's record to the bucket.
+  the fleet's record to the bucket. It refuses while the node cannot read
+  every row that may name a file — a data node running a state log this
+  build does not, or this node's copy of the estate migrated by a newer build
+  ([What a build cannot see](../concepts/object-store.md#what-a-build-cannot-see)):
+  run it from a build that knows every log the fleet runs.
 
 It prints what the pass found: the objects the files name, how many the
 bucket already held and how many were copied, whether the bucket offers
@@ -3047,7 +3051,7 @@ holds one — so a logout killed part way never leaves one file of the login it
 was removing, and a settings file the CLI keeps beside it, holding none, stays
 — and
 **records the logout** in the CLI's share of the state directory
-(`<state_dir>/<agent>/logged-out`), so the configured bundle below is not
+(`<state_dir>/<harness>/logged-out`), so the configured bundle below is not
 restored into the directory it emptied —
 not by the engine's next boot or apply, and not by `list`, `status`, `export`
 or `doctor`, which each say why instead — until a login is written into that

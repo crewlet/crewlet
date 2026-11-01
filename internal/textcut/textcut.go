@@ -118,7 +118,7 @@ func Bytes(s string, max int) string {
 //
 // The mirror of [Ellipsis], for the one kind of text whose useful end is the
 // end: a process's own account of itself watched live — the last few KiB of a
-// running coding job's activity log or its stderr, where what a watcher asks
+// running executor's activity log or its stderr, where what a watcher asks
 // is what it is doing now — and the end of one line too long to keep whole,
 // which is where a process says what went wrong. It is never how a whole log
 // is bounded for a record: that keeps whole lines from both ends and counts

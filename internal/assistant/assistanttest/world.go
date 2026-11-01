@@ -16,7 +16,7 @@ const RecordID = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 
 // World is a small company as the routes a write's preview reads answer it,
 // by request path and in each route's own shape: a task with a decision on its
-// thread, a person's priorities, an agent, a parked coding run, a page, an
+// thread, a person's priorities, an agent, a parked executor, a page, an
 // artifact, and a private chat room with a message in it. Every proposing tool
 // called with its [ProposalArgs] previews against it.
 func World() map[string]any {

@@ -181,7 +181,7 @@ func (e *Engine) storedAt(ctx context.Context) (map[string]time.Time, error) {
 func (e *Engine) tokenLifetimes(c *Company) map[string]time.Duration {
 	out := map[string]time.Duration{}
 	for key := range c.Config.Providers.LLM {
-		if agent, ok := e.cliEntry(key); ok {
+		if agent, ok := e.harnessEntry(key); ok {
 			out[key] = agent.TokenLifetime()
 		}
 	}

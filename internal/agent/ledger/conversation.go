@@ -8,16 +8,16 @@ import "strings"
 // structure is never a model's — and stored as the payload of a
 // conversation_sessions row.
 //
-// Why a ledger and not a transcript. The engine can already round-trip a whole
-// LLM conversation: a parked sandbox run persists the full message list and
-// splices it back into a running loop.
-// That is right for a PARKED turn, whose dangling tool call is waiting for one
-// answer. It is wrong here: a conversation's next turn arrives against a
-// thread that has MOVED, and replaying raw prior context invites acting on
-// state that is no longer true. So this carries the same things the iteration
-// ledger carries (intent, calls, artifact, verdict) under the same budgets,
-// plus the two facts a cross-turn reader needs that a within-turn one does
-// not: who said what to trigger it, and what the seat finally replied.
+// Why a ledger and not a transcript. A parked executor keeps its whole
+// transcript — its CLI's own session holds it, in its box — and the answer it
+// waits for carries that session on where it can. That is right for a PARKED
+// turn, whose question is waiting for one answer. It is wrong here: a
+// conversation's next turn arrives against a thread that has MOVED, and
+// replaying raw prior context invites acting on state that is no longer true.
+// So this carries the same things the iteration ledger carries (intent,
+// calls, artifact, verdict) under the same budgets, plus the two facts a
+// cross-turn reader needs that a within-turn one does not: who said what to
+// trigger it, and what the seat finally replied.
 type Session struct {
 	TurnID string `json:"turn_id,omitempty"`
 

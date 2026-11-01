@@ -24,7 +24,7 @@ import (
 // ([sandbox.EndsRun]).
 const AskAndWaitTool = toolname.AskAndWait
 
-// RunAskDesk is the run record a coding run asks through: the write that
+// RunAskDesk is the run record an executor asks through: the write that
 // records its question onto the job's row ([sandbox.PendingStore.RecordAsk])
 // and the read of that row ([sandbox.PendingStore.Get]) a submission is held to
 // ([AskAndWait.Gate]), which the engine hands over through the sandbox runtime
@@ -54,15 +54,16 @@ type RunAskDeps struct {
 //
 // # Why a tool, and why only on the run's surface
 //
-// A coding run cannot wait on a person inside its CLI: a headless run goes on
-// until it ends. So a question the work cannot go on without PARKS the run:
-// the ask is recorded on its row, the run ends, a person answers, and the
-// answer resumes the same run. Asking through a tool over the run's bridge
-// means the ask is validated whole BEFORE anything is written, every fault
-// named at once while the run can still fix it (ADR-0059), and the options a
-// person chooses between are a structure rather than prose: a shell command's
-// one free-text argument carried them as a paragraph, and the person answering
-// got a wall of text with the options somewhere in it.
+// An executor cannot wait on a person inside its CLI: a headless run goes on
+// until it ends. So a question the work cannot go on without PARKS the
+// executor: the ask is recorded on its row, the launch ends, a person
+// answers, and the answer resumes the same executor. Asking through a tool
+// over its bridge means the ask is validated whole BEFORE anything is
+// written, every fault named at once while the executor can still fix it
+// (ADR-0059), and the options a person chooses between are a structure rather
+// than prose: a shell command's one free-text argument carried them as a
+// paragraph, and the person answering got a wall of text with the options
+// somewhere in it.
 //
 // It is offered on the executor's run surface alone, beside `submit_work`,
 // because those are the two ways that run ends, and it means something only

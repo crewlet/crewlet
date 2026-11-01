@@ -74,7 +74,7 @@ func (b *answerBoard) outcomes() []types.AnswerOutcome {
 	return out
 }
 
-// spentWorld is one seat's coding run over one store and the fleet's one
+// spentWorld is one seat's executor over one store and the fleet's one
 // completion ledger, held by whichever node a case gives it to.
 type spentWorld struct {
 	store   *sandbox.CoordStore

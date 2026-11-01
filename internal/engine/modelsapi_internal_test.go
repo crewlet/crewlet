@@ -12,8 +12,8 @@ import (
 // on a CLI binary that is not there, so nothing in a test calls a vendor.
 func sonnetEntry(t *testing.T) config.LLMProvider {
 	t.Helper()
-	return config.LLMProvider{Agent: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
-		Auth:      config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY_SONNET}"},
+	return config.LLMProvider{Harness: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
+		Auth:      config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY_SONNET}"},
 		Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-such-cli")}}
 }
 

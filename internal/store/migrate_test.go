@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // WHAT THESE CASES PROTECT: Pending is a second way into a connection, and it
@@ -353,5 +355,41 @@ func TestEveryMigrationHasItsOwnNumberAndNoneAreMissing(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A ROLLED-BACK NODE KNOWS WHAT IT CANNOT READ. The migration runner steps
+// over a version this binary does not carry — a newer build's, applied before
+// the node was rolled back — so the node boots on that file, and
+// ForeignMigrations is how a caller about to act on "nothing names this", the
+// object store's collector above all, learns that tables it cannot read are in
+// it.
+//
+// Mutation: answer nothing, or answer Pending's question (what this binary
+// carries and the file lacks), and the newer build's version goes unreported.
+func TestARolledBackDatabaseReportsTheMigrationsItDoesNotCarry(t *testing.T) {
+	t.Parallel()
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "rolled-back.db"), Options{})
+	if err != nil {
+		t.Fatalf("OpenNode: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if foreign, err := db.ForeignMigrations(t.Context()); err != nil || len(foreign) != 0 {
+		t.Fatalf("a file this binary migrated reports %v as foreign (err %v)", foreign, err)
+	}
+
+	const newer = "9999_a_newer_build.sql"
+	if _, err := db.SQL().ExecContext(t.Context(),
+		`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
+		newer, EncodeTime(time.Now())); err != nil {
+		t.Fatalf("record a newer build's migration: %v", err)
+	}
+	foreign, err := db.ForeignMigrations(t.Context())
+	if err != nil {
+		t.Fatalf("ForeignMigrations: %v", err)
+	}
+	if !slices.Equal(foreign, []string{newer}) {
+		t.Fatalf("ForeignMigrations = %v, want [%s]: a rolled-back node cannot "+
+			"tell that tables it cannot read are in its file", foreign, newer)
 	}
 }

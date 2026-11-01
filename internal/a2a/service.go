@@ -237,7 +237,7 @@ type Answer struct {
 	// phases, the reply, and the turn it wakes — reads as ONE trace.
 	//
 	// THE CONTEXT, NOT THE ASK'S EVENT: the turn that answers can end days
-	// after its trigger, in a segment resumed off its coding run's record on
+	// after its trigger, in a segment resumed off its executor's record on
 	// whichever node then holds the seat, which carries the ask's trace and
 	// never the event itself.
 	AskTrace events.TraceContext

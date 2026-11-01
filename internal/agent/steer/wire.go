@@ -12,14 +12,14 @@ import (
 // # Why a scatter, and why only one node answers
 //
 // The person's request lands on whichever node serves their dashboard, and a
-// turn that has not launched its coding run yet runs on whichever node holds
+// turn that has not launched its executor yet runs on whichever node holds
 // its seat — which nothing on the first node knows without asking. So the note
 // is SCATTERED on the queue's ephemeral request verb to every node, and the one
 // node whose box the turn id names is the one that answers. Every other node
 // answers nothing, which is what a scatter's "a server that did not answer"
 // means: it is not an error to be reported, it is a node this turn is not on.
 //
-// ONLY A TURN WITH NO RUN RECORD YET. From its coding run's launch on, a turn's
+// ONLY A TURN WITH NO RUN RECORD YET. From its executor's launch on, a turn's
 // notes wait on the run's record in the coordination store, which every node
 // reads: the asking node files the note there itself, and asks nobody. The one
 // node that still answers for such a turn is the one that ran its first segment
@@ -163,7 +163,7 @@ var ErrUnverified = errors.New("steer: the node running the turn could not verif
 
 // What a run's record says of the seat its turn serves, where its sealed
 // anchor names none anybody can vouch for (internal/engine, runsteer.go, and
-// ADR-0067): a note to a turn whose coding run is out is decided on that seat,
+// ADR-0067): a note to a turn whose executor is out is decided on that seat,
 // so such a record decides nothing, and the steer tool words each of these for
 // its own readers.
 //

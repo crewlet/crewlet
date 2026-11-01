@@ -83,7 +83,7 @@ func TestAUnitsRoomHoldsItsWholeSubtree(t *testing.T) {
 //     it is addressed;
 //   - a DESCENDANT's agent does not, because it has its own room and a message
 //     in a division's room would otherwise be a turn for every agent beneath
-//     it, each its own coding run in a box;
+//     it, each with its own executor in a box;
 //   - a HUMAN never does, because a person is addressable and runs no turn.
 //
 // Asserting only the first would pass against a build that woke the entire
@@ -731,7 +731,7 @@ func unitRoomHeld(t *testing.T, e *Engine, name string) bool {
 // read, so it skipped an EXISTING room too: a unit with no lead up its chain
 // that lost its last seat kept its last members for good, FollowAll flags
 // included, and every message posted there went on waking an agent the chart
-// had moved to another team — each a coding run in a box, in a room its
+// had moved to another team — each an executor in a box, in a room its
 // prompt no longer names. The rule is about CREATING a room nobody could
 // reach; a room that exists is restated like any other, as nobody.
 func TestAUnitThatLosesItsLastSeatEmptiesItsRoom(t *testing.T) {

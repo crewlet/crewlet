@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-// Why is why a coding run was not started, or a box could not be reached: the
+// Why is why an executor was not launched, or a box could not be reached: the
 // one fact a caller decides what to say from, classed by WHAT WOULD CLEAR IT
 // rather than by which backend failed.
 //

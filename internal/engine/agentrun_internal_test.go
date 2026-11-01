@@ -115,7 +115,7 @@ func chainCompany(t *testing.T, members ...chainMember) (*Company, *org.Role) {
 	for _, m := range members {
 		entries = append(entries, phase.Entry{Key: m.key, Provider: cliProvider(t, m)})
 		configured[m.key] = config.LLMProvider{
-			Agent: config.CLIAgentName(m.agent), Model: m.model, RunIn: m.runIn, Env: m.env,
+			Harness: config.Harness(m.agent), Model: m.model, RunIn: m.runIn, Env: m.env,
 		}
 		keys = append(keys, m.key)
 	}

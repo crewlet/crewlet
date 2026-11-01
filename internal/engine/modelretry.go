@@ -170,7 +170,7 @@ func (e *Engine) applyModelRetry(ctx context.Context, r coord.ModelRetry) {
 	e.retries.mu.Unlock()
 
 	cleared := false
-	if agent, ok := e.cliEntry(r.Key); ok {
+	if agent, ok := e.harnessEntry(r.Key); ok {
 		cleared = agent.Plan().Clear(r.At)
 	}
 	armed := e.rearmLimitProbesNaming(ctx, r.Key)
@@ -182,8 +182,8 @@ func (e *Engine) applyModelRetry(ctx context.Context, r coord.ModelRetry) {
 			"tried again now")
 }
 
-// cliEntry is the active revision's coding-CLI entry under key.
-func (e *Engine) cliEntry(key string) (*cliagent.Provider, bool) {
+// harnessEntry is the active revision's coding-CLI entry under key.
+func (e *Engine) harnessEntry(key string) (*cliagent.Provider, bool) {
 	c := e.Company()
 	if c == nil || c.Models == nil {
 		return nil, false
@@ -222,7 +222,7 @@ func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRet
 	if !mode.Valid() {
 		return RetryResult{}, fmt.Errorf("engine: a retry is %q or %q, not %q", coord.RetryProbe, coord.RetryClear, mode)
 	}
-	agent, ok := e.cliEntry(key)
+	agent, ok := e.harnessEntry(key)
 	if !ok {
 		return RetryResult{}, fmt.Errorf("%w: %q", ErrNoModel, key)
 	}

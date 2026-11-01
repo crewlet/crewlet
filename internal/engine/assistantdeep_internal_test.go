@@ -55,8 +55,8 @@ func deepCompany(t *testing.T) *Company {
 			Name: "Acme",
 			Providers: config.Providers{
 				LLM: map[string]config.LLMProvider{"deep": {
-					Agent: config.CLIClaudeCode, Model: "sonnet",
-					Auth: config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"},
+					Harness: config.HarnessClaudeCode, Model: "sonnet",
+					Auth: config.HarnessAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"},
 				}},
 				Sandbox: &config.SandboxProvider{E2B: &config.E2BSandbox{}},
 			},
@@ -125,7 +125,7 @@ func (r deepRig) started(t *testing.T) sandbox.RunRequest {
 	return sandbox.RunRequest{}
 }
 
-// A RUN IS A CODING RUN OF THE DEEP ENTRY, REACHING CREWLET ONLY THROUGH THE
+// A RUN IS THE DEEP ENTRY'S CLI'S OWN RUN, REACHING CREWLET ONLY THROUGH THE
 // TURN'S SURFACE: its job is the entry's CLI on the entry's model with the
 // brief and standing instructions it was handed, the bridge its one MCP
 // server; a call over that bridge reaches the surface decided as NOBODY, so

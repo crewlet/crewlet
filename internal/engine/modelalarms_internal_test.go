@@ -35,10 +35,10 @@ func TestAModelsConditionIsTheFleetsHeartbeats(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
 	c := &Company{Config: &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
-		"default":      {Agent: "claude-code", Model: "opus", Auth: config.CLIAgentAuth{Token: "${CLAUDE_CODE_OAUTH_TOKEN}"}},
-		"recovered":    {Agent: "claude-code", Model: "opus", Auth: config.CLIAgentAuth{Token: "${RECOVERED_TOKEN}"}},
-		"idle":         {Agent: "codex", Model: "gpt-6.1-sol"},
-		"unsigned-run": {Agent: "codex", Model: "gpt-6.1-sol"},
+		"default":      {Harness: "claude-code", Model: "opus", Auth: config.HarnessAuth{Token: "${CLAUDE_CODE_OAUTH_TOKEN}"}},
+		"recovered":    {Harness: "claude-code", Model: "opus", Auth: config.HarnessAuth{Token: "${RECOVERED_TOKEN}"}},
+		"idle":         {Harness: "codex", Model: "gpt-6.1-sol"},
+		"unsigned-run": {Harness: "codex", Model: "gpt-6.1-sol"},
 	}}}}
 	seat := uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8")
 	early, late := now.Add(-time.Hour), now.Add(-time.Minute)

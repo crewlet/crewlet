@@ -279,7 +279,7 @@ entry:
 providers:
   llm:
     assistant-deep:
-      agent: claude-code     # deep work runs the CLI's own loop and tools, in a box
+      harness: claude-code     # deep work runs the CLI's own loop and tools, in a box
       model: sonnet
       # run_in: e2b          # optional; see "Where a run happens"
 assistant:

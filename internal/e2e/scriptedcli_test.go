@@ -228,7 +228,7 @@ func scriptedEntry(key, endpoint, stateDir string) string {
 		overrides.WriteString("        " + line + "\n")
 	}
 	return fmt.Sprintf(`    %s:
-      agent: custom
+      harness: custom
       model: claude-golden
       state_dir: %q
       env:
@@ -270,7 +270,7 @@ type exchange struct {
 	Reply   modelReply   `json:"reply"`
 	Results []callResult `json:"results,omitempty"`
 
-	// Notes are what a coding run's hooks handed its model after this
+	// Notes are what an executor's hooks handed its model after this
 	// response — a person's notes, after its calls' results or as it was
 	// finishing ([codingHooks]). A CLI on the engine host is handed none:
 	// the engine's own loop puts a note in its conversation.

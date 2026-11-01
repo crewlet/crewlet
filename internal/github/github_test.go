@@ -675,7 +675,7 @@ func TestTheDirectedPromptsSayDifferentThings(t *testing.T) {
 
 // AN ASSIGNED ISSUE'S CODE CHANGE IS THE SEAT'S OWN TO MAKE.
 //
-// The executor reading the wake is the seat's coding run, with its own
+// The executor reading the wake is its coding CLI's own run, with its own
 // checkout, shell and git, so the prompt sends it to no other runtime, and the
 // pull request it opens carries its own name. An assigned pull request already
 // exists and is not told where one comes from. Both say how an assignment is

@@ -1310,7 +1310,7 @@ func (p *Provider) SandboxCredentials() map[string]string {
 // its own ([cliprofile.CredentialStore]) — the document its export printed —
 // as an absolute path on the engine host, or "" when the profile keeps none.
 //
-// A PATH, NOT A BOX PATH: where a box keeps it is the coding runner's to say,
+// A PATH, NOT A BOX PATH: where a box keeps it is the CLI runner's to say,
 // because the runner is what imports it into the CLI's database before a run
 // and exports back over it after, so the engine maps it there. It travels
 // under the same rule as [Provider.SandboxCredentials] — seeded into a local
@@ -1325,7 +1325,7 @@ func (p *Provider) SandboxCredentialDocument() string {
 	return p.ws.documentPath()
 }
 
-// SandboxEnv is the environment a coding run on this entry carries into its
+// SandboxEnv is the environment a launch on this entry carries into its
 // box, in any cell: the entry's own env, and the credential its auth mode signs
 // the CLI in with — the headless subscription token where one is configured,
 // an api-key entry's key, the variables inherit-env forwards.

@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// Who a parked coding run's question is put to.
+// Who a parked executor's question is put to.
 //
 // The coding agent names its audience in its own words — `requester`,
 // `manager`, `team`, or a colleague's name — and until this existed nothing

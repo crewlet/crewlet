@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
-// A PERSON STEERS A LIVE CODING RUN, END TO END.
+// A PERSON STEERS A LIVE EXECUTOR, END TO END.
 //
 // The run is the stand-in Claude Code in a real `direct` box, held open, its
 // hooks the settings file the runner wrote. A person sends a note through the
@@ -201,7 +201,7 @@ func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 	waitFor(t, "the steered run to settle", func() bool { return len(n.activeRuns(t)) == 0 })
 }
 
-// steerRunningTurn sends a person's note to the turn whose coding run is out,
+// steerRunningTurn sends a person's note to the turn whose executor is out,
 // through the route the dashboard presses, and returns its id: answered
 // pending, read at the run's next step, and waiting on the run's record.
 func steerRunningTurn(t *testing.T, n *codingNode, turnID, note string) string {

@@ -672,7 +672,7 @@ func (b *Bootstrap) validateTopology() error {
 	// because the broker authenticates nothing. A node WITHOUT data needs it
 	// just as much: the company document it fetches from the coordination
 	// store is authenticated by its seal, a seats node mints and verifies
-	// the per-run tokens its sandbox runs carry, and every request it sends
+	// the per-run tokens its executors carry, and every request it sends
 	// a data node's estate service, and every answer, is signed under it
 	// for the reason the records are — as is every request ANY node asks a
 	// peer to carry out, a broker member's removal of a voter and a note to

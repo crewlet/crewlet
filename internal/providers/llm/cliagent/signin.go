@@ -231,7 +231,7 @@ func (p *Provider) signsInWithKey() bool {
 // and how an operator supplies it.
 //
 // WORDED ONCE, for every message that tells an operator how to sign such an
-// entry in — the doctor's "no sign-in", a remote coding run's refusal,
+// entry in — the doctor's "no sign-in", a remote launch's refusal,
 // `crewlet llm login`'s refusal of a token the mode never reads, and its
 // `-username` refusal of a CLI with no credential login
 // ([Provider.CredentialLogin]). Each used to choose its remedy for itself, and

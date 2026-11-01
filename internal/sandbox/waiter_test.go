@@ -560,7 +560,7 @@ func TestARunNamingAnUnknownRunnerIsFreedRatherThanPolledForever(t *testing.T) {
 	}
 }
 
-// The engine imposes NO run-time limit on a coding job — the box is bounded
+// The engine imposes NO run-time limit on a launched job — the box is bounded
 // only by how long the engine can go without a heartbeat.
 func TestEveryTickKeepsTheRunningBoxAlive(t *testing.T) {
 	t.Parallel()

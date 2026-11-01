@@ -27,12 +27,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A person's note to a turn whose coding run is out: it waits sealed on the
+// A person's note to a turn whose executor is out: it waits sealed on the
 // run's record (ADR-0067).
 //
 // # Where a turn's notes wait, and who has to agree on them
 //
-// Before a turn launches its coding run, its notes wait in the box its first
+// Before a turn launches its executor, its notes wait in the box its first
 // segment holds, on the node running it (steer.go). From the run's launch to
 // the turn's end they wait on the RUN'S RECORD in the coordination store
 // ([sandbox.RunSteer]) — the whole company, now: the node a person's request
@@ -77,7 +77,7 @@ import (
 // # Who records what became of a note
 //
 // The node whose step read it: the runner for a round of the engine's loop or
-// a coding run's brief, the run inbox of the node serving the run's bridge for
+// a launch's brief, the run inbox of the node serving the run's bridge for
 // a read inside the run ([runInbox]), under ids derived from the turn and the
 // note. And the node that finishes the run's ending, for every note no job ran
 // with when the turn is over — still waiting, or read by the brief of a job
@@ -172,7 +172,7 @@ func newRunSteers(seals steerSeals, store sandbox.PendingStore, pub queue.Publis
 	return &runSteers{note: seals.note, seat: seals.seat, store: store, pub: pub, now: time.Now}
 }
 
-// RunSteers is where a person's note to a turn whose coding run is out is filed
+// RunSteers is where a person's note to a turn whose executor is out is filed
 // ([builtin.SteerDeps.Runs]); nil on an engine assembled without one.
 func (e *Engine) RunSteers() builtin.RunSteers {
 	if e.runSteers == nil {
@@ -368,7 +368,7 @@ func readsOf(status string) steer.Reads {
 	return steer.ReadsNextStep
 }
 
-// briefNotes is notes a coding run's brief carries, sealed for the record the
+// briefNotes is notes a launch's brief carries, sealed for the record the
 // launch opens and marked read at the brief — the launch names the job
 // ([sandbox.LaunchRequest.BriefNotes]).
 func (s *runSteers) briefNotes(turnID string, round int, notes []steer.Note) ([]sandbox.RunNote, error) {
@@ -550,8 +550,8 @@ func (s *runSteers) expired(ctx context.Context, run sandbox.PendingRun) error {
 
 // --- a resumed segment's notes: the run's record ---------------------------
 
-// rowSource is the turn's notes as a segment that resumes it from its coding
-// run reads them: off the run's record, taken under the segment's claim
+// rowSource is the turn's notes as a segment that resumes it from its executor
+// reads them: off the run's record, taken under the segment's claim
 // ([runner.SteerSource]).
 type rowSource struct {
 	steers *runSteers
@@ -683,7 +683,7 @@ func (r *rowSource) Close() {
 
 // --- a run's own CLI's notes: the run inbox --------------------------------
 
-// runInbox is a coding run's notes as its bridge session serves them to its CLI
+// runInbox is an executor's notes as its bridge session serves them to its CLI
 // between steps ([mcpbridge.SteerInbox]): built for the run's job from its
 // record alone, so the node that takes a run over builds the same one.
 type runInbox struct {

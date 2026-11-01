@@ -404,7 +404,7 @@ func (e *Engine) deviceEntry(key string) (*cliagent.Provider, error) {
 		return nil, fmt.Errorf("%w: %q", ErrNoModel, key)
 	}
 	spec, declared := c.Config.Providers.LLM[key]
-	agent, ok := e.cliEntry(key)
+	agent, ok := e.harnessEntry(key)
 	if !declared || !ok {
 		return nil, fmt.Errorf("%w: %q", ErrNoModel, key)
 	}

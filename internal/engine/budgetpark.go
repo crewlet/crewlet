@@ -25,7 +25,7 @@ import (
 // lost every message its seats were sent for the rest of the day.
 //
 // So BEFORE A DELIVERY IS CLAIMED — before the completion ledger, before the
-// answer offer to a parked coding run, before any model — the dispatcher asks
+// answer offer to a parked executor, before any model — the dispatcher asks
 // whether one of the seat's capped windows is refusing ([meter.refusing]). If
 // one is, the seat is PARKED:
 //
@@ -37,7 +37,7 @@ import (
 //   - an alarm is armed for the window's end;
 //   - and the refusal is recorded on the shared counter as the gate's
 //     ([meter.turnAway]), so the window's `refused_at` says when its seats
-//     were last turned away — a window a coding run or a background pass
+//     were last turned away — a window an executor launch or a background pass
 //     filled used to park every delivery it was sent while reading as one
 //     that had refused nothing.
 //

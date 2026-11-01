@@ -216,11 +216,11 @@ func assigned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	if !mr {
 		// A FACT ABOUT THIS ENGINE, not advice: who makes the change, and
 		// whose name the merge request carries. The executor reading this IS
-		// the seat's coding run, with its own checkout, shell and git, so the
-		// change is its own to make: there is no other runtime to hand it
-		// to, and a prompt that names one has the seat look for something
-		// that does not exist. The request opens under the seat's own
-		// identity, so what the code host says about it afterwards — a
+		// the seat's coding CLI's own run, with its own checkout, shell and
+		// git, so the change is its own to make: there is no other runtime to
+		// hand it to, and a prompt that names one has the seat look for
+		// something that does not exist. The request opens under the seat's
+		// own identity, so what the code host says about it afterwards — a
 		// review, a merge — reaches the seat that wrote it.
 		b.WriteString("You make any code change the issue needs yourself, in" +
 			" your own checkout, and open the merge request under your own" +

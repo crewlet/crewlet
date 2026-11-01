@@ -1059,13 +1059,13 @@ func TestARefusalAnsweredToACallerThatHungUpIsHeld(t *testing.T) {
 
 // A RESUMED TURN'S METER KNOWS WHAT THE COUNTER ALREADY REFUSES.
 //
-// A coding run's completion resumes its turn straight from the sandbox
+// A launch's completion resumes its turn straight from the sandbox
 // coordinator, with no budget park asked first, and the coordinator has just
-// post-charged the run — which never refuses, so it can take a window past its
-// ceiling with no refusal answered to anybody. The resumed executor's first
-// round was then sent, billed and refused. Its meter reads the counter once
-// now and holds the full window before any call is made; a counter it cannot
-// read leaves it holding nothing, so the first charge stays the gate.
+// post-charged the launch — which never refuses, so it can take a window past
+// its ceiling with no refusal answered to anybody. The resumed executor's
+// first round was then sent, billed and refused. Its meter reads the counter
+// once now and holds the full window before any call is made; a counter it
+// cannot read leaves it holding nothing, so the first charge stays the gate.
 func TestAResumedTurnsMeterHoldsWhatTheCounterAlreadyRefuses(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

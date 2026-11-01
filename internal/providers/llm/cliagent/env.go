@@ -11,7 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
-// AuthMode is how a call authenticates. It mirrors config.CLIAgentAuthMode,
+// AuthMode is how a call authenticates. It mirrors config.HarnessAuthMode,
 // declared here so this package does not import config — the backend is
 // constructed from resolved values, not from a config document.
 type AuthMode string

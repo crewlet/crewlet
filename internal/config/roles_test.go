@@ -457,7 +457,7 @@ func TestAReferenceInANodePinSaysItIsNotResolved(t *testing.T) {
 
 // EVERY BAD KEY IS REPORTED, IN THE SAME ORDER ON EVERY RUN. A document with
 // several is reported in full rather than one fix at a time, and a problem
-// list that reshuffled with map order would make a CLI's output and a
+// list that reshuffled with map order would make a harness's output and a
 // dashboard's marker list differ between two validations of one file.
 func TestEveryBadPlacementKeyIsReportedInOneStableOrder(t *testing.T) {
 	t.Parallel()

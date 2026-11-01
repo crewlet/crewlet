@@ -201,7 +201,7 @@ type Options struct {
 	// refusal [builtin.OperatorTools] makes of a nil one on every call.
 	Authorize builtin.Authorizer
 
-	// Runs answers a parked coding run by its turn (`answer_executor`). Its
+	// Runs answers a parked executor by its turn (`answer_executor`). Its
 	// Actor is set per call. REQUIRED (its Desk): see [Options.Steer].
 	Runs builtin.RunDeps
 

@@ -44,7 +44,7 @@ type modelCall struct {
 }
 
 // modelCalls is EVERY function in the tree that builds a model's input, a
-// provider request or a coding run's launch, keyed `<file>:<function>` (or
+// provider request or an executor's launch, keyed `<file>:<function>` (or
 // `<file>:<variable>` for one a package-level variable holds). An input built
 // anywhere else fails the gate below until somebody decides what it reads
 // (ADR-0040): every model call that reads text somebody else wrote reads it
@@ -185,16 +185,16 @@ var modelCalls = map[string]modelCall{
 
 // EVERY MODEL CALL IS ACCOUNTED FOR (ADR-0040). The gate walks every non-test
 // Go file in the tree for a composite literal of a model's input
-// ([modelInputs]: a provider request, or the request a coding run is launched
+// ([modelInputs]: a provider request, or the request an executor is launched
 // or continued from) and requires the function that builds it, or the
 // package-level variable that holds it, to be in [modelCalls] — with the tests
 // that hold its fences, each of which must exist, or the reason it reads
 // nobody's words — and every entry there to still build one. It is the walk,
-// not the list, that finds a new call: a model call added anywhere, a coding
-// run's launch among them, is refused until somebody decides what it reads
-// and names what holds it.
+// not the list, that finds a new call: a model call added anywhere, an
+// executor's launch among them, is refused until somebody decides what it
+// reads and names what holds it.
 //
-// Mutation: launch a coding run from a function nothing lists, or hold a
+// Mutation: launch an executor from a function nothing lists, or hold a
 // provider request in a package-level variable nothing lists, and this is
 // red.
 func TestEveryModelCallIsAccountedFor(t *testing.T) {

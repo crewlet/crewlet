@@ -19,7 +19,7 @@ import (
 // claimed to come from the local backend.
 var e2bLog = logging.Get("sandbox.e2b")
 
-// The remote backend: a real VM per coding run, on E2B cloud or a
+// The remote backend: every box a real VM, on E2B cloud or a
 // self-hosted cluster.
 //
 // # What this backend is FOR, next to the local one
@@ -100,7 +100,7 @@ type E2BOptions struct {
 func NewE2B(opts E2BOptions) (*E2BProvider, error) {
 	if strings.TrimSpace(opts.APIKey) == "" {
 		// REFUSED AT CONSTRUCTION, so an apply fails rather than every
-		// coding run: a provider built without a key would report a
+		// launch: a provider built without a key would report a
 		// configured sandbox and 401 at the first create, minutes into a
 		// turn that has already spent its own rounds.
 		return nil, errors.New(

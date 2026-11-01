@@ -75,7 +75,7 @@ type turnTelemetry struct {
 	// publishes is tagged with, what the episode row is filed under, and
 	// what matches a person's answer back to a detached run — while
 	// partKey is the inbox PARTITION the trigger arrived in, carried only
-	// so a detached coding run's row can also state the batch it was
+	// so a detached executor's row can also state the batch it was
 	// launched from, which is what tells two runs parked on one direct
 	// message apart ([sandbox.ConversationRef.Best]).
 	convKey string
@@ -158,7 +158,7 @@ type turnTelemetry struct {
 	written *turnctx.Written
 
 	// resumed marks a segment that re-entered a parked run, and launchID
-	// the coding run it collected — together they name the segment its
+	// the launch it collected — together they name the segment its
 	// charge is recorded under (see turnspend.go). jobInput and jobOutput
 	// are that run's tokens, which the segment pays, and jobCacheRead and
 	// jobCacheWrite their cached share; jobEngine what the
@@ -416,7 +416,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			// ordinary turn's ask reported a one-element chain.
 			Chain: chain,
 			// The conversation this turn owes an answer to, so work it
-			// detaches carries it: a coding run's row is written from
+			// detaches carries it: an executor's row is written from
 			// here, the resumed turn reports back through it, and a
 			// person's answer is MATCHED on it — because a person
 			// answers on the conversation rather than into the batch
@@ -450,7 +450,7 @@ func (t turnTelemetry) runnerTurn(company *Company,
 			Senders: t.senders,
 			// THE ITEM THIS TURN IS ON, and the set its writes report
 			// into. The item rides every phase event and the row of any
-			// coding run this turn detaches; the set is the one mutable
+			// executor this turn detaches; the set is the one mutable
 			// thing a turn points at, shared by every tool call.
 			WorkItem:      t.workItem,
 			WorkItemBasis: t.workItemBasis,
@@ -591,7 +591,7 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		WorkItem:         item,
 		WorkItemBasis:    basis,
 		// A SEGMENT THAT PARKED says so, because the same turn id completes
-		// again when its coding run is collected: read as an end, this
+		// again when its launch is collected: read as an end, this
 		// record would list a parked turn as finished.
 		Suspended:       res.Suspended,
 		Iterations:      res.Rounds,

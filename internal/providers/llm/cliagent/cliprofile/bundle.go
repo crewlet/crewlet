@@ -4,7 +4,7 @@ import "strings"
 
 // BundleManifest is the name a credential bundle keeps its manifest under:
 // the one entry that is not a login file, naming the CLI the bundle was
-// exported from — `{"agent": "codex"}`.
+// exported from — `{"harness": "codex"}`.
 //
 // A BUNDLE NAMES ITS CLI BECAUSE A LOGIN FILE'S NAME DOES NOT. Six CLIs keep
 // a login in an `auth.json` and two in an `oauth_creds.json`, and a bundle is

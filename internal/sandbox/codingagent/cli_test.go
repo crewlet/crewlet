@@ -100,10 +100,10 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 	}
 }
 
-// THE PROMPT A CODING RUN SENT IS ITS WHOLE PROMPT, cached share included.
+// THE PROMPT A RUN SENT IS ITS WHOLE PROMPT, cached share included.
 //
-// The vendor's input_tokens is only the UNCACHED remainder, and a coding run
-// is almost entirely cached rounds — so reading it alone put a fraction of
+// The vendor's input_tokens is only the UNCACHED remainder, and a run is
+// almost entirely cached rounds — so reading it alone put a fraction of
 // every run's prompt on the budget counter and the spend rollup. The cached
 // share is carried beside it as a breakdown, which is the convention every
 // engine provider reports in.
@@ -730,7 +730,9 @@ func TestAContinuedRunResumesTheAskingRunsSession(t *testing.T) {
 	t.Parallel()
 	continued := sandbox.RunRequest{Brief: "the answer: main", Resume: "ses_0123456789abcdef0123456789abcdef"}
 
-	cmd := claude().Command(continued, codingagent.Paths{}, "")
+	// A SCRIPT, which records the CLI's release before it execs the run
+	// (TestAContinuedClaudeRunRecordsItsRelease).
+	cmd := scriptOf(t, claude().Command(continued, codingagent.Paths{}, ""))
 	if !strings.Contains(cmd, "--resume 'ses_0123456789abcdef0123456789abcdef'") {
 		t.Errorf("Claude Code does not resume the asking run's session: %s", cmd)
 	}

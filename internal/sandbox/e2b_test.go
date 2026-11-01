@@ -27,7 +27,7 @@ import (
 // This backend talks to a service no test here can reach, so what is pinned
 // is THE WIRE: every request shape, every header, and the framing of the one
 // streaming call. A field spelled differently from what E2B expects fails
-// only against the real API, minutes into a coding run, with a message from
+// only against the real API, minutes into a launch, with a message from
 // the vendor rather than from us — so the assertions are written as "the
 // request carries X", not as "the method returns Y".
 
@@ -493,7 +493,7 @@ func newE2B(t *testing.T, stub *e2bStub) (*sandbox.E2BProvider, *httptest.Server
 }
 
 // A KEYLESS PROVIDER IS REFUSED AT CONSTRUCTION, so an apply fails rather
-// than every coding run: the API authenticates every call, including against
+// than every launch: the API authenticates every call, including against
 // a self-hosted cluster.
 func TestE2BRefusesToBuildWithoutAKey(t *testing.T) {
 	t.Parallel()
@@ -809,7 +809,7 @@ func TestE2BExecSendsAFramedShellCommand(t *testing.T) {
 //
 // This is the whole of "start and walk away": the process keeps running
 // because envd owns it, not because anything here is still listening. Reading
-// on would block the turn for the length of the coding run.
+// on would block the turn for the length of the job.
 func TestE2BStartBackgroundReturnsAtTheFirstFrame(t *testing.T) {
 	t.Parallel()
 	stub := newE2BStub()

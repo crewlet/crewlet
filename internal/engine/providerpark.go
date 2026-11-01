@@ -155,7 +155,7 @@ import (
 // left to lift it.
 //
 // A RELEASE IS ALSO A SIGNAL to the resumes waiting on the same condition
-// ([waitProvider]): a coding run's completion or a person's answer refused
+// ([waitProvider]): a launch's completion or a person's answer refused
 // because the models were limited is re-checked the moment a park lifts, on
 // any seat, since the entries are the node's and not the seat's, rather than
 // at its own clock or the waiter's next announcement.
@@ -740,7 +740,7 @@ func (e *Engine) providerRefusing(ctx context.Context, c *Company, handle string
 		limit, true
 }
 
-// collectedRefusal is what a coding run's completion is refused for once its
+// collectedRefusal is what a launch's completion is refused for once its
 // job is collected, and before its turn runs: a usage limit every model its
 // review could take already reported ([Engine.providerRefusing], for
 // [sandbox.ResumeCompletion]), on which the seat is parked at once, as the turn

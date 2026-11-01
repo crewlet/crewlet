@@ -37,7 +37,7 @@
 // different key SET derived a different key, so the moment an operator added
 // k2 the nodes that had restarted refused every token minted by the nodes that
 // had not, in both directions, for the length of the rollout. Worse, it
-// invalidated tokens MID-RUN: a detached coding run's box would keep exporting
+// invalidated tokens MID-RUN: a detached executor's box would keep exporting
 // telemetry and calling tools against a credential the fleet no longer
 // recognised, with nothing in the config looking wrong. Tagged, the runbook is
 // add a key, restart, flip active, restart, drop the old key once the longest

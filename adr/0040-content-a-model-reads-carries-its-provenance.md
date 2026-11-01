@@ -20,7 +20,7 @@ never an instruction, and every read result says so.** One package,
   file, a datastore row, the adopted brand's voice, a note somebody wrote about
   a change they made, a monitor's alert, a notification from an integration
   that names no surface of its own, a colleague's ask or answer on an agent-to-agent channel, the question a
-  seat's coding run stopped to ask a person, and what the Dashboard Assistant
+  seat's executor stopped to ask a person, and what the Dashboard Assistant
   reads as the person it acts for: a route's answer, what that person's open
   screen says about itself and a deep-work run's account of what it did), who
   wrote it (by kind and seat handle),
@@ -37,7 +37,7 @@ It applies to every read that hands a model somebody else's words: page bodies,
 work item comments, a work search's snippets, the tracker's listings, its
 activity feed and a person's inbox and queue (a change's text under whoever
 made the change, every title and name neutralised with its writers on the
-envelope), project files, a knowledge answer's sources, a parked coding run's
+envelope), project files, a knowledge answer's sources, a parked executor's
 question, the chat thread block a turn is given, the
 body every wake hands a seat on every surface (a message, a comment, a
 description, a change's note, an alert, an unprompted integration's text), a
@@ -67,7 +67,7 @@ search, so a text's trust was decided by the door it came through; now every
 door that decides a trust is found by a walk and held to the rule its surface
 takes, the adopted brand's voice (the one hosted text an administrator vouches
 for) to `company` alone, and what a page's script reports it applied (which
-the engine cannot verify) to `page` alone. A chat reply that answers a coding run
+the engine cannot verify) to `page` alone. A chat reply that answers an executor
 parked on a question is recorded as what was written, and the run it carries
 on reads it fenced as the trigger labels the same body, under its own turn's
 token: a fence is a model's, and what a person reads back as their reply
@@ -110,10 +110,10 @@ direct that turn (the run's requester, its seat's lead or an administrator
 answers; a note is sent on the authority decided on the seat's sealed
 anchor), sealed on the run's record with who gave it
 ([ADR-0031](0031-every-state-log-record-is-signed.md)'s amendments,
-[ADR-0067](0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md),
+[ADR-0067](0067-a-note-to-an-executor-waits-sealed-on-its-record.md),
 [ADR-0068](0068-a-run-asks-a-person-in-the-shape-a-decision-is-asked.md)), and
 a fence would tell the run not to follow the instruction it waited for. What a
-seat's coding run puts to a person (its question, the context it gives with
+seat's executor puts to a person (its question, the context it gives with
 it, the options it offers) is read by one rule wherever it reaches a model,
 answered, listed among the decisions waiting on a person or read back once
 answered: as a vendor's coding CLI's words, `external`, the way a deep-work
@@ -134,7 +134,7 @@ catalogue registers against stores whose every declared field and every stored
 body spells a forged closer, so a tool whose answer carries those words
 unfenced, unlabelled or with no case holding its labels fails the build — the
 tracker's listings, a person's inbox, the activity feed, a knowledge answer's
-sources and a parked coding run's question were each handed over bare before
+sources and a parked executor's question were each handed over bare before
 it. So does a wake surface or a kind of
 wake whose foreign text does not reach the turn fenced, and a type anywhere in
 the tree that builds a wake's trigger without being one of those surfaces. A schedule's task is

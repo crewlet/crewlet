@@ -38,7 +38,7 @@ type heldSeat struct {
 	//
 	// The seat enters the held set BEFORE the hook, so the heartbeat renews
 	// its lease throughout: an acquire spawns MCP children and recovers an
-	// interrupted sandbox run, which can outlast a TTL, and a lease that
+	// interrupted executor, which can outlast a TTL, and a lease that
 	// lapsed mid-acquire would let a peer claim a seat this node is halfway
 	// through building. But it must admit NOTHING until the hook returns —
 	// the hook attaches the consumer LAST precisely because a seat that
@@ -715,7 +715,7 @@ func (h *Host) stampBeat() {
 //
 // THE HEARTBEAT FIRST, before anything the start claims. The first pass runs
 // each claimed seat's acquire hook inline, and a hook spawns MCP children,
-// hydrates the seat's memory and recovers its interrupted sandbox run, which
+// hydrates the seat's memory and recovers its interrupted executor, which
 // can outlast a TTL: the seat is in the held set while it does precisely so
 // that the heartbeat renews its lease throughout ([heldSeat]). Started after
 // that pass, as it was, the heartbeat renewed nothing on the one pass where

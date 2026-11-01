@@ -531,7 +531,7 @@ func TestAnUnaddressedChatTriggerRaisesNoIndicator(t *testing.T) {
 
 // AN INDICATOR SURVIVES A TURN ONLY WHILE SOMETHING IS STILL WORKING.
 //
-// The keep-alive case is a turn that suspended into a detached coding run the
+// The keep-alive case is a turn that suspended into a detached executor the
 // engine has established is coming back: the box is running, the same turn
 // resumes when it reports, and the person who asked is still waiting — so
 // taking it down would say the agent had stopped in the middle of the longest
@@ -1208,7 +1208,7 @@ func TestTheIndicatorsConversationComesOffTheTrigger(t *testing.T) {
 // A NODE THAT HANDS A SEAT ON TAKES ITS INDICATORS DOWN.
 //
 // The kept-alive session is why this has to exist. A turn suspended into a
-// detached coding run leaves its indicator up deliberately, and the resume
+// detached executor leaves its indicator up deliberately, and the resume
 // lands on whichever node holds the seat WHEN THE BOX REPORTS — so a node that
 // released the seat in between would otherwise re-assert "is thinking…" every
 // refresh interval, for a turn it is not running, until the process died. It is

@@ -43,7 +43,7 @@ type Seeded interface {
 // the last one it ENDED.
 //
 // THREE, because a seat runs one turn at a time: its newest turn may be the one
-// in flight, and the one before it may be parked on a coding run — a seat with
+// in flight, and the one before it may be parked on its executor — a seat with
 // a run in flight takes no new work until it is collected — so the newest
 // ended turn is among the newest three unless the seat's recent turns died
 // mid-flight, which leaves nothing the store could honestly call an end. It is
@@ -84,7 +84,7 @@ const seedTurnReads = 16
 //     Read in pages ([eventfan.Fleet.PhaseTokens]), because the cap is more
 //     than one node's reply carries;
 //   - each agent seat's newest [SeedTurnsPerSeat] turns, for the seat's last
-//     turn and a turn it left parked on a coding run — asked by the seat's
+//     turn and a turn it left parked on its executor — asked by the seat's
 //     AGENT ID, read off the composed org (nil asks nobody: a node with no
 //     company has no seats).
 //

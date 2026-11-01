@@ -282,15 +282,15 @@ type issueFailure struct {
 }
 
 // credentialMissing is why a server was not started — a seat's child, a
-// shared server, or one a coding agent's box was not given — or what a coding
-// run's own environment lacks ([Engine.runEnvironment]): references among the
-// values it is started with resolved to nothing, and the keys holding them are
-// not declared optional. See the file comment.
+// shared server, or one a coding agent's box was not given — or what a
+// launch's own environment lacks ([Engine.runEnvironment]): references among
+// the values it is started with resolved to nothing, and the keys holding them
+// are not declared optional. See the file comment.
 type credentialMissing struct {
 	// seat is the seat's handle, which is what an integration's findings
 	// name a seat by — empty for a shared server; server is the
 	// configuration's name for the server, and instance the bridge's name
-	// for this start of it, both empty for a coding run.
+	// for this start of it, both empty for a launch.
 	seat, server, instance string
 
 	// reader is what goes without a value its sentence offers to declare

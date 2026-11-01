@@ -26,10 +26,10 @@ func trimValues(values map[string]string) {
 // builtinProfile is the shipped profile of the entry's CLI, Claude Code's for
 // an entry that names none, and whether there is one.
 func builtinProfile(entry *config.LLMProvider) (cliprofile.Profile, bool) {
-	if entry.Agent == "" {
+	if entry.Harness == "" {
 		return cliprofile.Builtin("claude-code")
 	}
-	return cliprofile.Builtin(string(entry.Agent))
+	return cliprofile.Builtin(string(entry.Harness))
 }
 
 // credentialWords is how a refusal names the credential a write carries.

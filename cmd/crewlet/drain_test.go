@@ -543,7 +543,7 @@ func (m *heldCLI) entry(key, stateDir string) string {
 		"echo 'the drain probe has no model' >&2; exit 1",
 		m.marker, m.release, heldCLIPoll.Seconds())
 	return fmt.Sprintf(`    %s:
-      agent: custom
+      harness: custom
       model: claude-drain-probe
       state_dir: %q
       overrides:
@@ -560,7 +560,7 @@ func (m *heldCLI) entry(key, stateDir string) string {
 // running the suite. Indented to sit under `providers: llm:`.
 func unreachableCoder(key, stateDir string) string {
 	return fmt.Sprintf(`    %s:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       state_dir: %q
       overrides:

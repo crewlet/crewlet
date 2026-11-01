@@ -442,9 +442,9 @@ func (o InvocationOutcome) Valid() bool { return slices.Contains(InvocationOutco
 //
 // It is the one thing a round's records cannot say, because an [Execution] is
 // appended only once its call has answered. Without it, a seat whose round
-// launched a coding run or queried a slow MCP server showed its model's last
-// words and nothing after them for as long as the call took — indistinguishable
-// from a seat that had stalled.
+// queried a slow MCP server showed its model's last words and nothing after
+// them for as long as the call took — indistinguishable from a seat that had
+// stalled.
 type RunningCall struct {
 	// ID is the call's id, on the [Execution.CallID] rule — what tells two
 	// calls of one response running side by side apart.

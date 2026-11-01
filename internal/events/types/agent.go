@@ -265,8 +265,8 @@ type PhaseInvocation struct {
 //
 // Keyed on the round number `rounds[]`, `tool_executions[]` and
 // `round_narration[]` share, so a reader puts the note beside the round it
-// changed. A coding run's record is one round of the engine's, so every note
-// the run read — in its brief, or at a boundary of its own loop — is at round 1,
+// changed. An executor's record is one round of the engine's, so every note
+// it read — in its brief, or at a boundary of its own loop — is at round 1,
 // and its Boundary is what tells them apart ([SteerBoundary]): every read
 // records one.
 type PhaseSteer struct {
@@ -402,7 +402,7 @@ type AgentTurnCompleted struct {
 	// showed had no way to say why it stopped.
 	Failed bool `json:"failed"`
 	// Stopped is true when a PERSON ended the turn — a pause that asked to
-	// stop the running turn reached its next round, or ended the coding run
+	// stop the running turn reached its next round, or ended the executor
 	// the turn was parked on ([ExecutorStopped]) — rather than the turn
 	// finishing or failing. Never both: a stop is not a failure, and read as
 	// one it would list a turn somebody deliberately ended among the ones
@@ -584,8 +584,8 @@ type TurnCompleted struct {
 type TurnTally struct {
 	// DurationMS is every segment's own span summed — each from its start
 	// to its end, the time it held a seat — and so not the wall clock from
-	// the first start to the last end, which would count the coding run's
-	// park as work.
+	// the first start to the last end, which would count the turn's park
+	// on its executor as work.
 	DurationMS int `json:"duration_ms"`
 	// Failed is whether the turn failed: an error, or a failed decision,
 	// and never a person's stop — the rule [AgentTurnCompleted.Failed]
@@ -775,13 +775,13 @@ type AgentPhaseCompleted struct {
 	// DurationMS below covers both — so StartedAt is deliberately NOT
 	// "published minus duration": that instant is when the first segment
 	// began, possibly days earlier and on another node, and the gap
-	// between the two segments was a coding run rather than this phase.
-	// Absent on a record that measured no start.
+	// between the two segments was the executor's run in its box rather
+	// than this phase. Absent on a record that measured no start.
 	StartedAt time.Time `json:"started_at,omitzero"`
 	// WorkItem is the item the turn is charged to, as the turn knew it
 	// when this record was published — see [AgentTurnStarted.WorkItem].
 	WorkItem *WorkItem `json:"work_item,omitempty"`
-	// LaunchID names the detached coding run a resumed phase collected —
+	// LaunchID names the executor's launch a resumed phase collected —
 	// the job [ExecutorFinished.LaunchID] names, which the pending-run
 	// row held when the resume claimed it. A turn can launch more than
 	// once, so one segment of a phase is (turn_id, phase, iteration,
@@ -841,7 +841,7 @@ type AgentPhaseCompleted struct {
 	// with every first-party tool and NO MCP tool, because sending full
 	// schemas for every server's catalogue is what made a turn expensive; a
 	// tool it activates through discovery joins the list from that round on.
-	// On the execute phase that collects a coding run it is what the run held
+	// On the execute phase that collects its executor it is what the run held
 	// when it ended: a tool it activated over the bridge is here, and not in
 	// ToolCatalogue.
 	ToolsAvailable []string `json:"tools_available,omitempty"`

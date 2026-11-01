@@ -70,7 +70,7 @@ function company({ admin = true } = {}): ModelsData {
       }),
       modelEntry({
         key: "codex-review",
-        agent: "codex",
+        harness: "codex",
         model: "gpt-6.1",
         used_by: runs("qa", SECOND_JOB!),
       }),
@@ -80,7 +80,7 @@ function company({ admin = true } = {}): ModelsData {
       default: {},
       haiku: {},
       sonnet: {},
-      "codex-review": { agent: "codex" },
+      "codex-review": { harness: "codex" },
       guarded: { overrides: { web_tools: "denied" } },
     }),
   });

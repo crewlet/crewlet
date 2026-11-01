@@ -40,13 +40,13 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		// providers.llm
 		{
 			"provider with no model",
-			"name: Acme\nproviders:\n  llm:\n    default:\n      agent: claude-code\n",
+			"name: Acme\nproviders:\n  llm:\n    default:\n      harness: claude-code\n",
 			"providers.llm.default.model", ErrMissing,
 		},
 		{
-			"unknown coding CLI",
-			"name: Acme\nproviders:\n  llm:\n    sub:\n      agent: claude-code-2\n      model: sonnet\n",
-			"providers.llm.sub.agent", ErrUnknownValue,
+			"unknown harness",
+			"name: Acme\nproviders:\n  llm:\n    sub:\n      harness: claude-code-2\n      model: sonnet\n",
+			"providers.llm.sub.harness", ErrUnknownValue,
 		},
 		{
 			"unknown auth mode",
@@ -97,7 +97,7 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		{
 			// An agent seat with a model to run on and no catalogue
 			// takes its work and fails every turn at launch: its
-			// executor is its CLI's own run, in a box.
+			// executor is its harness's own run, in a box.
 			"an agent seat with no catalogue at all",
 			"name: Acme\nproviders:\n  llm:\n    sub: {model: sonnet}\nroles:\n  - name: SWE\n",
 			"providers.sandbox", ErrMissing,
@@ -710,16 +710,16 @@ func TestMinimalCompanyLoads(t *testing.T) {
 	}
 }
 
-// ENTRIES ON ONE STATE DIRECTORY MAY DRIVE DIFFERENT CLIs. Each CLI keeps its
-// files in a subdirectory of its own (<state_dir>/<agent>), so the two share
+// ENTRIES ON ONE STATE DIRECTORY MAY DRIVE DIFFERENT HARNESSES. Each harness keeps its
+// files in a subdirectory of its own (<state_dir>/<harness>), so the two share
 // nothing and there is no hazard to refuse. The rule that refused this pair
-// guarded a layout that is gone — and with it, moving one key to another CLI
+// guarded a layout that is gone — and with it, moving one key to another harness
 // was an ordinary edit every running node refused to apply.
-func TestEntriesOnOneStateDirMayDriveDifferentCLIs(t *testing.T) {
+func TestEntriesOnOneStateDirMayDriveDifferentHarnesses(t *testing.T) {
 	t.Parallel()
 	mustCompany(t, "name: Acme\nproviders:\n  llm:\n"+
-		"    big:\n      agent: claude-code\n      model: opus\n      state_dir: /var/lib/one\n"+
-		"    small:\n      agent: codex\n      model: gpt-5\n      state_dir: /var/lib/one/\n")
+		"    big:\n      harness: claude-code\n      model: opus\n      state_dir: /var/lib/one\n"+
+		"    small:\n      harness: codex\n      model: gpt-5\n      state_dir: /var/lib/one/\n")
 }
 
 // A DISABLED BLOCK SKIPS ITS OWN REQUIRED FIELDS.

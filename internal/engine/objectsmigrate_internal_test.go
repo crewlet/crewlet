@@ -68,10 +68,41 @@ func migrationNode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, *coord
 	objects.Backend = config.ObjectBackendS3
 	objects.S3 = config.ObjectsS3{Endpoint: srv.URL, Region: "us-east-1", Bucket: "files",
 		Prefix: "acme/", PathStyle: true, AccessKeyID: "AKIAEXAMPLE", SecretAccessKey: "example-secret"}
+	// THE LEASES TOO, which a final pass reads to know who the fleet counts
+	// before it asks what this build cannot see ([Engine.unseen]).
 	e := &Engine{id: "data-a", mode: mode,
-		backends: &Backends{Fleet: fleet, objectsIdentity: "nats", Objects: memobj.New()},
-		objects:  &objectStore{store: store}}
+		backends: &Backends{Fleet: fleet, Coord: coordmemory.New(), objectsIdentity: "nats",
+			Objects: memobj.New()},
+		objects: &objectStore{store: store}}
 	return e, fleet, src, objects, srv
+}
+
+// A FINAL PASS IS REFUSED WHILE A NEWER BUILD'S ROWS MAY NAME A FILE: it
+// copies only what this build's tables name, and the store it leaves behind
+// is the operator's to delete, so a data node the fleet counts running a log
+// this build does not know is a refusal naming that log — before anything is
+// copied or sealed.
+//
+// Mutation: drop the question from the final pass's fence, and the fleet moves
+// with the newer log's objects left in the old store.
+func TestTheFinalPassWaitsForEveryDataNodeToRunAKnownBuild(t *testing.T) {
+	t.Parallel()
+	e, fleet, src, objects, _ := migrationNode(t, statelog.ModeMaintenance)
+	if err := fleet.PutPositions(t.Context(), coord.NodePositions{NodeID: "data-b",
+		Domains: map[string]coord.DomainPosition{"tracker": {}, "a_newer_log": {}}}); err != nil {
+		t.Fatal(err)
+	}
+	report := ObjectMigrationReport{From: "nats", To: objects.Identity()}
+	final, err := e.migrateTo(t.Context(), true, objects, collect.References{src}, report)
+	if !errors.Is(err, ErrMigrationRefused) || !strings.Contains(err.Error(), "a_newer_log") {
+		t.Fatalf("a final pass beside a newer build's log answered %v, want a refusal naming the log", err)
+	}
+	if final.Moved || final.Sealed {
+		t.Fatalf("a refused final pass moved or sealed the store: %+v", final)
+	}
+	if got, _ := fleet.AgreeObjectBackend(t.Context(), "nats"); got != "nats" {
+		t.Fatalf("a refused final pass moved the fleet to %q", got)
+	}
 }
 
 // A COPY PASS MOVES NOTHING, and the final pass moves the fleet's record

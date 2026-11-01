@@ -91,7 +91,7 @@ func seatNamed(t *testing.T, c *Company, name string) *org.Role {
 	return nil
 }
 
-// runOn is the coding run seat's executor launches with on the head of its
+// runOn is what seat's executor launches with on the head of its
 // chain, over the given seat environment.
 func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) codingRun {
 	t.Helper()
@@ -105,7 +105,7 @@ func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) 
 // AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
 //
 // Under auth.mode api-key an entry signs its CLI in with one metered key, and
-// a coding run on that entry has to carry it: Claude Code in a box reads only
+// a launch on that entry has to carry it: Claude Code in a box reads only
 // its environment, so a run that left the key behind started signed in to
 // nothing. Model and key are the epoch's resolution, the one its seats' own
 // calls are made with, so a `${LLM_MODEL}` reaches the box as its value rather
@@ -113,7 +113,7 @@ func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) 
 // token the engine's own environment happens to hold stays out of an api-key
 // entry's box, or the run would be signed in two ways at once.
 func TestAnAPIKeyEntrysBoxCarriesItsResolvedKey(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("LLM_MODEL", "claude-sonnet-5")
 	t.Setenv("ENTRY_KEY", "sk-ant-entry")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-not-this-entrys")
@@ -150,7 +150,7 @@ roles:
 // credentials carries a company key into a box that never reads it. When the
 // seat's environment signs Claude Code in, the entry adds nothing.
 func TestASeatsOwnClaudeCodeSignInKeepsTheEntrysOut(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	t.Setenv("ENTRY_KEY", "sk-ant-company")
 	c := companyFor(t, `
 name: Acme
@@ -202,7 +202,7 @@ roles:
 // value) and passed as written.
 func TestAnEntrysRunNamesItsModelAsItsTextCallsDo(t *testing.T) {
 	state := t.TempDir()
-	t.Setenv(config.CLIHomeEnv, state)
+	t.Setenv(config.HarnessHomeEnv, state)
 	t.Setenv("OC_MODEL", "openrouter/anthropic/claude-sonnet-5")
 	c := companyFor(t, `
 name: Acme
@@ -210,7 +210,7 @@ providers:
   sandbox: {fake: true}
   llm:
     oc:
-      agent: opencode
+      harness: opencode
       model: ${OC_MODEL}
 roles:
   - name: Engineer
@@ -245,14 +245,14 @@ roles:
 // then. A map of what was there when the run was resolved named a login the
 // shared directory may have moved past by the time the box was seeded.
 func TestAnOpenCodeLoginTravelsAsItsExportedDocument(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	c := companyFor(t, `
 name: Acme
 providers:
   sandbox: {fake: true}
   llm:
     oc:
-      agent: opencode
+      harness: opencode
       model: anthropic/claude-sonnet-5
 roles:
   - name: Engineer
@@ -288,7 +288,7 @@ roles:
 // because they carry a refresh token whose rotation is shared fleet state.
 func TestASubscriptionSeatCarriesItsLoginIntoTheBox(t *testing.T) {
 	state := t.TempDir()
-	t.Setenv(config.CLIHomeEnv, state)
+	t.Setenv(config.HarnessHomeEnv, state)
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat-travelling")
 
 	credentials := filepath.Join(state, "subscription", "claude-code", "credentials")
@@ -306,7 +306,7 @@ providers:
   sandbox: {fake: true}
   llm:
     subscription:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
 roles:
   - name: Engineer
@@ -335,14 +335,14 @@ roles:
 // resolved named a login the shared directory may have moved past by the
 // time the box was seeded, and a box given half of a newer sign-in.
 func TestEveryLoginFileIsOfferedWhetherOrNotItIsHeld(t *testing.T) {
-	t.Setenv(config.CLIHomeEnv, t.TempDir())
+	t.Setenv(config.HarnessHomeEnv, t.TempDir())
 	c := companyFor(t, `
 name: Acme
 providers:
   sandbox: {fake: true}
   llm:
     subscription:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
 roles:
   - name: Engineer
@@ -363,7 +363,7 @@ roles:
 
 // The direction of the merge is a decision, not a detail: an operator who
 // named a variable in role.sandbox.env meant that value — including the
-// deliberate choice to point one seat's coding runs at a different account.
+// deliberate choice to point one seat's executor at a different account.
 func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 	t.Parallel()
 	got := underlay(
@@ -387,7 +387,7 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 // `buildSandboxProvider` is what turns one into a running backend. Nothing
 // connects them, and when they last disagreed the config's DEFAULT was the
 // offender: `providers.sandbox: {}` validated, reported a configured sandbox
-// on every operator surface, and failed at the first coding run with an error
+// on every operator surface, and failed at the first launch with an error
 // naming a backend nobody had written.
 //
 // It fails in the direction that is hardest to see — the config says yes and
@@ -654,7 +654,7 @@ func (m *movedSeat) Resume(context.Context, sandbox.ResumeRequest) error {
 	return nil
 }
 
-// newChargeRig seeds one running coding run whose job has finished having
+// newChargeRig seeds one running launch whose job has finished having
 // spent `tokens`, charged against the given caps.
 func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resumer) *chargeRig {
 	t.Helper()
@@ -731,7 +731,7 @@ func dayCap(n int) coord.Caps {
 	return coord.Caps{period.Day: n}
 }
 
-// A CODING RUN IS CHARGED TO THE FLEET ONCE, however often its completion
+// A LAUNCH IS CHARGED TO THE FLEET ONCE, however often its completion
 // comes back. A node that lost the seat answers ErrResumeUnavailable, the
 // claim reverts and the completion is delivered again, and each of those
 // passes collected the same finished job and charged it to both counters: the

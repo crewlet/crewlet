@@ -161,7 +161,7 @@ var auxCondenseKinds = []string{
 }
 
 // AuxCondense is the purpose of a compaction of one kind of text:
-// `condense_<kind>`, so a rewrite of a chat thread and one of a coding run's
+// `condense_<kind>`, so a rewrite of a chat thread and one of an executor's
 // report are told apart wherever they are spent.
 func AuxCondense(kind string) AuxPurpose { return AuxPurpose(auxCondensePrefix + kind) }
 

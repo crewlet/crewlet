@@ -11,7 +11,7 @@ import (
 )
 
 // A RUN ANSWER'S RECEIPT IS READ AT THE RUN'S TRUST. The approval that sends
-// the assistant's answer to a parked coding run resumes the turn that proposed
+// the assistant's answer to a parked executor resumes the turn that proposed
 // it, which reads what the request answered: the run's receipt, carrying the
 // question the run asked, a coding CLI's words, read by the one rule for them
 // ([provenance.Executor]) as every other door to that question reads it. Any

@@ -17,7 +17,7 @@ import (
 
 // A NOTE INBOX: a person's notes to the run's turn, at the run's own steps.
 //
-// A coding run is its CLI's own loop, so the engine has no round of it to open
+// An executor is its CLI's own loop, so the engine has no round of it to open
 // with a note. What the CLI has is boundaries of its own — Claude Code's hooks
 // after a batch of tool calls and as it is about to finish, OpenCode's next
 // step — and a way to ask for something there. So a run's session carries the

@@ -565,7 +565,7 @@ func TestAnAbsentEntityIsNotFoundBeforeItIsARename(t *testing.T) {
 		{
 			name: "an llm provider whose body has a typo",
 			kind: configapi.EntityLLMProviders, id: "nothing",
-			body: `{"agent":"claude-code","modell":"claude-sonnet-5"}`,
+			body: `{"harness":"claude-code","modell":"claude-sonnet-5"}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -606,7 +606,7 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 		// a refusal's problems are placed on every route.
 		at string
 	}{
-		{configapi.EntityLLMProviders, "zulu", `{"agent":"claude-code","modell":"claude-sonnet-5"}`, "providers.llm.zulu.modell"},
+		{configapi.EntityLLMProviders, "zulu", `{"harness":"claude-code","modell":"claude-sonnet-5"}`, "providers.llm.zulu.modell"},
 		{configapi.EntityLLMProviders, "yankee", `{"model":"m","auth":{"mode":"api-key","api_kies":"${K}"}}`, "providers.llm.yankee.auth.api_kies"},
 		{configapi.EntityMCPServers, "tracker", `{"name":"tracker","transport":"http","url":"https://mcp.example.com","comand":"npx"}`,
 			"mcp_servers[0].comand"},

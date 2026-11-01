@@ -25,12 +25,12 @@ import (
 // tiers in one block is how an operator comes to believe the broker's
 // address is live-editable.
 type Providers struct {
-	// LLM is the named models seats select from by key, each a coding CLI
+	// LLM is the named models seats select from by key, each a harness
 	// the engine drives ([LLMProvider]). A seat naming a key that is not
 	// here falls back to `default`, else the first provider declared — a
 	// model nobody chose for it — so the keys are the company's model
 	// vocabulary, and a company naming one is refused at Validate.
-	LLM map[string]LLMProvider `yaml:"llm,omitempty" json:"llm,omitempty" desc:"Named models, each a coding CLI the engine drives; seats select one by key."`
+	LLM map[string]LLMProvider `yaml:"llm,omitempty" json:"llm,omitempty" desc:"Named models, each a harness the engine drives; seats select one by key."`
 
 	// LLMOrder is the order the providers were DECLARED in, preserved
 	// because per-phase resolution's last resort is "the first provider
@@ -64,7 +64,7 @@ type Providers struct {
 	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for semantic knowledge search and for diary and episode recall."`
 
 	// Sandbox is the catalogue of cells every agent seat's executor runs
-	// in: each executor is its coding CLI's own run, in a box. Required as
+	// in: each executor is its harness's own run, in a box. Required as
 	// soon as the company has an agent seat AND a providers.llm entry to
 	// run it on ([Company.validateSandboxPlacement]); nil only while the
 	// company has no agent seat or no model — an org chart written before
@@ -226,11 +226,11 @@ func (p *Providers) validate(path Path) error {
 
 // ---- LLM providers --------------------------------------------------- //
 
-// LLMProvider is one named entry under providers.llm: a coding CLI — Claude
-// Code, Codex, OpenCode and the rest of [CLIAgentNames] — that the engine
+// LLMProvider is one named entry under providers.llm: a harness — Claude
+// Code, Codex, OpenCode and the rest of [Harnesses] — that the engine
 // drives as its model.
 //
-// # The CLI is the only backend
+// # The harness is the only backend
 //
 // There is no HTTP client to a model vendor in this engine, and that is the
 // decision rather than a gap. Each vendor ships its own harness — the request
@@ -238,41 +238,41 @@ func (p *Providers) validate(path Path) error {
 // where, how a stream ends, which sign-in bills which account — and moves it
 // with every model it releases. Re-implementing that per vendor and per model
 // was a second, permanently trailing copy of work the vendors already do in
-// the CLIs they maintain. So a model is reached THROUGH one: Claude Code for
+// the harnesses they maintain. So a model is reached THROUGH one: Claude Code for
 // Anthropic's models, on a subscription or an API key; Codex for OpenAI's;
 // OpenCode for open models on any provider it speaks to, a local server
 // included.
 //
-// The entry is therefore the CLI's own settings and nothing else: which CLI,
-// which model in that CLI's grammar, where its runs are placed, where its
+// The entry is therefore the harness's own settings and nothing else: which harness,
+// which model in that harness's grammar, where its runs are placed, where its
 // login and per-seat homes live, and how it signs in.
 //
 // # One entry, two uses
 //
-// A seat's EXECUTOR is its coding CLI's own agentic run in a box: the CLI's
+// A seat's EXECUTOR is its harness's own agentic run in a box: the harness's
 // loop drives the model, its own shell and editor are enabled, and the seat's
-// tools reach it over the MCP bridge (internal/api/mcpbridge). Only a CLI
-// with an in-box runner can be that run ([CodingAgents]). Every OTHER phase —
+// tools reach it over the MCP bridge (internal/api/mcpbridge). Only a harness
+// with an in-box runner can be that run ([ExecutorHarnesses]). Every OTHER phase —
 // the reviewer, a delegated worker, the onboarding pass, the side passes —
-// runs the CLI's own loop on this host, with its own shell and editor denied
+// runs the harness's own loop on this host, with its own shell and editor denied
 // and the phase's tools reached as the `crewlet` MCP server
-// ([ToolServerName]), and any CLI can serve one. So the same entry may be
+// ([ToolServerName]), and any harness can serve one. So the same entry may be
 // both: the executor of the seats whose `llm` names it, and the reviewer of
 // the seats whose `llm_review` does.
 type LLMProvider struct {
-	// Agent is which CLI to drive. Empty drives Claude Code.
-	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|kimi-code|hermes|pi|custom" desc:"Which coding CLI to drive (default claude-code)."`
+	// Harness is which harness to drive. Empty drives Claude Code.
+	Harness Harness `yaml:"harness,omitempty" json:"harness,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|kimi-code|hermes|pi|custom" desc:"Which harness to drive (default claude-code)."`
 
-	// Model is handed to the CLI's model flag, in that CLI's own grammar:
+	// Model is handed to the harness's model flag, in that harness's own grammar:
 	// an alias or id for Claude Code (`sonnet`, `claude-opus-5-5`), an
 	// OpenAI id for Codex, `<provider>/<model>` for OpenCode.
-	Model string `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id, in the CLI's own grammar (OpenCode: <provider>/<model>)."`
+	Model string `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id, in the harness's own grammar (OpenCode: <provider>/<model>)."`
 
 	// RunIn is WHERE a run launched on this entry happens, naming a cell of
 	// providers.sandbox. Empty takes the catalogue's default.
 	//
 	// On the entry rather than on the seat, because it is a property of
-	// this RUNTIME: the CLI's subscription login lives on the engine host,
+	// this RUNTIME: the harness's subscription login lives on the engine host,
 	// so `direct` and `container` reach it directly and a remote cell
 	// needs the headless token instead. An operator who wants both makes
 	// two entries and points seats at whichever one is right for them —
@@ -284,46 +284,46 @@ type LLMProvider struct {
 	// is placed by its own run_in. An entry no executor chain reaches never
 	// launches a run, and its run_in is read the day a seat points at it.
 	//
-	// REFUSED ON A CLI THAT CANNOT LAUNCH ONE ([CodingAgents]): an entry on
-	// any other CLI serves text phases only, so a launch passes over it in
+	// REFUSED ON A HARNESS THAT CANNOT LAUNCH ONE ([ExecutorHarnesses]): an entry on
+	// any other harness serves text phases only, so a launch passes over it in
 	// every chain and nothing would ever read the field.
 	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in."`
 
 	// StateDir is where this provider keeps its credential directory and
-	// its per-seat homes, under a subdirectory named for the CLI it drives
-	// (<state_dir>/<agent>). Empty derives one per key, so unrelated
+	// its per-seat homes, under a subdirectory named for the harness it drives
+	// (<state_dir>/<harness>). Empty derives one per key, so unrelated
 	// providers never collide.
 	//
-	// ENTRIES POINTING AT ONE DIRECTORY AND DRIVING ONE CLI SHARE ONE LOGIN
+	// ENTRIES POINTING AT ONE DIRECTORY AND DRIVING ONE HARNESS SHARE ONE LOGIN
 	// — and one set of per-seat homes, and one generation. That is how
 	// per-phase models work off a single `crewlet llm login`, and entries
 	// that should share have to say so. Entries on one directory that drive
-	// DIFFERENT CLIs share nothing: each CLI keeps its own subdirectory,
-	// because two CLIs agree on neither which files are credentials nor
+	// DIFFERENT HARNESSES share nothing: each harness keeps its own subdirectory,
+	// because two harnesses agree on neither which files are credentials nor
 	// which are conversation memory. That is also what lets an entry move
-	// to another CLI in a live revision: the new CLI opens a login
+	// to another harness in a live revision: the new harness opens a login
 	// directory of its own, and moving back finds the old one intact.
-	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login."`
+	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Credential + per-seat home directory, each harness under <state_dir>/<harness>. Entries sharing one and a harness share a login."`
 
-	// TimeoutSeconds caps one STRETCH of the CLI's own work, wall clock:
+	// TimeoutSeconds caps one STRETCH of the harness's own work, wall clock:
 	// from its launch, or from the end of the tool call it last waited on,
 	// to the start of its next tool call or its exit — a process launch (a
 	// Node runtime costs seconds before its first byte), its model's
 	// answers, and its own internal retry and backoff. The engine's tools
-	// are not on the clock: they hold their own bounds, and a CLI run that
+	// are not on the clock: they hold their own bounds, and a harness run that
 	// drives a phase through many requests and calls is never cut for its
 	// length, only for a stretch in which it made no progress the engine
-	// could see. See [defaultCLITimeoutSeconds] for where the default comes
+	// could see. See [defaultHarnessTimeoutSeconds] for where the default comes
 	// from.
 	//
 	// THE PHASES ON THIS HOST ONLY — the reviewer, a worker, the onboarding
-	// pass, a side pass. An executor run is the CLI's own detached run in a
+	// pass, a side pass. An executor run is the harness's own detached run in a
 	// box, and it is bounded by its round cap
 	// (providers.sandbox.default_max_turns, role.sandbox.max_turns) rather
 	// than by a clock.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of a CLI run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead."`
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of a harness run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead."`
 
-	// MaxConcurrent is how many CLI processes this provider runs at once on
+	// MaxConcurrent is how many harness processes this provider runs at once on
 	// the engine's own host. A process lives for a whole run of a phase, its
 	// requests and tool calls included; a model call made from INSIDE one of
 	// its tool calls on this same entry — a delegated worker, an auxiliary
@@ -339,11 +339,11 @@ type LLMProvider struct {
 	//
 	// THE PHASES ON THIS HOST ONLY, like timeout_seconds: an executor run
 	// is a process in its own box, and each seat runs at most one at a time.
-	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Concurrent CLI processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one."`
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Concurrent harness processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one."`
 
 	// Env is extra environment for every invocation, ${VAR}-resolved. The
 	// child gets an ALLOWLISTED environment, not the engine's, so anything
-	// the CLI needs beyond PATH, locale, TLS and proxy is declared here —
+	// the harness needs beyond PATH, locale, TLS and proxy is declared here —
 	// for OpenCode, the key of the provider its model names.
 	//
 	// EVERY INVOCATION INCLUDES A SEAT'S EXECUTOR RUN, in whichever cell its
@@ -354,67 +354,67 @@ type LLMProvider struct {
 	// Claude Code in itself replaces the entry's sign-in whole, its
 	// credential-named variables and cloud toggles included, and keeps the
 	// rest.
-	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI, on this host and in every executor run's box (beneath the seat's role.sandbox.env)."`
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the harness, on this host and in every executor run's box (beneath the seat's role.sandbox.env)."`
 
-	Auth CLIAgentAuth `yaml:"auth,omitempty" json:"auth"`
+	Auth HarnessAuth `yaml:"auth,omitempty" json:"auth"`
 
 	// Overrides replaces fields of the built-in profile.
 	//
-	// CLI flags drift between releases, and a vendor renaming
+	// Harness flags drift between releases, and a vendor renaming
 	// --output-format must be a config edit rather than a Crewlet release,
 	// so every profile field is replaceable. Lists replace wholesale —
 	// position matters in an argv.
-	Overrides map[string]any `yaml:"overrides,omitempty" json:"overrides,omitempty" desc:"Field-wise overrides of the built-in CLI profile."`
+	Overrides map[string]any `yaml:"overrides,omitempty" json:"overrides,omitempty" desc:"Field-wise overrides of the built-in harness profile."`
 }
 
-// CLIAgentName is which coding CLI a providers.llm entry drives.
+// Harness is which harness a providers.llm entry drives.
 //
 // A NAMED TYPE over a closed set, like every other closed set in this
 // package. Two things followed from a bare string. The generated schema
 // emitted `"type":"string"` where a closed set emits an enum, so an editor
-// blessed `agent: claud-code` — which [names]'s own doc calls worse than no
+// blessed `harness: claud-code` — which [names]'s own doc calls worse than no
 // schema — and with no `js:` tag the field could not join schema_test.go's
 // enum table, so nothing noticed.
-type CLIAgentName string
+type Harness string
 
-// The coding CLIs the engine knows how to drive. `custom` ships no defaults
+// The harnesses the engine knows how to drive. `custom` ships no defaults
 // at all — supply everything under Overrides.
 const (
-	CLIClaudeCode  CLIAgentName = "claude-code"
-	CLICodex       CLIAgentName = "codex"
-	CLIGeminiCLI   CLIAgentName = "gemini-cli"
-	CLIQwenCode    CLIAgentName = "qwen-code"
-	CLIOpenCode    CLIAgentName = "opencode"
-	CLICursorAgent CLIAgentName = "cursor-agent"
-	CLICopilot     CLIAgentName = "copilot"
-	CLIGrok        CLIAgentName = "grok"
-	CLIMuseCode    CLIAgentName = "muse-code"
-	CLIKimiCode    CLIAgentName = "kimi-code"
-	CLIHermes      CLIAgentName = "hermes"
-	CLIPi          CLIAgentName = "pi"
-	CLICustom      CLIAgentName = "custom"
+	HarnessClaudeCode  Harness = "claude-code"
+	HarnessCodex       Harness = "codex"
+	HarnessGeminiCLI   Harness = "gemini-cli"
+	HarnessQwenCode    Harness = "qwen-code"
+	HarnessOpenCode    Harness = "opencode"
+	HarnessCursorAgent Harness = "cursor-agent"
+	HarnessCopilot     Harness = "copilot"
+	HarnessGrok        Harness = "grok"
+	HarnessMuseCode    Harness = "muse-code"
+	HarnessKimiCode    Harness = "kimi-code"
+	HarnessHermes      Harness = "hermes"
+	HarnessPi          Harness = "pi"
+	HarnessCustom      Harness = "custom"
 )
 
-// CLIAgentNames is the closed set.
-var CLIAgentNames = []CLIAgentName{
-	CLIClaudeCode, CLICodex, CLIGeminiCLI, CLIQwenCode,
-	CLIOpenCode, CLICursorAgent, CLICopilot, CLIGrok, CLIMuseCode,
-	CLIKimiCode, CLIHermes, CLIPi, CLICustom,
+// Harnesses is the closed set.
+var Harnesses = []Harness{
+	HarnessClaudeCode, HarnessCodex, HarnessGeminiCLI, HarnessQwenCode,
+	HarnessOpenCode, HarnessCursorAgent, HarnessCopilot, HarnessGrok, HarnessMuseCode,
+	HarnessKimiCode, HarnessHermes, HarnessPi, HarnessCustom,
 }
 
 // Valid reports whether n is one the engine knows.
 //
 // Empty is NOT valid here — unlike an optional enum elsewhere — because the
-// caller checks emptiness first: an absent agent takes the default rather
+// caller checks emptiness first: an absent harness takes the default rather
 // than meaning "any".
-func (n CLIAgentName) Valid() bool { return slices.Contains(CLIAgentNames, n) }
+func (n Harness) Valid() bool { return slices.Contains(Harnesses, n) }
 
-// CodingAgents is the closed set of CLIs that can run a seat's EXECUTOR: the
+// ExecutorHarnesses is the closed set of harnesses that can run a seat's EXECUTOR: the
 // ones with an in-box runner (internal/sandbox/codingagent), which launches
-// the CLI as its own agentic run, renders its tools and limits, and reads
+// the harness as its own agentic run, renders its tools and limits, and reads
 // back what it did.
 //
-// Every other CLI drives the text phases only. A seat's executor chain is
+// Every other harness drives the text phases only. A seat's executor chain is
 // walked at launch for its first member in this set that is not sitting out,
 // so a chain with no member here can never run its seat's turn, and config
 // refuses it ([Company.validateExecutors]).
@@ -422,79 +422,79 @@ func (n CLIAgentName) Valid() bool { return slices.Contains(CLIAgentNames, n) }
 // HELD TO THE RUNNERS THAT EXIST by a test against codingagent.Names(): a
 // runner added there and not here refuses entries that would run, and one
 // listed here with no runner admits entries every launch then refuses.
-var CodingAgents = []CLIAgentName{CLIClaudeCode, CLIOpenCode}
+var ExecutorHarnesses = []Harness{HarnessClaudeCode, HarnessOpenCode}
 
-// CLIAgentAuthMode is how a providers.llm entry's CLI authenticates.
-type CLIAgentAuthMode string
+// HarnessAuthMode is how a providers.llm entry's harness authenticates.
+type HarnessAuthMode string
 
 const (
-	// AuthSubscription uses the operator's own CLI login — a token in the
+	// AuthSubscription uses the operator's own harness login — a token in the
 	// secret store, or the credential files `crewlet llm login` wrote.
 	// The default.
-	AuthSubscription CLIAgentAuthMode = "subscription"
-	// AuthAPIKey puts the entry's API key into the CLI's key variable (its
+	AuthSubscription HarnessAuthMode = "subscription"
+	// AuthAPIKey puts the entry's API key into the harness's key variable (its
 	// profile's api_key_env), billing the metered account: auth.api_key,
 	// or that variable itself looked up through the secret store and then
-	// the environment when the entry names none. Refused on a CLI whose
+	// the environment when the entry names none. Refused on a harness whose
 	// profile names no such variable, where the key would reach nothing.
-	AuthAPIKey CLIAgentAuthMode = "api-key"
+	AuthAPIKey HarnessAuthMode = "api-key"
 	// AuthInheritEnv forwards whichever of the two variables the engine's
-	// own environment has — an escape hatch for an unusual CLI, and the
+	// own environment has — an escape hatch for an unusual harness, and the
 	// only mode that lets a host credential reach the child.
-	AuthInheritEnv CLIAgentAuthMode = "inherit-env"
-	// AuthEnv signs the CLI in with the entry's own env: a cloud
+	AuthInheritEnv HarnessAuthMode = "inherit-env"
+	// AuthEnv signs the harness in with the entry's own env: a cloud
 	// provider's switch and credentials (Claude Code's
 	// CLAUDE_CODE_USE_BEDROCK with the AWS pair), or a gateway's address
-	// and token (ANTHROPIC_BASE_URL with ANTHROPIC_AUTH_TOKEN). The CLI is
+	// and token (ANTHROPIC_BASE_URL with ANTHROPIC_AUTH_TOKEN). The harness is
 	// handed neither the profile's token variable nor its key variable,
 	// and runs in a home no login is seeded into.
 	//
 	// A MODE OF ITS OWN rather than an env the default mode reads beside
 	// its token: under subscription the convention resolves the plan
-	// token for every entry, and it reached a Bedrock entry's CLI and its
+	// token for every entry, and it reached a Bedrock entry's harness and its
 	// box, where the cloud switch outranks it and it was never used. Such
 	// an entry also read as signed in to nothing, since only an
 	// env_sign_in profile counted its env. Admitted only where the env
-	// does sign the CLI in ([LLMProvider.validateCredentials]).
-	AuthEnv CLIAgentAuthMode = "env"
+	// does sign the harness in ([LLMProvider.validateCredentials]).
+	AuthEnv HarnessAuthMode = "env"
 )
 
-// CLIAgentAuthModes is the closed set.
+// HarnessAuthModes is the closed set.
 //
 // The default is deliberately NOT inherit-env: a subscription entry that
 // silently picked up a stray ANTHROPIC_API_KEY would bill the metered
 // account while the operator believed they were on a flat-rate plan.
-var CLIAgentAuthModes = []CLIAgentAuthMode{AuthSubscription, AuthAPIKey, AuthInheritEnv, AuthEnv}
+var HarnessAuthModes = []HarnessAuthMode{AuthSubscription, AuthAPIKey, AuthInheritEnv, AuthEnv}
 
-// CLIAgentAuth is how a providers.llm entry's CLI authenticates. The login
+// HarnessAuth is how a providers.llm entry's harness authenticates. The login
 // itself is performed by `crewlet llm login`, never by the engine.
-type CLIAgentAuth struct {
-	Mode CLIAgentAuthMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=subscription|api-key|inherit-env|env" desc:"subscription (default), api-key, inherit-env, or env (the entry's env signs the CLI in: a cloud provider or a gateway)."`
+type HarnessAuth struct {
+	Mode HarnessAuthMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=subscription|api-key|inherit-env|env" desc:"subscription (default), api-key, inherit-env, or env (the entry's env signs the harness in: a cloud provider or a gateway)."`
 
 	// Token is a ${VAR} reference to a long-lived subscription token.
 	// Empty falls back to the profile's own token variable. This is the
-	// best headless path where a CLI offers one: no credential files to
+	// best headless path where a harness offers one: no credential files to
 	// sync, no refresh rotation, and it survives an ephemeral container.
-	// Read only under auth.mode subscription and only by a CLI whose
+	// Read only under auth.mode subscription and only by a harness whose
 	// profile names a token_env; set anywhere else it is refused, because
 	// it would reach nothing.
 	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"${VAR} holding a long-lived subscription token."`
 
 	// APIKey is a ${VAR} reference to a metered API key, put into the
-	// CLI's key variable (its profile's api_key_env) under auth.mode
+	// harness's key variable (its profile's api_key_env) under auth.mode
 	// api-key. Empty reads that variable itself through the secret store
 	// and then the environment — ANTHROPIC_API_KEY for Claude Code,
 	// CODEX_API_KEY for Codex — so a key already exported, or set with
 	// `crewlet secrets set`, works with no YAML change.
 	//
-	// ONE key, never a list: a CLI holds one sign-in and rotates nothing,
+	// ONE key, never a list: a harness holds one sign-in and rotates nothing,
 	// so a second key belongs on an entry of its own in the seat's
 	// fallback chain. Set under any other mode it is refused, because it
 	// would reach nothing.
-	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"${VAR} holding an API key, read under auth.mode api-key. Empty reads the CLI's own key variable."`
+	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"${VAR} holding an API key, read under auth.mode api-key. Empty reads the harness's own key variable."`
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
-	// `crewlet llm export` — the CLI's login (its credential files, or the
+	// `crewlet llm export` — the harness's login (its credential files, or the
 	// document its export printed) as one blob, restored whenever the engine
 	// builds a company to run (boot and every apply it publishes) into a
 	// credential directory holding no login, or over one installed before the
@@ -504,54 +504,54 @@ type CLIAgentAuth struct {
 	// after `crewlet llm logout` until a login is written into the
 	// credential directory again (`crewlet llm login`,
 	// `-from-host` or `crewlet llm import`; a headless token does not end it).
-	// It holds ONE CLI's files and names that CLI, though it is keyed by the
-	// entry: after the entry's agent changes, the new CLI refuses it — by the
-	// CLI it names, whatever its files are called — until a bundle exported
-	// from that CLI replaces it.
+	// It holds ONE HARNESS's files and names that harness, though it is keyed by the
+	// entry: after the entry's harness changes, the new harness refuses it — by the
+	// harness it names, whatever its files are called — until a bundle exported
+	// from that harness replaces it.
 	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
 }
 
 // Default entry knobs. See the field comments for where the numbers come
 // from.
 const (
-	// defaultCLITimeoutSeconds is ten minutes. A stretch is at least one
-	// model answer at the CLI's own effort, and on the current Claude models
+	// defaultHarnessTimeoutSeconds is ten minutes. A stretch is at least one
+	// model answer at the harness's own effort, and on the current Claude models
 	// that is adaptive thinking against a 128K-token output cap: ten minutes
 	// is Anthropic's documented ceiling for such an answer in one call, and
 	// two minutes was measured cutting off exactly the calls doing the most
-	// work when the engine still made them itself. A CLI adds its process
+	// work when the engine still made them itself. A harness adds its process
 	// launch to the first stretch. A hung child holds its seat for no longer
 	// than this, and a timeout is retryable, so the seat's fallback chain
 	// moves on.
-	defaultCLITimeoutSeconds = 600.0
-	defaultCLIMaxConcurrent  = 4
-	defaultCLIAgentName      = CLIClaudeCode
+	defaultHarnessTimeoutSeconds = 600.0
+	defaultHarnessMaxConcurrent  = 4
+	defaultHarness               = HarnessClaudeCode
 )
 
-// AgentName is the CLI to drive, applying the default.
+// HarnessName is the harness to drive, applying the default.
 //
-// A STRING, not a CLIAgentName: the value crosses into internal/providers,
+// A STRING, not a [Harness]: the value crosses into internal/providers,
 // which does not import config, and the profile registry it keys is that
 // package's own. The type exists to bound what config ACCEPTS, which is a
 // question answered before this is called.
-func (l *LLMProvider) AgentName() string {
-	if l.Agent == "" {
-		return string(defaultCLIAgentName)
+func (l *LLMProvider) HarnessName() string {
+	if l.Harness == "" {
+		return string(defaultHarness)
 	}
-	return string(l.Agent)
+	return string(l.Harness)
 }
 
-// runsExecutor reports whether this entry's CLI can run a seat's executor:
-// whether it has an in-box runner ([CodingAgents]).
+// runsExecutor reports whether this entry's harness can run a seat's executor:
+// whether it has an in-box runner ([ExecutorHarnesses]).
 func (l *LLMProvider) runsExecutor() bool {
-	return slices.Contains(CodingAgents, CLIAgentName(l.AgentName()))
+	return slices.Contains(ExecutorHarnesses, Harness(l.HarnessName()))
 }
 
-// Timeout is the cap on one stretch of the CLI's own work, applying the
+// Timeout is the cap on one stretch of the harness's own work, applying the
 // default.
 func (l *LLMProvider) Timeout() float64 {
 	if l.TimeoutSeconds <= 0 {
-		return defaultCLITimeoutSeconds
+		return defaultHarnessTimeoutSeconds
 	}
 	return l.TimeoutSeconds
 }
@@ -559,20 +559,20 @@ func (l *LLMProvider) Timeout() float64 {
 // Concurrency is the process cap, applying the default.
 func (l *LLMProvider) Concurrency() int {
 	if l.MaxConcurrent <= 0 {
-		return defaultCLIMaxConcurrent
+		return defaultHarnessMaxConcurrent
 	}
 	return l.MaxConcurrent
 }
 
-// CLIHomeEnv is the environment variable naming the root under which every
+// HarnessHomeEnv is the environment variable naming the root under which every
 // providers.llm entry keeps its credential directory and per-seat homes.
-const CLIHomeEnv = "CREWLET_LLM_CLI_HOME"
+const HarnessHomeEnv = "CREWLET_LLM_HARNESS_HOME"
 
-// defaultCLIHome is the per-user fallback root, under the operator's home.
-const defaultCLIHome = ".crewlet/llm-cli"
+// defaultHarnessHome is the per-user fallback root, under the operator's home.
+const defaultHarnessHome = ".crewlet/llm-harness"
 
 // ResolvedStateDir is the directory under which this entry keeps its login and
-// its per-seat homes — in a subdirectory named for its CLI, which the backend
+// its per-seat homes — in a subdirectory named for its harness, which the backend
 // adds — applying the derivation when the operator named none.
 //
 // Derived PER PROVIDER KEY, which is what makes sharing a login an explicit
@@ -587,27 +587,27 @@ func (l *LLMProvider) ResolvedStateDir(key string) (string, error) {
 	if l.StateDir != "" {
 		return filepath.Clean(l.StateDir), nil
 	}
-	if root := os.Getenv(CLIHomeEnv); root != "" {
+	if root := os.Getenv(HarnessHomeEnv); root != "" {
 		return filepath.Join(filepath.Clean(root), key), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf(
 			"providers.llm.%s.state_dir: no directory given and no home directory to "+
-				"derive one under (%w): set state_dir, or %s", key, err, CLIHomeEnv)
+				"derive one under (%w): set state_dir, or %s", key, err, HarnessHomeEnv)
 	}
-	return filepath.Join(home, defaultCLIHome, key), nil
+	return filepath.Join(home, defaultHarnessHome, key), nil
 }
 
 // ResolvedAuthMode is the entry's auth.mode, applying the default.
-func (l *LLMProvider) ResolvedAuthMode() CLIAgentAuthMode {
+func (l *LLMProvider) ResolvedAuthMode() HarnessAuthMode {
 	if l.Auth.Mode == "" {
 		return AuthSubscription
 	}
 	return l.Auth.Mode
 }
 
-// CredentialSource is one credential a providers.llm entry signs its CLI in
+// CredentialSource is one credential a providers.llm entry signs its harness in
 // with: what the entry's own field holds, and the variable read in its place
 // when the field holds nothing.
 type CredentialSource struct {
@@ -615,7 +615,7 @@ type CredentialSource struct {
 	Value string
 	// Fallback is the variable read when Value is empty, through the secret
 	// store and then the environment. Empty where the entry's auth mode does
-	// not read this credential, or its CLI names no such variable.
+	// not read this credential, or its harness names no such variable.
 	Fallback string
 }
 
@@ -626,7 +626,7 @@ type CredentialSources struct {
 
 // CredentialSources says where each of this entry's credentials is read from:
 // the field the entry writes or, where it writes none, a conventional variable
-// — the CLI's own token or key variable, and the bundle's
+// — the harness's own token or key variable, and the bundle's
 // [cliprofile.BundleVarName].
 //
 // A CONVENTION, so `crewlet llm login -capture-token`, `crewlet llm export
@@ -636,14 +636,14 @@ type CredentialSources struct {
 // the Secrets screen never calls a variable "read by nothing" while an entry
 // signs in with it — which is what invited deleting a live credential.
 //
-// PER AUTH MODE, as the CLI is handed them: a token only under subscription,
+// PER AUTH MODE, as the harness is handed them: a token only under subscription,
 // an API key only under api-key, and the bundle under every mode, since it is
 // restored into the credential directory whatever signs the calls in.
 // inherit-env reads nothing through here: it forwards the engine's own
 // environment, which the secret store is not part of. Nor does env: the
-// entry's own env is its sign-in, and the CLI is handed no token and no key.
+// entry's own env is its sign-in, and the harness is handed no token and no key.
 func (l *LLMProvider) CredentialSources(key string) CredentialSources {
-	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
+	profile, err := cliprofile.Load(l.HarnessName(), l.Overrides)
 	if err != nil {
 		// A profile that does not load is refused at overrides by
 		// validation, and names no variable to fall back to.
@@ -671,12 +671,12 @@ func (l *LLMProvider) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(l.Model) == "" {
 		p.add(at(path, "model"), ErrMissing,
-			"name the model this entry's CLI runs, in that CLI's own grammar "+
+			"name the model this entry's harness runs, in that harness's own grammar "+
 				"(e.g. sonnet for claude-code, anthropic/claude-sonnet-5 for opencode)")
 	}
-	if l.Agent != "" && !l.Agent.Valid() {
-		p.add(at(path, "agent"), ErrUnknownValue, "%q (want %s)",
-			l.Agent, words.Or(CLIAgentNames))
+	if l.Harness != "" && !l.Harness.Valid() {
+		p.add(at(path, "harness"), ErrUnknownValue, "%q (want %s)",
+			l.Harness, words.Or(Harnesses))
 	}
 	// Left unbounded, a timeout of 0 or a negative one passes validation
 	// and reaches a process supervisor that reads it as "expire
@@ -685,22 +685,22 @@ func (l *LLMProvider) validate(path Path) error {
 	if l.TimeoutSeconds < 0 {
 		p.add(at(path, "timeout_seconds"), ErrOutOfRange,
 			"must be 0 (the %v s default) or positive, got %v",
-			defaultCLITimeoutSeconds, l.TimeoutSeconds)
+			defaultHarnessTimeoutSeconds, l.TimeoutSeconds)
 	}
 	if l.MaxConcurrent < 0 {
 		p.add(at(path, "max_concurrent"), ErrOutOfRange,
 			"must be 0 (the default of %d) or positive, got %d",
-			defaultCLIMaxConcurrent, l.MaxConcurrent)
+			defaultHarnessMaxConcurrent, l.MaxConcurrent)
 	}
-	if l.Auth.Mode != "" && !slices.Contains(CLIAgentAuthModes, l.Auth.Mode) {
+	if l.Auth.Mode != "" && !slices.Contains(HarnessAuthModes, l.Auth.Mode) {
 		p.add(at(path, "auth.mode"), ErrUnknownValue, "%q (want %s)",
-			l.Auth.Mode, words.Or(CLIAgentAuthModes))
+			l.Auth.Mode, words.Or(HarnessAuthModes))
 	}
 	// THE SPELLING, and that the entry can be placed at all. Whether the
 	// cell is configured is a question about providers.sandbox, and whether
 	// a seat's executor reaches this entry is one about the seats; both are
 	// asked by the company ([Company.validateSandboxPlacement]). Whether its
-	// CLI launches a run anywhere is the entry's own: a CLI with no in-box
+	// harness launches a run anywhere is the entry's own: a harness with no in-box
 	// runner serves text phases only, so a launch passes over it in every
 	// chain it is in, and a run_in on it is a placement nothing ever reads —
 	// refused as a value that means nothing where it is written, rather than
@@ -710,12 +710,12 @@ func (l *LLMProvider) validate(path Path) error {
 	case !slices.Contains(Placements, l.RunIn):
 		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
 			l.RunIn, words.Or(Placements))
-	case (l.Agent == "" || l.Agent.Valid()) && !l.runsExecutor():
+	case (l.Harness == "" || l.Harness.Valid()) && !l.runsExecutor():
 		p.add(at(path, "run_in"), ErrConflict,
 			"%s has no in-box runner, so no run is ever launched on this entry and nothing "+
 				"reads where it would be placed: only %s launch an executor run. Remove the "+
-				"field, or move the entry to one of those CLIs",
-			l.AgentName(), words.And(CodingAgents))
+				"field, or move the entry to one of those harnesses",
+			l.HarnessName(), words.And(ExecutorHarnesses))
 	}
 	p.wrap(l.validateProfile(path))
 	return p.err()
@@ -736,11 +736,11 @@ func (l *LLMProvider) validate(path Path) error {
 // model (the backend refuses to drop one silently). Where the entry's
 // CREDENTIALS go is the admission half, [LLMProvider.validateCredentials].
 func (l *LLMProvider) validateProfile(path Path) error {
-	if l.Agent != "" && !l.Agent.Valid() {
-		return nil // reported at agent; there is no profile to judge
+	if l.Harness != "" && !l.Harness.Valid() {
+		return nil // reported at harness; there is no profile to judge
 	}
 	var p problems
-	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
+	profile, err := cliprofile.Load(l.HarnessName(), l.Overrides)
 	switch {
 	case errors.Is(err, cliprofile.ErrOverrides):
 		p.add(at(path, "overrides"), ErrShape, "%v", err)
@@ -752,9 +752,9 @@ func (l *LLMProvider) validateProfile(path Path) error {
 	if strings.TrimSpace(l.Model) != "" && !profile.TakesModel() {
 		p.add(at(path, "overrides.model_args"), ErrMissing,
 			"the %q profile's model_args carry no {model}, so the model %q this entry "+
-				"names would never reach the CLI, and every entry names one: declare "+
+				"names would never reach the harness, and every entry names one: declare "+
 				`the flag with the placeholder, e.g. overrides.model_args: ["--model", "{model}"]`,
-			l.AgentName(), l.Model)
+			l.HarnessName(), l.Model)
 	}
 	return p.err()
 }
@@ -764,7 +764,7 @@ func (l *LLMProvider) validateProfile(path Path) error {
 // DNS label with the two separators a model's name already uses.
 //
 // A GRAMMAR, because a key is not only the name seats select an entry by. It
-// names a directory: the default state_dir joins it under the CLI home
+// names a directory: the default state_dir joins it under the harness home
 // ([LLMProvider.ResolvedStateDir]), so a key with a `/` nested one entry's
 // login inside another's, and `..` left the home altogether. And it names a
 // variable: the entry's credential bundle is read from
@@ -866,30 +866,30 @@ func (c *Company) validateLLMModels() error {
 	return p.err()
 }
 
-// validateModel holds an entry's model to the grammar its CLI reads it in,
+// validateModel holds an entry's model to the grammar its harness reads it in,
 // where the merged profile declares one
 // ([cliprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
 // the first slash into a provider and a model, so a bare `claude-sonnet-5`
 // names the provider "claude-sonnet-5" and no model, and every call the entry
 // makes — its runs on this host and an executor run alike, which are handed
-// the same value — fails inside the CLI, which OpenCode 2 refuses as "Invalid
+// the same value — fails inside the harness, which OpenCode 2 refuses as "Invalid
 // model reference".
 //
-// JUDGED ON THE VALUE THE CLI IS HANDED, the model rendered through the
+// JUDGED ON THE VALUE THE HARNESS IS HANDED, the model rendered through the
 // profile's model_args, so an override that puts the provider in the flag
 // (["--model", "anthropic/{model}"]) admits a bare model. A model written as a
 // `${VAR}` is not judged: its value is the secret store's and the
 // environment's, which a write cannot see.
 //
-// ADMISSION rather than runnable: the provider builds and the CLI starts, the
-// refusal is the CLI's grammar — a vendor fact that moves between releases,
+// ADMISSION rather than runnable: the provider builds and the harness starts, the
+// refusal is the harness's grammar — a vendor fact that moves between releases,
 // which is why it is a profile declaration — and a newer peer may admit what
 // this build would not. So a write is refused and an apply only warns.
 func (l *LLMProvider) validateModel(path Path) error {
-	if (l.Agent != "" && !l.Agent.Valid()) || envref.Has(l.Model) || strings.TrimSpace(l.Model) == "" {
+	if (l.Harness != "" && !l.Harness.Valid()) || envref.Has(l.Model) || strings.TrimSpace(l.Model) == "" {
 		return nil
 	}
-	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
+	profile, err := cliprofile.Load(l.HarnessName(), l.Overrides)
 	if err != nil || !profile.ModelNamesProvider {
 		//nolint:nilerr // Deliberate: a profile that does not load is a
 		// runnable fault validateProfile already reports at overrides,
@@ -906,23 +906,23 @@ func (l *LLMProvider) validateModel(path Path) error {
 	if strings.TrimSpace(provider) == "" {
 		what = "names no provider"
 	}
-	// THE VENDOR'S OWN WORDS ONLY FOR THE CLI THEY ARE MEASURED ON. Any
+	// THE VENDOR'S OWN WORDS ONLY FOR THE HARNESS THEY ARE MEASURED ON. Any
 	// profile can declare the grammar through overrides, and an operator
 	// pointed at `opencode models` for a hermes entry is sent to a tool
 	// that entry does not run.
-	failure, listing := "with the CLI's own model-not-found error", ""
-	if l.AgentName() == string(CLIOpenCode) {
+	failure, listing := "with the harness's own model-not-found error", ""
+	if l.HarnessName() == string(HarnessOpenCode) {
 		failure = `with OpenCode's "Invalid model reference"`
 		listing = " (`opencode models --standalone` lists them)"
 	}
 	p.add(at(path, "model"), ErrConflict,
-		"the %s CLI reads its model as <provider>/<model> and splits it at the first "+
+		"the %s harness reads its model as <provider>/<model> and splits it at the first "+
 			"slash, so %q %s: every call this entry makes, an executor run included, "+
-			"would fail inside the CLI %s. Name the provider as the CLI spells it%s, e.g. "+
+			"would fail inside the harness %s. Name the provider as the harness spells it%s, e.g. "+
 			"anthropic/claude-sonnet-5 or openrouter/anthropic/claude-sonnet-5, with that "+
 			"provider's key in env (e.g. ANTHROPIC_API_KEY, OPENROUTER_API_KEY) or a "+
-			"login of the CLI's own",
-		l.AgentName(), value, what, failure, listing)
+			"login of the harness's own",
+		l.HarnessName(), value, what, failure, listing)
 	return p.err()
 }
 
@@ -934,12 +934,12 @@ func (l *LLMProvider) validateModel(path Path) error {
 // The rules exist because the backend's applyAuth (in
 // internal/providers/llm/cliagent) places a credential only where the profile
 // names a variable for it and drops it silently otherwise: an api-key entry
-// on a CLI with no api_key_env ran signed in to nothing, and so did a token on
-// a CLI with no token_env. Every such shape is refused, naming the route the
-// CLI does read.
+// on a harness with no api_key_env ran signed in to nothing, and so did a token on
+// a harness with no token_env. Every such shape is refused, naming the route the
+// harness does read.
 //
 // ADMISSION rather than runnable, because an entry that breaks one still
-// runs: the provider builds, the CLI starts, and it signs in from whatever it
+// runs: the provider builds, the harness starts, and it signs in from whatever it
 // does read — its credential files, a bundle, its own environment — while only
 // the misplaced credential goes unused. So a write that keeps one is refused,
 // and a revision being applied is only warned about. Refusing it at apply
@@ -948,14 +948,14 @@ func (l *LLMProvider) validateModel(path Path) error {
 // this build's lacks, which is how a guess like an api_key_env for opencode
 // would arrive.
 //
-// Skipped where the runnable half already refused the entry (an unknown agent,
+// Skipped where the runnable half already refused the entry (an unknown harness,
 // a profile that does not load): there is no profile to judge credentials
 // against, and the refusal that matters is already reported.
 func (l *LLMProvider) validateCredentials(path Path) error {
-	if l.Agent != "" && !l.Agent.Valid() {
+	if l.Harness != "" && !l.Harness.Valid() {
 		return nil
 	}
-	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
+	profile, err := cliprofile.Load(l.HarnessName(), l.Overrides)
 	if err != nil {
 		//nolint:nilerr // Deliberate: a profile that does not load is a
 		// runnable fault validateProfile already reports at overrides,
@@ -963,8 +963,8 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		return nil
 	}
 	var p problems
-	agent := l.AgentName()
-	if err := profile.ValidateCredentials(agent); err != nil {
+	harness := l.HarnessName()
+	if err := profile.ValidateCredentials(harness); err != nil {
 		p.add(at(path, "overrides"), ErrConflict, "%v", err)
 	}
 
@@ -973,9 +973,9 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 	// any other: the secret store refuses the name, so `crewlet llm login
 	// -capture-token` cannot write the token there and a `${VAR}` cannot
 	// spell it; no shell exports one for auth.mode inherit-env to forward;
-	// and a name carrying `=` sets a different variable in the CLI's
+	// and a name carrying `=` sets a different variable in the harness's
 	// environment. Only overrides can name one — every shipped profile's
-	// names are in the grammar — and the CLI still starts with it, signed in
+	// names are in the grammar — and the harness still starts with it, signed in
 	// by whatever it does read, so this is an admission rule like the rest.
 	// Here rather than in the profile's own rules because the grammar is
 	// envref's, which that leaf does not import.
@@ -985,11 +985,11 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		if variable.name != "" && !envref.ValidName(variable.name) {
 			p.add(at(path, "overrides."+variable.field), ErrShape,
 				"%q is not an environment variable name (letters, digits and "+
-					"underscores, not starting with a digit): the CLI is handed its "+
+					"underscores, not starting with a digit): the harness is handed its "+
 					"credential under it, and no secret store, ${VAR} or `crewlet llm "+
 					"login` can hold a name outside that grammar, nor a shell export "+
 					"one for auth.mode inherit-env to forward. Name the variable your "+
-					"build of the CLI reads", variable.name)
+					"build of the harness reads", variable.name)
 		}
 	}
 
@@ -998,14 +998,14 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 	// judged as one, a typo drew refusals naming a mode that does not exist.
 	// The fault is reported once, at auth.mode.
 	mode := l.ResolvedAuthMode()
-	if !slices.Contains(CLIAgentAuthModes, mode) {
+	if !slices.Contains(HarnessAuthModes, mode) {
 		return p.err()
 	}
 
 	if l.Auth.APIKey != "" && mode != AuthAPIKey {
 		p.add(at(path, "auth.api_key"), ErrConflict,
 			"an API key is read only under auth.mode api-key, which puts it in the "+
-				"CLI's key variable; under %s it reaches nothing. Set auth.mode: "+
+				"harness's key variable; under %s it reaches nothing. Set auth.mode: "+
 				"api-key, or drop auth.api_key", mode)
 	}
 
@@ -1013,61 +1013,61 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		switch {
 		case profile.APIKeyEnv == "" && profile.EnvSignIn:
 			p.add(at(path, "auth.mode"), ErrConflict,
-				"api-key puts the entry's key in the CLI's key variable, and the "+
-					"%q profile names none (api_key_env): this CLI reads each model "+
+				"api-key puts the entry's key in the harness's key variable, and the "+
+					"%q profile names none (api_key_env): this harness reads each model "+
 					"provider's key from that provider's own variable. Leave auth.mode "+
 					"at subscription, drop auth.api_key, and set the key in env under "+
 					"the variable of the provider its model names, as a ${VAR}, e.g. "+
-					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
+					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, harness)
 		case profile.APIKeyEnv == "":
 			p.add(at(path, "auth.mode"), ErrConflict,
-				"api-key puts the entry's key in the CLI's key variable, and the "+
+				"api-key puts the entry's key in the harness's key variable, and the "+
 					"%q profile names none (api_key_env), so the key would reach "+
-					"nothing: this CLI reads a key only from %s, so put it there "+
+					"nothing: this harness reads a key only from %s, so put it there "+
 					"(`crewlet llm login`, or a credential bundle), or, if your build of "+
-					"the CLI does read a key variable, name it with "+
+					"the harness does read a key variable, name it with "+
 					"overrides.api_key_env",
-				agent, profile.LoginLocation())
+				harness, profile.LoginLocation())
 		case profile.APIKeyEnvShared && strings.TrimSpace(l.Auth.APIKey) == "":
 			// Refused rather than left to fall back: the variable the
-			// CLI reads holds other vendors' keys too, and the one the
+			// harness reads holds other vendors' keys too, and the one the
 			// engine would find there is the wrong one more often than
-			// not — sent to this CLI's endpoint all the same.
+			// not — sent to this harness's endpoint all the same.
 			p.add(at(path, "auth.api_key"), ErrMissing,
-				"name this entry's key as auth.api_key: the %q CLI reads its key from "+
+				"name this entry's key as auth.api_key: the %q harness reads its key from "+
 					"%s, a variable other vendors' keys are kept under too, so the "+
 					"engine does not read it from its own environment or secret store "+
 					`in this entry's place (for example api_key: "${DASHSCOPE_API_KEY}")`,
-				agent, profile.APIKeyEnv)
+				harness, profile.APIKeyEnv)
 		}
 	}
 
-	// SUBSCRIPTION READS A LOGIN THE CLI KEEPS OR A HEADLESS TOKEN. A CLI that
+	// SUBSCRIPTION READS A LOGIN THE HARNESS KEEPS OR A HEADLESS TOKEN. A harness that
 	// keeps neither and signs in with a key alone would run signed in to
-	// nothing under it: the mode removes the key variable from the CLI's
+	// nothing under it: the mode removes the key variable from the harness's
 	// environment, and every call is refused for want of a key. Qwen Code is
-	// that CLI — both measured builds refuse the OAuth login it once kept.
+	// that harness — both measured builds refuse the OAuth login it once kept.
 	if mode == AuthSubscription && !profile.KeepsLogin() && profile.TokenEnv == "" &&
 		!profile.EnvSignIn && profile.APIKeyEnv != "" {
 		p.add(at(path, "auth.mode"), ErrConflict,
-			"subscription signs the CLI in with a login it keeps or a headless token, and "+
+			"subscription signs the harness in with a login it keeps or a headless token, and "+
 				"the %q profile names neither (no credential_paths, credential_store or "+
-				"token_env), so the entry would sign in to nothing. This CLI signs in with "+
+				"token_env), so the entry would sign in to nothing. This harness signs in with "+
 				"its key, so set auth.mode: api-key and give the key as auth.api_key (the "+
-				"CLI reads it from %s)", agent, profile.APIKeyEnv)
+				"harness reads it from %s)", harness, profile.APIKeyEnv)
 	}
 
 	if l.Auth.Token != "" {
 		switch {
 		case profile.TokenEnv == "":
 			p.add(at(path, "auth.token"), ErrConflict,
-				"the %q profile names no token_env (this CLI mints no headless "+
+				"the %q profile names no token_env (this harness mints no headless "+
 					"token), so the token would reach nothing: remove it, or name the "+
-					"variable your build of the CLI reads with overrides.token_env", agent)
+					"variable your build of the harness reads with overrides.token_env", harness)
 		case mode != AuthSubscription:
 			p.add(at(path, "auth.token"), ErrConflict,
 				"a token is read only under auth.mode subscription: %s removes %s "+
-					"from the CLI's environment or forwards the engine's own. Remove "+
+					"from the harness's environment or forwards the engine's own. Remove "+
 					"it, or set auth.mode: subscription", mode, profile.TokenEnv)
 		}
 	}
@@ -1075,17 +1075,17 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 	// NOR FROM THE ENGINE'S ENVIRONMENT BY MODE. inherit-env forwards the key
 	// variable as the engine's process holds it, and a shared one holds
 	// whichever vendor's key was exported under it — the embeddings key, on a
-	// host that runs any — sent to this CLI's endpoint all the same.
+	// host that runs any — sent to this harness's endpoint all the same.
 	if mode == AuthInheritEnv && profile.APIKeyEnvShared {
 		p.add(at(path, "auth.mode"), ErrConflict,
-			"inherit-env forwards %s from the engine's own environment, and the %q CLI's key "+
+			"inherit-env forwards %s from the engine's own environment, and the %q harness's key "+
 				"variable is one other vendors' keys are kept under too, so the key it forwarded "+
 				"would be whichever was exported there: set auth.mode: api-key and name this "+
 				`entry's key as auth.api_key, e.g. api_key: "${DASHSCOPE_API_KEY}"`,
-			profile.APIKeyEnv, agent)
+			profile.APIKeyEnv, harness)
 	}
 	if mode == AuthInheritEnv && profile.TokenEnv == "" && profile.APIKeyEnv == "" {
-		remedy := "sign the CLI in with `crewlet llm login`"
+		remedy := "sign the harness in with `crewlet llm login`"
 		if profile.EnvSignIn {
 			remedy = "set the key in env under the variable of the provider " +
 				"its model names, as a ${VAR}"
@@ -1094,7 +1094,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 			"inherit-env forwards the profile's token_env and api_key_env from the "+
 				"engine's own environment, and the %q profile names neither, so "+
 				"nothing would be forwarded: leave auth.mode at subscription and %s",
-			agent, remedy)
+			harness, remedy)
 	}
 
 	p.wrap(l.validateEnvSignIn(path, profile, mode))
@@ -1111,24 +1111,24 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 			continue
 		case profile.TokenEnv:
 			p.add(entry(at(path, "env"), name), ErrConflict,
-				"%s is this CLI's token variable, which auth owns: whether a value "+
-					"here reaches the CLI depends on auth.mode and on whether the secret "+
+				"%s is this harness's token variable, which auth owns: whether a value "+
+					"here reaches the harness depends on auth.mode and on whether the secret "+
 					"store or the engine's environment holds a token of its own. Give "+
 					"the token as auth.token", name)
 		case cliprofile.ZoneVariable:
-			// The engine pins the zone of every CLI it starts, and reads a
-			// reset the CLI names with no zone in it; a value here would be
+			// The engine pins the zone of every harness it starts, and reads a
+			// reset the harness names with no zone in it; a value here would be
 			// replaced without a word, or, honoured, would have the engine
-			// read the CLI's reset in the wrong zone.
+			// read the harness's reset in the wrong zone.
 			p.add(entry(at(path, "env"), name), ErrConflict,
-				"%s is the zone the engine hands every CLI it starts (its own TZ, else "+
-					"UTC), and reads the CLI's limit resets in; it is not set per entry. "+
+				"%s is the zone the engine hands every harness it starts (its own TZ, else "+
+					"UTC), and reads the harness's limit resets in; it is not set per entry. "+
 					"Drop it, and set TZ in the engine's own environment to move every "+
-					"CLI's zone", name)
+					"harness's zone", name)
 		case profile.APIKeyEnv:
 			p.add(entry(at(path, "env"), name), ErrConflict,
-				"%s is this CLI's key variable, which auth owns: whether a value "+
-					"here reaches the CLI depends on auth.mode, and on whether auth.api_key "+
+				"%s is this harness's key variable, which auth owns: whether a value "+
+					"here reaches the harness depends on auth.mode, and on whether auth.api_key "+
 					"resolves or the engine's environment holds a key of its own. Give "+
 					"the key as auth.api_key with auth.mode api-key", name)
 		default:
@@ -1139,10 +1139,10 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"%s is set by the %q profile under auth.mode subscription, to %q, to "+
 						"choose the login the seat's home holds; a value here is replaced on "+
 						"every call, so drop it. A different value is set with "+
-						"overrides.subscription_env", name, l.Agent, profile.SubscriptionEnv[name])
+						"overrides.subscription_env", name, l.Harness, profile.SubscriptionEnv[name])
 				continue
 			}
-			// env is layered OVER the variables that keep each seat's CLI
+			// env is layered OVER the variables that keep each seat's harness
 			// inside its own home and its call's working directory, so a
 			// value here would replace them for every seat on the entry —
 			// the engine user's real dotfiles, a configuration directory the
@@ -1152,7 +1152,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 			// and nothing would say so.
 			if layer, ok := profile.IsolationLayerOf(name); ok {
 				p.add(entry(at(path, "env"), name), ErrConflict,
-					"%s is a variable the engine sets for every call of this CLI to keep "+
+					"%s is a variable the engine sets for every call of this harness to keep "+
 						"it inside its seat's own home and its call's working directory "+
 						"(%s); a value here would replace that isolation for every seat, so "+
 						"drop it: %s", name, strings.Join(isolation, ", "),
@@ -1166,32 +1166,32 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 // validateEnvSignIn holds an entry to the rule that its env is its sign-in
 // exactly when auth.mode says so ([AuthEnv]).
 //
-// UNDER env, THE ENV MUST SIGN THE CLI IN. The mode hands the CLI no token
+// UNDER env, THE ENV MUST SIGN THE HARNESS IN. The mode hands the harness no token
 // and no key and seeds no login, so an env that sets none of the names the
-// profile signs in by ([cliprofile.Profile.SignInEnv]), or on a CLI that reads
+// profile signs in by ([cliprofile.Profile.SignInEnv]), or on a harness that reads
 // its model provider's key from its environment ([cliprofile.Profile.EnvSignIn])
 // no credential-named variable, is an entry signed in to nothing. A profile
 // that declares neither has no env that signs it in, and cannot take the mode.
 //
-// UNDER ANY OTHER MODE, A NAME THAT SIGNS THE CLI IN IS REFUSED in env. The
-// mode hands the CLI its own credential beside it: subscription the plan
+// UNDER ANY OTHER MODE, A NAME THAT SIGNS THE HARNESS IN IS REFUSED in env. The
+// mode hands the harness its own credential beside it: subscription the plan
 // token the convention resolves for every entry, api-key the metered key. The
-// CLI then ranks the two by rules of its own (Claude Code routes a cloud
+// harness then ranks the two by rules of its own (Claude Code routes a cloud
 // switch away from the vendor's API whatever token it holds), so one of them
 // is a credential handed to a process that never uses it, and which one is
-// the CLI's choice rather than the document's.
+// the harness's choice rather than the document's.
 //
-// ADMISSION, like the rest of [LLMProvider.validateCredentials]: the CLI
+// ADMISSION, like the rest of [LLMProvider.validateCredentials]: the harness
 // starts and signs in from whatever it reads.
-func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, mode CLIAgentAuthMode) error {
+func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, mode HarnessAuthMode) error {
 	var p problems
-	agent := l.AgentName()
+	harness := l.HarnessName()
 	if mode != AuthEnv {
 		for _, name := range profile.SignsInWithEnv(l.Env) {
 			p.add(entry(at(path, "env"), name), ErrConflict,
-				"%s signs the %q CLI in from its env, and auth.mode %s hands it a credential of "+
-					"its own beside it, which the CLI then ranks by rules of its own: set "+
-					"auth.mode: env, so the entry's env is its one sign-in", name, agent, mode)
+				"%s signs the %q harness in from its env, and auth.mode %s hands it a credential of "+
+					"its own beside it, which the harness then ranks by rules of its own: set "+
+					"auth.mode: env, so the entry's env is its one sign-in", name, harness, mode)
 		}
 		return p.err()
 	}
@@ -1199,20 +1199,20 @@ func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, m
 		// A bundle is a login, and an env entry seeds none, on this host or in
 		// a box: one named here would be stored, restored and never read.
 		p.add(at(path, "auth.credential_bundle"), ErrConflict,
-			"auth.mode env signs the %q CLI in with the entry's env alone and seeds no "+
+			"auth.mode env signs the %q harness in with the entry's env alone and seeds no "+
 				"login, so a credential bundle reaches nothing. Drop auth.credential_bundle, "+
-				"or set auth.mode: subscription to sign in with that login", agent)
+				"or set auth.mode: subscription to sign in with that login", harness)
 	}
 	switch {
 	case len(profile.SignInEnv) > 0:
 		if len(profile.SignsInWithEnv(l.Env)) == 0 {
 			p.add(at(path, "env"), ErrMissing,
-				"auth.mode env signs the CLI in with the entry's env, and env sets none of the "+
-					"names the %q CLI signs in by (%s), so the entry would sign in to nothing: set "+
+				"auth.mode env signs the harness in with the entry's env, and env sets none of the "+
+					"names the %q harness signs in by (%s), so the entry would sign in to nothing: set "+
 					"the one your cloud provider or gateway uses, its credentials as ${VAR}s, "+
 					"e.g. CLAUDE_CODE_USE_BEDROCK: \"1\" with AWS_REGION, or "+
 					"ANTHROPIC_AUTH_TOKEN: \"${GATEWAY_TOKEN}\" with ANTHROPIC_BASE_URL",
-				agent, strings.Join(profile.SignInEnv, ", "))
+				harness, strings.Join(profile.SignInEnv, ", "))
 		}
 	case profile.EnvSignIn:
 		signed := slices.ContainsFunc(slices.Collect(maps.Keys(l.Env)), func(name string) bool {
@@ -1220,18 +1220,18 @@ func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, m
 		})
 		if !signed {
 			p.add(at(path, "env"), ErrMissing,
-				"auth.mode env signs the CLI in with the entry's env, and env holds no "+
-					"credential: the %q CLI reads the key of the provider its model names from "+
+				"auth.mode env signs the harness in with the entry's env, and env holds no "+
+					"credential: the %q harness reads the key of the provider its model names from "+
 					"that provider's own variable, so set it there as a ${VAR}, e.g. "+
-					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
+					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, harness)
 		}
 	default:
 		p.add(at(path, "auth.mode"), ErrConflict,
-			"env signs the CLI in with the entry's env, and the %q profile names no variable "+
+			"env signs the harness in with the entry's env, and the %q profile names no variable "+
 				"that does (sign_in_env) and does not read its provider's key from its "+
 				"environment (env_sign_in), so the entry would sign in to nothing: use "+
-				"subscription or api-key, or name the variables your build of the CLI signs in "+
-				"by with overrides.sign_in_env", agent)
+				"subscription or api-key, or name the variables your build of the harness signs in "+
+				"by with overrides.sign_in_env", harness)
 	}
 	return p.err()
 }
@@ -1239,7 +1239,7 @@ func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, m
 // subscriptionEnvName reports whether name is one the profile sets under
 // subscription ([cliprofile.Profile.SubscriptionEnv]) on an entry running
 // under it.
-func subscriptionEnvName(profile cliprofile.Profile, mode CLIAgentAuthMode, name string) bool {
+func subscriptionEnvName(profile cliprofile.Profile, mode HarnessAuthMode, name string) bool {
 	_, ok := profile.SubscriptionEnv[name]
 	return ok && mode == AuthSubscription
 }
@@ -1271,7 +1271,7 @@ func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile clipr
 			"%q, changed only deliberately, with overrides.isolation_env, since a value "+
 			"that turns it off undoes the isolation it is there for", profile.IsolationEnv[name])
 	default: // cliprofile.IsolationHome, which every profile field refuses
-		return "the engine points it at or inside the seat's own home for every CLI, " +
+		return "the engine points it at or inside the seat's own home for every harness, " +
 			"and no field changes it"
 	}
 }
@@ -1280,7 +1280,7 @@ func isolationRemedy(name string, layer cliprofile.IsolationLayer, profile clipr
 // field that does it, and what has to move with a different directory.
 //
 // WITH THE PATHS KEPT UNDER IT, because the directory alone is not a remedy
-// that works: the CLI finds the profile's login, sessions, tool policy or
+// that works: the harness finds the profile's login, sessions, tool policy or
 // agent file through the variable ([cliprofile.Profile.KeptUnder]), so "a
 // different directory is set with overrides.work_config_env", followed as
 // written, was an entry every write path accepted whose OpenCode found no
@@ -1292,7 +1292,7 @@ func relocationRemedy(field, root, dir string, kept []string) string {
 		return remedy + "; a different directory is set with overrides." + field
 	}
 	return fmt.Sprintf("%s; a different directory is set with overrides.%s, moving the "+
-		"%s kept under %s beneath it in the same override, since the CLI finds them "+
+		"%s kept under %s beneath it in the same override, since the harness finds them "+
 		"through this variable", remedy, field, fieldNames(kept), dir)
 }
 

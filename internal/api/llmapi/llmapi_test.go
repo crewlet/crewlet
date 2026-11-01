@@ -50,7 +50,7 @@ providers:
       model: sonnet
       auth: {mode: api-key, api_key: "${ANTHROPIC_API_KEY_SONNET}"}
     codex-review:
-      agent: codex
+      harness: codex
       model: gpt-6.1-sol
     gateway:
       model: sonnet
@@ -550,7 +550,7 @@ func TestADraftIsValidatedAndTested(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
 	body := `{"values": {"OPUS_KEY": "sk-ant-api03-a-brand-new-key-0000"},
-		"entity": {"agent": "claude-code", "model": "opus",
+		"entity": {"harness": "claude-code", "model": "opus",
 		"auth": {"mode": "api-key", "api_key": "${OPUS_KEY}"}}}`
 	code, got := r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true", body, nil)
 	if code != http.StatusOK {
@@ -560,7 +560,7 @@ func TestADraftIsValidatedAndTested(t *testing.T) {
 		t.Errorf("the test was not handed the draft: %+v", c)
 	}
 	code, got = r.do(t, http.MethodPut, "/llm/providers/opus/credential",
-		`{"values": {"OPUS_KEY": "x"}, "entity": {"agent": "claude-code",
+		`{"values": {"OPUS_KEY": "x"}, "entity": {"harness": "claude-code",
 		"auth": {"mode": "api-key", "api_key": "${OPUS_KEY}", "token": "${T}"}}}`, nil)
 	if code != http.StatusUnprocessableEntity || got["error"] != "validation_error" || got["problems"] == nil {
 		t.Errorf("an invalid draft = %d %v, want 422 with problems", code, got)
@@ -701,7 +701,7 @@ func TestEveryModelRouteTakesItsVerb(t *testing.T) {
 }
 
 // draftBody is a check of a draft entry: a model the company does not run yet.
-const draftBody = `{"smoke": false, "entity": {"agent": "claude-code", "model": "opus",
+const draftBody = `{"smoke": false, "entity": {"harness": "claude-code", "model": "opus",
 	"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`
 
 // A DRAFT IS RUN ONLY BY WHO MAY WRITE WHAT IT STANDS FOR.
@@ -738,7 +738,7 @@ func TestADraftIsCheckedOnlyByWhoMayWriteIt(t *testing.T) {
 			}
 			code, body = r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true",
 				`{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-a-candidate-key-0000"},
-				"entity": {"agent": "claude-code", "model": "opus",
+				"entity": {"harness": "claude-code", "model": "opus",
 				"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`, nil)
 			if code != http.StatusForbidden {
 				t.Errorf("a draft credential test = %d %v, want 403", code, body)
@@ -780,7 +780,7 @@ func TestACredentialAsksConfigWriteWhereItWritesTheConfig(t *testing.T) {
 
 	code, body := r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true",
 		`{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-a-candidate-key-0000"},
-		"entity": {"agent": "claude-code", "model": "opus",
+		"entity": {"harness": "claude-code", "model": "opus",
 		"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`, nil)
 	if code != http.StatusForbidden || len(r.engine.checks) != 0 {
 		t.Errorf("a draft without config.write = %d %v, ran %d checks", code, body, len(r.engine.checks))

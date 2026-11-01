@@ -192,7 +192,7 @@ func (r *OtelReceiver) Forwards() bool { return r.upstream != "" }
 //
 // FAILURES ARE LOGGED, NEVER RETURNED as something the caller reports to the
 // box. An exporter that gets a 5xx retries, and retries against a backend
-// that is down turn one outage into two: the coding run's own traffic
+// that is down turn one outage into two: the box's own traffic
 // multiplies while nothing it carries is recoverable anyway.
 func (r *OtelReceiver) Forward(ctx context.Context, signal string, body []byte, contentType string) {
 	if r.upstream == "" {

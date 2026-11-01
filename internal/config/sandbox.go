@@ -76,7 +76,7 @@ func (p Placement) backend() string {
 // SandboxProvider is the engine-wide CATALOGUE of cells every agent seat's
 // executor runs in.
 //
-// Every agent seat's executor is its coding CLI's own run, in a box: this
+// Every agent seat's executor is its harness's own run, in a box: this
 // block says WHICH BOXES EXIST, the providers.llm entry the run launches on
 // picks the cell (`run_in`, else `default_run_in`), and a seat's own
 // role.sandbox adds what that seat's box reads beyond the engine-wide
@@ -94,7 +94,7 @@ type SandboxProvider struct {
 	E2B *E2BSandbox `yaml:"e2b,omitempty" json:"e2b,omitempty" desc:"The remote backend. Absent = run_in: e2b is refused."`
 
 	// Local configures the engine host as a backend, so a run can use the
-	// subscription CLI login `crewlet llm login` already established, with
+	// subscription harness login `crewlet llm login` already established, with
 	// no remote account and no API key. Absent means no run may be placed
 	// `run_in: direct` or `run_in: container`.
 	//
@@ -133,7 +133,7 @@ type SandboxProvider struct {
 	DefaultRunIn Placement `yaml:"default_run_in,omitempty" json:"default_run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a run launched on a providers.llm entry with no run_in happens. Required unless the catalogue names exactly one cell, or every entry a seat's executor can launch on names its own."`
 
 	// DefaultTimeoutSeconds is the box TTL and keepalive window. NOT a run
-	// limit: a coding job is never force-stopped on a timer, and the
+	// limit: an executor is never force-stopped on a timer, and the
 	// waiter refreshes a running box's TTL every tick so the clock never
 	// kills it. Effectively the orphan-reclaim grace — how long a box
 	// outlives an engine that stopped heart-beating.
@@ -250,7 +250,7 @@ const (
 	// at 48 rounds once its extension judge had granted all it could
 	// (turn_engine's execute ceiling, twice its 24-round base), and that was
 	// for engine-tool work alone. One run now also does the shell, edit and
-	// test steps code work adds, each a CLI turn of its own, so twice that
+	// test steps code work adds, each a harness turn of its own, so twice that
 	// ceiling: room for a real task's reading, editing and checking, and
 	// still a wall a run that is thrashing hits within one turn.
 	defaultSandboxMaxTurns = 96
@@ -488,9 +488,9 @@ var ContainerRuntimes = []ContainerRuntime{RuntimeAuto, RuntimeDocker, RuntimePo
 type LocalSandbox struct {
 	// Image is the container image, required wherever an executor run is
 	// placed in a container, with deliberately no default: a box whose
-	// image lacks the coding-agent CLI fails only once an agent tries to use
+	// image lacks the harness fails only once an agent tries to use
 	// it.
-	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image with the coding-agent CLI installed. Required for run_in: container."`
+	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image with the harness installed. Required for run_in: container."`
 
 	Runtime ContainerRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty" js:"enum=auto|docker|podman" desc:"Container CLI to drive."`
 

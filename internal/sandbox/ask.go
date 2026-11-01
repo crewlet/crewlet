@@ -10,7 +10,7 @@ import (
 
 // A RUN ASKS A PERSON IN THE SHAPE A DECISION IS ASKED: ADR-0068.
 //
-// A coding run that cannot go on without a person's answer asks through one
+// An executor that cannot go on without a person's answer asks through one
 // tool over its bridge (`ask_and_wait`, internal/agent/builtin), and what it
 // asked is an [Ask]: the question in one sentence, its context in Markdown,
 // and, where the person is to choose, a [decision.Decision] whose options the
@@ -61,7 +61,7 @@ const (
 	AskToManager   = "manager"
 )
 
-// Ask is what a coding run asked a person.
+// Ask is what an executor asked a person.
 type Ask struct {
 	// Question is what the run needs answered, in one sentence: the title
 	// a person reads first. Held to [decision.MaxQuestion], the bound a
