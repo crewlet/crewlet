@@ -1283,6 +1283,7 @@ sequenceDiagram
     M->>S: store every output, at once
     M->>C: propose the begin
     C-->>M: applied: inputs retired, kept packs live, the rest dropping, drop epoch moved
+    M->>M: link the kept and the dropping packs it built into its own copy
     G->>G: next sync: kept packs in, dropping packs beside the copy
     M->>M: rescue: what a push landed since the scan reaches again
     M->>S: store the rescue
@@ -1380,8 +1381,10 @@ admitted in the node's maintenance lane at a publication's charge — about
 waiting, never a push refused. The begin's record writes at most 2 625 rows
 and applied in 75 ms at its widest, measured on two cores, the commit's at
 most 97 rows in 13.5 ms. Every other git node holding the repository downloads
-the kept and rescue packs once — the maintainer links its own — which is why
-the schedule waits for a quarter of the repository to be unreachable.
+the kept, the dropping and the rescue packs once — the maintainer links its
+own, the dropping ones into its copy's dropping view, so it downloads none of
+what it built — which is why the schedule waits for a quarter of the
+repository to be unreachable.
 
 ---
 

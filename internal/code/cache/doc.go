@@ -1088,7 +1088,9 @@
 // where only dropping rows do. Everything that places, keeps or judges a pack
 // reads the place from the live set (placeOf) or a snapshot
 // (snapshot.places): the install, which makes the view with the first pack it
-// places there (ensureView); a delta's live set and a full round's sweep,
+// places there (ensureView), and the maintainer's adoption of the dropping
+// packs it built ([Cache.AdoptDropping]), which makes it the same way; a
+// delta's live set and a full round's sweep,
 // whose strays are a pack's files where its rows no longer place them; the
 // swap, which links each pack where its rows place it, so a next incarnation
 // holding no dropping pack holds no view; the check, the scrub and Verify,

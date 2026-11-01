@@ -22,7 +22,9 @@ import (
 // files into the cache rather than download them back: Adopt. A compaction's
 // outputs are adopted the same way by the git node that built them
 // (internal/code/compact), every output of one scratch in one call: what the
-// one node that built them would otherwise download back, a GET an output.
+// one node that built them would otherwise download back, a GET an output. So
+// are an expunge's begin's (AdoptDropping for its dropping packs, into the
+// copy's dropping view) and its commit's rescue.
 //
 // AN ADOPTION NEVER WAITS AND IS NEVER LOST. What it must not do is write
 // beside a ROUND — a full one sweeps what its snapshot does not name and
@@ -89,6 +91,10 @@ var bundleOrder = []string{".pack", ".rev", ".idx"}
 type staging struct {
 	pack code.PackRef
 	stem string
+	// dropping: the pack's row is one an expunge's begin left dropping
+	// ([Cache.AdoptDropping]) — placed in the copy's dropping view and
+	// recorded a dropping row, never linked into objects/pack.
+	dropping bool
 }
 
 // Adopt installs packs from a scratch into the repository's CURRENT
@@ -106,14 +112,15 @@ type staging struct {
 // object no row names, fetchable by id from this node alone until the next
 // full round swept it.
 //
-// EVERY PACK ADOPTED IS LIVE, linked into objects/pack: a push's, a
+// EVERY PACK ADOPT ADOPTS IS LIVE, linked into objects/pack: a push's, a
 // compaction's output, an expunge's kept pack and its rescue are, by the
 // records that add them (code.PackPush, code.PackCompact, code.PackExpunge,
-// code.PackRescue). A pack an expunge's begin leaves dropping is no
-// adoption's — linked here it would be one a push could rely on — and enters
-// the copy's dropping view by a round's install, as its row places it. A
-// rescue byte for byte one of the dropping packs it was cut from moves that
-// checksum's files out of the view as its row moves its place (liveAdopted).
+// code.PackRescue). A pack an expunge's begin leaves dropping is never
+// Adopt's — linked here it would be one a push could rely on — but
+// [Cache.AdoptDropping]'s, into the copy's dropping view, as its row places
+// it. A rescue byte for byte one of the dropping packs it was cut from moves
+// that checksum's files out of the view as its row moves its place
+// (liveAdopted).
 //
 // Each of packs is its row's: its checksum must be one of the scratch's
 // packs', and each section's size that pack's file's (a .rev missing
@@ -138,6 +145,35 @@ type staging struct {
 // not written — the next round that moves its refs writes it, and a boot's
 // first round recounts the directory.
 func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, packs ...code.PackRef) error {
+	return c.adopt(ctx, repoID, sc, false, packs)
+}
+
+// AdoptDropping installs packs an expunge's begin left DROPPING from the
+// scratch its maintainer built them in — the cruft its build wrote beside the
+// kept packs — into the repository's current incarnation by hard link, as
+// [Cache.Adopt] installs a live pack: called by the maintainer once the
+// begin's record has applied, so the node that built them downloads none of
+// them back — up to internal/code/compact's ExpungeInputByteCap of GETs a
+// cycle, of bytes its own disk held a moment before, for packs the cycle's
+// commit retires minutes later. Every other git node installs them by its
+// next round, from the store, as their rows place them.
+//
+// INTO THE DROPPING VIEW, NEVER objects/pack: each pack's files are linked
+// into the incarnation's objects-dropping/pack — made, durably, where the
+// copy holds no view yet — and its row recorded a DROPPING row of the live
+// set, exactly where a round's install of the row would place it (placeOf),
+// so only a process serving the copy reads them and no push relies on one
+// (packPlace). A pack whose checksum a live row of the incarnation names
+// already is held in objects/pack, where that row keeps its files, and its
+// row recorded beside it. Everything else — the checks, one share of the
+// write lock that never waits, the hand-over to a round, the outcomes — is
+// Adopt's, and so is the caller's obligation: the rows must have applied.
+func (c *Cache) AdoptDropping(ctx context.Context, repoID string, sc *Scratch, packs ...code.PackRef) error {
+	return c.adopt(ctx, repoID, sc, true, packs)
+}
+
+// adopt is [Cache.Adopt] — and, dropping, [Cache.AdoptDropping] — of packs.
+func (c *Cache) adopt(ctx context.Context, repoID string, sc *Scratch, dropping bool, packs []code.PackRef) error {
 	switch {
 	case sc == nil || sc.c != c:
 		return fmt.Errorf("%w: an adoption names a scratch this cache made", ErrInvalid)
@@ -173,7 +209,7 @@ func (c *Cache) Adopt(ctx context.Context, repoID string, sc *Scratch, packs ...
 	}
 	stagings := make([]*staging, 0, len(packs))
 	for _, pack := range packs {
-		st, err := c.stageAdoption(sc, pack)
+		st, err := c.stageAdoption(sc, pack, dropping)
 		if err != nil {
 			for _, st := range stagings {
 				c.dropStaging(st)
@@ -434,8 +470,8 @@ func checkAdoption(sc *Scratch, packs []code.PackRef) error {
 // stageAdoption links the scratch's pack files into tmp/ under second names,
 // and counts them as tmp/'s until they are dropped. A link that fails takes
 // back the ones before it.
-func (c *Cache) stageAdoption(sc *Scratch, pack code.PackRef) (*staging, error) {
-	st := &staging{pack: pack, stem: filepath.Join(c.dir, tmpDir, "adopt-"+newV7())}
+func (c *Cache) stageAdoption(sc *Scratch, pack code.PackRef, dropping bool) (*staging, error) {
+	st := &staging{pack: pack, stem: filepath.Join(c.dir, tmpDir, "adopt-"+newV7()), dropping: dropping}
 	from := filepath.Join(sc.Dir, "objects", "pack", "pack-"+pack.GitChecksum)
 	for i, ext := range bundleOrder {
 		if err := os.Link(from+ext, st.stem+ext); err != nil {
@@ -527,11 +563,36 @@ func liveAdopted(inc *incarnation, st *staging) {
 	inc.leaving[leaveKey{placeDropping, cs}] = EventPackRetired
 }
 
+// adopted records st's pack as a row of inc's live set, the adoption's: live
+// (liveAdopted), or — an expunge's dropping pack ([Cache.AdoptDropping]) —
+// the dropping row its begin wrote, which places the pack's files in the
+// dropping view unless a live row names the same checksum. e.mu is held.
+func adopted(inc *incarnation, st *staging) {
+	if st.dropping {
+		setLive(inc, st.pack.PackID, liveOf(st.pack, code.PackDropping))
+		return
+	}
+	liveAdopted(inc, st)
+}
+
+// adoptedPlace is where inc keeps st's pack's files once its row is recorded
+// (placeOf): objects/pack for a live row; for a dropping one the dropping
+// view, but objects/pack where a live row names its checksum already, whose
+// files are there. e.mu is held.
+func adoptedPlace(inc *incarnation, st *staging) packPlace {
+	if st.dropping && placeOf(inc, st.pack.GitChecksum) != placeLive {
+		return placeDropping
+	}
+	return placeLive
+}
+
 // placeStagings installs stagings into inc — the write lock held, inc pinned
-// — and drops them, whatever the outcome: each pack's files linked into
-// objects/pack (unless the incarnation holds one of them already) and
-// counted, then the directory synced ONCE for them all; and answers each
-// staging's outcome, in order, with every failure joined.
+// — and drops them, whatever the outcome: each pack's files linked where its
+// row places them (adoptedPlace: objects/pack, or the dropping view, made
+// first where the copy holds none) unless the incarnation holds one of them
+// there already, and counted, then each directory linked into synced ONCE for
+// them all; and answers each staging's outcome, in order, with every failure
+// joined.
 //
 // A DIRECTORY SYNC THAT FAILS LEAVES THE PACKS INSTALLED AND COUNTED, and is
 // returned, exactly as a round's install answers one: the names are there and
@@ -545,23 +606,29 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 			c.dropStaging(st)
 		}
 	}()
-	packDir := filepath.Join(inc.dir, "objects", "pack")
-	// THE ROW IS LIVE in the incarnation once this ends, whatever it links:
-	// its row has applied, and the pack is either linked here or held
-	// already (swap.go's live set — a compaction's retirement of it takes it
-	// out by this id, before any delta has served it).
+	// THE ROW IS IN THE INCARNATION once this ends, whatever it links: its
+	// row has applied, and the pack is either linked here or held already
+	// (swap.go's live set — a compaction's retirement of it takes it out by
+	// this id, before any delta has served it).
 	held := func(st *staging) {
 		e.mu.Lock()
-		liveAdopted(inc, st)
+		adopted(inc, st)
 		e.mu.Unlock()
 	}
+	places := make([]packPlace, len(stagings))
+	e.mu.Lock()
+	for i, st := range stagings {
+		places[i] = adoptedPlace(inc, st)
+	}
+	e.mu.Unlock()
 	outcomes := make([]adoptOutcome, len(stagings))
 	var (
 		errs   []error
 		toLink []int
+		view   bool
 	)
 	for i, st := range stagings {
-		state, err := placedAlready(packDir, st.pack.GitChecksum)
+		state, err := placedAlready(filepath.Join(inc.dir, places[i].rel()), st.pack.GitChecksum)
 		switch {
 		case err != nil:
 			outcomes[i] = adoptFailed
@@ -573,6 +640,7 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 			outcomes[i] = adoptHeld
 		default:
 			toLink = append(toLink, i)
+			view = view || places[i] == placeDropping
 		}
 	}
 	if len(toLink) == 0 {
@@ -587,10 +655,24 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 		}
 		return outcomes, errors.Join(append(errs, err)...)
 	}
-	var linked []int
+	// THE DROPPING VIEW, made durable before any pack is placed in it, as a
+	// round's install makes it for the copy's first dropping pack.
+	var viewErr error
+	if view {
+		viewErr = c.ensureView(inc.dir)
+	}
+	var (
+		linked   []int
+		placedIn [placeDropping + 1]bool
+	)
 	for _, i := range toLink {
-		st := stagings[i]
-		ok, err := linkBundle(nil, st.stem, packDir, st.pack.GitChecksum, nil)
+		st, place := stagings[i], places[i]
+		if place == placeDropping && viewErr != nil {
+			outcomes[i] = adoptFailed
+			errs = append(errs, fmt.Errorf("pack %s: %w", st.pack.PackID, viewErr))
+			continue
+		}
+		ok, err := linkBundle(nil, st.stem, filepath.Join(inc.dir, place.rel()), st.pack.GitChecksum, nil)
 		switch {
 		case err != nil:
 			outcomes[i] = adoptFailed
@@ -599,7 +681,8 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 			held(st)
 			outcomes[i] = adoptHeld
 		default:
-			c.vouchPack(e, inc, placeLive, st.pack.GitChecksum)
+			c.vouchPack(e, inc, place, st.pack.GitChecksum)
+			placedIn[place] = true
 			linked = append(linked, i)
 		}
 	}
@@ -609,23 +692,27 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 
 	now := c.now()
 	e.mu.Lock()
+	addedLive := false
 	for _, i := range linked {
 		st := stagings[i]
-		liveAdopted(inc, st)
-		inc.packs++
-		inc.objects += st.pack.Objects
-		c.setSize(inc, inc.diskBytes+st.pack.Size)
+		adopted(inc, st)
+		c.counted(inc, places[i], st.pack.Objects, true, st.pack.Size)
+		addedLive = addedLive || places[i] == placeLive
 		outcomes[i] = adoptAdopted
 	}
 	inc.unmoved = false
 	// No repair (incarnation.repairWrite): an adopted pack adds what no
 	// failed request needed, and leaves whatever failed it as it was.
 	// The maintainer's debounce and ceiling, exactly as a round that adds a
-	// pack sets them; and like such a round's, no kick: the pack is due only
-	// once the debounce has passed, which is the maintainer's own tick.
-	e.lastAdded = now
-	if e.uncoveredSince.IsZero() {
-		e.uncoveredSince = now
+	// pack sets them — for a pack in objects/pack, the one directory the
+	// copy's index covers, so a dropping pack alone sets neither; and like
+	// such a round's, no kick: the pack is due only once the debounce has
+	// passed, which is the maintainer's own tick.
+	if addedLive {
+		e.lastAdded = now
+		if e.uncoveredSince.IsZero() {
+			e.uncoveredSince = now
+		}
 	}
 	e.mu.Unlock()
 	if c.overBudget() > 0 {
@@ -636,8 +723,13 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 	if c.knobs != nil && c.knobs.adoptSync != nil {
 		sync = c.knobs.adoptSync
 	}
-	if err := sync(packDir); err != nil {
-		errs = append(errs, fmt.Errorf("the packs are installed, and their directory is not yet durable: %w", err))
+	for _, place := range []packPlace{placeLive, placeDropping} {
+		if !placedIn[place] {
+			continue
+		}
+		if err := sync(filepath.Join(inc.dir, place.rel())); err != nil {
+			errs = append(errs, fmt.Errorf("the packs are installed, and their directory is not yet durable: %w", err))
+		}
 	}
 	return outcomes, errors.Join(errs...)
 }

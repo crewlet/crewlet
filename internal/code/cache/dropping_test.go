@@ -430,6 +430,61 @@ func TestAnAdoptionOfADroppingPacksChecksumMovesItsFilesOut(t *testing.T) {
 	}
 }
 
+// AN ADOPTED DROPPING PACK IS NEVER DOWNLOADED, AND LIES IN THE VIEW: the
+// maintainer that built an expunge's dropping pack adopts it from its
+// build's scratch once the begin has applied (AdoptDropping), and the copy's
+// next round — the rescue's sync — finds it installed where its row places
+// it, in the dropping view, and opens nothing of it; the copy is then exactly
+// what a fresh cache builds at the same position, nothing of the pack in
+// objects/pack.
+//
+// Mutations: place the adopted pack in objects/pack (adoptedPlace answering
+// placeLive), and the round moves it into the view with a GET; skip the
+// adoption's links, and the round downloads it.
+func TestAnAdoptedDroppingPackIsNeverDownloaded(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	base, first := w.push(t, repo, "refs/heads/main", nil)
+	gone, second := w.push(t, repo, "refs/heads/gone", nil)
+	w.client.Run(t, w.repos[repo].work, "reset", "--hard", base)
+	_, third := w.push(t, repo, "refs/heads/main", nil)
+	w.log.write(repo, nil, map[string]string{"refs/heads/gone": ""})
+	c := w.open(t)
+	before := w.sync(t, c, repo)
+	_, dropping := w.expungeBegin(t, repo, []string{gone}, first, second, third)
+	sc, err := c.NewScratch(t.Context(), before, uuid.Must(uuid.NewV7()).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Remove()
+	b := w.bundle(dropping.GitChecksum)
+	at := int64(0)
+	for _, section := range []struct {
+		ext string
+		n   int64
+	}{{".pack", b.PackBytes}, {".idx", b.IndexBytes}, {".rev", b.ReverseBytes}} {
+		write(t, filepath.Join(sc.Dir, "objects", "pack", "pack-"+dropping.GitChecksum+section.ext),
+			string(b.Bytes[at:at+section.n]))
+		at += section.n
+	}
+	if err := c.AdoptDropping(t.Context(), repo, sc, dropping.Ref()); err != nil {
+		t.Fatalf("adopting the dropping pack: %v", err)
+	}
+	after := w.sync(t, c, repo)
+	if opens, _, _ := w.objects.counts(); opens[dropping.Object] != 0 {
+		t.Errorf("the round after the adoption opened the dropping pack's object %d times, want none",
+			opens[dropping.Object])
+	}
+	if got := droppingFiles(t, after.Dir); !slices.Equal(got, rowFiles(dropping)) {
+		t.Errorf("after the begin's round the view holds %v, want the adopted dropping pack's %v", got,
+			rowFiles(dropping))
+	}
+	if got, want := imageOf(t, after.Dir), w.rebuilt(t, repo); got != want {
+		t.Errorf("after the begin's round, the image:\n%s\nwant a fresh cache's:\n%s", got, want)
+	}
+}
+
 // ONLY SERVING READS NAME THE DROPPING VIEW (M6-D3): every git process under
 // internal/code that names a copy's dropping view (gitproc.Cmd.Dropping) is
 // a read — a subcommand of gitReaders — that SERVES the copy, a row of

@@ -105,7 +105,8 @@ type Uploader interface {
 // its repack's outputs; an expunge's holding its inputs and leaning on a store
 // of every other live pack; a rescue's holding the dropping packs and leaning
 // on the incarnation — every one pinning it — and the adoption of what it
-// built once its rows have applied.
+// built once its rows have applied, an expunge's dropping packs into the
+// copy's dropping view.
 type Cache interface {
 	Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error)
 	Packs(s cache.Synced) []code.PackRow
@@ -122,6 +123,7 @@ type Cache interface {
 	StageExpunge(ctx context.Context, s cache.Synced, id string, inputs []string) (*cache.Scratch, error)
 	StageRescue(ctx context.Context, s cache.Synced, id string) (*cache.Scratch, error)
 	Adopt(ctx context.Context, repoID string, sc *cache.Scratch, packs ...code.PackRef) error
+	AdoptDropping(ctx context.Context, repoID string, sc *cache.Scratch, packs ...code.PackRef) error
 	AdoptLayer(ctx context.Context, repoID string, sc *cache.Scratch, row code.LayerRef) error
 }
 

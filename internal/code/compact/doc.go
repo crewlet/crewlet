@@ -306,7 +306,13 @@
 // which a begin must name one output of. The builds are admitted at a
 // publication's repack's charge (cache.Cache.AdmitExpunge): the walk reads the
 // whole history whatever few packs it sorts, and a refused expunge is a purge
-// waiting, never a push refused.
+// waiting, never a push refused. Once the begin has applied, EVERY OUTPUT IS
+// ADOPTED from the build's scratch before it goes — the kept packs live
+// (cache.Cache.Adopt), the dropping packs into the copy's dropping view
+// (cache.Cache.AdoptDropping) — so the maintainer downloads none of what it
+// built, the cruft above all, up to [ExpungeInputByteCap] of GETs a cycle
+// for packs its commit retires minutes later; every other git node installs
+// both from the store at its next round.
 //
 // THE RESCUE IS VALID AT ANY POSITION AT OR AFTER THE BEGIN, which is what
 // makes a crash resumable from the rows alone. A push checked after the begin

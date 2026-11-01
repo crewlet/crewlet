@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -235,6 +238,77 @@ func TestAnExpungeKeepsEveryObjectAReferenceReaches(t *testing.T) {
 	if x.holds(dir, leaked) {
 		t.Errorf("a cache rebuilt from the rows holds the leaked commit %s", leaked)
 	}
+}
+
+// THE MAINTAINER DOWNLOADS NOTHING ITS EXPUNGE BUILT: once the begin has
+// applied, the node that built it adopts every output from the build's
+// scratch — the kept packs live, the dropping packs into its copy's dropping
+// view — and the rescue too once the commit has: so across a whole cycle,
+// the rescue's sync and every round to the commit among it, that node GETs
+// none of the objects the cycle stored. The dropping packs are the cruft, up
+// to compact.ExpungeInputByteCap a cycle, which the commit retires minutes
+// later.
+//
+// Mutation: skip the dropping packs' adoption in the cycle, and the rescue's
+// sync downloads every dropping pack.
+func TestTheMaintainerDownloadsNothingItsExpungeBuilt(t *testing.T) {
+	t.Parallel()
+	gets := &gotten{}
+	x := newFixtureWith(t, func(o *codetest.SoloOptions) {
+		o.WrapObjects = func(_ string, b objstore.Backend) objstore.Backend {
+			return gettingFrom{Backend: b, gets: gets}
+		}
+	})
+	x.pushN(code.CompactMinMerge, 4<<10)
+	x.leak("feature")
+	x.purge()
+	rs := &recordingStore{Store: x.store}
+	c, _, _ := x.compactorOf(func(o *compact.Options) { o.Objects = rs })
+	if out, err := expungeWhileBusy(t, c, x.mustOwe()); out != compact.OutcomeApplied {
+		t.Fatalf("the purge's expunge answered %s, %v; want applied", out, err)
+	}
+	stored, _ := rs.stored()
+	if len(stored) < 2 {
+		t.Fatalf("the premise: the cycle stored %d objects, want its kept and its dropping packs at least",
+			len(stored))
+	}
+	got := gets.names()
+	for _, obj := range stored {
+		if n := got[obj.Key.Name()]; n > 0 {
+			t.Errorf("the maintainer downloaded %s, which its own cycle built and stored, %d times", obj.Key, n)
+		}
+	}
+}
+
+// gotten is every object name a git node's backend was asked to GET, and how
+// many times.
+type gotten struct {
+	mu  sync.Mutex
+	got map[string]int
+}
+
+// names is a copy of what g counted.
+func (g *gotten) names() map[string]int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return maps.Clone(g.got)
+}
+
+// gettingFrom is a git node's backend with every GET it makes counted, by
+// name, in gets.
+type gettingFrom struct {
+	objstore.Backend
+	gets *gotten
+}
+
+func (g gettingFrom) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	g.gets.mu.Lock()
+	if g.gets.got == nil {
+		g.gets.got = map[string]int{}
+	}
+	g.gets.got[name]++
+	g.gets.mu.Unlock()
+	return g.Backend.Get(ctx, name, off, n)
 }
 
 // AN EXPUNGE HOLDS ITS REPOSITORY FROM EVERY OTHER BUILD ON ITS NODE, from its

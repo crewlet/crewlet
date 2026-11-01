@@ -362,8 +362,10 @@ type openExpunge struct {
 //  4. UPLOAD every output at once ([uploadAll]); a store with no room holds the
 //     repository back until it has the room, as a compaction is held.
 //  5. BEGIN, proposed to the repository's committer, which moves its drop
-//     epoch: applied, the kept packs are adopted into this node's cache — so
-//     the node that built them downloads none — and the cycle FINISHES
+//     epoch: applied, every output is adopted into this node's cache from the
+//     build's scratch — the kept packs live, the dropping packs into the
+//     copy's dropping view — so the node that built them downloads none, and
+//     only then is the scratch removed; and the cycle FINISHES
 //     ([Compactor.finish]) with the tips its scan kept, which bound its
 //     rescue's walk.
 func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace time.Duration) (Outcome, error) {
@@ -459,13 +461,23 @@ func (c *Compactor) cycle(ctx context.Context, cand code.ExpungeCandidate, grace
 	if res.Outcome != statelog.OutcomeApplied {
 		return c.expungeAnswered(cand, b.begin.ExpungeID, "begin", res)
 	}
+	// EVERY OUTPUT IS PRESENT AT ONCE, linked from the scratch, which goes only
+	// after: the kept packs live, as a compaction's outputs are, and the
+	// dropping packs into the copy's dropping view, as their rows place them
+	// — never objects/pack, where a push could rely on one — so the rescue's
+	// sync finds every pack the begin added installed and downloads none: up
+	// to ExpungeInputByteCap of GETs a cycle otherwise, of the cruft this
+	// node's disk held a moment before, which the commit retires minutes
+	// later. Every other git node installs both from the store by its next
+	// round. An adoption that fails costs that round the GETs, never the
+	// cycle.
 	if len(b.kept) > 0 {
-		// THE KEPT PACKS ARE PRESENT AT ONCE, linked from the scratch: they
-		// are live, as a compaction's outputs are. The dropping packs are no
-		// adoption's — linked into objects/pack they would be packs a push
-		// could rely on — and reach the copy's dropping view by the rescue's
-		// sync, as every git node's copy gets them.
 		if err := c.o.Cache.Adopt(ctx, cand.ID, b.sc, refs(b.kept)...); err != nil {
+			c.log.Warn("code_expunge_adopt_failed", "repo", cand.Name, "expunge", b.begin.ExpungeID, "error", err)
+		}
+	}
+	if len(b.dropping) > 0 {
+		if err := c.o.Cache.AdoptDropping(ctx, cand.ID, b.sc, refs(b.dropping)...); err != nil {
 			c.log.Warn("code_expunge_adopt_failed", "repo", cand.Name, "expunge", b.begin.ExpungeID, "error", err)
 		}
 	}

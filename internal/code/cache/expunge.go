@@ -29,9 +29,10 @@ import (
 // what they reach of are one moment's with the packs it sorts
 // ([Scratch.RefTips]); both are made under the entry's write lock (scratch.go's
 // A REWRITE'S REPOSITORIES); and neither writes an incarnation: what the
-// maintainer builds enters the cache by adoption (the kept and rescue packs,
-// live) or by a round's install (the dropping packs, into the dropping view),
-// once its rows have applied.
+// maintainer builds enters its copy by adoption once its rows have applied —
+// the kept and rescue packs live ([Cache.Adopt]), the dropping packs into the
+// dropping view ([Cache.AdoptDropping]) — and every other git node's by a
+// round's install, as the rows place each.
 
 // ErrInputsLeaving is a rescue asked over a copy whose objects/ still holds the
 // inputs of the begin it rescues for, or of any begin past the one its
