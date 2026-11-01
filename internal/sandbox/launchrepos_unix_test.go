@@ -12,17 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 )
 
-// A REUSED BOX IS GIVEN ONLY THE REPOSITORIES IT LACKS. A job that continues
-// its turn's run reattaches to the box the job before it left, whose checkout
-// holds the agent's work: each clone step's own guard skips a repository
-// already checked out, so web is not cloned again and the agent's file in it
-// survives, api — which the first job was not given — is cloned, and the
-// operator's setup is not applied twice. On the direct cell, where the steps run for real, against
-// a stand-in git that clones by making the directory.
+// A REUSED BOX KEEPS WHAT IT HOLDS AND IS GIVEN NOTHING AGAIN. A job that
+// continues its turn's run reattaches to the box the job before it left,
+// whose checkout holds the agent's work. No launch clones a repository — the
+// run checks each out itself, running the commands `code_checkout` answers —
+// so the second launch clones and fetches nothing though it carries the first
+// job's grant, the agent's file in its checkout survives, and the operator's
+// setup is not applied twice. On the direct cell, where the steps run for real,
+// against a stand-in git that records every call.
 //
-// Mutation: guard the clone step on a directory the clone does not make (or
-// drop the guard) — web is cloned a second time over the agent's work, red.
-func TestAReusedBoxIsGivenOnlyTheRepositoriesItLacks(t *testing.T) {
+// Mutation: apply the operator's setup to a reused box as well — it is
+// applied twice, red.
+func TestAReusedBoxKeepsWhatItHoldsAndIsGivenNothingAgain(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	local := newDirect(t)
@@ -34,16 +35,12 @@ func TestAReusedBoxIsGivenOnlyTheRepositoriesItLacks(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	calls := filepath.Join(t.TempDir(), "git-calls")
-	// A CLONE MAKES ITS DIRECTORY'S .git, as git's does; every other
-	// command succeeds having done nothing, which is all the recipe asks of
-	// it here.
 	stub := gittest.Fake(t, "git version 2.56.0", `printf '%s\n' "$*" >> "$GIT_CALLS"
-if [ "$1" = clone ]; then for dir in "$@"; do :; done; mkdir -p "$dir/.git"; fi
 exit 0`)
 	env := map[string]string{"GIT_CALLS": calls, "PATH": filepath.Dir(stub) + ":" + os.Getenv("PATH")}
 	operator := []SetupStep{{Name: "operator", Commands: []string{"echo applied >> provisioned"}}}
 
-	first := withRepos(t, launchReq("t1"), granted("web", webRepoID))
+	first := launchReq("t1")
 	first.Spec.Env, first.Setup = env, operator
 	res, err := rig.launchVia(t.Context(), manager, first)
 	if err != nil {
@@ -53,13 +50,18 @@ exit 0`)
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
+	// THE CHECKOUT THE FIRST JOB'S AGENT MADE, and its work in it.
 	workspace := filepath.Join(box.Home(), WorkspaceSubdir)
 	work := filepath.Join(workspace, "web", "notes.txt")
+	if err := os.MkdirAll(filepath.Join(workspace, "web", ".git"), 0o700); err != nil {
+		t.Fatalf("the agent's checkout: %v", err)
+	}
 	if err := os.WriteFile(work, []byte("the agent's uncommitted work\n"), 0o600); err != nil {
 		t.Fatalf("the agent's work: %v", err)
 	}
 
-	second := withRepos(t, launchReq("t1"), granted("web", webRepoID), granted("api", apiRepoID))
+	// A ROUND CARRIED ON, which keeps the first job's grant.
+	second := withRepos(t, launchReq("t1"), granted("web", webRepoID))
 	second.Spec.Env, second.Setup = env, operator
 	resumeInItsBox(t, rig)
 	again, err := rig.launchVia(t.Context(), manager, second)
@@ -70,18 +72,12 @@ exit 0`)
 		t.Fatalf("the second launch = %+v, want it on the first one's box", again)
 	}
 
-	body, err := os.ReadFile(calls)
-	if err != nil {
-		t.Fatalf("the stand-in's calls: %v", err)
-	}
-	var clones []string
-	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
-		if strings.HasPrefix(line, "clone ") {
-			clones = append(clones, line[strings.LastIndexByte(line, ' ')+1:])
+	if body, err := os.ReadFile(calls); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+			if strings.HasPrefix(line, "clone ") || strings.HasPrefix(line, "fetch ") {
+				t.Fatalf("a launch cloned or fetched in the box: %q", line)
+			}
 		}
-	}
-	if strings.Join(clones, ",") != "web,api" {
-		t.Fatalf("the box cloned %q, want web on the first launch and api alone on the second", clones)
 	}
 	if got, err := os.ReadFile(work); err != nil || string(got) != "the agent's uncommitted work\n" {
 		t.Fatalf("the agent's work in the reused checkout is %q (%v), want it as the agent left it", got, err)
@@ -89,18 +85,12 @@ exit 0`)
 	if got, err := os.ReadFile(filepath.Join(workspace, "provisioned")); err != nil || string(got) != "applied\n" {
 		t.Fatalf("the operator's setup left %q (%v), want it applied once, to the fresh box", got, err)
 	}
-	for _, repo := range []string{"web", "api"} {
-		hook, err := os.Stat(filepath.Join(workspace, repo, ".git", "hooks", "prepare-commit-msg"))
-		if err != nil || hook.Mode().Perm() != 0o755 {
-			t.Errorf("%s's checkout has no executable commit-trailer hook: %v", repo, err)
-		}
-	}
 }
 
-// SETUP AND THE RUN SHARE ONE WORKING DIRECTORY. The clone step checks a
-// repository out at a path relative to where it runs, and the coding agent is
-// told to find it at that path from where IT starts, so the two must start in
-// the same directory: every backend runs a command with no directory of its
+// SETUP AND THE RUN SHARE ONE WORKING DIRECTORY. A setup step writes at a path
+// relative to where it runs, and the coding agent is told to find what it
+// made at that path from where IT starts, so the two must start in the same
+// directory: every backend runs a command with no directory of its
 // own in one default (the box's workspace here). A file a setup step writes
 // is the job's to find.
 //

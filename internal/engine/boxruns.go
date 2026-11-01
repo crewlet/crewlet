@@ -49,9 +49,9 @@ func (e *Engine) codeBoxRuns(log *slog.Logger) boxRuns {
 // and the job's bridged-call log the row carries, which is bounded
 // (sandbox.MaxBridgeCalls) whatever the turn's size.
 //
-// LIVE is a row whose job is in its box: LAUNCHING — the clone steps run
-// during the launch, before the job is marked suspended — or RUNNING, with no
-// ending decided. A row parked on a question (awaiting, reseed, answered) or
+// LIVE is a row whose job is in its box: LAUNCHING — a job's first calls,
+// its checkouts' clones among them, can come before the launch marks it
+// suspended — or RUNNING, with no ending decided. A row parked on a question (awaiting, reseed, answered) or
 // resumed has no job in its box: a parked job's box is paused, and a resumed
 // one's job has ended while its collection reads what it pushed.
 func (b boxRuns) Run(ctx context.Context, turnID string) (host.BoxRun, bool, error) {

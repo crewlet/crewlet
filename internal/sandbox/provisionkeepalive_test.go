@@ -11,84 +11,48 @@ import (
 	"time"
 )
 
-// slowStep is how long each setup and clone command takes in the cases below:
-// four minutes, so the fourth command of a launch ends past the 15-minute
-// timer the box was made with, and a launch's every command together — ten on
-// a fresh box, nine on a reused one — is well past it.
+// slowStep is how long each setup command takes in the case below: four
+// minutes, so the fourth command of a launch ends past the 15-minute timer the
+// box was made with, and a launch's every command together — ten — is well
+// past it.
 const slowStep = 4 * time.Minute
+
+// provisionSteps is how many operator steps the case's launch is given.
+const provisionSteps = 10
 
 // A BOX IS KEPT ALIVE FOR AS LONG AS ITS LAUNCH PROVISIONS IT. Its provider
 // ends a box at its timer, which nothing but a refresh moves, and the waiter's
 // keepalive refreshes only a running row's box — never one a launch is still
-// giving its setup and clone steps, one after another, each to its own budget.
-// A fresh box given the operator's step, the git check and eight clones of
-// four minutes each, and a reused box given the check and the clones again,
-// are each refreshed to the manager's box timeout from the moment provisioning
-// begins — before the first command, since a reused box's timer is whatever
-// its reconnect left — and at most every provisionRefresh after, so their
-// timer never runs out while the forty minutes of steps run; and nothing
-// refreshes either once the launch has returned.
+// giving its setup steps, one after another, each to its own budget. A fresh
+// box given ten of the operator's steps of four minutes each is refreshed to
+// the manager's box timeout from the moment provisioning begins — before the
+// first command — and at most every provisionRefresh after, so its timer
+// never runs out while the forty minutes of steps run; and nothing refreshes
+// it once the launch has returned.
 //
-// Mutations: start no keepalive in Acquire — the fresh box is reaped at its
-// fourth command, red; start none for a reused box's clone steps — the reused
-// box is, red; refresh only on the ticker — each box's first refresh comes a
-// whole interval after its first command began, red; never stop it —
-// refreshes go on after the launch, red.
+// Mutations: start no keepalive in Acquire — the box is reaped at its fourth
+// command, red; refresh only on the ticker — its first refresh comes a whole
+// interval after its first command began, red; never stop it — refreshes go
+// on after the launch, red.
 func TestABoxIsKeptAliveWhileItsLaunchProvisionsIt(t *testing.T) {
 	t.Parallel()
-	repos := make([]RunRepo, MaxRunRepos)
-	for i := range repos {
-		repos[i] = granted(fmt.Sprintf("repo%d", i), fmt.Sprintf("0190d8f0-0000-7000-8000-%012x", i+1))
-	}
-	t.Run("a fresh box", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			rig := newWaiterRig(t)
-			boxes := &timedBoxes{FakeProvider: rig.provider, step: slowStep}
-			manager := boxes.manager(t, rig)
-			req := withRepos(t, launchReq("t1"), repos...)
-			req.Spec.TimeoutSec = DefaultBoxTimeout.Seconds()
-			req.Setup = []SetupStep{{Name: "operator", Commands: []string{"make deps"}}}
+	synctest.Test(t, func(t *testing.T) {
+		rig := newWaiterRig(t)
+		boxes := &timedBoxes{FakeProvider: rig.provider, step: slowStep}
+		manager := boxes.manager(t, rig)
+		req := launchReq("t1")
+		req.Spec.TimeoutSec = DefaultBoxTimeout.Seconds()
+		for i := range provisionSteps {
+			req.Setup = append(req.Setup, SetupStep{Name: fmt.Sprintf("operator-%d", i),
+				Commands: []string{"make deps"}})
+		}
 
-			began := time.Now()
-			res, err := rig.launchVia(t.Context(), manager, req)
-			if err != nil {
-				t.Fatalf("a launch whose provisioning outlasts its box's timer: %v", err)
-			}
-			boxes.keptAlive(t, rig.provider.Box(res.SandboxID), began, 1+len(req.Clone))
-		})
-	})
-	t.Run("a reused box", func(t *testing.T) {
-		t.Parallel()
-		synctest.Test(t, func(t *testing.T) {
-			rig := newWaiterRig(t)
-			boxes := &timedBoxes{FakeProvider: rig.provider}
-			manager := boxes.manager(t, rig)
-			first := withRepos(t, launchReq("t1"), repos[0])
-			first.Spec.TimeoutSec = DefaultBoxTimeout.Seconds()
-			res, err := rig.launchVia(t.Context(), manager, first)
-			if err != nil {
-				t.Fatalf("the first launch: %v", err)
-			}
-			box := rig.provider.Box(res.SandboxID)
-
-			// PAUSED FOR AN HOUR — a snapshot runs no timer — and then reused
-			// by the job that continues the turn's run, which is given every
-			// repository: its reconnect sets it a timer of its own.
-			if err := box.Pause(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			time.Sleep(time.Hour)
-			boxes.slow(slowStep)
-			second := withRepos(t, launchReq("t1"), repos...)
-			second.Spec.TimeoutSec = DefaultBoxTimeout.Seconds()
-			resumeInItsBox(t, rig)
-			began := time.Now()
-			if _, err := rig.launchVia(t.Context(), manager, second); err != nil {
-				t.Fatalf("a reused box's clones outlasting its timer: %v", err)
-			}
-			boxes.keptAlive(t, box, began, len(second.Clone))
-		})
+		began := time.Now()
+		res, err := rig.launchVia(t.Context(), manager, req)
+		if err != nil {
+			t.Fatalf("a launch whose provisioning outlasts its box's timer: %v", err)
+		}
+		boxes.keptAlive(t, rig.provider.Box(res.SandboxID), began, provisionSteps)
 	})
 }
 
@@ -123,13 +87,6 @@ func (p *timedBoxes) manager(t *testing.T, rig *waiterRig) *Manager {
 		t.Fatalf("NewManager: %v", err)
 	}
 	return m
-}
-
-// slow makes every command from here on take d.
-func (p *timedBoxes) slow(d time.Duration) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.step = d
 }
 
 func (p *timedBoxes) Create(ctx context.Context, spec Spec) (Sandbox, error) {
@@ -238,8 +195,7 @@ func (p *timedBoxes) keptAlive(t *testing.T, box *FakeSandbox, began time.Time, 
 		t.Fatal("the box's timer was never refreshed while the launch provisioned it")
 	case !during[0].At.Equal(began) || during[0].At.After(first):
 		t.Errorf("the box's timer was first refreshed %v after its provisioning began, its first command at %v: "+
-			"a reused box's steps began on whatever timer its reconnect left", during[0].At.Sub(began),
-			first.Sub(began))
+			"its steps began on whatever timer its create left", during[0].At.Sub(began), first.Sub(began))
 	}
 	at := began
 	for _, r := range during {

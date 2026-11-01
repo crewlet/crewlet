@@ -594,7 +594,7 @@ type Engine struct {
 	// through, as [ReadBoxURLs] read it from this node's environment
 	// ([sandbox.BoxGitURLVar]) — "" where it is unset, and then no run this
 	// node launches is given a repository, refused naming the variable rather
-	// than started with a clone step that dials nowhere. Read once at boot,
+	// than answered with clone commands that dial nowhere. Read once at boot,
 	// like the receiver's and the bridge's, whose refusals the boot shares.
 	boxGitURL string
 

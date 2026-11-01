@@ -53,8 +53,9 @@ func codeAt(seq uint64) statelog.Position {
 	return statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: seq}
 }
 
-// A BOX'S RUN IS LIVE while its job is in its box: launching — the clone steps
-// run during the launch — or running, with no ending decided; never a row
+// A BOX'S RUN IS LIVE while its job is in its box: launching — its first
+// checkouts' clones can run before the launch returns — or running, with no
+// ending decided; never a row
 // parked on a question, answered, reseeded or resumed, whose box holds no job
 // that may push. Its grants map to the code host's, an access this build does
 // not know read as read and never more, and its pushes are stamped with the

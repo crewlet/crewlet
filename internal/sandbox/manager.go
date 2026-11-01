@@ -17,7 +17,7 @@ import (
 // force-stopped on a timer, and the waiter refreshes a running box's TTL to
 // this value every tick so the clock never kills it — as the launch refreshes
 // the box it is still provisioning ([keepProvisioning]), so no sum of setup
-// and clone steps is raced against it either. It is effectively the
+// steps is raced against it either. It is effectively the
 // ORPHAN-RECLAIM GRACE — how long a box outlives an engine that stops
 // heart-beating before the provider reclaims it. 900s is 60 waiter ticks:
 // ample slack for a node that pauses for GC, a deploy, or a slow reconcile,
@@ -662,9 +662,9 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 // auto-resumes a paused one. No re-Install and no setup re-apply — the box
 // already carries its bin directory, the work dir and the launch's provisioning,
 // which is why a box is only ever reattached for the CLI it was installed for.
-// The engine's clone steps are the launch's to give it ([LaunchRequest.Clone]):
-// a repository this job was granted and the box does not hold yet is not
-// provisioning the box already carries.
+// A repository on the engine's code host is never provisioning: the run
+// checks each out itself, with the commands `code_checkout` answers, so the
+// box keeps what an earlier job cloned and is given nothing here.
 func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(codingAgent)
 	if err != nil {

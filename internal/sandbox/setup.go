@@ -20,12 +20,11 @@ import (
 // failure at its own budget.
 //
 // ONE COMMAND'S BUDGET, NEVER THE PROVISIONING'S. A launch runs the coding
-// agent's install, the operator's steps, the box's git check and one clone
-// for each repository it is given ([MaxRunRepos]) one after another, each to
-// this budget unless its step sets its own — an hour and a half at worst for
-// the engine's own nine, the check and eight clones, before any of the
-// operator's — while the box's TTL ([DefaultBoxTimeout], 900s) is a sixth of
-// that. Nothing races the two: the launch keeps the box's timer refreshed for
+// agent's install and then every one of the operator's steps one after
+// another, and a check's box its git check and its clone, each to this budget
+// unless its step sets its own — so a launch whose operator declares a handful
+// of steps can provision for longer than the box's TTL ([DefaultBoxTimeout],
+// 900s, a step and a half of this budget). Nothing races the two: the launch keeps the box's timer refreshed for
 // as long as it provisions it ([keepProvisioning]), so the provider never
 // reaps a box out from under a step that is still within its budget, and
 // only that budget ends a slow step.
@@ -55,11 +54,12 @@ const DefaultSetupTimeout = 10 * time.Minute
 // facts into tool shape itself.
 //
 // The one exception is the engine's OWN code host, whose repositories a run
-// is granted rather than told about: the steps that give a box those are the
-// engine's ([GitVersionStep], [CloneRecipe]), carried apart from the
-// operator's ([LaunchRequest.Clone]) and applied after them, and so is the
-// git access they clone with — the run's credential and the box's git
-// configuration ([BoxGit], ADR-0086), in the launch's own environment.
+// is granted rather than told about: the commands that give a box one are the
+// engine's ([CodingSteps]: [GitVersionStep], a [CloneRecipe], the monitor's
+// [MonitorStep]), answered by the `code_checkout` that grants it for the run
+// to run itself, never applied at launch, and so is the git access they clone
+// with — the run's credential and the box's git configuration ([BoxGit],
+// ADR-0086), in the launch's own environment.
 type SetupStep struct {
 	// Name is a short identifier, used in logs and setup-failure errors.
 	Name string `yaml:"name" json:"name"`
@@ -194,8 +194,8 @@ func (e *SetupError) why() (Why, bool) {
 const exitTempFail = 75
 
 // ApplySetup applies every step to a box: write files, run commands, in order —
-// a fresh box's whole provisioning, or the clone steps a reused one is given
-// ([LaunchRequest.Clone]), each of which skips a repository already there.
+// a fresh box's whole provisioning, or a check box's git floor and checkout
+// ([Manager.AcquireBox]).
 //
 // env is the run env the coding agent will get — commands run WITH it so a
 // recipe can reference the engine's identity facts and its own configured

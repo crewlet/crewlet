@@ -278,18 +278,6 @@ type LaunchRequest struct {
 	// would not carry.
 	CodeHolds []string
 
-	// Clone are the engine's own steps giving the box the repositories it is
-	// granted on the engine's code host ([Spec.Repos]): what [CodingSteps]
-	// gives the box's cell — [GitVersionStep], a [CloneRecipe] for each, and
-	// in a cell whose boxes own their kernel the monitor's [MonitorStep],
-	// which decides every launch again. Applied after Setup on a fresh box, and
-	// ALONE on a kept one — where each step's own guard skips a repository
-	// already checked out — so a job that continues the run in the box the
-	// job before it left ([PriorBox.ContinuesIn]) is given a repository that
-	// job was not, and keeps its checkout and the work in it. Kept apart from
-	// Setup, which is the operator's and is never applied twice to one box.
-	Clone []SetupStep
-
 	// CodeFloor is the run's first code floor — the furthest position its
 	// repositories were resolved at, as statelog.Position's token — written on
 	// the row with Spec.Repos ([PendingRun.CodeFloor]). Set exactly when
@@ -561,9 +549,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 
 	// THE LAUNCH'S OWN ENVIRONMENT, now that the store has named the job
 	// its credentials are minted for ([LaunchRequest.RunEnv]). It is what
-	// the box is made with, what its setup and clone steps run with — the
-	// clones need the job's credential — and, with the run's telemetry, what
-	// the coding agent runs with; and it lives in this frame alone: the spec
+	// the box is made with, what its setup steps run with and, with the
+	// run's telemetry, what the coding agent runs with — the clones it runs
+	// once a checkout answers need the job's credential; and it lives in this frame alone: the spec
 	// is never persisted, and a job that continues the run hours later is
 	// launched anew, with credentials of its own.
 	env, err := launchEnv(req, opened.LaunchID)
@@ -584,26 +572,6 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		c.abandon(ctx, m, req, fence, "")
 		return LaunchResult{}, err
 	}
-	// A REUSED BOX IS GIVEN WHAT IT LACKS: its own provisioning survives with
-	// its disk state, but this job's repositories may not all be there, so
-	// the clone steps run on it alone, each skipping a repository already
-	// checked out. One that fails is this launch's failure, as a failed step
-	// on a fresh box is: a brief promising a checkout the box does not hold
-	// must never reach a run. KEPT ALIVE while they run, as a fresh box is
-	// through its own provisioning ([keepProvisioning]): its reconnect left it
-	// one timer's worth, and the clones are as long as the repositories.
-	if reused && len(req.Clone) > 0 {
-		stopKeepalive := keepProvisioning(ctx, box, m.BoxTimeout())
-		err := ApplySetup(ctx, box, req.Clone, env)
-		stopKeepalive()
-		if err != nil {
-			log.ErrorContext(ctx, "sandbox_setup_failed", "sandbox_id", box.ID(), "reused", true,
-				"error", err.Error())
-			c.abandon(ctx, m, req, fence, box.ID())
-			return LaunchResult{}, err
-		}
-	}
-
 	// Attached before the job starts, for the reason above — WITH ITS CELL,
 	// in the same write: a relaunch may run in another cell than the job
 	// before it, and the row is how every later reader reaches the box.
@@ -745,11 +713,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // again. Only the same CLI in the same cell, once the last job is over
 // ([PriorBox.ContinuesIn]).
 //
-// A fresh box is given the operator's setup and then the engine's clone
-// steps, in that order, so a clone can rely on whatever the setup installed
-// (a proxy, a CA bundle in the box's git configuration). A kept box is given
-// its clone steps by the launch itself, which abandons the job and reclaims
-// the box if one fails.
+// A fresh box is given the operator's setup; a kept box is given nothing,
+// since its provisioning survives with its disk. Neither is given a
+// repository on the engine's code host at launch: the run checks each out as
+// it needs it, running the commands `code_checkout` answers (ADR-0086), so a
+// kept box's checkouts are its own and a repository it lacks is one more
+// checkout away.
 //
 // EVERY OTHER PRIOR BOX IS RECLAIMED HERE, THROUGH ITS OWN CELL, before the
 // fresh box exists. The row is about to name the new box instead — the attach
@@ -791,7 +760,7 @@ func (c *Coordinator) acquire(ctx context.Context, m *Manager, req LaunchRequest
 		}
 		c.reclaimPrior(ctx, m, req, prior)
 	}
-	box, runner, err := m.Acquire(ctx, req.Spec, append(slices.Clone(req.Setup), req.Clone...))
+	box, runner, err := m.Acquire(ctx, req.Spec, req.Setup)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -838,8 +807,8 @@ func checkRepos(req LaunchRequest) error {
 // ([LaunchRequest.RunEnv]), which win over every other source for the names
 // they set — an operator's value for one of those would break what the engine
 // minted it for, and configuration refuses the names where an operator writes
-// the run environment. The box is made with it and every setup and clone step
-// runs with it; the coding agent runs with it and the run's telemetry
+// the run environment. The box is made with it and every setup step runs with
+// it; the coding agent runs with it and the run's telemetry
 // ([withTelemetry]).
 //
 // A COPY, never the spec's own map, which the caller's [Spec] goes on holding:
@@ -1023,10 +992,10 @@ func summarise(brief string) string {
 // and what it answers for, and the box and how to ask a person are details of
 // where it is working.
 //
-// The environment lists the operator's steps and then the engine's clone
-// steps ([LaunchRequest.Clone]), in the order a fresh box was given them, on a
-// kept box too: the checkouts are there either way, and the run is told
-// where each is and how it pushes.
+// The environment lists the operator's steps alone: a repository on the
+// engine's code host is not the box's at launch, and the run is told where
+// each of its checkouts is, and how it pushes, by the `code_checkout` answer
+// that gives it one.
 func buildSystem(req LaunchRequest) string {
 	names := slices.Collect(maps.Keys(req.MCPServers))
 	own := strings.TrimSpace(req.System)
@@ -1035,7 +1004,7 @@ func buildSystem(req LaunchRequest) string {
 	}
 	parts := []string{
 		own,
-		strings.TrimSpace(EnvironmentBrief(append(slices.Clone(req.Setup), req.Clone...), names)),
+		strings.TrimSpace(EnvironmentBrief(req.Setup, names)),
 		strings.TrimSpace(req.Ask),
 	}
 	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n\n")

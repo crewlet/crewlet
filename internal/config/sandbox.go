@@ -136,7 +136,7 @@ type SandboxProvider struct {
 	// limit: a coding job is never force-stopped on a timer, and the
 	// waiter refreshes a running box's TTL every tick so the clock never
 	// kills it — as a launch refreshes the box it is still provisioning, so
-	// no sum of setup and clone steps races it either. Effectively the
+	// no sum of setup steps races it either. Effectively the
 	// orphan-reclaim grace — how long a box outlives an engine that stopped
 	// heart-beating.
 	DefaultTimeoutSeconds float64 `yaml:"default_timeout_seconds,omitempty" json:"default_timeout_seconds,omitempty" js:"min=0" desc:"Box TTL/keepalive. Not a run cap: the orphan-reclaim grace."`

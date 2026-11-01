@@ -29,18 +29,13 @@ func granted(name, id string) RunRepo {
 	}
 }
 
-// withRepos is req given repos the way the engine gives a run them: on the
-// spec, with the steps that clone them in its cell (CodingSteps) and the
-// floor their resolution read.
+// withRepos is req given repos the way the engine gives a carried-on round
+// its job's grants: on the spec, with the floor their resolution read. No
+// launch clones them: the run does, with the commands its checkout answered.
 func withRepos(t *testing.T, req LaunchRequest, repos ...RunRepo) LaunchRequest {
 	t.Helper()
 	req.Spec.Repos = repos
 	req.CodeFloor = "code@1:40"
-	steps, err := CodingSteps(req.Spec.Placement, repos)
-	if err != nil {
-		t.Fatalf("CodingSteps: %v", err)
-	}
-	req.Clone = steps
 	return req
 }
 
@@ -179,15 +174,17 @@ func (r LaunchRequest) withFloor(floor string) LaunchRequest {
 	return r
 }
 
-// THE LAUNCH'S OWN ENVIRONMENT REACHES EVERY SETUP STEP AND THE RUN. A box is
-// given its repositories by setup steps that clone them with the job's own
-// credential, which the engine mints for the launch the store has just named
+// THE LAUNCH'S OWN ENVIRONMENT REACHES EVERY SETUP STEP AND THE RUN. A run
+// clones each repository it checks out with the job's own credential, which
+// the engine mints for the launch the store has just named
 // ([LaunchRequest.RunEnv]): asked once, with the row's launch id, its
-// variables are in the environment of the operator's setup command, of every
-// clone step and of the coding agent, winning over an operator's value of the
-// same name, and the clone steps run after the operator's. The run's telemetry
-// is minted at the job's start and reaches the run alone. The spec the caller
-// built keeps its own map.
+// variables are in the environment of the operator's setup command and of the
+// coding agent, winning over an operator's value of the same name. The run's
+// telemetry is minted at the job's start and reaches the run alone. The spec
+// the caller built keeps its own map. A launch runs the operator's steps
+// alone — a grant the job carries is cloned by the run, never at launch — and
+// its environment block names no checkout, which the checkout's own answer
+// does.
 //
 // Mutation: provision with req.Spec rather than the launch's — the setup
 // commands' environment lacks the token, red.
@@ -240,9 +237,8 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 				firstLine(e.Command))
 		}
 	}
-	want := []string{"echo provisioned", firstLine(req.Clone[0].Commands[0]), firstLine(req.Clone[1].Commands[0])}
-	if !slices.Equal(ran, want) {
-		t.Fatalf("the box ran %q, want the operator's setup then the clone steps: %q", ran, want)
+	if want := []string{"echo provisioned"}; !slices.Equal(ran, want) {
+		t.Fatalf("the box ran %q, want the operator's setup alone: %q", ran, want)
 	}
 
 	started := rig.runner.Started()
@@ -259,12 +255,10 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 	if !maps.Equal(req.Spec.Env, specEnv) {
 		t.Errorf("the caller's spec environment became %v, want %v untouched", req.Spec.Env, specEnv)
 	}
-	// THE ENVIRONMENT BLOCK NAMES THE CHECKOUT, after the operator's own
-	// steps, in the order the box was given them.
-	setupAt := strings.Index(run.System, "Provisioned.")
-	cloneAt := strings.Index(run.System, "Repository `web` is checked out at `./web`")
-	if setupAt < 0 || cloneAt < setupAt {
-		t.Errorf("the environment block does not name the checkout after the operator's steps:\n%s", run.System)
+	// THE ENVIRONMENT BLOCK IS THE OPERATOR'S STEPS', and names no checkout
+	// the box does not hold.
+	if !strings.Contains(run.System, "Provisioned.") || strings.Contains(run.System, "is checked out at") {
+		t.Errorf("the environment block is not the operator's steps alone:\n%s", run.System)
 	}
 }
 
@@ -308,100 +302,6 @@ func TestALaunchWhoseEnvironmentFailsIsAbandoned(t *testing.T) {
 		t.Fatal("a launch whose environment failed made a box or started a run")
 	}
 	rig.finished("t1")
-}
-
-// A FAILED CLONE ABANDONS THE LAUNCH, on a fresh box and on a reused one alike:
-// a box whose git is below the floor fails the version step with its own
-// sentence, named, and the box is reclaimed; a clone that fails on a reused box
-// is the launch's failure too, its box killed and its row ended, because a brief
-// promising a checkout the box lacks must never reach a run. A reused box is
-// given the clone steps alone — the operator's setup survived with its disk.
-//
-// Mutation: skip the clone steps on a reused box — the second launch starts its
-// run with no checkout, red.
-func TestAFailedCloneAbandonsTheLaunch(t *testing.T) {
-	t.Parallel()
-	t.Run("a fresh box", func(t *testing.T) {
-		t.Parallel()
-		rig := newWaiterRig(t)
-		failing := &scriptedBoxes{FakeProvider: rig.provider, exec: func(cmd string) ExecResult {
-			if strings.HasPrefix(cmd, "command -v git") {
-				return ExecResult{ExitCode: 3, Stderr: "git 2.39.3 (Apple Git-145) in this box is below 2.40.0"}
-			}
-			return ExecResult{}
-		}}
-		manager, err := NewManager(ManagerOptions{
-			Providers: map[Placement]Provider{Direct: failing},
-			Runners:   map[string]Runner{"claude-code": rig.runner},
-		})
-		if err != nil {
-			t.Fatalf("NewManager: %v", err)
-		}
-		_, err = rig.launchVia(t.Context(), manager, withRepos(t, launchReq("t1"), granted("web", webRepoID)))
-		var setup *SetupError
-		if !errors.As(err, &setup) || setup.Step != "git-version" || !setup.Exited || setup.Exit != 3 ||
-			!strings.Contains(setup.Detail, "below 2.40.0") {
-			t.Fatalf("Launch = %v, want the version step's refusal with its sentence", err)
-		}
-		if box := rig.provider.Box("box-1"); box == nil || !box.Closed() {
-			t.Fatal("the box whose git is below the floor was not reclaimed")
-		}
-		if len(rig.runner.Started()) != 0 {
-			t.Fatal("a run was started in a box whose clone failed")
-		}
-		rig.finished("t1")
-	})
-	t.Run("a reused box", func(t *testing.T) {
-		t.Parallel()
-		rig := newWaiterRig(t)
-		first := withRepos(t, launchReq("t1"), granted("web", webRepoID))
-		first.Setup = []SetupStep{{Name: "operator", Commands: []string{"echo provisioned"}}}
-		res, err := rig.launchVia(t.Context(), rig.manager, first)
-		if err != nil {
-			t.Fatalf("the first launch: %v", err)
-		}
-		box := rig.provider.Box(res.SandboxID)
-		before := len(box.Execs())
-
-		second := withRepos(t, launchReq("t1"), granted("web", webRepoID), granted("api", apiRepoID))
-		second.Setup = first.Setup
-		resumeInItsBox(t, rig)
-		if _, err := rig.launchVia(t.Context(), rig.manager, second); err != nil {
-			t.Fatalf("the second launch: %v", err)
-		}
-		var reran []string
-		for _, e := range box.Execs()[before:] {
-			reran = append(reran, firstLine(e.Command))
-		}
-		want := []string{firstLine(second.Clone[0].Commands[0]), firstLine(second.Clone[1].Commands[0]),
-			firstLine(second.Clone[2].Commands[0])}
-		if !slices.Equal(reran, want) {
-			t.Fatalf("the reused box ran %q, want its clone steps alone: %q", reran, want)
-		}
-
-		// AND A CLONE THAT FAILS THERE ENDS THE LAUNCH.
-		box.ExecFunc = func(_ context.Context, cmd string, _ ExecOptions) (ExecResult, error) {
-			if strings.Contains(firstLine(cmd), "'api'/.git") {
-				return ExecResult{ExitCode: 128, Stderr: "fatal: repository not found"}, nil
-			}
-			return ExecResult{}, nil
-		}
-		third := second
-		third.Clone = slices.Clone(second.Clone)
-		resumeInItsBox(t, rig)
-		_, err = rig.launchVia(t.Context(), rig.manager, third)
-		var setup *SetupError
-		if !errors.As(err, &setup) || setup.Step != "clone api" || setup.Exit != 128 {
-			t.Fatalf("Launch = %v, want the api clone's failure", err)
-		}
-		if !slices.Contains(rig.provider.KilledIDs(), res.SandboxID) {
-			t.Fatalf("the reused box whose clone failed was not killed: %v", rig.provider.KilledIDs())
-		}
-		if got := len(rig.runner.Started()); got != 2 {
-			t.Fatalf("%d runs were started, want the first two alone", got)
-		}
-		rig.finished("t1")
-	})
 }
 
 // scriptedBoxes is a provider whose every box answers its commands through
