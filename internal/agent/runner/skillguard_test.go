@@ -2,6 +2,7 @@ package runner_test
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -181,14 +183,56 @@ func TestTheExecutorIsRefusedAToolBeforeItsSkillIsLoaded(t *testing.T) {
 	req := guardedLaunch(t, newCapture(), tools.OriginBuiltin, 1)
 	bridged := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"hi"}`)}})
 
-	// The refusal names the exact call to make, because the error IS the
-	// recovery path.
+	// The refusal names the skill to load, by the name the run's harness
+	// lists it under, and the harness's own tool as the loader: the error
+	// IS the recovery path, and the run was never told a key or handed
+	// load_tool_skill.
 	refusal := bridged[0]
 	if !refusal.Failed {
 		t.Fatalf("the covered tool ran before its skill was loaded: %q", refusal.Result)
 	}
-	if !strings.Contains(refusal.Result, `load_tool_skill(key="chat-conventions")`) {
-		t.Fatalf("the refusal does not name the call:\n%s", refusal.Result)
+	if !strings.Contains(refusal.Result, "Load the skill crewlet:chat-conventions with your skill tool") ||
+		strings.Contains(refusal.Result, "load_tool_skill") {
+		t.Fatalf("the refusal does not name the skill as the run's harness lists it:\n%s", refusal.Result)
+	}
+}
+
+// THE EXECUTOR'S TOOL SKILLS ARE HANDED TO ITS HARNESS AS ITS OWN: each skill
+// its phase matches, named as its harness lists it, described by its summary
+// — a required one saying so — and with the body a load of it answers. Its
+// prompt lists none. The names are on the parked state, which every later
+// opening of the run's bridge reads a reported load by.
+//
+// Mutation: list the skills in the executor's prompt as well, and the run is
+// offered every skill twice; leave the names off the parked state, and a
+// bridge opened after a restart reads no load the harness reports.
+func TestTheExecutorsSkillsAreHandedToItsHarness(t *testing.T) {
+	t.Parallel()
+	r, launcher := guardedRunner(t, newCapture(), tools.OriginBuiltin)
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	req := launcher.last(t)
+	want := runner.HandedSkills{{Key: "chat-conventions", Skill: sandbox.Skill{
+		Name: "chat-conventions",
+		Description: "how this company writes on chat Required: load this skill before " +
+			"you call the tools it covers.",
+		Body:     "# Chat conventions\n\nhow this company writes on chat\n\nAlways thread your reply.\n",
+		Required: true,
+	}}}
+	if !slices.Equal(req.Skills, want) {
+		t.Fatalf("the run's harness is handed %+v, want %+v", req.Skills, want)
+	}
+	if strings.Contains(req.System, "## Tool skills") || strings.Contains(req.System, "chat-conventions") {
+		t.Errorf("the executor's prompt lists a skill its harness lists itself:\n%s", req.System)
+	}
+	suspended, ok := r.Suspended()
+	if !ok {
+		t.Fatal("the launch recorded no suspension")
+	}
+	if got := suspended.State.NativeSkills; !maps.Equal(got,
+		map[string]string{"crewlet:chat-conventions": "chat-conventions"}) {
+		t.Errorf("the parked state records the handed names %v", got)
 	}
 }
 
@@ -226,10 +270,10 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	}
 }
 
-// A REQUIRED SKILL ON AN MCP TOOL IS ENFORCED as the catalogue promised it.
+// A REQUIRED SKILL ON AN MCP TOOL IS ENFORCED as its harness was told it is.
 // An executor holds every MCP tool its seat does from its launch, and its
-// prompt lists the skills for every tool in its universe — so the guard is
-// armed over the same universe, and the tool is refused until its skill is
+// harness is handed the skills for every tool in its universe — so the guard
+// is armed over the same universe, and the tool is refused until its skill is
 // read.
 func TestARequiredSkillOnAnMCPToolIsEnforced(t *testing.T) {
 	t.Parallel()
@@ -238,8 +282,8 @@ func TestARequiredSkillOnAnMCPToolIsEnforced(t *testing.T) {
 	play(t, req, run{calls: []llm.ToolCall{
 		call(t, "slack_post", `{"text":"hi"}`),
 	}})
-	if !strings.Contains(req.System, "`chat-conventions` (required") {
-		t.Fatalf("the catalogue does not list the skill as required:\n%s", req.System)
+	if len(req.Skills) != 1 || req.Skills[0].Key != "chat-conventions" || !req.Skills[0].Skill.Required {
+		t.Fatalf("the run's harness is not handed the skill as required: %+v", req.Skills)
 	}
 	blocked := pub.blocked()
 	if len(blocked) != 1 || blocked[0].ToolName != "slack_post" {

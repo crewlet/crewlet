@@ -31,9 +31,30 @@ func allSkills() *fakeCatalogue {
 			key: "tool:refresh_memory", tool: "refresh_memory",
 			summary: "Re-filter personal memory after recon changed the picture.",
 			body:    "MEMORY-BODY",
-			phases:  []Phase{PhaseExecute},
+			phases:  []Phase{PhaseExecute, PhaseSubagent},
 		},
 	}}
+}
+
+// worker is the prompt of a delegated worker holding tools and servers,
+// cataloguing cat: the phase whose catalogue every case below reads, as the
+// executor's skills are its harness's own and its prompt lists none.
+func worker(seat Seat, cat SkillCatalogue, tools, servers []string) string {
+	return BuildSubagent(seat, SubagentInput{
+		ParentSystemPrompt: "P", AvailableTools: tools, MCPServers: servers, Skills: cat,
+	}).Text
+}
+
+// THE EXECUTOR'S PROMPT LISTS NO TOOL SKILL, nor the loader: its skills are its
+// harness's own, which lists each to its model and loads it with its own skill
+// tool (internal/agent/runner, handedskills.go). A catalogue here would offer
+// every skill twice and name a loader the harness is never listed.
+func TestTheExecutorsPromptListsNoToolSkill(t *testing.T) {
+	t.Parallel()
+	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: []string{
+		"refresh_memory", "load_tool_skill", "reflect_and_persist",
+	}}).Text
+	excludes(t, p, "## Tool skills", "load_tool_skill", "(required — load before use)")
 }
 
 // The catalogue is one line per skill: key + summary. Bodies are never
@@ -44,13 +65,8 @@ func TestNoPhaseInlinesSkillBodies(t *testing.T) {
 	cat := allSkills()
 	s := engineer()
 	for name, p := range map[string]string{
-		"executor": BuildExecutor(s, ExecutorInput{
-			AvailableTools: []string{"refresh_memory"}, Skills: cat, MCPServers: engineerServers,
-		}).Text,
-		"review": BuildReview(s, ReviewInput{Skills: cat, MCPServers: engineerServers}).Text,
-		"subagent": BuildSubagent(s, SubagentInput{
-			ParentSystemPrompt: "P", Skills: cat, MCPServers: engineerServers,
-		}).Text,
+		"review":   BuildReview(s, ReviewInput{Skills: cat, MCPServers: engineerServers}).Text,
+		"subagent": worker(s, cat, []string{"refresh_memory"}, engineerServers),
 	} {
 		t.Run(name, func(t *testing.T) {
 			excludes(t, p, "MENTIONS-BODY", "GITHUB-BODY", "MEMORY-BODY")
@@ -72,17 +88,15 @@ func TestNoPhaseInlinesSkillBodies(t *testing.T) {
 	}
 }
 
-func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
+func TestACatalogueFiresOnToolsAndServers(t *testing.T) {
 	t.Parallel()
 	cat := allSkills()
 
 	// A tool-keyed skill needs its tool in the surface.
-	without := BuildExecutor(engineer(), ExecutorInput{Skills: cat, MCPServers: engineerServers}).Text
+	without := worker(engineer(), cat, nil, engineerServers)
 	excludes(t, without, "tool:refresh_memory")
 
-	with := BuildExecutor(engineer(), ExecutorInput{
-		AvailableTools: []string{"refresh_memory"}, Skills: cat, MCPServers: engineerServers,
-	}).Text
+	with := worker(engineer(), cat, []string{"refresh_memory"}, engineerServers)
 	contains(t, with, "## Tool skills", "tool:refresh_memory",
 		"Re-filter personal memory after recon")
 
@@ -91,8 +105,7 @@ func TestPlanCatalogueFiresOnToolsAndServers(t *testing.T) {
 	contains(t, without, "mcp:github", "skill:platform_mentions")
 
 	// A surface holding neither server gets neither skill.
-	excludes(t, BuildExecutor(lead(), ExecutorInput{Skills: cat}).Text,
-		"mcp:github", "skill:platform_mentions")
+	excludes(t, worker(lead(), cat, nil, nil), "mcp:github", "skill:platform_mentions")
 }
 
 // A SERVER SKILL FIRES ON THE SERVERS THE SURFACE HOLDS, which is the set the
@@ -106,16 +119,15 @@ func TestAServerSkillFiresOnTheServersTheSurfaceHolds(t *testing.T) {
 	cat := allSkills()
 	// The engineer declares mcp_env blocks for atlassian and github; its
 	// surface holds neither, as when both are turned off.
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{Skills: cat}).Text,
-		"mcp:github", "skill:platform_mentions")
+	excludes(t, worker(engineer(), cat, nil, nil), "mcp:github", "skill:platform_mentions")
 	// The lead declares no block at all; its surface holds github, as a
 	// shared server's tools are held.
-	held := BuildExecutor(lead(), ExecutorInput{Skills: cat, MCPServers: []string{"github"}}).Text
+	held := worker(lead(), cat, nil, []string{"github"})
 	contains(t, held, "mcp:github")
 	excludes(t, held, "skill:platform_mentions")
 	for name, p := range map[string]string{
 		"review":   BuildReview(lead(), ReviewInput{Skills: cat, MCPServers: []string{"atlassian"}}).Text,
-		"subagent": BuildSubagent(lead(), SubagentInput{ParentSystemPrompt: "P", Skills: cat, MCPServers: []string{"atlassian"}}).Text,
+		"subagent": worker(lead(), cat, nil, []string{"atlassian"}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			contains(t, p, "skill:platform_mentions")
@@ -129,9 +141,7 @@ func TestAServerSkillFiresOnTheServersTheSurfaceHolds(t *testing.T) {
 // downstream would report it as anything but a larger bill.
 func TestCatalogueOrdersEntriesByKey(t *testing.T) {
 	t.Parallel()
-	p := BuildExecutor(engineer(), ExecutorInput{
-		AvailableTools: []string{"refresh_memory"}, Skills: allSkills(), MCPServers: engineerServers,
-	}).Text
+	p := worker(engineer(), allSkills(), []string{"refresh_memory"}, engineerServers)
 	order(t, p, "- `mcp:github`", "- `skill:platform_mentions`", "- `tool:refresh_memory`")
 }
 
@@ -140,12 +150,10 @@ func TestCatalogueOrdersEntriesByKey(t *testing.T) {
 func TestCatalogueCollapsesAMultilineSummary(t *testing.T) {
 	t.Parallel()
 	cat := &fakeCatalogue{skills: []fakeSkill{{
-		key: "skill:multiline", tool: "anything",
+		key: "skill:multiline", tool: "anything", phases: []Phase{PhaseSubagent},
 		summary: "First sentence here.\nSecond sentence here.\n",
 	}}}
-	p := BuildExecutor(engineer(), ExecutorInput{
-		AvailableTools: []string{"anything"}, Skills: cat,
-	}).Text
+	p := worker(engineer(), cat, []string{"anything"}, nil)
 	contains(t, p, "- `skill:multiline` — First sentence here. Second sentence here.")
 	excludes(t, p, "\nSecond sentence here.")
 }
@@ -156,10 +164,11 @@ func TestCatalogueCollapsesAMultilineSummary(t *testing.T) {
 func TestCatalogueSubstitutesSkillVariables(t *testing.T) {
 	t.Parallel()
 	cat := &fakeCatalogue{
-		skills: []fakeSkill{{key: "tool:x", tool: "x", summary: "base is ${wiki_base_url}"}},
-		vars:   map[string]string{"wiki_base_url": "https://acme.example.com/wiki"},
+		skills: []fakeSkill{{key: "tool:x", tool: "x", phases: []Phase{PhaseSubagent},
+			summary: "base is ${wiki_base_url}"}},
+		vars: map[string]string{"wiki_base_url": "https://acme.example.com/wiki"},
 	}
-	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: []string{"x"}, Skills: cat}).Text
+	p := worker(engineer(), cat, []string{"x"}, nil)
 	contains(t, p, "base is https://acme.example.com/wiki")
 	excludes(t, p, "${wiki_base_url}")
 }
@@ -182,17 +191,11 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 		},
 	}}
 	s := engineer()
-	for name, p := range map[string]string{
-		"executor": BuildExecutor(s, ExecutorInput{Skills: cat, MCPServers: engineerServers}).Text,
-		"subagent": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: cat, MCPServers: engineerServers}).Text,
-	} {
-		t.Run(name, func(t *testing.T) {
-			contains(t, p, "- `mcp:github` (required — load before use) — GITHUB-SUMMARY")
-			contains(t, p, "engine rejects calls")
-			// Only the required entry is marked.
-			contains(t, p, "- `skill:platform_mentions` — MENTIONS-SUMMARY")
-		})
-	}
+	p := worker(s, cat, nil, engineerServers)
+	contains(t, p, "- `mcp:github` (required — load before use) — GITHUB-SUMMARY")
+	contains(t, p, "engine rejects calls")
+	// Only the required entry is marked.
+	contains(t, p, "- `skill:platform_mentions` — MENTIONS-SUMMARY")
 
 	// Review is the exception: it has no domain tools and no
 	// load_tool_skill, so nothing is enforced there and the marker would
@@ -207,9 +210,9 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	excludes(t, rv, "load_tool_skill")
 
 	// No enforcement note when nothing catalogued is required.
-	advisory := BuildExecutor(s, ExecutorInput{Skills: &fakeCatalogue{skills: []fakeSkill{
-		{key: "mcp:github", mcpServer: "github", summary: "GITHUB-SUMMARY"},
-	}}, MCPServers: engineerServers}).Text
+	advisory := worker(s, &fakeCatalogue{skills: []fakeSkill{
+		{key: "mcp:github", mcpServer: "github", summary: "GITHUB-SUMMARY", phases: []Phase{PhaseSubagent}},
+	}}, nil, engineerServers)
 	contains(t, advisory, "## Tool skills")
 	excludes(t, advisory, "(required — load before use)", "engine rejects calls")
 }
@@ -222,12 +225,11 @@ func TestNoRegistryMeansNoSkillScaffolding(t *testing.T) {
 	s := engineer()
 	empty := &fakeCatalogue{}
 	for name, p := range map[string]string{
-		"executor/nil": BuildExecutor(s, ExecutorInput{AvailableTools: []string{
+		"executor": BuildExecutor(s, ExecutorInput{AvailableTools: []string{
 			"reflect_and_persist", "refine_skill", "query_knowledge", "refresh_memory",
 		}}).Text,
-		"executor/empty": BuildExecutor(s, ExecutorInput{Skills: empty}).Text,
 		"review/empty":   BuildReview(s, ReviewInput{Skills: empty}).Text,
-		"subagent/empty": BuildSubagent(s, SubagentInput{ParentSystemPrompt: "P", Skills: empty}).Text,
+		"subagent/empty": worker(s, empty, nil, nil),
 	} {
 		t.Run(name, func(t *testing.T) {
 			excludes(t, p, "## Tool skills",
@@ -237,12 +239,11 @@ func TestNoRegistryMeansNoSkillScaffolding(t *testing.T) {
 	}
 }
 
-// The executor's catalogue is scoped to the tools it has available, so a skill
-// for a tool this executor cannot call must not appear.
-func TestExecuteCatalogueIsScopedToTheExecutorsSurface(t *testing.T) {
+// A worker's catalogue is scoped to the tools its grant holds, so a skill for
+// a tool the worker cannot call must not appear.
+func TestAWorkersCatalogueIsScopedToItsSurface(t *testing.T) {
 	t.Parallel()
-	cat := allSkills()
-	p := BuildExecutor(engineer(), ExecutorInput{Skills: cat, MCPServers: engineerServers}).Text
+	p := worker(engineer(), allSkills(), nil, engineerServers)
 	excludes(t, p, "tool:refresh_memory")
 	// Server-keyed skills still fire: they key on the servers the surface
 	// holds, not on the tool list.

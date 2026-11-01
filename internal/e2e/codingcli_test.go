@@ -235,6 +235,9 @@ func shellQuote(s string) string {
 // brief it read on stdin.
 type codingArgs struct {
 	brief, systemFile, mcpConfig, settings string
+	// plugins are the directories `--plugin-dir` names: the run's own
+	// skills, as Claude Code is handed them ([codingSkills]).
+	plugins []string
 	// resume is the session `--resume` names: the asking run's own, which
 	// a run carrying it on with the answer continues; session the one
 	// `--session-id` names, which a run that starts one is started under.
@@ -269,6 +272,11 @@ func parseCodingArgs(args []string) (codingArgs, error) {
 			out.systemFile, err = value(i)
 		case "--mcp-config":
 			out.mcpConfig, err = value(i)
+		case "--plugin-dir":
+			var dir string
+			if dir, err = value(i); err == nil {
+				out.plugins = append(out.plugins, dir)
+			}
 		case "--resume":
 			out.resume, err = value(i)
 		case "--session-id":
@@ -522,7 +530,12 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks cod
 	// THE REQUEST THE SCRIPTED HARNESS ON THE HOST POSTS, so the one script
 	// answers both: the brief as the prompt, the bridge's tools by the
 	// server's own names, and every earlier round of this run.
-	req := modelRequest{System: system, Channel: channelAppend, Prompt: args.brief, Tools: names}
+	skills, err := codingSkills(args.plugins)
+	if err != nil {
+		return err
+	}
+	req := modelRequest{System: system, Channel: channelAppend, Prompt: args.brief, Tools: names,
+		Skills: skills}
 	var spent replyUsage
 	// finish plays the run's Stop hooks with its last word said: a note one
 	// hands back continues the turn, as Claude Code continues it, and
@@ -855,4 +868,79 @@ func callOverBridge(ctx context.Context, session *mcp.ClientSession, id, name st
 		return err.Error(), true
 	}
 	return callText(res), res.IsError
+}
+
+// codingSkills is what Claude Code lists to its model of the skills in plugins:
+// each skill of each plugin as `<plugin>:<name> — <description>`, read as Claude
+// Code reads them — the plugin's name off its `.claude-plugin/plugin.json`, a
+// skill's name and description off its SKILL.md's frontmatter — sorted. A
+// plugin that does not read is the run's failure, as a broken plugin is a
+// Claude Code run's load error.
+func codingSkills(plugins []string) ([]string, error) {
+	var out []string
+	for _, dir := range plugins {
+		raw, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json")) //nolint:gosec // the run's own plugin, in its box
+		if err != nil {
+			return nil, fmt.Errorf("reading the plugin at %s: %w", dir, err)
+		}
+		var manifest struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			return nil, fmt.Errorf("decoding the plugin at %s: %w", dir, err)
+		}
+		if manifest.Name == "" {
+			return nil, fmt.Errorf("the plugin at %s names nothing", dir)
+		}
+		files, err := filepath.Glob(filepath.Join(dir, "skills", "*", "SKILL.md"))
+		if err != nil {
+			return nil, err
+		}
+		for _, file := range files {
+			raw, err := os.ReadFile(file) //nolint:gosec // the run's own plugin, in its box
+			if err != nil {
+				return nil, err
+			}
+			name, description, err := skillFrontmatter(string(raw))
+			if err != nil {
+				return nil, fmt.Errorf("the skill at %s: %w", file, err)
+			}
+			out = append(out, manifest.Name+":"+name+" — "+description)
+		}
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// skillFrontmatter is a SKILL.md's name and description: the two lines of its
+// frontmatter the runner writes, each value a JSON string.
+func skillFrontmatter(file string) (name, description string, err error) {
+	head, ok := strings.CutPrefix(file, "---\n")
+	if !ok {
+		return "", "", errors.New("no frontmatter")
+	}
+	head, _, ok = strings.Cut(head, "\n---\n")
+	if !ok {
+		return "", "", errors.New("the frontmatter does not end")
+	}
+	for _, line := range strings.Split(head, "\n") {
+		key, value, ok := strings.Cut(line, ": ")
+		if !ok {
+			continue
+		}
+		var decoded string
+		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+			return "", "", fmt.Errorf("%s is not a quoted value: %w", key, err)
+		}
+		switch key {
+		case "name":
+			name = decoded
+		case "description":
+			description = decoded
+		}
+	}
+	if name == "" {
+		return "", "", errors.New("the frontmatter names no skill")
+	}
+	return name, description, nil
 }

@@ -487,6 +487,9 @@ type scriptedModel struct {
 	// land. Captured because "the block was rendered" and "the model was
 	// shown it" are different claims and only the second one matters.
 	systems []string
+	// skills are the skills of its own each request's harness listed to its
+	// model ([modelRequest.Skills]).
+	skills [][]string
 	// channels is which channel each request's system prompt came on
 	// ([modelRequest.Channel]).
 	channels []string
@@ -849,6 +852,7 @@ func (m *scriptedModel) sawRequest(phase string, req modelRequest) {
 	m.calls = append(m.calls, phase)
 	m.offered = append(m.offered, tools)
 	m.systems = append(m.systems, req.System)
+	m.skills = append(m.skills, slices.Clone(req.Skills))
 	m.channels = append(m.channels, req.Channel)
 	m.prompts = append(m.prompts, req.Prompt)
 	m.results = append(m.results, results)
@@ -908,6 +912,18 @@ func (m *scriptedModel) systemPrompts() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.systems...)
+}
+
+// skillsListed is the skills of its own each request's harness listed to its
+// model, aligned with [scriptedModel.seen].
+func (m *scriptedModel) skillsListed() [][]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([][]string, len(m.skills))
+	for i, listed := range m.skills {
+		out[i] = slices.Clone(listed)
+	}
+	return out
 }
 
 // toolResults is every tool result the model was handed back, flattened.

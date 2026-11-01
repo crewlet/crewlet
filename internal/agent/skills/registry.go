@@ -430,6 +430,44 @@ func (o *Offer) SkillsFor(phase prompts.Phase, surface prompts.Surface) []prompt
 // Render implements [prompts.SkillCatalogue].
 func (o *Offer) Render(text string) string { return o.registry.Render(text) }
 
+// Handed is one skill a phase hands its harness as the harness's own: the
+// skill, and what loading it answers.
+type Handed struct {
+	Skill  Skill
+	Loaded Loaded
+}
+
+// Hand is the skills a phase hands its harness as the harness's OWN rather
+// than listing them in its prompt: matched against surface as the phase's
+// catalogue is, and recorded as an offering as a rendered catalogue is — the
+// harness lists each to its model, which is the summary a catalogue line
+// carries — each with the body a load of it answers, which is what the
+// harness hands its model when the model loads it. Sorted by key, as a
+// catalogue is. A skill edited away between the match and its load is not
+// handed. Nil for a nil offer.
+func (o *Offer) Hand(phase prompts.Phase, surface prompts.Surface) []Handed {
+	if o == nil {
+		return nil
+	}
+	matching := o.registry.Matching(phase, surface)
+	out := make([]Handed, 0, len(matching))
+	offered := make([]Skill, 0, len(matching))
+	for _, s := range matching {
+		loaded, ok := o.registry.Load(s.Key)
+		if !ok {
+			continue
+		}
+		out = append(out, Handed{Skill: s, Loaded: loaded})
+		offered = append(offered, s)
+	}
+	if len(offered) > 0 {
+		o.mu.Lock()
+		o.offerings = append(o.offerings, offered)
+		o.mu.Unlock()
+	}
+	return out
+}
+
 // Drain returns every offering recorded since the last drain, oldest first,
 // and forgets them — so an offering is reported exactly once however many
 // callers drain it. Nil-safe.

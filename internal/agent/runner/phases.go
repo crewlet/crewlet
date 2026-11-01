@@ -565,26 +565,20 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // own ask, which its harness is handed as an appended system prompt and
 // the prompt it runs ([AgentRunRequest]).
 //
-// It also RECORDS what the prompt's tool-skill catalogue offered, as a
-// `knowledge_read` with `via: skill_injected` (see [emitter.skillsInjected]):
-// here, once, because this is the one frame that renders the catalogue, and
-// a record made anywhere else would describe a catalogue matched a second
-// time against a live registry rather than the one sent.
-//
 // THE BUILT SURFACE, not the snapshot it was built from: it also holds what
 // [Runner.surfaceWith] adds to its own copy — submit_work and `delegate` — so
-// every section gated on a tool being offered, and the tool-skill matching,
-// read built's names. Read off the snapshot, they never saw `delegate`, and
-// `## Your workers` was rendered for no seat at all. No tool the surface holds
-// is listed: each one's definition reaches the run over the bridge, under the
-// server it comes from, which also says what the server is for.
+// every section gated on a tool being offered reads built's names. Read off
+// the snapshot, they never saw `delegate`, and `## Your workers` was rendered
+// for no seat at all. No tool the surface holds is listed: each one's
+// definition reaches the run over the bridge, under the server it comes from,
+// which also says what the server is for. And NO TOOL SKILL IS LISTED either:
+// they are its harness's own, which lists them to its model itself
+// ([Runner.handSkills]).
 func (r *Runner) executorPrompt(ctx context.Context, notes string,
 	history []ledger.Iteration, built *tools.Surface, fresh []steer.Note,
 ) (system, user prompts.Prompt) {
-	offer := r.cfg.Skills.Offer()
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
 		AvailableTools: built.Universe().Names(),
-		MCPServers:     built.Universe().MCPServers(),
 
 		ThreadContext:       r.cfg.Context.ThreadContext,
 		PersonalMemory:      r.cfg.Context.PersonalMemory,
@@ -593,13 +587,7 @@ func (r *Runner) executorPrompt(ctx context.Context, notes string,
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
 		Workers:             r.workerCatalogue(),
-		// The tool-skill catalogue, offered against the surface this
-		// phase actually has — and nil where a company has published
-		// none, which keeps the prompt free of skill scaffolding rather
-		// than rendering an empty section.
-		Skills: offer.Catalogue(),
 	})
-	r.emitter().skillsInjected(ctx, phase.Execute, offer.Drain())
 	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription:     r.taskFor(notes),
 		PriorWork:           r.priorWork(ctx, history),

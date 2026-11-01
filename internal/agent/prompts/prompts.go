@@ -12,11 +12,13 @@
 //     reports as the ONE roster allowance pays for; then names; then a line
 //     naming the tool that finds the rest — see rosterAllowanceTokens, the
 //     only budget in this package the prompt itself enforces) + the
-//     executor's contract + prefetch blocks + tool-skills catalogue. No tool
-//     list: every tool it holds reaches its harness over the bridge.
+//     executor's contract + prefetch blocks. No tool list: every tool it
+//     holds reaches its harness over the bridge. No tool-skills catalogue:
+//     its harness is handed its skills as its own, and lists them itself
+//     (internal/agent/runner, handedskills.go).
 //   - Review — one-line identity + the rules that decide its decision + the
-//     round's evidence. No policies, no roster, no catalogue: the reviewer
-//     judges one round's record and needs nothing else.
+//     round's evidence + the skills scoped to review. No policies, no
+//     roster: the reviewer judges one round's record and needs nothing else.
 //   - Onboarding — one-line identity + the one-time setup contract + the
 //     tools it can discover.
 //   - Sub-agent — parent-provided task prompt + the tools it can discover +

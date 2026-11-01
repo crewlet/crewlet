@@ -87,14 +87,9 @@ type ExecutorInput struct {
 	// AvailableTools is every name on the surface built for this phase,
 	// the tools the phase adds to it included (`submit_work`, `delegate`)
 	// — never the registry snapshot it was built from, which holds none of
-	// those. It scopes skill matching, and gates every section that tells
-	// the model to call a tool (escalation, workers).
+	// those. It gates every section that tells the model to call a tool
+	// (escalation, workers).
 	AvailableTools []string
-
-	// MCPServers is every MCP server the surface's universe holds a tool
-	// of, sorted: what the skill catalogue's server triggers are matched
-	// against, as the guard matches them (see [Surface]).
-	MCPServers []string
 
 	// Workers is the rendered `## Your workers` block: one line per
 	// delegate template this seat may name, with what it is for and what
@@ -111,7 +106,9 @@ type ExecutorInput struct {
 	CounterpartyProfile string
 
 	// SynthesizedSkills is the block of skills this agent has learned for
-	// itself (distinct from the operator-authored tool skills in Skills).
+	// itself (distinct from the operator-authored tool skills, which are its
+	// harness's own and listed by it — internal/agent/runner,
+	// handedskills.go).
 	SynthesizedSkills string
 
 	// EpisodeRecall is episodic recall, frozen at turn start rather than
@@ -131,10 +128,6 @@ type ExecutorInput struct {
 	// turn start and handed over rather than left for the agent to fetch.
 	// Empty for every trigger that is not a chat thread reply.
 	ThreadContext string
-
-	// Skills is the tool-skill registry. Nil keeps the prompt free of skill
-	// scaffolding entirely.
-	Skills SkillCatalogue
 }
 
 // BuildExecutor renders the executor's system prompt, and its outline.
@@ -233,10 +226,10 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	if in.CounterpartyProfile != "" {
 		b.Heading(KeyCounterparty, "\n## Known counterparty", in.CounterpartyProfile)
 	}
-	// BEFORE the tool sections, because choosing a worker is a decision
-	// about how to do the work rather than about which tool to call, and
-	// the executor reads this prompt top-down: what it is, what it knows,
-	// who it can hand work to, then what it can call itself.
+	// LAST, because choosing a worker is a decision about how to do the
+	// work, and the executor reads this prompt top-down: what it is, what
+	// it knows, who it can hand work to. What it can call itself, and the
+	// tool skills that say how, are its harness's to list.
 	//
 	// THE LIST ALONE: what a worker is, what it may not do and that it
 	// answers inside this turn is `delegate`'s own description, which
@@ -245,10 +238,6 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 		b.Heading("workers", "\n## Your workers", in.Workers)
 	}
 
-	b.Heading("tool_skills", skillCatalogue(in.Skills, PhaseExecute, Surface{
-		Tools:      in.AvailableTools,
-		MCPServers: in.MCPServers,
-	})...)
 	return b.Build()
 }
 

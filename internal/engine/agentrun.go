@@ -269,6 +269,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// closes nothing: it holds the seat's mailbox, not its running
 		// work.
 		Fence: e.seatFence(handle),
+		// THE SKILLS ITS HARNESS IS HANDED AS ITS OWN, by the name it lists
+		// each under: a load the harness reports is the run's load of the
+		// key (internal/api/mcpbridge, skills.go).
+		Skills: req.Skills.Listed(),
 	}
 
 	settings := seatSandbox(company, handle)
@@ -345,6 +349,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		Spec:        spec,
 		Setup:       runEnv.setup,
 		MCPServers:  servers,
+		Skills:      req.Skills.Box(),
 		Model:       run.model,
 		ProviderKey: member.Key,
 		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
@@ -463,6 +468,12 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 		// disagree about where the notes are.
 		opening.Steer = sandbox.SteerWiring{Server: config.ToolServerName,
 			Tool: mcpbridge.SteerTool, URL: mcpbridge.SteerURL(endpoint)}
+	}
+	if len(s.Skills) > 0 {
+		// AND WHERE ITS HARNESS REPORTS LOADING ONE OF ITS SKILLS, by the
+		// same names.
+		opening.SkillLoads = sandbox.SkillWiring{Server: config.ToolServerName,
+			Tool: mcpbridge.SkillTool, URL: mcpbridge.SkillURL(endpoint)}
 	}
 	return opening, nil
 }
