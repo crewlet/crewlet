@@ -173,7 +173,7 @@ func TestACollectiveWakeIsCappedAndSaysSo(t *testing.T) {
 
 	if len(routed) != chatlet.MaxCollectiveRecipients {
 		t.Fatalf("an @channel in a room of %d woke %d, want %d — past the cap "+
-			"one broadcast starts a coding run for every agent in the room",
+			"one broadcast launches an executor for every agent in the room",
 			len(room), len(routed),
 			chatlet.MaxCollectiveRecipients)
 	}

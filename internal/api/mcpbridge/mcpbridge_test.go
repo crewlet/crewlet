@@ -621,7 +621,7 @@ func TestACallThatCouldNotRunIsToldInWordsNotItsError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a call that could not run failed the protocol: %v", err)
 	}
-	if said := text(res); !strings.Contains(said, "the turn this coding run belongs to has ended") ||
+	if said := text(res); !strings.Contains(said, "the turn you are working for has ended") ||
 		strings.Contains(said, "context canceled") || strings.Contains(said, "toolloop") {
 		t.Errorf("a call that could not run was told %q", said)
 	}

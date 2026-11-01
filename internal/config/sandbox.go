@@ -174,7 +174,7 @@ type SandboxProvider struct {
 	// said nothing would run without the one bound its turns have.
 	DefaultMaxTurns *int `yaml:"default_max_turns,omitempty" json:"default_max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one executor run on seats that name none. Unset = 96; 0 = uncapped."`
 
-	// CommitAttribution says whether every commit a coding run authors as
+	// CommitAttribution says whether every commit an executor authors as
 	// itself credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.ai>`,
 	// and `Crewlet-Run:` naming the run's turn. Git adds it, through a hook
 	// the run's box is given (internal/sandbox/codingagent), so it holds
@@ -189,7 +189,7 @@ type SandboxProvider struct {
 	//
 	// A POINTER, because unset is "on": a plain bool's zero would turn the
 	// credit off for every company that said nothing.
-	CommitAttribution *bool `yaml:"commit_attribution,omitempty" json:"commit_attribution,omitempty" desc:"Credit Crewlet on every commit a coding run authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, and Crewlet-Run naming the run. Unset = true; false = credit nothing."`
+	CommitAttribution *bool `yaml:"commit_attribution,omitempty" json:"commit_attribution,omitempty" desc:"Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, and Crewlet-Run naming the run. Unset = true; false = credit nothing."`
 
 	// Setup is the engine-wide provisioning applied to every box before
 	// each seat's own extras. The engine ships NO steps of its own — git
@@ -275,7 +275,7 @@ func (s *SandboxProvider) MaxTurns() int {
 	return *s.DefaultMaxTurns
 }
 
-// AttributesCommits reports whether a coding run's own commits credit Crewlet
+// AttributesCommits reports whether an executor's own commits credit Crewlet
 // ([SandboxProvider.CommitAttribution]): unless the company set false.
 // Nil-safe, as [SandboxProvider.MaxTurns] is: a company with no catalogue
 // runs no box, so nothing reads the answer.

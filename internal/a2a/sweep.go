@@ -112,7 +112,7 @@ func NewSweeper(channels Store, pub queue.Publisher, owed Owed, now func() time.
 	}
 	if owed == nil {
 		return nil, fmt.Errorf("a2a: no judge of whether an idle channel's answer is still " +
-			"owed, so the sweep would close the ask a colleague's coding run is still working on")
+			"owed, so the sweep would close the ask a colleague's executor is still working on")
 	}
 	return &Sweeper{keeper: k, owed: owed}, nil
 }

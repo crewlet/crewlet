@@ -841,7 +841,7 @@ func TestABareRetirementSkipsARecordNothingCanRead(t *testing.T) {
 	// Refused over the READABLE run, and over it alone: a listing that failed
 	// on the unreadable record would refuse too, for the wrong reason.
 	if err := bare.retireSeatRuns(t.Context(), swe, "swe", "retirement:1", 3); err == nil ||
-		!strings.Contains(err.Error(), "still has 1 coding runs") {
+		!strings.Contains(err.Error(), "still has 1 executor records") {
 		t.Fatalf("the retirement of a seat with one readable run = %v, want it refused over "+
 			"that run", err)
 	}

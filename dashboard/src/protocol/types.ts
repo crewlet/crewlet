@@ -399,7 +399,7 @@ export interface PhaseSteer {
   note_id: string;
   /** The kind of step that read it (`types.SteerBoundary`, one of
    *  `STEER_BOUNDARIES`): a round of the engine's loop, or a step of the
-   *  phase's coding run. */
+   *  executor in its box. */
   boundary: string;
 }
 
@@ -414,7 +414,7 @@ export interface WorkItemRef {
 /** Where in a turn a seat is (`livestate.Stage`). */
 export type TurnStage = "context" | "phase" | "parked";
 
-/** The turn a seat is on — running, or parked on a detached coding run. */
+/** The turn a seat is on — running, or parked while its executor runs in its box. */
 export interface LiveTurn {
   turn_id: string;
   work_item?: WorkItemRef | null;
@@ -441,7 +441,7 @@ export interface Paused {
   at: string;
   reason?: string;
   /** Whether the pause also ended the seat's running work: the turn it was
-   *  on, at its next round, and any coding run it had out, at once. */
+   *  on, at its next round, and its executor in its box, at once. */
   stop_running: boolean;
 }
 
@@ -716,7 +716,7 @@ export interface AgentRow extends Overlay {
   /**
    * The seat's AGENT ID, which the engine derives from its handle (ADR-0013):
    * a handle never changes, so neither does this, and no two seats share it.
-   * THE key a live overlay, a sandbox run, a spend row and a phase record
+   * THE key a live overlay, an executor's row, a spend row and a phase record
    * carry and pair with this row by — never `role`, which is prose two seats
    * may share.
    */
@@ -727,7 +727,7 @@ export interface AgentRow extends Overlay {
   [key: string]: unknown;
 }
 
-/** One in-flight detached coding run. */
+/** One executor in flight, in its box. */
 export interface ExecutorEntry {
   turn_id: string;
   /** What the seat was called when the run started — display only; the run
@@ -787,15 +787,15 @@ export interface ExecutorEntry {
 export type ExecutorStatus =
   "launching" | "running" | "awaiting_clarification" | "reseed" | "answered" | "resumed";
 
-/** One durable coding run, as the `executors` query answers it. */
+/** One executor's durable row, as the `executors` query answers it. */
 export interface ExecutorRow {
-  /** The RUN this job belongs to — one execution of a turn, and this
+  /** The turn this launch belongs to — one execution of a turn, and this
    *  record's own key. See `adr/0017`. */
   turn_id: string;
-  /** The job the row holds NOW — a turn can launch more than one — and what
-   *  `executor_tail` is asked by. On a parked run it names the question the
-   *  run waits on, which `answer_executor` answers by. Empty on a run the live
-   *  projection knows of before its durable row is read. */
+  /** The launch the row holds NOW — a turn can launch more than one — and
+   *  what `executor_tail` is asked by. On a parked executor it names the
+   *  question it waits on, which `answer_executor` answers by. Empty on an
+   *  executor the live projection knows of before its durable row is read. */
   launch_id?: string;
   /** The unit of work behind that run. Absent on a turn with no ledgerable
    *  trigger, and on a live entry whose durable row has not been read yet. */
@@ -3313,7 +3313,7 @@ export interface WorkItemTurn {
   seat: string;
   trigger?: string;
   /** How many completions were charged here; more than one for a turn that
-   *  parked on a coding run. */
+   *  parked on its executor. */
   segments: number;
   /** Input plus output, over every segment — what the task's spend sums. */
   tokens: number;
@@ -3323,8 +3323,8 @@ export interface WorkItemTurn {
   workers?: number;
   sent_back?: number;
   /** How the turn ended, off its newest segment: its decision, `failed`,
-   *  `stopped` where a person's pause ended it, or `suspended` while a coding
-   *  run is still out. */
+   *  `stopped` where a person's pause ended it, or `suspended` while its
+   *  executor is still out in its box. */
   outcome: string;
   phases: string[];
   /** The phase that failed, when `outcome` is `failed` because one did.
@@ -4786,7 +4786,7 @@ export interface TurnAnswer {
 }
 
 /**
- * What a running coding run has said, read from its box by the node that owns
+ * What an executor has said in its box, read from the box by the node that owns
  * it (`sandbox.Output`), redacted by the engine: what the asker's CURSOR lacks
  * — the text after the offset it holds through (`start`), or on `reset` the
  * last 256 KiB (what the record will hold) in whole lines, which replaces what
@@ -5842,8 +5842,8 @@ export interface TurnRow {
    *  suspension. A turn with no completion is either running or died
    *  mid-flight, and those look identical from a list. */
   complete: boolean;
-  /** Whether the turn is waiting on a detached coding run: its newest
-   *  completion is a suspension, and it completes again when the run is
+  /** Whether the turn is waiting on its executor in its box: its newest
+   *  completion is a suspension, and it completes again when the launch is
    *  collected. Never true beside `complete`. */
   parked?: boolean;
   phases: number;
@@ -5862,7 +5862,7 @@ export interface TurnRow {
   error?: string;
   error_kind?: string;
   /** Whether a PERSON ended the turn — a pause with `stop_running` reached it
-   *  at a round, or ended the coding run it was parked on. Never a failure:
+   *  at a round, or ended the executor it was parked on. Never a failure:
    *  a stopped completion carries no `failed`. Absent when nobody stopped it. */
   stopped?: boolean;
   input_tokens: number;
@@ -6218,7 +6218,7 @@ export interface DecisionItem {
   run?: ExecutorRow;
 }
 
-/** `decisions`: the open asks put to a person and the coding runs parked on
+/** `decisions`: the open asks put to a person and the executors parked on
  *  a question to them, newest first. */
 export interface DecisionsAnswer {
   handle: string;
@@ -6272,15 +6272,15 @@ export interface AnsweredWorkAsk {
   followed_up?: WorkAskFollowUp;
 }
 
-/** A coding run's question as the record of its answer states it
+/** An executor's question as the record of its answer states it
  *  (`queries.RunAsked`), asked in a work item's ask's shape (ADR-0068). */
 export interface AnsweredRunAsk {
   turn_id: string;
-  /** The launch that asked: a turn's run asks again under a new one. */
+  /** The launch that asked: a turn's executor asks again under a new one. */
   launch_id: string;
-  /** The seat whose coding run asked. */
+  /** The seat whose executor asked. */
   agent_handle: string;
-  /** The question: the title of what the run asked. */
+  /** The question: the title of what the executor asked. */
   question: string;
   /** What the question says beside its title, as Markdown. Always sent, ""
    *  where the run gave none. */
@@ -6293,8 +6293,8 @@ export interface AnsweredRunAsk {
   work_item?: WorkItemRef;
 }
 
-/** One coding run's question a person answered lately and the run took
- *  (`queries.AnsweredRunAsk`). A run's question has no thread, so it carries
+/** One executor's question a person answered lately and the executor took
+ *  (`queries.AnsweredRunAsk`). An executor's question has no thread, so it carries
  *  no `followed_up`, and `answer.by` is always the person it is listed for. */
 export interface AnsweredRun {
   /** When it was answered: `answer.at`. */
@@ -6306,11 +6306,11 @@ export interface AnsweredRun {
 }
 
 /** One question put to a person and closed lately: a work item's ask, or a
- *  coding run's question, which is the one that carries `run`. */
+ *  executor's question, which is the one that carries `run`. */
 export type AnsweredDecision = AnsweredWorkAsk | AnsweredRun;
 
 /** `answered_decisions`: the asks put to a person and closed in the last
- *  week and the coding runs' questions they answered in it, newest closing
+ *  week and the executors' questions they answered in it, newest closing
  *  first, together at most 50. */
 export interface AnsweredDecisionsAnswer {
   handle: string;
@@ -7859,7 +7859,7 @@ export interface QueryMap {
   brand: BrandAnswer;
   /** Every model, in an admin's reading or a member's (Settings › Models). */
   llm_entries: ModelEntriesAnswer;
-  /** Where a model's coding runs can happen, on each node. Admin. */
+  /** Where a model's executors can run, on each node. Admin. */
   llm_runners: RunnersAnswer;
   /** The models a CLI can run (`agent`, and `provider` for OpenCode). Admin. */
   llm_models: ModelsAnswer;

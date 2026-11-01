@@ -269,7 +269,7 @@ saying what the operation is (`01a0…-7…-….update-<task>`). A retry reuses 
 id, so it reuses the instant — including a turn re-run on another node, whose
 writes derive their ids from the unit of work and the instant it began rather
 than from the run. The exception is a unit of work older than the ledger — a
-trigger dispatched, or a turn resumed from a coding run, more than twenty-nine
+trigger dispatched, or a turn resumed from its executor, more than twenty-nine
 days after the work began: an id minted at that start would be one no node's
 ledger can vouch for any more, so that attempt mints at its own instant and
 records it in the coordination store, and a later attempt at the same work

@@ -2038,10 +2038,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armMemoryReads(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve seats' memory: %w", err)
 	}
-	// AND THE LIVE OUTPUT OF THE CODING RUNS IT OWNS, for the same reason
-	// and at the same point — see executortail.go.
+	// AND THE LIVE OUTPUT OF THE EXECUTORS' BOXES IT OWNS, for the same
+	// reason and at the same point — see executortail.go.
 	if err = e.armExecutorTails(ctx); err != nil {
-		return nil, fmt.Errorf("engine: serve coding runs' live output: %w", err)
+		return nil, fmt.Errorf("engine: serve executors' live output: %w", err)
 	}
 	// AND THE BOXES ON ITS HOST, which no other node can reach — see
 	// sandboxhost.go.

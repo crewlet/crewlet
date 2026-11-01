@@ -412,8 +412,8 @@ export interface TurnView {
   workItem: WorkItemRef | null;
   /**
    * Where in the turn the seat is, off the seat's own live overlay — ""
-   * where the seat is not on this turn. `parked` is the turn waiting on a
-   * detached coding run: running, and in nobody's loop but the run's.
+   * where the seat is not on this turn. `parked` is the turn waiting on its
+   * executor in its box: running, and in nobody's loop but the executor's.
    */
   stage: TurnStage | "";
   parked: boolean;
@@ -456,7 +456,7 @@ export function useTurnView(turnId: string): TurnView {
   // THE ANSWER IS ASKED AGAIN when this turn moves on the stream: a phase of
   // it lands, its seat's stage changes, or its reflection pass's sentinel
   // lands. The `turn` query is answered once, and what the phases do not
-  // carry — a coding run's announcement, a note's `agent_turn_steered`, what
+  // carry — a launch's announcement, a note's `agent_turn_steered`, what
   // the auxiliary model spent, the reflection pass — arrives only in its
   // answer. The engine publishes a turn's in-turn spend before its end and a
   // pass's spend before its sentinel, so those two moments read them whole.
@@ -583,7 +583,7 @@ export function useTurnView(turnId: string): TurnView {
 
   // RUNNING while a phase is live OR the seat's overlay says it is on this
   // turn: a turn gathering its context has no phase yet, and a parked one
-  // has none in flight while its coding run works.
+  // has none in flight while its executor works in its box.
   const running = phases.some((p) => p.live) || stage !== "";
   // THE TURN'S OPENING RECORD, which the engine publishes BEFORE the turn
   // gathers its context — so on a turn deep-linked while it does, or one
@@ -592,8 +592,8 @@ export function useTurnView(turnId: string): TurnView {
   // landed it headed that turn "Turn", run by "the engine": the one turn a
   // reader opens this page to find out about, described as nobody's.
   //
-  // THE DISPATCH'S, where the answer holds it. A parked coding run publishes
-  // one start per resumed segment under the same id, and a segment's trigger
+  // THE DISPATCH'S, where the answer holds it. A turn parked on its executor
+  // publishes one start per resumed segment under the same id, and a segment's trigger
   // is the box's completion rather than what asked for the work; one is read
   // only where the store's window dropped the first.
   const opened = useMemo(() => {
@@ -954,7 +954,7 @@ export function turnFacts(
 /**
  * Where the turn is: the phase as the value — "Execute" while it runs,
  * "Execute → Review" once it is over — and where in it as the note: "round 3
- * of 25", "waiting on a coding run", "2 iterations".
+ * of 25", "executor running in its box", "2 iterations".
  *
  * THE QUALIFIER IS THE NOTE, not a clause of the value: "Execute · round 3 of
  * 24" and "Execute → Review · 2 iterations" each wrapped to two lines in their
@@ -965,7 +965,7 @@ function phaseFact(view: TurnView): { value: string; note?: string } {
   if (view.stage === "context") return { value: "Gathering its context" };
   if (view.parked) {
     const at = view.own[view.own.length - 1];
-    return { value: at ? phaseLabel(at) : "Execute", note: "waiting on a coding run" };
+    return { value: at ? phaseLabel(at) : "Execute", note: "executor running in its box" };
   }
   if (call) {
     const round = roundOf(call);
@@ -1002,7 +1002,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
       {view.running &&
         (view.parked ? (
           <Tag variant="warning" dot>
-            Parked on a coding run{elapsed}
+            Parked while its executor runs{elapsed}
           </Tag>
         ) : (
           <Tag variant="info" dot>
@@ -1286,7 +1286,7 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * largest of them and was the one the engine did not measure at all: a turn
  * reporting ~6,900 tokens here had been billed 205,000. Every row is a phase
  * opening a conversation of its own: an executor's is the system prompt and
- * the brief its run is launched with, and the run's collection, which opens
+ * the brief it is launched with, and the launch's collection, which opens
  * none, measures nothing.
  *
  * The tool COUNT is the hover rather than a column of its own: forty
@@ -1573,17 +1573,17 @@ export function turnCrumbLabel(view: TurnView, ordinal: number | null): string {
 }
 
 /**
- * The coding run a PARKED turn is waiting on, live, at the head of its
- * Transcript.
+ * The executor a PARKED turn is waiting on, live in its box, at the head of
+ * its Transcript.
  *
  * A parked turn is the engine's "working" with no phase in flight: its
- * executor launched its detached run and suspended, and the run is the work —
- * for most of the turn, and for hours on a long one. Every watch link lands on
- * this tab, and without this card a parked turn's Transcript held nothing live
- * and no way to the thing that was: the run's output was a Timeline span and a
- * click away. It is the SAME
- * poll that span opens (`LiveOutput`, `executor_tail`), and the run's own page
- * is one link away for its history.
+ * executor launched in its box and the turn suspended, and the executor is the
+ * work — for most of the turn, and for hours on a long one. Every watch link
+ * lands on this tab, and without this card a parked turn's Transcript held
+ * nothing live and no way to the thing that was: the executor's output was a
+ * Timeline span and a click away. It is the SAME poll that span opens
+ * (`LiveOutput`, `executor_tail`), and the executor's own page is one link
+ * away for its history.
  */
 function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now: number }) {
   return (
@@ -1593,11 +1593,11 @@ function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now
         subtitle={run?.sub || undefined}
         actions={
           <a className="t-link" href={href(pathOf({ kind: "run", id: turnId }))}>
-            Open the run
+            Open the executor
           </a>
         }
       >
-        <Card.Title>Coding run</Card.Title>
+        <Card.Title>Executor</Card.Title>
       </Card.Header>
       {run?.launchId ? (
         <LiveOutput turnId={turnId} launchId={run.launchId} now={now} />
@@ -1606,8 +1606,9 @@ function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now
       ) : (
         // THE PARK IS PUSHED BEFORE THE ANNOUNCEMENT IS READ: the stage moves
         // on the agents push and the page asks for the turn again on it, so
-        // for a moment the run is known to be out and not yet which one.
-        <span className="t-caption">Finding its coding run…</span>
+        // for a moment the executor is known to be out and not yet which
+        // launch it is on.
+        <span className="t-caption">Finding its launch…</span>
       )}
     </Card>
   );
@@ -1678,13 +1679,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   const marks = useMemo(() => steerMarks(events, turnId), [events, turnId]);
   const calls = phases.reduce((n, p) => n + p.tools.length, 0);
 
-  // A PARKED TURN'S LIVE WORK IS ITS CODING RUN, and the Transcript draws it.
-  // The run is the waterfall's own OPEN run span — the one derivation of
-  // "which run is still out", read off the announcement and the records
-  // rather than a second guess here — and the phase it parked in is the
-  // executor's newest record: only an executor launches a run. Never a
-  // launch that stands among the turn's own for want of its round's record,
-  // which is the run's work and not the phase that waits on it.
+  // A PARKED TURN'S LIVE WORK IS ITS EXECUTOR, and the Transcript draws it.
+  // Its launch is the waterfall's own OPEN launch span — the one derivation
+  // of "which launch is still out", read off the announcement and the
+  // records rather than a second guess here — and the phase it parked in is
+  // the executor's newest record: only an executor launches. Never a launch
+  // that stands among the turn's own for want of its round's record, which is
+  // the launch's work and not the phase that waits on it.
   const parkedRun = view.parked
     ? (model.spans.find((s) => s.kind === "run" && s.open) ?? null)
     : null;
@@ -2054,7 +2055,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                           // then; one that completes keeps its key and its card,
                           // and the card latches, so finishing never closes it
                           // under a reader. A parked turn has no live phase: its
-                          // executor's card is opened instead, under the run.
+                          // executor's card is opened instead, under its live output.
                           defaultOpen={i === 0 || p.live || p.key === parkedPhase}
                         />
                       ))}
@@ -2070,7 +2071,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                         // "COLLEAGUES" IS A PROMISE the wire keeps: the A2A records
                         // carry the publishing turn (internal/a2a/service.go), and
                         // internal/events/types/turnbands_client_test.go holds it.
-                        subtitle="coding runs, delegations, colleagues, skills"
+                        subtitle="executor launches, delegations, colleagues, skills"
                       >
                         <Card.Title>What else it did</Card.Title>
                       </Card.Header>
@@ -2251,7 +2252,7 @@ function PhaseStrip({
                 )}
                 {p.failed && <Tag variant="danger">{failureWords(p.errorKind).tag}</Tag>}
                 <span className="spacer" />
-                <span className="phase-meta" title="tokens this phase spent, its run included">
+                <span className="phase-meta" title="tokens this phase spent, its launches included">
                   {fmtCount(roundTokens(p, launches.get(p.key)))}
                 </span>
                 {/* WHAT THE ENGINE MEASURED, and nothing where it measured

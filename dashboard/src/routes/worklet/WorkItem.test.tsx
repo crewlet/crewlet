@@ -898,15 +898,15 @@ test("a turn card shows the send-back notes", async () => {
   expect(card.textContent).not.toMatch(/[$€£]/);
 });
 
-// A TURN WITH NO COUNT HERE IS NOT NUMBERED, and a turn still out on a coding
-// run says it is parked rather than done.
+// A TURN WITH NO COUNT HERE IS NOT NUMBERED, and a turn still out on its
+// executor says it is parked rather than done.
 test("a turn's pills say how it went, and only what is worth a pill", () => {
   expect(turnPills(turn())).toEqual([]);
   expect(turnPills(turn({ sent_back: 2 })).map((p) => p.label)).toEqual([
     "sent back 2 times for another pass",
   ]);
   expect(turnPills(turn({ outcome: "suspended" })).map((p) => p.label)).toEqual([
-    "parked on a coding run",
+    "parked on its executor",
   ]);
   expect(turnPills(turn({ outcome: "failed" }))[0]?.variant).toBe("danger");
   expect(turnPills(turn({ outcome: "failed" }))[0]?.label).toBe("failed");

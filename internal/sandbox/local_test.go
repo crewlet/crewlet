@@ -1468,7 +1468,7 @@ func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 	}
 	blob, _ := os.ReadFile(box.layout.envFile())
 	if strings.Contains(string(blob), "SETUP_ONLY") {
-		t.Fatalf("the coding job inherited the setup phase's environment: %q", blob)
+		t.Fatalf("the executor's launch inherited the setup phase's environment: %q", blob)
 	}
 }
 

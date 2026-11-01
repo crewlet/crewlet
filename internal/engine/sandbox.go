@@ -1945,8 +1945,8 @@ func (e *Engine) boxServers(
 		attrs := append([]any{"seat", seat.Handle(), "server", missing.server}, missing.logAttrs()...)
 		if missing.waiting() {
 			log.InfoContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
-				"detail", "the coding agent is not given this server for this run: "+
-					missing.reason()+"; a coding run launched once "+missing.arrival()+
+				"detail", "the coding agent is not given this server for this launch: "+
+					missing.reason()+"; a launch made once "+missing.arrival()+
 					" is given it")...)
 			continue
 		}

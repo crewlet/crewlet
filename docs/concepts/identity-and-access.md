@@ -190,7 +190,7 @@ app. That is
 [ADR-0033](../../adr/0033-access-is-admin-and-one-permission-per-app.md).
 
 It replaced eleven grants — a read and a write for each surface, plus a
-deployment operator, a manager of people and a sandbox run — that nobody
+deployment operator, a manager of people and one to run a sandbox — that nobody
 inviting a teammate could tell apart, and that left somebody handed none of
 the right ones on a "no access yet" panel with no step they could take,
 because reading the company was itself a grant.
@@ -231,7 +231,7 @@ service account, a machine token, a Tier A token — reads the company's
   (`GET /iam/seats`);
 - **the agents' status** — who is working, on which phase, for how long and at
   what spend — and each seat's page, its status side;
-- **coding runs' status**;
+- **executors' status**;
 - **spend**, the token rollups and series, and **budgets**;
 - **schedules** and their runs, the **tools** list and the node's **health**;
 - who to ask: `lookup_colleague` and the person-facing colleague question —
@@ -240,15 +240,15 @@ service account, a machine token, a Tier A token — reads the company's
 - `viewer` — who they are, what they carry, which actions are theirs — and
   the live socket, which admits every resolved principal.
 
-**The overview carries status, never transcripts.** An agent's and a coding
-run's surfaces split into a **status** half and a **body** half, declared once
+**The overview carries status, never transcripts.** An agent's and an
+executor's surfaces split into a **status** half and a **body** half, declared once
 per surface and held by a walk that fails the build on a field nobody
 classified. The body is what a turn *said*: its prompts and prompt messages,
 its responses, its tool calls and their arguments, its round narration, its
-`llm_history` payloads, the text that triggered a live call, and a coding run's
+`llm_history` payloads, the text that triggered a live call, and an executor's
 task, question, reply and bridged calls. It goes to **an administrator**, to
 **whoever leads that seat** — `audit.seat.read`, the same rule that decides
-who reads a seat's diary — and, for a coding run's question, to **the person
+who reads a seat's diary — and, for an executor's question, to **the person
 it is put to**. Everybody else receives the status alone, with
 `body_withheld: true` and the body's version counters at zero, so a screen
 says "not shown to you" and never asks again for what it will not be sent.
@@ -450,8 +450,8 @@ memory overview, turns, phases and live bodies are its **lead's** to read as
 well as an administrator's — a lead steers, pauses and answers for their
 agents, and could do none of it well without reading what those agents did.
 It is `audit.seat.read`, decided per seat, and it is limited to questions
-about **one seat** (a seat page's own turns and phases, its memory, a coding
-run that seat launched). The company-wide trail stays admin's.
+about **one seat** (a seat page's own turns and phases, its memory, the
+executor that seat launched). The company-wide trail stays admin's.
 
 **Admin is host access: running code on every engine host**, and that is what
 it confers rather than a side effect of it. It is one permission by decision,
@@ -2388,7 +2388,7 @@ unlocks.
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even admin |
 | **Own record** | Marking an inbox, pinned views; a person's chat read state (`mark_chat_read`) | The owner, or admin, with the row's app |
-| **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); answering the question a coding run parked on (`answer_executor`); and reading one seat's own trail (`audit.seat.read`) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses no app still runs their team. For a seat's controls the owner is the person bound to the seat — for a note to a turn whose coding run is out, the seat the run's record names under its sealed anchor, which the asking node reads itself ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)); for a run's question it is the run's **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
+| **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); answering the question an executor parked on (`answer_executor`); and reading one seat's own trail (`audit.seat.read`) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses no app still runs their team. For a seat's controls the owner is the person bound to the seat — for a note to a turn whose executor is in its box, the seat the executor's record names under its sealed anchor, which the asking node reads itself ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)); for an executor's question it is its **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the executor's seat, so nobody who merely leads the requester answers a question the executor put to them |
 | **Saved view** | Saving a view | With `worklet`: a **personal** view (one naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's (a project's, a unit's, or the person whose page it sits on and whoever leads them) or admin's, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy (its fields, default assignee, tag renames and archives, archiving the project) and re-routing a task to another team | The project's lead, or admin, with `worklet` |
 | **Tidy** | Removing and restoring a work item; renaming, trashing and restoring a page; archiving a chat room and opening it again (`chat.channel.archive`, asked inside `update_channel` once the room is read) | The container's lead, the item's **reporter**, the page's or the room's **creator**, or admin — with the app. A unit's room has its unit as its container, so its unit's lead (or the lead of a unit above it) archives it; a named room has none, so nobody but its creator and admin does. An author tidies their own item and never a subtree beneath it |

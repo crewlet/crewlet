@@ -469,7 +469,7 @@ function settle(found: InlineToken[]): InlineToken[] {
  * model read>` hands the words to whoever owns the host. A link the
  * dashboard builds can only reach the company's own places, so a click there
  * carries nothing a writer chose but a validated name or number. The
- * Dashboard Assistant's answers, the Inbox, a coding run's question in its
+ * Dashboard Assistant's answers, the Inbox, an executor's question in its
  * Answer dialog (`components/writes.tsx`) and the links a chat message
  * carries (`routes/chatlet/MessageLinks.tsx`, whoever wrote the message) read
  * `checked` (ADR-0061).

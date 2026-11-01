@@ -191,7 +191,7 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 		return nil, builtin.ErrNoBox
 	case row.Status != sandbox.StatusRunning:
 		// NOT THE RUN WORKING IN IT: see [artifactBoxes].
-		return nil, fmt.Errorf("%w: the coding run is %s", builtin.ErrNoBox, row.Status)
+		return nil, fmt.Errorf("%w: the executor is %s", builtin.ErrNoBox, row.Status)
 	}
 	manager := rt.coordinator.Manager()
 	if manager == nil {
@@ -201,7 +201,7 @@ func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.Artifa
 		// ANOTHER NODE'S HOST: the seat moved since the run launched, and
 		// its box is a process tree or a container there, which only that
 		// node touches (internal/sandbox, boxhost.go).
-		return nil, fmt.Errorf("%w: the coding run's box is on node %s's host, and this turn "+
+		return nil, fmt.Errorf("%w: the executor's box is on node %s's host, and this turn "+
 			"runs on another node", builtin.ErrNoBox, row.LaunchNode)
 	}
 	// ATTACHED, NEVER RECONNECTED: the job is working in the box, and a
@@ -352,7 +352,7 @@ func (b *runBox) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 			// fault of this node. The check's own exit and nothing else: a
 			// check the box timed out, killed or couldn't run is the box's,
 			// never a path the caller named wrong.
-			return nil, fmt.Errorf("engine: %s is missing from the coding run's workspace, "+
+			return nil, fmt.Errorf("engine: %s is missing from the box's workspace, "+
 				"or %w", p, sandbox.ErrNotRegularFile)
 		default:
 			return nil, boxExited("check "+p, res)

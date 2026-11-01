@@ -160,7 +160,7 @@ export function accessLine(grants: readonly string[]): string {
 
 /**
  * What a seat's withheld BODY is drawn as — a prompt, an answer, a tool's
- * arguments, a coding run's task — where the engine sent only its status
+ * arguments, an executor's task — where the engine sent only its status
  * (`body_withheld`). Said, never drawn as an empty value, because "the prompt
  * was empty" and "you may not read the prompt" are opposite facts.
  */
@@ -169,14 +169,15 @@ export const WITHHELD_WORDS = "Hidden";
 /** Why, in one sentence: whose a seat's trail is to read. */
 export const WITHHELD_WHY = "Only this seat’s lead and admins can see it.";
 
-/** What a coding run's question is drawn as where the engine withheld it. */
+/** What an executor's question is drawn as where the engine withheld it. */
 export const QUESTION_WITHHELD = "Its question is hidden";
 
 /**
- * Whether a coding run's QUESTION was withheld from this reader: the engine
- * sent no question and said it withheld the run's body (`body_withheld`). The
- * people a question is put to are always sent it, so this is a reader looking
- * at somebody else's run — told so, never shown a run that asked nothing.
+ * Whether an executor's QUESTION was withheld from this reader: the engine
+ * sent no question and said it withheld the executor's body (`body_withheld`).
+ * The people a question is put to are always sent it, so this is a reader
+ * looking at somebody else's executor — told so, never shown one that asked
+ * nothing.
  */
 export function questionWithheld(run: { question?: string; body_withheld?: boolean }): boolean {
   return !run.question && run.body_withheld === true;

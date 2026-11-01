@@ -70,8 +70,8 @@ func (e *Engine) stopSeatRuns(ctx context.Context, seat uuid.UUID, p coord.SeatP
 	}
 	if err := rt.coordinator.StopSeat(ctx, handle, runStopOf(p)); err != nil {
 		log.WarnContext(ctx, "seat_runs_not_stopped", "seat", handle, "by", p.By, "error", err,
-			"detail", "the seat's running coding runs could not be stopped yet; the pause "+
-				"stops them when this node next reads the pauses, or when the seat is acquired")
+			"detail", "the seat's executor could not be stopped yet; the pause "+
+				"stops it when this node next reads the pauses, or when the seat is acquired")
 	}
 }
 

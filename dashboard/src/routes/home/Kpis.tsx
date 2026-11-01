@@ -59,7 +59,7 @@ export type KpiId = (typeof KPI_IDS)[number];
  * progress and tasks completed are Worklet's flow (`work_flow`). Where
  * the company does not run it they are not drawn, and the rest fill the row.
  * What waits on the reader's decision is not among them: the seats stopped on
- * a spent budget and the coding runs parked on a question arrive whatever
+ * a spent budget and the executors parked on a question arrive whatever
  * runs the tracker.
  */
 export const KPI_SERVICES: Readonly<Partial<Record<KpiId, Service>>> = {

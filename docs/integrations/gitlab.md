@@ -464,7 +464,7 @@ The prompt dispatches on the **routing reason**, not the event type, because one
 | `event_type` | Prompt behaviour |
 |---|---|
 | `merge_request.review_requested` | The request and the MR's description, and how a review is declined here: request review from the right reviewer and remove yourself |
-| `merge_request.assigned` / `issue.assigned` | The item, and how an assignment is declined here: reassign it. For an issue it also says who makes the change and under whose name: the agent itself, in its own checkout — the executor reading the prompt is its coding run, with its own shell and git — opening the MR under its own identity |
+| `merge_request.assigned` / `issue.assigned` | The item, and how an assignment is declined here: reassign it. For an issue it also says who makes the change and under whose name: the agent itself, in its own checkout — the executor reading the prompt is its coding CLI, running in its box with its own shell and git — opening the MR under its own identity |
 | `note.mention`, `issue.mention`, `merge_request.mention` | Who named the agent and what they wrote. A mention is addressed, so the turn engine holds it to an answer and the prompt does not ask whether the agent was really asked |
 | `issue.close` | **Stop** any in-flight work: an agent that keeps working a closed issue is spending budget on a deliverable nobody will take |
 | `pipeline.failed` | The pipeline and who triggered it. The prompt states plainly that the agent is being told about its own action deliberately, or a seat that has learned "I am not notified of what I did" reads its own name as a routing mistake |

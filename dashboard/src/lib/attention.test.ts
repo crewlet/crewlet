@@ -4,8 +4,8 @@
  * The attention queue: what needs a person, in one list.
  *
  * Every condition here was already known to the previous dashboard and each
- * lived in a different screen — a paused coding run was a badge on the board
- * (and a run whose box had been reclaimed appeared NOWHERE), a stopped seat was
+ * lived in a different screen — a paused executor was a badge on the board
+ * (and one whose box had been reclaimed appeared NOWHERE), a stopped seat was
  * a card among the healthy ones, a refusing budget was a bar on one seat's
  * page, and an engine with no active configuration was a line in a popover.
  */

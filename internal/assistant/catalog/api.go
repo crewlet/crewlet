@@ -724,23 +724,23 @@ func queryValues(v any) (url.Values, error) {
 
 // outsideRoutes are the read routes whose answers carry text from outside the
 // company, by path prefix: conversations on chat surfaces this engine does not
-// own, and the transcripts and coding runs that quoted them. An answer of one is
-// fenced as external; every other route's as a colleague's, unless it carries a
-// coding run's question (the decisions waiting on a person, and the ones they
+// own, and the transcripts and executors that quoted them. An answer of one is
+// fenced as external; every other route's as a colleague's, unless it carries an
+// executor's question (the decisions waiting on a person, and the ones they
 // answered: [decisionRows]) or names a connected knowledge base as its
 // backend.
 var outsideRoutes = []string{
 	"/agents/{id}/conversations", "/events", "/turns", "/executors", "/query/{what}",
 }
 
-// decisionRows is where a decisions answer keeps a coding run's question: on
+// decisionRows is where a decisions answer keeps an executor's question: on
 // a row's `run`, among the decisions waiting on a person (/worklet/decisions)
 // and the ones they answered (/worklet/decisions/answered) alike.
 const decisionRows, runAskField = "items", "run.question"
 
 // trustOf is a generic read's trust, by the route it was sent to and by what
-// its answer holds: a coding run's question is read by the one rule for a
-// coding run's words (provenance.Executor) whichever route carries it, as the
+// its answer holds: an executor's question is read by the one rule for an
+// executor's words (provenance.Executor) whichever route carries it, as the
 // curated reads of the same decisions read it.
 func (g generic) trustOf(args Args, answer any) provenance.Trust {
 	route, _ := g.table.Lookup(args.String("route"))

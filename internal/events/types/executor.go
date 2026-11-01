@@ -460,7 +460,7 @@ func (e ExecutorFailed) SummaryFor(actor string) string {
 	if reason == "" {
 		reason = "an unrecorded reason"
 	}
-	return lead(actor, "lost its executor's run to "+reason)
+	return lead(actor, "lost its executor's launch to "+reason)
 }
 
 // ExecutorStopped records an executor's run a PERSON ended: its seat was
@@ -641,10 +641,10 @@ func (e ExecutorAnswerGiven) SummaryFor(actor string) string {
 	if who == "" {
 		who = actor
 	}
-	return lead(who, "answered a parked coding run")
+	return lead(who, "answered a parked executor")
 }
 
-// AnswerVia is the route an answer reached a parked coding run by.
+// AnswerVia is the route an answer reached a parked executor by.
 type AnswerVia string
 
 const (
@@ -771,15 +771,15 @@ func (e ExecutorAnswered) AgentID() string { return e.Agent }
 func (e ExecutorAnswered) SummaryFor(actor string) string {
 	switch e.Outcome {
 	case AnswerResumed:
-		return lead(actor, "resumed a sandbox run with an answer")
+		return lead(actor, "resumed its executor with an answer")
 	case AnswerNotAwaiting:
-		return lead(actor, "was answered, but its sandbox run was not waiting")
+		return lead(actor, "was answered, but its executor was not waiting")
 	case AnswerGone:
-		return lead(actor, "was answered after its sandbox run had ended")
+		return lead(actor, "was answered after its executor had ended")
 	case AnswerDeclined:
-		return lead(actor, "was answered, but its sandbox run could not be resumed with the answer")
+		return lead(actor, "was answered, but its executor could not carry on with the answer")
 	case AnswerUnoffered:
-		return lead(actor, "was answered with a choice its sandbox run's question does not offer")
+		return lead(actor, "was answered with a choice its executor's question does not offer")
 	}
 	return lead(actor, "was answered")
 }

@@ -842,9 +842,9 @@ seat goes:
   you decommission them. They are listed by name, never by value, with links to
   **Company › Integrations** and **Settings › Secrets**. A seat added in this draft was never saved,
   so nothing exists for it outside the chart.
-- **The mailbox, coding runs and memory.** A removed agent seat's mailbox, and
+- **The mailbox, executor and memory.** A removed agent seat's mailbox, and
   the mail still addressed to it, is kept for 24 hours after the engine applies
-  the change and then retired, together with any coding runs it still has. Its
+  the change and then retired, together with its executor on any turn it still has out. Its
   memory (diary, episodes, counterparty profiles, onboarding markers) is kept,
   and a seat added later under the same handle reattaches to it. See
   [Seat Ownership](../concepts/seat-ownership.md#the-removed-seat).

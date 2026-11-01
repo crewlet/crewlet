@@ -46,7 +46,7 @@ func TestAResumedSegmentIsTaintedByWhatItsModelHolds(t *testing.T) {
 				evals.Call("r1", "list_executors", map[string]any{}),
 				evals.Call("c1", "create_task", map[string]any{"title": "Follow it up"})},
 			answer: `{"key":"ENG-7","title":"Follow it up"}`, first: true, second: true},
-		{name: "after a coding run's question the decision carried",
+		{name: "after an executor's question the decision carried",
 			tools: []string{"answer_executor", "create_task"},
 			propose: []evals.Round{
 				evals.Call("c1", "answer_executor", map[string]any{"turn_id": "t1",

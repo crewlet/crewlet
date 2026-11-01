@@ -729,7 +729,7 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	// completion, answer or resume can ever reach again.
 	if runsErr := m.runs(work, rec.Seat, rec.Handle, lease.Owner, lease.Epoch); runsErr != nil {
 		m.unmark(ctx, marked)
-		return false, fmt.Errorf("end the coding runs of retired seat %q: %w", handle, runsErr)
+		return false, fmt.Errorf("end the executor of retired seat %q: %w", handle, runsErr)
 	}
 	if deleteErr := m.deleteSubscriptions(work, rec.Seat, handle); deleteErr != nil {
 		m.unmark(ctx, marked)

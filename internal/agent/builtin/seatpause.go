@@ -100,9 +100,9 @@ func (d SeatPauseDeps) wired() bool {
 // `applied` means the pause is the fleet's record: every node holding or later
 // acquiring the seat holds its mail, its schedules are skipped, and — with
 // `stop_running` — its running work ends: the turn it is on at its next round,
-// and a coding run it has out at once, its box reclaimed, what it had spent
-// charged and its turn closed as stopped. A run parked on a person's question
-// stays parked behind the pause. The node holding the seat carries that out
+// and its executor in its box at once, the box reclaimed, what it had spent
+// charged and its turn closed as stopped. An executor parked on a person's
+// question stays parked behind the pause. The node holding the seat carries that out
 // from its own watched copy, typically within a second; nothing here waits for
 // it, because the record IS the pause and a node that has not heard yet holds
 // its mail — and ends the seat's running run — the moment it does.
@@ -132,7 +132,7 @@ func (t *pauseSeat) Description() string {
 	return "Pause an agent seat: it starts no new turn until somebody resumes it, its " +
 		"incoming work waits on its inbox in order, and its scheduled runs are skipped. " +
 		"The turn it is on finishes first unless `stop_running` is true, which ends that " +
-		"turn at its next round and any coding run the seat has out at once — its box " +
+		"turn at its next round and the seat's executor in its box at once — the box " +
 		"reclaimed — instead. Pausing a paused seat changes nothing, except to add " +
 		"`stop_running`. Resume it with " + ResumeSeatTool + "."
 }
@@ -153,8 +153,8 @@ func (t *pauseSeat) Parameters() map[string]any {
 			"stop_running": map[string]any{
 				"type": "boolean",
 				"description": "End the seat's running work rather than letting it " +
-					"finish: the turn it is on at its next round, and any coding run it " +
-					"has out at once, its box reclaimed. What was stopped is not run again.",
+					"finish: the turn it is on at its next round, and its executor in its " +
+					"box at once, the box reclaimed. What was stopped is not run again.",
 			},
 		},
 		"required": []any{"handle"},

@@ -2,9 +2,9 @@
  * Steer is offered on every turn that is still going.
  *
  * A note to a turn in the engine's own loop is read at its next round; one to
- * a turn whose coding run is out waits on the run's record and is read by the
- * run at its next step, after its question is answered, or by the review that
- * follows it (`internal/agent/steer`). Only an ended turn holds the control,
+ * a turn whose executor is in its box waits on the executor's record and is
+ * read by the executor at its next step, after its question is answered, or by
+ * the review that follows it (`internal/agent/steer`). Only an ended turn holds the control,
  * with the reason — and what the engine answered about WHEN the note is read is
  * what the toast says.
  */
@@ -87,12 +87,12 @@ describe("SteerTurnButton", () => {
     ).toBeTruthy();
   });
 
-  test("is pressable on a turn whose coding run is out — the note waits on the run", () => {
-    // A turn parked on its run is still running to the screen (its stage is
-    // `parked`), and that is all the control asks.
+  test("is pressable on a turn whose executor is in its box — the note waits on it", () => {
+    // A turn parked while its executor works is still running to the screen
+    // (its stage is `parked`), and that is all the control asks.
     render(<SteerTurnButton turnId="t-1" seat="CEO" running />);
     const steer = screen.getByRole("button", { name: /Steer/ });
-    expect(heldBecause(steer)).not.toMatch(/coding run is working/);
+    expect(heldBecause(steer)).not.toMatch(/executor is working/);
     fireEvent.click(steer);
     expect(screen.getByRole("dialog", { name: "Steer CEO's turn" })).toBeTruthy();
   });

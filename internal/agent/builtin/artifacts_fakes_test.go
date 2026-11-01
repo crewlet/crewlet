@@ -443,7 +443,7 @@ func founderPrincipal(grants ...iam.Grant) iam.Principal {
 		Stage: iam.StageActive, Grants: grants}
 }
 
-// fakeBox is a coding run's box: files by workspace path.
+// fakeBox is an executor's box: files by workspace path.
 type fakeBox struct {
 	files  map[string]string
 	listed []string // overrides the listing, for a box that lies

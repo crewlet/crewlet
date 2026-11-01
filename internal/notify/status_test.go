@@ -326,7 +326,7 @@ func TestAPostNamesTheNewestTurnHoldingTheIndicator(t *testing.T) {
 	second := d.Begin(t.Context(), "swe", "run-2", "plan", chatMeta(nil))
 	second.Phase("execute")
 	p.shownAtLeast(t, 2)
-	second.End(t.Context(), true) // suspended into a coding run
+	second.End(t.Context(), true) // suspended while its executor runs in its box
 	first.Phase("review")
 	p.shownAtLeast(t, 3)
 	back := d.Rejoin("swe", "run-2")

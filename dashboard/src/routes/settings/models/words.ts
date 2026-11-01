@@ -171,7 +171,7 @@ export function product(agent: string): string {
   return CLI_PRODUCTS[agent] ?? agent;
 }
 
-/** Where a model's coding runs happen, as the wizard's choice and the model's page both name it. */
+/** Where a model's executors run, as the wizard's choice and the model's page both name it. */
 export const RUN_IN: Record<RunnerCellName, string> = {
   direct: "On this engine's host",
   container: "In a container",

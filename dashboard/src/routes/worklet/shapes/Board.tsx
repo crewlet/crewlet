@@ -73,11 +73,11 @@ import { keyboardDrop, moveFor, withDrop, type Drop } from "./boardMove.ts";
 import type { WorkGroup, WorkProjectDetail, WorkSummary } from "~/protocol/index.ts";
 import { itemAddress } from "~/lib/work.ts";
 
-/** What the board knows about the seats and runs on its cards, keyed by task id or handle. */
+/** What the board knows about the seats and executors on its cards, keyed by task id or handle. */
 export interface BoardFacts {
   /** The turn running on a task, by task id — see `liveOnItems`. */
   live: ReadonlyMap<string, CardLive>;
-  /** A coding run on a task parked waiting on the reader, by task id. */
+  /** An executor on a task parked waiting on the reader, by task id. */
   waiting: ReadonlyMap<string, CardWaiting>;
   /** A holder's state, as the glyph on their badge, by handle. */
   status: (handle: string) => AvatarStatus | undefined;

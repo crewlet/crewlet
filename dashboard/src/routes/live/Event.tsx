@@ -269,7 +269,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 <Card.Header icon={<BrainGlyph size="sm" />}>
                   <Card.Title>
                     {phase.launch
-                      ? "The launch of its executor's run this event records"
+                      ? "The executor's launch this event records"
                       : "The phase this event records"}
                   </Card.Title>
                 </Card.Header>

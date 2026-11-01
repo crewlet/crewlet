@@ -385,9 +385,9 @@ func (c *Coordinator) deferAnswer(ctx context.Context, run PendingRun, trigger *
 	log.ErrorContext(ctx, "sandbox_answer_record_exhausted",
 		"turn_id", run.TurnID, "agent", run.AgentHandle, "delivery", delivery,
 		"attempts", MaxAnswerAttempts, "window_s", window.Seconds(), "error", detail,
-		"detail", "this node could not record this message as the answer the coding run "+
+		"detail", "this node could not record this message as the answer the executor "+
 			"that asked is waiting on, in every one of its attempts, so the message is run "+
-			"as the ordinary message it looks like; the run stays parked on its question "+
+			"as the ordinary message it looks like; the executor stays parked on its question "+
 			"and its box is bounded by pause_ttl_seconds")
 	// THE BUDGET STAYS SPENT, so this delivery does not start a second one
 	// if another copy of it reaches this node — the park a held seat makes

@@ -182,7 +182,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 		t.Fatalf("the busy seat requeued its mail %d times while its job ran", n)
 	}
 	if ran := ordinary.ran(); len(ran) != 0 {
-		t.Fatalf("a turn ran beside the coding job: %q", ran)
+		t.Fatalf("a turn ran beside the executor's launch: %q", ran)
 	}
 
 	// THE JOB COMPLETES: its completion resumes the turn, the seat stops

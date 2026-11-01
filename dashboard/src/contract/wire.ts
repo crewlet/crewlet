@@ -153,8 +153,8 @@ export const MAX_ARTIFACT_ROOMS = 8;
 /**
  * What a seat is doing: the ONE seat-state vocabulary, served on every
  * `agents` row as `activity` and computed by the engine alone
- * (`internal/api/livestate/activity.go`) from the seat's turn, its coding
- * runs' durable record, its pause, its placement across the fleet and its
+ * (`internal/api/livestate/activity.go`) from the seat's turn, its
+ * executor's durable record, its pause, its placement across the fleet and its
  * budget windows. A screen maps it to a tone and a label and derives nothing.
  *
  * EXACTLY THE ENGINE'S `livestate.Activities`, held both ways by

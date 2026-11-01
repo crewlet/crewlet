@@ -705,7 +705,7 @@ func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 		waits bool
 	}{
 		{name: "a path naming no file", box: &fakeBox{files: map[string]string{}},
-			class: tools.RefusalInvalid, says: "isn't a file in your coding run's workspace"},
+			class: tools.RefusalInvalid, says: "isn't a file in your workspace"},
 		{name: "a provider that did not answer", box: &fakeBox{err: sandbox.Because(
 			sandbox.WhyProviderUnavailable, errors.New(detail))},
 			class: tools.RefusalUnavailable, says: "didn't answer", waits: true},
@@ -788,7 +788,7 @@ func TestABoxReadIsToldByWhyItFailed(t *testing.T) {
 	got = r.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
 		"artifact": h.ID.String(), "base_version": 1, "source": map[string]any{"sandbox": "dist"}})
 	if tools.RefusalOf(got) != tools.RefusalInvalid ||
-		!strings.Contains(got.Output, "dist isn't a directory in your coding run's workspace") ||
+		!strings.Contains(got.Output, "dist isn't a directory in your workspace") ||
 		len(r.f.publishes) != 0 {
 		t.Errorf("a directory the workspace does not hold: %v %q", tools.RefusalOf(got), got.Output)
 	}

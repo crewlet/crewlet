@@ -556,10 +556,10 @@ export function ItemsView({
   usePeekNeighbours(neighbours, listQuery);
 
   // WHAT IS HAPPENING ON THE CARDS: the turn a seat is running on each task,
-  // its holder's state, and — for a bound reader — the coding runs parked
+  // its holder's state, and — for a bound reader — the executors parked
   // on a question put to THEM. All the engine's words: `activity` from the
   // push, the item the turn is charged to, and `decisions`' own reading of
-  // which runs wait on this person.
+  // which executors wait on this person.
   const live = useMemo(() => liveOnItems(agents), [agents]);
   const statuses = useMemo(() => {
     const out = new Map<string, AvatarStatus>();

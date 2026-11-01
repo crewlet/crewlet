@@ -5,7 +5,7 @@
  * # A list, and each item read in full beside it
  *
  * The left column is ONE list in a fixed order (`InboxColumn.tsx`): Needs
- * you first (the asks put to this person and the coding runs parked on a
+ * you first (the asks put to this person and the executors parked on a
  * question to them, from the engine's `decisions`; the seats stopped on a
  * spent budget; and the engine conditions a person decides,
  * `lib/attention.ts` with `where: seat`), then Updates, what reached them and
@@ -30,9 +30,9 @@
  * asks and mentions go instead ([elsewhereLine]). Needs you stays, because
  * what fills it without Worklet still arrives: the seats stopped on a
  * spent budget and the engine's conditions (the agents and budget pushes) and
- * the coding runs parked on a question (`decisions`, which answers them
- * whatever runs the tracker). So does Answered, for the runs' questions the
- * person answered (`answered_decisions`, which lists those on every company).
+ * the executors parked on a question (`decisions`, which answers them
+ * whatever runs the tracker). So does Answered, for the executors' questions
+ * the person answered (`answered_decisions`, which lists those on every company).
  *
  * # What is answered moves to Answered, and the next item opens
  *
@@ -50,7 +50,7 @@
  * # What was answered before stays to be looked back at
  *
  * The asks put to the reader and closed in the last week
- * (`answered_decisions`, by them or by somebody else), and the coding runs'
+ * (`answered_decisions`, by them or by somebody else), and the executors'
  * questions they answered in it, are a closed, counted Answered group after
  * Updates. Opened, its rows step with `j` and `k` like any other; a question
  * answered on this visit is in Needs you instead, never twice, and one the
@@ -233,7 +233,7 @@ export function Inbox() {
     pollMs: INBOX_POLL_MS,
   });
   // WHAT WAS ANSWERED LATELY, asked whatever runs the tracker: the asks are
-  // Worklet's, but a coding run's question is answered here on every company,
+  // Worklet's, but an executor's question is answered here on every company,
   // and the engine lists those it took beside the asks.
   const answeredRead = useQuery("answered_decisions", undefined, {
     enabled: bound,

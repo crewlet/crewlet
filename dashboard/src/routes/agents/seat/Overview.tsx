@@ -508,7 +508,7 @@ function CurrentTurn({
       </div>
       {asking && (
         <p className="prof-turn-ask">
-          Its coding run is waiting on a question:{" "}
+          Its executor is waiting on a question:{" "}
           <RunQuestionLine question={sandbox?.question} empty="(no question recorded)" />
         </p>
       )}

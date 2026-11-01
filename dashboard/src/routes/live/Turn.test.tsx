@@ -381,7 +381,7 @@ describe("turnFacts", () => {
     const running = fact(view({ running: true, stage: "phase", liveCall }), "Phase");
     expect([running?.value, running?.note]).toEqual(["Execute", "round 3 of 25"]);
     const parked = fact(view({ running: true, stage: "parked", parked: true }), "Phase");
-    expect([parked?.value, parked?.note]).toEqual(["Execute", "waiting on a coding run"]);
+    expect([parked?.value, parked?.note]).toEqual(["Execute", "executor running in its box"]);
   });
 
   test("a settled turn's phases hold one line, with its iterations as the note", () => {

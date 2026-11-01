@@ -742,8 +742,8 @@ func steerPreview(t Tool) proposal.Previewer {
 		c.move("note", "Note", "", a.String("note"))
 		return proposal.Preview{Title: "Steer turn", Target: a.String("turn_id"),
 			Note: "The turn reads the note at its next step — a round of the engine's own loop, " +
-				"or a step of the coding run it has out — and keeps to it for the rest of the turn; " +
-				"a run waiting on a person's answer reads it once that is answered.",
+				"or a step of its executor in its box — and keeps to it for the rest of the turn; " +
+				"an executor waiting on a person's answer reads it once that is answered.",
 			ApproveLabel: "Approve and send", Changes: c.rows(), Request: req}, nil
 	}
 }
@@ -767,19 +767,19 @@ func runAnswerPreview(t Tool) proposal.Previewer {
 			}
 		}
 		if run == nil {
-			return proposal.Preview{}, fmt.Errorf("%w: no coding run %s is parked on a question",
+			return proposal.Preview{}, fmt.Errorf("%w: no executor of turn %s is parked on a question",
 				ErrInvalidArguments, a.String("turn_id"))
 		}
-		// THE QUESTION THE PERSON IS SHOWN IS THE ONE ANSWERED: a run that
-		// moved on to another since the proposal was drafted is refused here,
+		// THE QUESTION THE PERSON IS SHOWN IS THE ONE ANSWERED: an executor
+		// that moved on to another since the proposal was drafted is refused here,
 		// before anybody approves an answer to a question it no longer asks.
 		if value(run, "launch_id") != a.String("launch_id") {
-			return proposal.Preview{}, fmt.Errorf("%w: coding run %s has moved on to another "+
-				"question since; read it again and answer that one", ErrInvalidArguments,
+			return proposal.Preview{}, fmt.Errorf("%w: the executor of turn %s has moved on to "+
+				"another question since; read it again and answer that one", ErrInvalidArguments,
 				a.String("turn_id"))
 		}
 		var c changes
-		c.fact("run", "Coding run", value(run, "agent_handle")+" on "+
+		c.fact("run", "Executor", value(run, "agent_handle")+" on "+
 			orDefault(value(run, "work_key"), "no task"))
 		c.fact("question", "Question", value(run, "question"))
 		if choice := a.String("choice"); choice != "" {
@@ -791,14 +791,14 @@ func runAnswerPreview(t Tool) proposal.Previewer {
 				}
 			}
 			if label == "" {
-				return proposal.Preview{}, fmt.Errorf("%w: %q is not an option of coding run "+
-					"%s's question", ErrInvalidArguments, choice, a.String("turn_id"))
+				return proposal.Preview{}, fmt.Errorf("%w: %q is not an option of the question "+
+					"turn %s's executor asked", ErrInvalidArguments, choice, a.String("turn_id"))
 			}
 			c.move("choice", "Choice", "", label)
 		}
 		c.move("answer", "Answer", "", a.String("answer"))
-		return proposal.Preview{Title: "Answer coding run", Target: a.String("turn_id"),
-			Note:         "The run resumes on the answer.",
+		return proposal.Preview{Title: "Answer executor", Target: a.String("turn_id"),
+			Note:         "The executor carries on with the answer.",
 			ApproveLabel: "Approve and answer", Changes: c.rows(), Request: req}, nil
 	}
 }

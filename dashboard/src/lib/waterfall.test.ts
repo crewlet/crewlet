@@ -544,7 +544,7 @@ describe("buildWaterfall", () => {
     expect(w.untimed.map((u) => `${u.kind}:${u.label}`)).toEqual(["phase:Execute"]);
   });
 
-  test("a turn that parked on a coding run is one turn: its phase spans the run it waited on", () => {
+  test("a turn that parked on its executor is one turn: its phase spans the launch it waited on", () => {
     // The executor's ONE record, published after the resume, carries its
     // rounds from before the park and after it.
     const execute = phaseRecord({

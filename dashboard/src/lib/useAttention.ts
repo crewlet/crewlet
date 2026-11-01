@@ -24,7 +24,7 @@ export function useAttention(): Attention[] {
   const engine = useEngineHealth();
   const org = useOrg();
   const nameOf = useMemo(() => nameOfIn(indexOrg(org)), [org]);
-  // THE DURABLE CODING RUNS, because a parked one is the longest-lived item
+  // THE EXECUTORS' DURABLE ROWS, because a parked one is the longest-lived item
   // this queue has by construction — it is waiting for a person — and what the
   // row says about it is how long its box is still held, which is the pause
   // window only the durable record carries. On the Executors board's own poll, so

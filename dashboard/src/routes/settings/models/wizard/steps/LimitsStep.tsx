@@ -38,7 +38,7 @@ export function LimitsStep({
       <FormField
         label="Processes at once"
         optional
-        helper={`CLI processes on the engine host for this model. Coding runs are not counted. Empty means ${DEFAULT_CLI_MAX_CONCURRENT}.`}
+        helper={`CLI processes on the engine host for this model. Executors are not counted. Empty means ${DEFAULT_CLI_MAX_CONCURRENT}.`}
         error={errors.concurrent}
       >
         {(field) => (

@@ -359,12 +359,12 @@ func readTools() []Tool {
 		{
 			Name: "list_decisions", Phrase: "list what waits on you",
 			Description: "What is waiting on the person: questions asked of them on tasks, and " +
-				"coding runs parked on a question for them. With list_agents' stopped seats, this " +
+				"executors parked on a question for them. With list_agents' stopped seats, this " +
 				"is the Inbox screen's Needs you.",
 			schema: object(nil, map[string]*schema{}),
 			Routes: []string{"GET /worklet/decisions"}, Fence: true,
-			// An ask is a colleague's; a coding run's is not, and is read by
-			// the one rule for a coding run's words (provenance.Executor).
+			// An ask is a colleague's; an executor's is not, and is read by
+			// the one rule for an executor's words (provenance.Executor).
 			TrustOf: outsideWhere(decisionRows, runAskField),
 			Build: func(map[string]any) (exec.Request, error) {
 				return get("GET /worklet/decisions", nil, nil)
@@ -375,8 +375,8 @@ func readTools() []Tool {
 					col("at", "Since", "at", tDatetime), col("key", "Task", "ask.key", tText),
 					prose("title", "Title", "ask.title"), prose("question", "Question", "ask.body"),
 					seat("asked_by", "Asked by", "ask.asked_by"),
-					seat("agent", "Coding run", "run.agent_handle"),
-					prose("run_question", "Run question", "run.question")},
+					seat("agent", "Executor", "run.agent_handle"),
+					prose("run_question", "Executor's question", "run.question")},
 				Open: &cards.Open{Screen: "inbox"}}}),
 			Label: func(map[string]any) string { return "Reading what waits on you" },
 		},
@@ -552,13 +552,13 @@ func readTools() []Tool {
 			Names: map[string]Directory{"handle": DirSeat},
 		},
 		{
-			Name: "list_executors", Phrase: "list coding runs",
-			Description: "Coding runs in flight and recent, including any parked on a question.",
+			Name: "list_executors", Phrase: "list executors",
+			Description: "Seats' executors in flight and recent, including any parked on a question.",
 			schema:      object(nil, map[string]*schema{}),
 			Routes:      []string{"GET /executors"}, Fence: true,
-			// A RUN'S QUESTION IS THE CODING CLI'S, a third party's model
+			// AN EXECUTOR'S QUESTION IS THE CODING CLI'S, a third party's model
 			// working from a brief that may be an outside chat message or a
-			// webhook's payload, read by the one rule for a coding run's
+			// webhook's payload, read by the one rule for an executor's
 			// words (provenance.Executor) wherever it is read.
 			TrustOf: outsideWhere("runs", "question"),
 			Build: func(map[string]any) (exec.Request, error) {
@@ -577,7 +577,7 @@ func readTools() []Tool {
 					col("updated", "Updated", "updated_at", tDatetime),
 					prose("question", "Question", "question"), col("turn", "Turn", "turn_id", tText)},
 				Open: &cards.Open{Screen: "live"}}}),
-			Label: func(map[string]any) string { return "Listing coding runs" },
+			Label: func(map[string]any) string { return "Listing executors" },
 		},
 		{
 			Name: "get_spend", Phrase: "read token spend",
@@ -955,8 +955,8 @@ func artifactKinds() []string {
 	return out
 }
 
-// outsideWhere is the trust of an answer whose rows (at rows) may carry a
-// coding run's question at field: the one trust decided for a coding run's
+// outsideWhere is the trust of an answer whose rows (at rows) may carry an
+// executor's question at field: the one trust decided for an executor's
 // words (provenance.Executor) where any row carries one, and where none does
 // the engine's own records, a colleague's by the one rule for a surface the
 // engine hosts.

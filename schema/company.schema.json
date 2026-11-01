@@ -3051,7 +3051,7 @@
       "additionalProperties": false,
       "properties": {
         "commit_attribution": {
-          "description": "Credit Crewlet on every commit a coding run authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, and Crewlet-Run naming the run. Unset = true; false = credit nothing.",
+          "description": "Credit Crewlet on every commit an executor authors as itself: Co-authored-by: Crewlet <noreply@crewlet.ai>, and Crewlet-Run naming the run. Unset = true; false = credit nothing.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
