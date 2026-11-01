@@ -5153,8 +5153,12 @@ preview and the change it would open say one thing — its state, the
 conflicted paths a record would hold and how many more there were — merged in
 a scratch of its own, in the node's read lane under one unit of its seat
 git-work share ([Fair share](#fair-share)), within a read's ten seconds of git:
-a merge that runs out of them answers `unknown`. No route asks for one yet;
-a comparison's question arrives with the code host's questions.
+a merge that runs out of them answers `unknown`. A comparison's question
+asks one beside its answer — the `preview` of `GET
+/code/repos/{name}/compare` ([A repository's
+content](../reference/api-endpoints.md#a-repositorys-content)) — and a
+comparison whose preview is `unknown` is answered without the tag that
+marks it immutable, since the same merge asked again may finish.
 
 ### Merge readiness
 
