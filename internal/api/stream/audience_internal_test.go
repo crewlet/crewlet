@@ -298,7 +298,7 @@ func TestAnAudienceReadsTheTrailOfTheSeatsTheTableAdmits(t *testing.T) {
 			Seats:     func() tokens.Seats { return seats },
 			Roster:    func() []map[string]any { return nil },
 			Org:       func() any { return map[string]any{} },
-			Tools:     func() []map[string]any { return nil },
+			Tools:     func() any { return nil },
 			Schedules: func() any { return []any{} },
 			Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
 			Chart:     chart,

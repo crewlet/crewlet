@@ -80,7 +80,10 @@ func runSuite(m *testing.M) int {
 type fakeRuntime struct {
 	state api.RuntimeState
 	fleet api.FleetState
-	tools []api.ToolInfo
+	tools []queries.ToolRow
+	// builtins are the engine's own tools as a seat is offered them,
+	// answered as they are set.
+	builtins []queries.ToolRow
 
 	// presenceHangs makes Fleet's presence read one that never returns on
 	// its own, the way a wedged broker's key scan does: it answers only
@@ -100,7 +103,9 @@ func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState {
 	return f.state
 }
 
-func (f *fakeRuntime) Tools() []api.ToolInfo { return f.tools }
+func (f *fakeRuntime) Tools() []queries.ToolRow { return f.tools }
+
+func (f *fakeRuntime) Builtins() []queries.ToolRow { return f.builtins }
 
 // Seats answers from the same state Snapshot does, as ShuttingDown does.
 func (f *fakeRuntime) Seats() []string { return f.state.Seats }
