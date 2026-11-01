@@ -181,6 +181,37 @@ const (
 	// string(OpExpungeCommit)}, with the same companions. It is no gate.
 	OpExpungeCommit OpKind = "expunge_commit"
 
+	// OpImportChunk lands one chunk of a repository's import — packs fetched
+	// from the host it is imported from and the refs they let it set — as a
+	// push row `via import`, on the repository's own subject
+	// ([ImportChunk]), decided by its committer alone, in its turn.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
+	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// import_chunk", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpImportChunk)}, with the same companions. It is no gate.
+	OpImportChunk OpKind = "import_chunk"
+
+	// OpImportDone ends a repository's import, making it active
+	// ([ImportDone]), on the repository's own subject, decided by its
+	// committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
+	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// import_done", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpImportDone)}, with the same companions. It is no gate.
+	OpImportDone OpKind = "import_done"
+
+	// OpMirrorSync moves a pull mirror onto its source as its home fetched
+	// it, as a push row `via mirror` ([MirrorSync]), on the repository's own
+	// subject, decided by its committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpExpungeRequest] states it;
+	// once a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// mirror_sync", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpMirrorSync)}, with the same companions. It is no gate.
+	OpMirrorSync OpKind = "mirror_sync"
+
 	// OpRename claims a new name for a tool-managed repository on that name's
 	// subject, leaving the old one redirecting to it ([Rename]).
 	//
@@ -523,11 +554,12 @@ const (
 	OpQueueSweep OpKind = "queue_sweep"
 )
 
-// OpKinds are the forty-nine, in the order they are documented.
+// OpKinds are the fifty-two, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
-	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
+	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpImportChunk, OpImportDone, OpMirrorSync, OpRename,
+	OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
 	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpMerge, OpEnqueue, OpDequeue,

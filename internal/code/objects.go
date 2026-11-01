@@ -257,6 +257,12 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	case ExpungeCommit:
 		out = append(out, written(p.RepoID, p.Add)...)
 		out = append(out, removed(p.RepoID, p.Retire)...)
+	case ImportChunk:
+		// AN IMPORT'S AND A SYNC'S PACKS, live packs of the repository
+		// from their record on, as a push's is.
+		out = append(out, written(p.RepoID, p.Packs)...)
+	case MirrorSync:
+		out = append(out, written(p.RepoID, p.Packs)...)
 	case Merge:
 		// A MERGE'S PACK, the objects its build wrote, which its push lands
 		// as a push lands its own; a fast-forward builds none.
@@ -284,9 +290,11 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 
 // packOps are the ops whose records write or remove rows of code_packs that
 // a record names — a push's, a compaction's, an expunge's begin's and its
-// commit's, a merge's, a queue's candidate's and its landing's; a purge
+// commit's, an import's chunk's, a mirror's sync's, a merge's, a queue's
+// candidate's and its landing's; a purge
 // removes rows its record does not list, and answers none.
-var packOps = []OpKind{OpPush, OpCompact, OpExpungeBegin, OpExpungeCommit, OpMerge, OpCandidate, OpLand}
+var packOps = []OpKind{OpPush, OpCompact, OpExpungeBegin, OpExpungeCommit, OpImportChunk, OpMirrorSync, OpMerge,
+	OpCandidate, OpLand}
 
 // written is the rows of code_packs refs write, each naming its object.
 func written(repoID string, refs []PackRef) []objstore.RecordReference {

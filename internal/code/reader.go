@@ -1489,6 +1489,17 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// from the committer's own snapshot.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.expungeDue(ctx, tx, q, &out) }
+	case ReadImportsDue:
+		// A SET READ OF THE DOMAIN, as the compaction's listing is, for the
+		// same reason: every chunk and end its home lands is decided again
+		// from the committer's own snapshot.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.importsDue(ctx, tx, q, &out) }
+	case ReadMirrorsDue:
+		// A SET READ OF THE DOMAIN, for the same reason: every sync is
+		// decided again from the committer's own snapshot.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.mirrorsDue(ctx, tx, q, &out) }
 	case ReadChangesDue:
 		// A SET READ, of the domain or of the one repository
 		// (changesdue.go): every record the home asks after it is decided
@@ -1618,6 +1629,10 @@ func (q ReadQuery) validate() error {
 		return q.validatePublicationDue()
 	case ReadExpungeDue:
 		return q.validateExpungeDue()
+	case ReadImportsDue:
+		return q.validateBareListing("an imports_due read lists every repository being imported")
+	case ReadMirrorsDue:
+		return q.validateBareListing("a mirrors_due read lists every repository with a mirror")
 	case ReadChangesDue:
 		return q.validateChangesDue()
 	case ReadIndexed:
@@ -2033,9 +2048,20 @@ func (q ReadQuery) validatePublicationDue() error {
 // since its partial index holds exactly the repositories it lists and a page
 // is MaxSnapshotItems of them.
 func (q ReadQuery) validateExpungeDue() error {
+	return q.validateBareListing("an expunge_due read lists every repository with an expunge open or a " +
+		"purge requested")
+}
+
+// validateBareListing is [ReadQuery.validate] for a duty listing that names
+// nothing but its page — `expunge_due`, `imports_due`, `mirrors_due`: the
+// engine's own, so NO asker, and no repository, filter, range, floor or
+// limit, since its partial index holds exactly the repositories it lists and
+// a page is MaxSnapshotItems of them. lists is the sentence a refusal says
+// what it lists in.
+func (q ReadQuery) validateBareListing(lists string) error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	if q.Asker != (Principal{}) {
-		return refused("asker", "an expunge_due read is the engine's own, which no principal makes")
+		return refused("asker", fmt.Sprintf("a %s read is the engine's own, which no principal makes", q.Kind))
 	}
 	for _, f := range []struct {
 		field string
@@ -2055,8 +2081,7 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"checks_running", q.ChecksRunning != nil},
 	} {
 		if f.set {
-			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
-				"purge requested, a page of MaxSnapshotItems at a time, and names nothing else")
+			return refused(f.field, lists+", a page of MaxSnapshotItems at a time, and names nothing else")
 		}
 	}
 	return nil
@@ -3127,6 +3152,154 @@ func (r *Reader) indexed(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Read
 	return rows.Err()
 }
 
+// importsDue serves one page of an `imports_due` read: the repositories being
+// imported, BY ID, each with its source, how many of its chunks have landed
+// and the version its row was read at — ONE WALK of code_repos_importing_idx
+// (replicated 0095), its partial predicate repeated verbatim, which holds
+// exactly the repositories being imported, keyset on the id after a cursor.
+// A FULL LISTING, never a delta from the last poll's, for the compaction's
+// listing's reason.
+func (r *Reader) importsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	if q.Cursor != "" && validRepoID("cursor", q.Cursor) != nil {
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	}
+	rows, err := tx.QueryContext(ctx, importsDueSQL, q.Cursor, r.pageRows)
+	if err != nil {
+		return fmt.Errorf("code: list the repositories being imported: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	for rows.Next() {
+		var (
+			c       ImportCandidate
+			source  string
+			version int64
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &source, &c.Seq, &version); err != nil {
+			return fmt.Errorf("code: list the repositories being imported: %w", err)
+		}
+		// AN IMPORTING REPOSITORY NAMES ITS SOURCE: its create's import or
+		// its pull mirror's, fixed at the create. One that names none is a
+		// row no apply of this build writes, listed with none, which its
+		// home ends rather than fetching from nowhere.
+		if src, err := remoteOf[ImportSource](source); err != nil {
+			return fmt.Errorf("code: list the repositories being imported: %s: %w", c.ID, err)
+		} else if src != nil {
+			c.Source = *src
+		}
+		c.Version = unpacked(version)
+		out.Imports = append(out.Imports, c)
+		if pg.add(c.encodedBytes()) {
+			out.Next = c.ID
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// mirrorsDue serves one page of a `mirrors_due` read: every push mirror BY ID —
+// one walk of code_repos_mirror_to_idx, the repositories still live — then
+// every active pull mirror LEAST RECENTLY SYNCED FIRST, by its last sync's
+// instant and then its id — one walk of code_repos_mirrored_idx (replicated
+// 0095) — each partial predicate repeated verbatim, keyset after a cursor that
+// names its arm: `t:<id>` in the push mirrors', `f:<instant>:<id>` in the
+// pull mirrors'. A page that ends the push arm with room left goes on into
+// the pull arm's first rows.
+func (r *Reader) mirrorsDue(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	arm, after, at, ok := cutMirrorsCursor(q.Cursor)
+	if !ok {
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	}
+	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
+	if arm == "t" {
+		full, err := r.pushMirrors(ctx, tx, after, &pg, out)
+		if err != nil || full {
+			return err
+		}
+		after, at = "", -1
+	}
+	rows, err := tx.QueryContext(ctx, pullMirrorsSQL, at, at, after, r.pageRows)
+	if err != nil {
+		return fmt.Errorf("code: list the pull mirrors: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			c      MirrorCandidate
+			from   string
+			synced int64
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &from, &synced); err != nil {
+			return fmt.Errorf("code: list the pull mirrors: %w", err)
+		}
+		if c.From, err = remoteOf[MirrorSource](from); err != nil {
+			return fmt.Errorf("code: list the pull mirrors: %s: %w", c.ID, err)
+		}
+		// ZERO IS NEVER: the column's default, and no record's instant.
+		if synced != 0 {
+			c.SyncedAt = store.DecodeTime(synced)
+		}
+		out.Mirrors = append(out.Mirrors, c)
+		if pg.add(c.encodedBytes()) {
+			out.Next = fmt.Sprintf("f:%d:%s", synced, c.ID)
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// pushMirrors serves the push mirrors' arm of a `mirrors_due` page after the
+// id after, and reports a page it filled — whose cursor it set.
+func (r *Reader) pushMirrors(ctx context.Context, tx *sql.Tx, after string, pg *page, out *ReadAnswer) (
+	bool, error) {
+
+	rows, err := tx.QueryContext(ctx, pushMirrorsSQL, after, r.pageRows)
+	if err != nil {
+		return false, fmt.Errorf("code: list the push mirrors: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			c  MirrorCandidate
+			to string
+		)
+		if err := rows.Scan(&c.ID, &c.Name, &to); err != nil {
+			return false, fmt.Errorf("code: list the push mirrors: %w", err)
+		}
+		if c.To, err = remoteOf[MirrorTarget](to); err != nil {
+			return false, fmt.Errorf("code: list the push mirrors: %s: %w", c.ID, err)
+		}
+		out.Mirrors = append(out.Mirrors, c)
+		if pg.add(c.encodedBytes()) {
+			out.Next = "t:" + c.ID
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
+}
+
+// cutMirrorsCursor reads a `mirrors_due` cursor: "" is the push arm's first
+// row; `t:<id>` the push arm after id; `f:<instant>:<id>` the pull arm after
+// the mirror synced at instant (store.EncodeTime, 0 for never) whose id is
+// id. ok is false for anything else.
+func cutMirrorsCursor(cursor string) (arm, after string, at int64, ok bool) {
+	switch {
+	case cursor == "":
+		return "t", "", 0, true
+	case strings.HasPrefix(cursor, "t:"):
+		id := strings.TrimPrefix(cursor, "t:")
+		return "t", id, 0, validRepoID("cursor", id) == nil
+	case strings.HasPrefix(cursor, "f:"):
+		instant, id, cut := strings.Cut(strings.TrimPrefix(cursor, "f:"), ":")
+		n, err := strconv.ParseInt(instant, 10, 64)
+		if !cut || err != nil || n < 0 || validRepoID("cursor", id) != nil {
+			return "", "", 0, false
+		}
+		return "f", id, n, true
+	}
+	return "", "", 0, false
+}
+
 // expungeTips serves one page of an `expunge_tips` read ([ReadExpungeTips]):
 // the object each of the repository's ref drops left whose record's broker
 // instant is at or after the query's — ONE SEEK of code_ref_drops' key
@@ -3834,6 +4007,22 @@ const (
 	// its start.
 	indexedSQL = `SELECT id, name FROM code_repos INDEXED BY code_repos_search_idx
 		WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`
+	// THE IMPORTS OWED, by id over code_repos_importing_idx — its partial
+	// predicate repeated verbatim — after the cursor, "" from its start.
+	importsDueSQL = `SELECT id, name, import_source, import_seq, version FROM code_repos
+		INDEXED BY code_repos_importing_idx WHERE status = 'importing' AND id > ? ORDER BY id LIMIT ?`
+	// THE PUSH MIRRORS, by id over code_repos_mirror_to_idx, the live
+	// repositories among them — an importing one has nothing to push yet,
+	// and a deleted one is going.
+	pushMirrorsSQL = `SELECT id, name, mirror_to FROM code_repos INDEXED BY code_repos_mirror_to_idx
+		WHERE mirror_to != '' AND status IN ('active', 'archived') AND id > ? ORDER BY id LIMIT ?`
+	// THE PULL MIRRORS, least recently synced first over
+	// code_repos_mirrored_idx, keyset after (instant, id): the instant seeks
+	// the index, and the id breaks a tie inside one instant.
+	pullMirrorsSQL = `SELECT id, name, mirror_from, mirror_synced_at FROM code_repos
+		INDEXED BY code_repos_mirrored_idx WHERE mirror_from != '' AND status = 'active'
+			AND mirror_synced_at >= ? AND (mirror_synced_at > ? OR id > ?)
+		ORDER BY mirror_synced_at, id LIMIT ?`
 	// AN EXPUNGE'S TIPS: a repository's ref drops from an instant, in the
 	// order of code_ref_drops' key, which leads with the instant — the first
 	// page from the instant, a later one after the last drop read.

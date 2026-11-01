@@ -565,6 +565,12 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case ExpungeCommit:
 		payloadRepo = p.RepoID
+	case ImportChunk:
+		payloadRepo = p.RepoID
+	case ImportDone:
+		payloadRepo = p.RepoID
+	case MirrorSync:
+		payloadRepo = p.RepoID
 	case Hold:
 		payloadRepo = p.RepoID
 	case ChangeOpen:
@@ -643,6 +649,12 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.applyExpungeBegin(ctx, tx, at, p)
 	case ExpungeCommit:
 		return a.applyExpungeCommit(ctx, tx, at, p)
+	case ImportChunk:
+		return a.applyImportChunk(ctx, tx, at, p)
+	case ImportDone:
+		return a.applyImportDone(ctx, tx, at, p)
+	case MirrorSync:
+		return a.applyMirrorSync(ctx, tx, at, p)
 	case ChangeOpen:
 		n, err := a.applyChangeOpen(ctx, tx, at, p)
 		return a.noticed(ctx, tx, at, id, payload, n, err)

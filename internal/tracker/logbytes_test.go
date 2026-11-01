@@ -467,6 +467,22 @@ var codeLogUnwritten = map[code.OpKind]struct {
 	payload reflect.Type
 	how     string
 }{
+	// AN IMPORT'S AND A PULL MIRROR'S RECORDS, decided by the repository's
+	// committer since the committer's import path landed, are appended by
+	// no node while nothing polls the listings their home works from: the
+	// home's import and mirror loop is their first writer, and their rate —
+	// once a repository imported, a chunk a thousand refs, and a pull
+	// mirror's sync every interval its source moved in — is what the day
+	// must price once they exist.
+	code.OpImportChunk: {listing: code.ReadImportsDue,
+		how: "an import's chunk is landed by its repository's home, polling imports_due, through the " +
+			"estate's code.import"},
+	code.OpImportDone: {listing: code.ReadImportsDue,
+		how: "an import is ended by its repository's home, polling imports_due, through the estate's " +
+			"code.import"},
+	code.OpMirrorSync: {listing: code.ReadMirrorsDue,
+		how: "a pull mirror's sync is landed by its repository's home, polling mirrors_due, through the " +
+			"estate's code.mirror_sync"},
 	// AN ENTRY'S LEAVING by a gesture, decided by its repository's committer
 	// since the committer's queue path landed, is appended by no node while
 	// nothing asks for it: code_dequeue_change is its first writer, through
@@ -523,6 +539,12 @@ var codeLogPushVias = map[code.PushVia]string{
 	code.ViaMerge: "the push a merge record lands, written by the merge's own apply and never a push " +
 		"record: its bytes are the merge record's (code.OpMerge), which the day prices one a change " +
 		"(codeLogDay)",
+	code.ViaImport: "the push an import chunk lands, written by the chunk's own apply and never a push " +
+		"record: its bytes are the chunk's (code.OpImportChunk), which no node appends while nothing " +
+		"asks for one (codeLogUnwritten)",
+	code.ViaMirror: "the push a pull mirror's sync lands, written by the sync's own apply and never a push " +
+		"record: its bytes are the sync's (code.OpMirrorSync), which no node appends while nothing asks " +
+		"for one (codeLogUnwritten)",
 	code.ViaQueue: "the pushes a land record lands, one a change, written by the landing's own apply and " +
 		"never a push record: their bytes are the land record's (code.OpLand), which no node appends " +
 		"while nothing asks for one (codeLogUnwritten)",

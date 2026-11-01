@@ -312,6 +312,8 @@ func everyReadAsked(id string) map[code.ReadKind]code.ReadQuery {
 		code.ReadPublicationDue: {},
 		code.ReadExpungeDue:     {},
 		code.ReadExpungeTips:    {ExpungeTips: &code.ExpungeTipsQuery{RepoID: id, Since: t1}},
+		code.ReadImportsDue:     {},
+		code.ReadMirrorsDue:     {},
 		code.ReadBranchChanges:  {BranchChanges: &code.BranchChangesQuery{RepoID: id, Refs: []string{mainRef}}},
 		code.ReadChangesDue:     {ChangesDue: &code.ChangesDueQuery{RecheckBefore: t1}},
 		code.ReadIndexed:        {},

@@ -375,6 +375,12 @@ const (
 	// PackRescue is a pack an expunge's commit keeps of its dropping packs:
 	// what a push that landed before its begin made reachable again, live.
 	PackRescue PackKind = "rescue"
+	// PackImport is a pack an import's chunk lands ([ImportChunk]): objects
+	// the repository's home fetched from the host it is imported from.
+	PackImport PackKind = "import"
+	// PackMirror is a pack a pull mirror's sync lands ([MirrorSync]):
+	// objects its home fetched from the repository it follows.
+	PackMirror PackKind = "mirror"
 )
 
 // PackKinds is the closed set, in the order the records that write them were
@@ -382,7 +388,7 @@ const (
 // one list names every kind code_packs may hold.
 func PackKinds() []PackKind {
 	return []PackKind{PackPush, PackCompact, PackMerge, PackCandidate, PackLand, PackExpunge, PackCruft,
-		PackRescue}
+		PackRescue, PackImport, PackMirror}
 }
 
 // Valid reports a kind this build knows.
@@ -1745,6 +1751,106 @@ type ExpungeCommit struct {
 	Add []PackRef `json:"add,omitempty"`
 }
 
+// ImportChunk lands one chunk of a repository's import ([CreateRepo.Import],
+// and a pull mirror's first fill): packs its home fetched from the other
+// host, and the refs they let it set — each a command whose Old is the ref as
+// the repository holds it after the chunks before — as ONE push row `via
+// import` ([ViaImport]) by the engine's own account, a code_ref_drops row for
+// every command that leaves an object ([leavesObject]), and the repository's
+// import_seq moved to Seq. Decided by the repository's committer
+// ([Committer.ProposeImport]) ONLY IN ITS TURN: the repository importing and
+// its import_seq one below Seq, so a chunk asked twice, or after its import
+// moved on, is refused stale rather than landed again.
+//
+// Every field is in the base format, under the condition [OpImportChunk]
+// states.
+type ImportChunk struct {
+	RepoID string `json:"repo_id"`
+	// ChunkID is minted afresh for every attempt — a bare UUIDv7
+	// (statelog.NewOpID with no name) — and is the record's operation id,
+	// its push row's push id and what each pack's id is derived from
+	// ([DeriveOutputPackID]). Its idempotence is Seq's precondition, never
+	// the id: a chunk built again after a refusal is another attempt, whose
+	// packs are its own.
+	ChunkID string `json:"chunk_id"`
+	// Node is the git node that fetched it, for whoever reads the log.
+	Node string `json:"node"`
+	// Seq is the chunk's place in the import, from 1: the repository's
+	// import_seq once it lands.
+	Seq int64 `json:"seq"`
+	// Packs are the bundles it lands, kind import, each at most MaxPackBytes
+	// whole, at most [MaxImportPacks] — none for a chunk whose refs the
+	// packs of the chunks before it already hold.
+	Packs []PackRef `json:"packs,omitempty"`
+	// Commands are the refs it sets, at most [MaxImportRefs], each decided
+	// ok by its committer or the chunk refused whole. A command's Forced is
+	// its builder's, which read the history it fetched.
+	Commands []Command `json:"commands,omitempty"`
+}
+
+// ImportDone ends a repository's import: the repository is active from its
+// record on, with imported_at its record's instant, import_error why the
+// import ended short ("" for none) and, where DefaultBranch is set, its
+// default branch moved there — the source's HEAD branch, which its builder
+// names only when the default branch the repository declares is absent from
+// what it imported (M6.md §2.3). Decided by the repository's committer
+// ([Committer.ProposeImport]) only while the repository is importing at
+// import_seq Seq: its last chunk's.
+//
+// Every field is in the base format, under the condition [OpImportDone]
+// states.
+type ImportDone struct {
+	RepoID string `json:"repo_id"`
+	// Node is the git node that ended it.
+	Node string `json:"node"`
+	// Seq is how many chunks landed — the repository's import_seq — 0 for an
+	// import that landed none.
+	Seq int64 `json:"seq"`
+	// DefaultBranch is the branch, by name ("main"), the repository's
+	// default moves to, "" to keep the one it declares.
+	DefaultBranch string `json:"default_branch,omitempty"`
+	// Error is why the import ended short — a permanent refusal: a blob past
+	// code.limits.max_blob_bytes, the repository past
+	// code.limits.repo_max_bytes — in one sentence, "" for an import that
+	// landed whole. The repository keeps what landed.
+	Error string `json:"error,omitempty"`
+}
+
+// MirrorSync moves a PULL MIRROR ([RepoSettings.MirrorFrom]) onto its source
+// as its home last fetched it: packs of what the source holds and the
+// repository did not, and the refs moved to the source's — each a command
+// whose Old is the ref as the home's copy held it — as ONE push row `via
+// mirror` ([ViaMirror]) by the engine's own account, a code_ref_drops row for
+// every command that leaves an object, and mirror_synced_at moved to the
+// record's instant. Decided by the repository's committer
+// ([Committer.ProposeMirrorSync]): refused stale where a ref it names moved
+// since its home read it — its next round reads them again — and
+// `expunging`, recorded nowhere, where the repository's drop epoch is not the
+// one its home's copy held: its packs were cut against objects an expunge may
+// since have left dropping (M6-D4).
+//
+// Every field is in the base format, under the condition [OpMirrorSync]
+// states.
+type MirrorSync struct {
+	RepoID string `json:"repo_id"`
+	// SyncID is minted afresh for every round — a bare UUIDv7 — and is the
+	// record's operation id, its push row's push id and what each pack's id
+	// is derived from ([DeriveOutputPackID]).
+	SyncID string `json:"sync_id"`
+	// Node is the git node that fetched it.
+	Node string `json:"node"`
+	// DropEpoch is the repository's drop epoch as its home's copy held it
+	// when it cut the packs (cache.Synced.DropEpoch).
+	DropEpoch int64 `json:"drop_epoch"`
+	// Packs are the bundles it lands, kind mirror, at most [MaxImportPacks].
+	Packs []PackRef `json:"packs,omitempty"`
+	// Commands are the refs it moves, at most [MaxImportRefs]; Forced is its
+	// builder's, as an import chunk's is.
+	Commands []Command `json:"commands,omitempty"`
+	// FetchedAt is when its home fetched the source, by the home's clock.
+	FetchedAt time.Time `json:"fetched_at"`
+}
+
 // Activated raises the activation fence to a configuration activation.
 //
 // PINNED AT [GateRecordVersion] FOR EVER, as every gate is: a node that
@@ -1821,6 +1927,12 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[ExpungeBegin](rec)
 	case kind == KindRepo && op == OpExpungeCommit:
 		return decodePayload[ExpungeCommit](rec)
+	case kind == KindRepo && op == OpImportChunk:
+		return decodePayload[ImportChunk](rec)
+	case kind == KindRepo && op == OpImportDone:
+		return decodePayload[ImportDone](rec)
+	case kind == KindRepo && op == OpMirrorSync:
+		return decodePayload[MirrorSync](rec)
 	case kind == KindRepo && op == OpChangeOpen:
 		return decodePayload[ChangeOpen](rec)
 	case kind == KindRepo && op == OpChangeEdit:

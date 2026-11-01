@@ -1098,6 +1098,21 @@ func registeredStatements() map[string]statement {
 		// listing, by name over code_repos_search_idx.
 		"indexed": {indexedSQL, []any{string(SearchIndexed), "", MaxSnapshotItems},
 			[]string{"code_repos_search_idx (search=? AND name>?)"}},
+		// THE HOME'S LISTINGS OF WHAT IT OWES OTHER HOSTS (replicated 0095's
+		// indexes): the repositories being imported by id, the push mirrors
+		// by id and the pull mirrors least recently synced first — each a
+		// keyset page, its partial predicate repeated verbatim.
+		"imports due": {importsDueSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_repos_importing_idx (id>?)"}},
+		"push mirrors due": {pushMirrorsSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_repos_mirror_to_idx (id>?)"}},
+		"pull mirrors due": {pullMirrorsSQL, []any{0, 0, "", MaxSnapshotItems},
+			[]string{"code_repos_mirrored_idx (mirror_synced_at>=?)"}},
+		// AN IMPORT'S AND A MIRROR'S APPLY: the repository's row by its key.
+		"remote state":  {remoteStateSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"import seq":    {importSeqSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"import done":   {importDoneSQL, []any{1, "", "", "", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"mirror synced": {mirrorSyncedSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		// A REPOSITORY'S CHECKS': the join's read of one row by its whole
 		// key, and its log's by the same; the oldest rows past a cutoff —
 		// the horizon's, a sweep's decide's and a purge part's — weighed by
@@ -1372,22 +1387,6 @@ func claimedReads() map[string]statement {
 		"code_landings_change_idx": {`SELECT repo_id, target_ref, position, ordinal FROM code_landings
 			INDEXED BY code_landings_change_idx WHERE change_id = ? AND change_id != ''`,
 			[]any{"repo-1-change-000001"}, []string{"code_landings_change_idx (change_id=?)"}},
-		// THE MIRRORS' AND THE IMPORTS' INDEXES THEIR LATER READERS SEEK
-		// (replicated 0095): the home's listings of the repositories being
-		// imported, the pull mirrors least recently synced first and the push
-		// mirrors — each a keyset page at a time, its partial predicate
-		// repeated verbatim. Nothing in this build reads a repository by its
-		// mirror or its import's progress.
-		"code_repos_importing_idx": {`SELECT id, import_source, import_seq FROM code_repos
-			INDEXED BY code_repos_importing_idx WHERE status = 'importing' AND id > ? ORDER BY id LIMIT ?`,
-			[]any{"", MaxSnapshotItems}, []string{"code_repos_importing_idx (id>?)"}},
-		"code_repos_mirrored_idx": {`SELECT id, name, mirror_from FROM code_repos
-			INDEXED BY code_repos_mirrored_idx WHERE mirror_from != '' AND status = 'active'
-			AND mirror_synced_at <= ? ORDER BY mirror_synced_at, id LIMIT ?`,
-			[]any{2, MaxSnapshotItems}, []string{"code_repos_mirrored_idx (mirror_synced_at<=?)"}},
-		"code_repos_mirror_to_idx": {`SELECT id, name, mirror_to FROM code_repos
-			INDEXED BY code_repos_mirror_to_idx WHERE mirror_to != '' AND id > ? ORDER BY id LIMIT ?`,
-			[]any{"", MaxSnapshotItems}, []string{"code_repos_mirror_to_idx (id>?)"}},
 		// A PERSON'S CODE INBOX (replicated 0081), newest first: the
 		// composed inbox's code half reads it.
 		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications

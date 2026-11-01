@@ -422,6 +422,60 @@ func (c ExpungeCandidate) encodedBytes() int {
 		field("version", positionBytes(c.Version), false)
 }
 
+// encodedBytes is the length of the candidate's JSON encoding.
+func (c ImportCandidate) encodedBytes() int {
+	return 2 + field("id", stringBytes(c.ID), true) +
+		field("name", stringBytes(c.Name), false) +
+		field("source", c.Source.encodedBytes(), false) +
+		field("seq", intBytes(c.Seq), false) +
+		field("version", positionBytes(c.Version), false)
+}
+
+// encodedBytes is the length of the source's JSON encoding.
+func (s ImportSource) encodedBytes() int {
+	n := 2 + field("url", stringBytes(s.URL), true)
+	if s.Credential != "" {
+		n += field("credential", stringBytes(s.Credential), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the candidate's JSON encoding.
+func (c MirrorCandidate) encodedBytes() int {
+	n := 2 + field("id", stringBytes(c.ID), true) +
+		field("name", stringBytes(c.Name), false)
+	if c.From != nil {
+		n += field("from", c.From.encodedBytes(), false)
+	}
+	if c.To != nil {
+		n += field("to", c.To.encodedBytes(), false)
+	}
+	if !c.SyncedAt.IsZero() {
+		n += field("synced_at", timeBytes(c.SyncedAt), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the source's JSON encoding.
+func (s MirrorSource) encodedBytes() int {
+	n := 2 + field("url", stringBytes(s.URL), true)
+	if s.Credential != "" {
+		n += field("credential", stringBytes(s.Credential), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the target's JSON encoding.
+func (t MirrorTarget) encodedBytes() int {
+	n := 2 + field("url", stringBytes(t.URL), true) +
+		field("credential", stringBytes(t.Credential), false) +
+		field("as", stringBytes(t.As), false)
+	if len(t.Refs) > 0 {
+		n += field("refs", stringsBytes(t.Refs), false)
+	}
+	return n
+}
+
 // encodedBytes is the length of the layer row's JSON encoding: its layer
 // whole, its parts and packs among them.
 func (r LayerRow) encodedBytes() int {

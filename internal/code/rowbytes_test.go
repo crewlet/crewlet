@@ -90,6 +90,14 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		fill(rng, reflect.ValueOf(&expunging).Elem())
 		check("expunge candidate", expunging, expunging.encodedBytes())
 
+		var importing ImportCandidate
+		fill(rng, reflect.ValueOf(&importing).Elem())
+		check("import candidate", importing, importing.encodedBytes())
+
+		var mirroring MirrorCandidate
+		fill(rng, reflect.ValueOf(&mirroring).Elem())
+		check("mirror candidate", mirroring, mirroring.encodedBytes())
+
 		var due ChangeDue
 		fill(rng, reflect.ValueOf(&due).Elem())
 		check("due change", due, due.encodedBytes())

@@ -1033,7 +1033,7 @@ func TestAPacksKindAndStateAreClosedSets(t *testing.T) {
 			t.Errorf("state %q is in the set and Valid says it is not", s)
 		}
 	}
-	if PackKind("import").Valid() || PackState("retired").Valid() || PackKind("").Valid() {
+	if PackKind("bundle").Valid() || PackState("retired").Valid() || PackKind("").Valid() {
 		t.Fatalf("a kind or state this build does not write is Valid")
 	}
 }

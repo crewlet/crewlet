@@ -31,6 +31,8 @@ type CodeServer interface {
 	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
 	ProposeCompaction(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error)
 	ProposeExpunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
+	ProposeImport(ctx context.Context, p code.ImportProposal) (code.SyncResult, error)
+	ProposeMirrorSync(ctx context.Context, p code.MirrorSyncProposal) (code.SyncResult, error)
 	ProposeChange(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
 	ProposeQueue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
 	ProposeMerge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error)
@@ -112,6 +114,36 @@ var opCodeExpunge = define("code.expunge", opIdempotentWrite, codeDomain, false,
 		res, err := b.Code.ProposeExpunge(ctx, p)
 		return res, ranNothing(err)
 	}).keyedBy(code.ExpungeProposal.RepoID).answeredOn(laneProposals)
+
+// opCodeImport is one step of a repository's import — a chunk its home
+// fetched, or the import's end — asked of the repository's COMMITTER exactly
+// as an expunge record is: an IDEMPOTENT write, by its Seq's precondition
+// rather than its id (a chunk landed answers its second asking stale, and its
+// home reads the rows), so an unanswered one is asked of the repository's
+// runner-up as it stands. On the proposals lane, because it waits in the
+// repository's one queue beside its pushes. No actor: an import is the
+// engine's own, recorded as the deciding node's system work.
+var opCodeImport = define("code.import", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, p code.ImportProposal) (code.SyncResult, error) {
+		if b.Code == nil {
+			return code.SyncResult{}, errNoHalf
+		}
+		res, err := b.Code.ProposeImport(ctx, p)
+		return res, ranNothing(err)
+	}).keyedBy(code.ImportProposal.RepoID).answeredOn(laneProposals)
+
+// opCodeMirrorSync is one sync of a pull mirror its home fetched, asked of the
+// repository's COMMITTER as an import's step is: idempotent by its commands'
+// old values, which a sync landed falsifies, so its second asking is answered
+// stale. No actor: a sync is the engine's own.
+var opCodeMirrorSync = define("code.mirror_sync", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, p code.MirrorSyncProposal) (code.SyncResult, error) {
+		if b.Code == nil {
+			return code.SyncResult{}, errNoHalf
+		}
+		res, err := b.Code.ProposeMirrorSync(ctx, p)
+		return res, ranNothing(err)
+	}).keyedBy(code.MirrorSyncProposal.RepoID).answeredOn(laneProposals)
 
 // opCodeChange is a write of a change's lifecycle — an open, an edit, a draft's
 // state, a retarget, a close or a reopen — asked of the repository's COMMITTER
@@ -385,7 +417,7 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
 // person's or a token's consults no chart, and a `run_pushes` page, an
 // `introduced` page and the `compaction_due`, `publication_due`,
-// `expunge_due`, `changes_due`, `checks_due` and `queue_due` listings name no
+// `expunge_due`, `imports_due`, `mirrors_due`, `changes_due`, `checks_due` and `queue_due` listings name no
 // asker at all, so each is answered there as a last resort.
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {

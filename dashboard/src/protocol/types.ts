@@ -6733,9 +6733,11 @@ export interface CodePushRow {
    * `git` for what a client's git sent, `engine` for a commit the engine built
    * from a tool's call, `merge` for a branch a change's merge record moved,
    * `expiry` for an idle seat branch the engine's own account deleted,
-   * `queue` for a branch a merge queue's landing moved, one push a change.
+   * `queue` for a branch a merge queue's landing moved, one push a change,
+   * `import` for refs an import set and `mirror` for refs a pull mirror's
+   * sync moved, each on the engine's own account.
    */
-  via: "git" | "engine" | "merge" | "expiry" | "queue" | (string & {});
+  via: "git" | "engine" | "merge" | "expiry" | "queue" | "import" | "mirror" | (string & {});
   /** A seat's push: the turn, its work item and its model. */
   run?: CodePushRun;
   node?: string;

@@ -802,6 +802,9 @@ type pushRepo struct {
 	// purge requested: a request forms its record whatever is open.
 	dropEpoch int64
 	expungeID string
+	// importSeq is how many of its import's chunks have landed: what an
+	// import's chunk and its end are decided in their turn by.
+	importSeq int64
 	// owner and visibility are what a seat's grant on the repository is
 	// judged by ([GrantOf]): its relation through the owner, and the row
 	// visibility decides.
@@ -849,7 +852,7 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
 		&r.liveBytes, &r.livePacks, &r.version, &deleted, &r.dropEpoch, &r.expungeID, &ownerKind,
-		&r.owner.Ref, &visibility, &managed, &r.defaultBranch, &r.mirrored)
+		&r.owner.Ref, &visibility, &managed, &r.defaultBranch, &r.mirrored, &r.importSeq)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
@@ -1796,7 +1799,8 @@ func UnheldDetail(old string) string {
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
 	decideRepoSQL = `SELECT name, status, refs, live_bytes, live_packs, version, deleted_at,
-		drop_epoch, expunge_id, owner_kind, owner, visibility, managed_by, default_branch, mirror_from != ''
+		drop_epoch, expunge_id, owner_kind, owner, visibility, managed_by, default_branch, mirror_from != '',
+		import_seq
 		FROM code_repos
 		WHERE id = ?`
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`

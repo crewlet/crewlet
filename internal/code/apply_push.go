@@ -120,7 +120,15 @@ import (
 // the rows they touch counted in the record's before any horizon takes what
 // is left ([countSeatDays]).
 func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch) (int, error) {
-	return a.landPushes(ctx, tx, at, p, 0)
+	return a.landPushes(ctx, tx, at, p, recordPacks{}, 0)
+}
+
+// recordPacks is packs a record lands beside its pushes' own, each of kind:
+// an import chunk's or a mirror sync's, several to one push, which its push
+// row names none of.
+type recordPacks struct {
+	packs []PackRef
+	kind  PackKind
 }
 
 // landPushes is the one apply of pushes ([Applier.applyPush]) — a push
@@ -130,7 +138,11 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 // move of its target is a push in every sense the history, the counters, the
 // tombstones and the changes it moves read — never a second spelling of what
 // a push does to a repository (ADR-0008).
-func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch,
+//
+// extra is packs the record lands beside its entries' own ([recordPacks]),
+// written and counted with them — and with nothing, where every entry was
+// applied already.
+func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch, extra recordPacks,
 	spent int) (int, error) {
 
 	ids := make([]string, 0, len(p.Pushes))
@@ -206,6 +218,12 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if len(pushRows) == 0 {
 		// A WHOLLY REDELIVERED BATCH writes nothing at all.
 		return 0, nil
+	}
+	for _, k := range extra.packs {
+		packRows = append(packRows, k)
+		packKinds = append(packKinds, extra.kind)
+		packBytes += k.Size
+		packObjects += k.Objects
 	}
 
 	refs := make([]string, 0, len(final))

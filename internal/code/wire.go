@@ -530,10 +530,25 @@ const (
 	//
 	// BASE FORMAT, under the condition queuerecords.go's head states.
 	ViaQueue PushVia = "queue"
+	// ViaImport is the push an IMPORT CHUNK lands ([ImportChunk]): the refs
+	// it sets, onto objects its home fetched from the host the repository is
+	// imported from, by the engine's own account ([PrincipalSystem]) —
+	// written by the chunk's own apply. No proposal of a push names it.
+	//
+	// BASE FORMAT, under the condition [OpImportChunk] states.
+	ViaImport PushVia = "import"
+	// ViaMirror is the push a PULL MIRROR'S SYNC lands ([MirrorSync]): the
+	// refs it moves onto its source's, by the engine's own account —
+	// written by the sync's own apply. No proposal of a push names it.
+	//
+	// BASE FORMAT, under the condition [OpMirrorSync] states.
+	ViaMirror PushVia = "mirror"
 )
 
 // PushVias is the closed set, in its documented order.
-func PushVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaMerge, ViaExpiry, ViaQueue} }
+func PushVias() []PushVia {
+	return []PushVia{ViaGit, ViaEngine, ViaMerge, ViaExpiry, ViaQueue, ViaImport, ViaMirror}
+}
 
 // Valid reports a way this build knows.
 func (v PushVia) Valid() bool { return slices.Contains(PushVias(), v) }
@@ -913,6 +928,18 @@ const (
 	// engine's own read, which no principal makes: a repository's maintainer
 	// reads it at its scan and at its rescue (internal/code/compact).
 	ReadExpungeTips ReadKind = "expunge_tips"
+	// ReadImportsDue is the repositories being imported, by id, each with
+	// its source and how many of its chunks have landed
+	// ([ImportCandidate]): the listing a repository's home polls for the
+	// imports it owes. The engine's own read, as `compaction_due` is.
+	ReadImportsDue ReadKind = "imports_due"
+	// ReadMirrorsDue is the repositories with a mirror ([MirrorCandidate]):
+	// every push mirror, by id, then the active pull mirrors LEAST RECENTLY
+	// SYNCED FIRST — so a home that syncs every MirrorInterval reads pages
+	// until one is synced within it, and no further — the listing a
+	// repository's home polls for the mirrors it keeps. The engine's own
+	// read, as `compaction_due` is.
+	ReadMirrorsDue ReadKind = "mirrors_due"
 	// ReadBranchChanges is the LIVE CHANGE each of one repository's branches
 	// heads ([BranchChangesQuery]), in the order the query names the
 	// branches, a branch heading none left out. The engine's own read, as
@@ -1035,8 +1062,8 @@ const (
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews, ReadCommit,
-		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadBranchChanges,
-		ReadChangesDue, ReadIndexed,
+		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadImportsDue,
+		ReadMirrorsDue, ReadBranchChanges, ReadChangesDue, ReadIndexed,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
 		ReadQueueDue, ReadLandings, ReadGreen, ReadInbox}
 }
@@ -1346,6 +1373,10 @@ type ReadAnswer struct {
 	Due        []CompactionCandidate  `json:"due,omitempty"`
 	Publish    []PublicationCandidate `json:"publish,omitempty"`
 	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
+	// Imports is an `imports_due` read's page, Mirrors a `mirrors_due`
+	// read's.
+	Imports []ImportCandidate `json:"imports,omitempty"`
+	Mirrors []MirrorCandidate `json:"mirrors,omitempty"`
 	// DueRepos is a `changes_due` listing's page of repositories, by id;
 	// DueChanges a page of one repository's due changes, by source branch,
 	// beside PathOwners, its path owners as its settings carry them, read in
@@ -1437,6 +1468,30 @@ type ExpungeCandidate struct {
 	LiveBytes   int64             `json:"live_bytes"`
 	LiveObjects int64             `json:"live_objects"`
 	Version     statelog.Position `json:"version"`
+}
+
+// ImportCandidate is one repository an `imports_due` read lists: a repository
+// being imported, its source — a URL and a ${VAR} reference, never a secret —
+// how many of its chunks have landed (the next is Seq+1) and the version its
+// row was read at.
+type ImportCandidate struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Source  ImportSource      `json:"source"`
+	Seq     int64             `json:"seq"`
+	Version statelog.Position `json:"version"`
+}
+
+// MirrorCandidate is one repository a `mirrors_due` read lists: its pull
+// mirror's source (From) or its push mirror's target (To) — a repository
+// with both is listed once in each arm, each naming its own — and, for a pull
+// mirror, when its last sync landed, zero for never.
+type MirrorCandidate struct {
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	From     *MirrorSource `json:"from,omitempty"`
+	To       *MirrorTarget `json:"to,omitempty"`
+	SyncedAt time.Time     `json:"synced_at,omitzero"`
 }
 
 // ExpungeTipsQuery is an `expunge_tips` read's repository, by id, and the
@@ -1552,6 +1607,42 @@ type ExpungeResult struct {
 	// repository's open request from its record on — until a later request
 	// widens it, or a commit serves it. Empty for a begin and a commit.
 	Request string `json:"request,omitempty"`
+}
+
+// ImportProposal is what a repository's home hands its committer to land one
+// step of an import ([Committer.ProposeImport]): EXACTLY ONE of a chunk and
+// the import's end, each decided alone as a record of its own op.
+type ImportProposal struct {
+	Chunk *ImportChunk `json:"chunk,omitempty"`
+	Done  *ImportDone  `json:"done,omitempty"`
+}
+
+// MirrorSyncProposal is what a pull mirror's home hands its committer to land
+// one sync ([Committer.ProposeMirrorSync]).
+type MirrorSyncProposal struct {
+	Sync MirrorSync `json:"sync"`
+}
+
+// SyncResult is what became of one import chunk, one import's end or one
+// mirror sync.
+type SyncResult struct {
+	// Outcome is applied, pending or unknown for a proposal whose record was
+	// appended, and empty for one refused with none. A chunk's and a sync's
+	// applied is answered only from the rows the record applied — its push
+	// row — never from the decision.
+	Outcome statelog.Outcome `json:"outcome,omitempty"`
+	// Refusal is why it was refused with no record — stale (a sync of a
+	// repository that follows no source among its causes), repo_deleted,
+	// repo_importing (a sync of a mirror not yet imported), repo_archived,
+	// expunging, ref_conflict, repo_refs, repo_size, upload_expired,
+	// pack_too_large, busy, not_applied or unavailable — and Detail its one
+	// sentence.
+	Refusal Refusal `json:"refusal,omitempty"`
+	Detail  string  `json:"detail,omitempty"`
+	// Position is where its record landed and, for a not_applied or
+	// repo_deleted refusal the log made after the append, where that record
+	// lies applying nowhere.
+	Position statelog.Position `json:"position,omitzero"`
 }
 
 // ChangeProposal is one write of a change's lifecycle as its asker hands it to

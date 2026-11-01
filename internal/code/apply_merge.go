@@ -209,7 +209,8 @@ func (a *Applier) applyMerge(ctx context.Context, tx *sql.Tx, at applyContext, m
 	}
 
 	// 4 THE PUSH, with what the rows above leave the record's horizons.
-	pushed, err := a.landPushes(ctx, tx, at, PushBatch{RepoID: m.RepoID, Pushes: []PushEntry{m.push()}}, rows)
+	pushed, err := a.landPushes(ctx, tx, at, PushBatch{RepoID: m.RepoID, Pushes: []PushEntry{m.push()}}, recordPacks{},
+		rows)
 	if err != nil {
 		return 0, err
 	}

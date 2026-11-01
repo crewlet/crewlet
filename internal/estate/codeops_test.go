@@ -72,6 +72,19 @@ func (f *fakeNode) ProposeCompaction(_ context.Context, p code.CompactionProposa
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
+// ProposeImport is a committer that answers every import record applied —
+// which node a record is routed to is all its callers here read.
+func (f *fakeNode) ProposeImport(context.Context, code.ImportProposal) (code.SyncResult, error) {
+	f.note("code.import")
+	return code.SyncResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
+// ProposeMirrorSync is a committer that answers every sync applied.
+func (f *fakeNode) ProposeMirrorSync(context.Context, code.MirrorSyncProposal) (code.SyncResult, error) {
+	f.note("code.mirror_sync")
+	return code.SyncResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
 // ProposeExpunge is a committer that commits every expunge record it is given
 // at the next position on the code log — or refuses every one with codeErr.
 func (f *fakeNode) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
@@ -554,6 +567,7 @@ type codeAnswers struct {
 	git       code.GitAnswer
 	compacted code.CompactResult
 	expunged  code.ExpungeResult
+	synced    code.SyncResult
 	changed   code.ChangeResult
 	queued    code.QueueResult
 	merged    code.MergeResult
@@ -598,6 +612,16 @@ func (d *codeDesk) Propose(ctx context.Context, p code.Proposal) (code.ProposeRe
 func (d *codeDesk) ProposeCompaction(_ context.Context, p code.CompactionProposal) (code.CompactResult, error) {
 	held, err := d.took(p)
 	return held.compacted, err
+}
+
+func (d *codeDesk) ProposeImport(_ context.Context, p code.ImportProposal) (code.SyncResult, error) {
+	held, err := d.took(p)
+	return held.synced, err
+}
+
+func (d *codeDesk) ProposeMirrorSync(_ context.Context, p code.MirrorSyncProposal) (code.SyncResult, error) {
+	held, err := d.took(p)
+	return held.synced, err
 }
 
 func (d *codeDesk) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
@@ -973,6 +997,43 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		d.mu.Unlock()
 		if got, err := seam.Expunge(ctx, p); err != nil || !reflect.DeepEqual(got, d.expunged) {
 			t.Errorf("expunge %s = (%+v, %v), want %+v", name, got, err, d.expunged)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, p) {
+			t.Errorf("the committer was proposed %s %+v, want %+v", name, got, p)
+		}
+	}
+
+	// AN IMPORT'S CHUNK AND END AND A PULL MIRROR'S SYNC, every field of
+	// each and of the answer.
+	forced := code.Command{Ref: "refs/heads/main", Old: "1111111111111111111111111111111111111111",
+		New: "2222222222222222222222222222222222222222", Forced: true}
+	tagged := code.Command{Ref: "refs/tags/v1", Old: code.ZeroOID, New: "3333333333333333333333333333333333333333"}
+	for name, p := range map[string]any{
+		"a chunk": code.ImportProposal{Chunk: &code.ImportChunk{RepoID: ref.ID,
+			ChunkID: "019a0c2e-0000-7000-8000-0000000000f0", Node: "git-a", Seq: 3,
+			Packs:    []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000f1", "cccccccccccccccccccccccccccccccccccccccc")},
+			Commands: []code.Command{forced, tagged}}},
+		"an end": code.ImportProposal{Done: &code.ImportDone{RepoID: ref.ID, Node: "git-a", Seq: 3,
+			DefaultBranch: "trunk", Error: "a blob past max_blob_bytes"}},
+		"a sync": code.MirrorSyncProposal{Sync: code.MirrorSync{RepoID: ref.ID,
+			SyncID: "019a0c2e-0000-7000-8000-0000000000f2", Node: "git-a", DropEpoch: 4,
+			Packs:    []code.PackRef{bundle("019a0c2e-0000-7000-8000-0000000000f3", "dddddddddddddddddddddddddddddddddddddddd")},
+			Commands: []code.Command{forced}, FetchedAt: created}},
+	} {
+		d.mu.Lock()
+		d.synced = code.SyncResult{Outcome: statelog.OutcomePending, Refusal: code.RefusalStale,
+			Detail: "its home reads the repository again at its next round", Position: at}
+		d.mu.Unlock()
+		var got code.SyncResult
+		var err error
+		switch p := p.(type) {
+		case code.ImportProposal:
+			got, err = seam.Import(ctx, p)
+		case code.MirrorSyncProposal:
+			got, err = seam.MirrorSync(ctx, p)
+		}
+		if err != nil || !reflect.DeepEqual(got, d.synced) {
+			t.Errorf("%s = (%+v, %v), want %+v", name, got, err, d.synced)
 		}
 		if got := d.last(); !reflect.DeepEqual(got, p) {
 			t.Errorf("the committer was proposed %s %+v, want %+v", name, got, p)

@@ -318,7 +318,7 @@ func (a *Applier) applyLand(ctx context.Context, tx *sql.Tx, at applyContext, l 
 	rows += swept
 
 	// 5 THE PUSHES, with what the rows above leave the record's horizons.
-	pushed, err := a.landPushes(ctx, tx, at, PushBatch{RepoID: l.RepoID, Pushes: pushes}, rows)
+	pushed, err := a.landPushes(ctx, tx, at, PushBatch{RepoID: l.RepoID, Pushes: pushes}, recordPacks{}, rows)
 	if err != nil {
 		return 0, err
 	}

@@ -361,6 +361,7 @@ type queued struct {
 	p          Proposal
 	compaction *CompactionProposal
 	expunge    *ExpungeProposal
+	remote     *remoteWrite
 	change     *ChangeProposal
 	queueWrite *QueueProposal
 	merge      *MergeProposal
@@ -402,6 +403,8 @@ func (q *queued) repoID() string {
 		return q.compaction.Compaction.RepoID
 	case q.expunge != nil:
 		return q.expunge.RepoID()
+	case q.remote != nil:
+		return q.remote.repoID()
 	case q.change != nil:
 		return q.change.RepoID()
 	case q.queueWrite != nil:
@@ -417,6 +420,8 @@ const (
 	kindPush       = "push"
 	kindCompaction = "compaction"
 	kindExpunge    = "expunge"
+	kindImport     = "import"
+	kindMirrorSync = "mirror_sync"
 	kindChange     = "change"
 	kindQueue      = "merge_queue"
 	kindMerge      = "merge"
@@ -429,6 +434,8 @@ func (q *queued) kind() string {
 		return kindCompaction
 	case q.expunge != nil:
 		return kindExpunge
+	case q.remote != nil:
+		return q.remote.kind()
 	case q.change != nil:
 		return kindChange
 	case q.queueWrite != nil:
@@ -443,7 +450,8 @@ func (q *queued) kind() string {
 // expunge record's, a change's, a queue's write or a merge, each a record of
 // its own op — never gathered with pushes.
 func (q *queued) alone() bool {
-	return q.compaction != nil || q.expunge != nil || q.change != nil || q.queueWrite != nil || q.merge != nil
+	return q.compaction != nil || q.expunge != nil || q.remote != nil || q.change != nil || q.queueWrite != nil ||
+		q.merge != nil
 }
 
 // judgedByChart reports a proposal whose decide reads the chart — a seat's
@@ -506,6 +514,8 @@ func (q *queued) again() string {
 		return "the next pass plans again"
 	case q.expunge != nil:
 		return q.expunge.again()
+	case q.remote != nil:
+		return q.remote.again()
 	case q.change != nil, q.queueWrite != nil, q.merge != nil:
 		return changeAgain
 	}
@@ -560,6 +570,7 @@ type answered struct {
 	res     ProposeResult
 	compact CompactResult
 	expunge ExpungeResult
+	remote  SyncResult
 	change  ChangeResult
 	queue   QueueResult
 	merge   MergeResult
@@ -724,6 +735,8 @@ func (c *Committer) busy(q *queued, reason busyReason, refusal string) answered 
 		return answered{compact: CompactResult{Refusal: RefusalBusy, Detail: refusal}}
 	case q.expunge != nil:
 		return answered{expunge: ExpungeResult{Refusal: RefusalBusy, Detail: refusal}}
+	case q.remote != nil:
+		return answered{remote: SyncResult{Refusal: RefusalBusy, Detail: refusal}}
 	case q.change != nil:
 		return answered{change: ChangeResult{ChangeID: q.change.ChangeID(), Refusal: ChangeRefusalBusy,
 			Detail: refusal}}
@@ -867,6 +880,8 @@ func (c *Committer) run(rc *repoCommitter) {
 			c.compact(rc.repoID, first)
 		case first.expunge != nil:
 			c.expunge(rc.repoID, first)
+		case first.remote != nil:
+			c.remote(rc.repoID, first)
 		case first.change != nil:
 			c.change(rc.repoID, first)
 		case first.queueWrite != nil:
@@ -897,7 +912,8 @@ func (c *Committer) run(rc *repoCommitter) {
 //
 // A COMPACTION, AN EXPUNGE RECORD, A CHANGE'S OR A QUEUE'S WRITE OR A MERGE
 // IS NEVER GATHERED: a record carries one op, and each is a record of its own
-// (OpCompact, OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, the ops
+// (OpCompact, OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpImportChunk,
+// OpImportDone, OpMirrorSync, the ops
 // ChangeOps lists, OpEnqueue, OpDequeue and OpMerge). Met behind pushes, it
 // ends the batch and is carried to be decided alone, after them and before
 // anything queued behind it, so a repository's proposals still land in the

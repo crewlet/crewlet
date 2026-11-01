@@ -3449,7 +3449,8 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 // code log and never its floor on another domain's.
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()
-	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeChange.spec,
+	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeImport.spec,
+		opCodeMirrorSync.spec, opCodeChange.spec,
 		opCodeQueue.spec, opCodeMerge.spec, opCodeConversation.spec, opCodeMark.spec, opCodeChecks.spec,
 		opCodeResolve.spec,
 		opCodeRepoState.spec, opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
@@ -3490,6 +3491,12 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	}
 	if _, err := seam.Expunge(ctx, code.ExpungeProposal{Request: &code.ExpungeRequest{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("expunge: %v", err)
+	}
+	if _, err := seam.Import(ctx, code.ImportProposal{Done: &code.ImportDone{RepoID: "repo-1"}}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if _, err := seam.MirrorSync(ctx, code.MirrorSyncProposal{Sync: code.MirrorSync{RepoID: "repo-1"}}); err != nil {
+		t.Fatalf("mirror sync: %v", err)
 	}
 	if _, err := seam.Change(ctx, code.ChangeProposal{Close: &code.ChangeClose{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("change: %v", err)

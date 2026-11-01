@@ -903,6 +903,28 @@ func (c CodeSeam) Expunge(ctx context.Context, p code.ExpungeProposal) (code.Exp
 	return out, err
 }
 
+// Import asks the repository's committer to decide one step of its import — a
+// chunk or the import's end — and raises this node's floors past the record it
+// landed in: this node's own write, which its home's next read of the
+// repository must see on whichever node answers it.
+func (c CodeSeam) Import(ctx context.Context, p code.ImportProposal) (code.SyncResult, error) {
+	out, err := call(ctx, c.r, opCodeImport, nil, p)
+	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
+		c.wrote(p.RepoID(), out.Position)
+	}
+	return out, err
+}
+
+// MirrorSync asks the repository's committer to decide one sync of a pull
+// mirror, and raises this node's floors past the record it landed in.
+func (c CodeSeam) MirrorSync(ctx context.Context, p code.MirrorSyncProposal) (code.SyncResult, error) {
+	out, err := call(ctx, c.r, opCodeMirrorSync, nil, p)
+	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
+		c.wrote(p.RepoID(), out.Position)
+	}
+	return out, err
+}
+
 // Change asks the repository's committer to decide a write of a change's
 // lifecycle, and raises this node's floors past the record it landed in — this
 // node's own write, which its next read of the change must see on whichever

@@ -931,8 +931,12 @@ func Catalogue() []Instrument {
 				"maintainer built, which it plans again at its next pass; " +
 				"`change`, a write of a change's lifecycle, which its asker " +
 				"sends again; `merge_queue`, an enqueue or a dequeue of a " +
-				"target's merge queue, which its asker sends again; and `merge`, " +
-				"a change's merge, which its builder asks again. `reason` is " +
+				"target's merge queue, which its asker sends again; `merge`, " +
+				"a change's merge, which its builder asks again; `import`, a " +
+				"chunk or the end of a repository's import from another host, " +
+				"which its home reads the repository and proposes again at its " +
+				"next round; and `mirror_sync`, a pull mirror's sync, which its " +
+				"home fetches and builds again at its next round. `reason` is " +
 				"one of five causes, each pointing at " +
 				"a different remedy. Three are a BACKLOG, which raises " +
 				"`code_commit_busy` on the committer's node: `queue`, a " +

@@ -1383,6 +1383,22 @@ const (
 	// there are; and thirty-two PUTs at once hold one first buffer of an S3
 	// part each (8 MiB), 256 MiB, on the maintainer that builds them.
 	MaxExpungeOutputs = 32
+
+	// MaxImportRefs is the most refs one import chunk sets and one mirror
+	// sync moves (M6-D19's thousand): MaxCommandsPerPush, the commands a push
+	// may carry, at most three rows each ([commandRows]) — so with
+	// MaxImportPacks packs and the record's own rows a chunk stays under
+	// MaxRecordRows, and an import of a repository holding a hundred thousand
+	// refs is a hundred chunks.
+	MaxImportRefs = MaxCommandsPerPush
+
+	// MaxImportPacks is the most packs one import chunk or mirror sync lands:
+	// MaxExpungeOutputs, for its reason — the packs a home cuts at
+	// CompactPackBytes are uploaded at once, each key minted as its upload
+	// begins, so the last lands within objstore.RecordWithin of the first
+	// however many there are, and thirty-two PUTs hold 256 MiB of S3 part
+	// buffers on the home that builds them.
+	MaxImportPacks = MaxExpungeOutputs
 )
 
 // expungeBeginRows is the most rows a begin of n inputs into m outputs — its
