@@ -119,7 +119,7 @@ roles:
 		launched := map[string]string{}
 		for _, m := range runners {
 			cell := manager.BuildSpec(sandbox.SpecInput{
-				Placement: sandbox.Placement(agentPlacement(c, m.Key)), CodingAgent: "claude-code",
+				Placement: sandbox.Placement(agentPlacement(c, m.Key)), Harness: "claude-code",
 			}).Placement
 			if _, seen := launched[string(cell)]; !seen {
 				launched[string(cell)] = m.Key

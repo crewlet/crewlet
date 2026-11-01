@@ -446,7 +446,7 @@ func TestTheExecuteRecordListsItsRoundsReads(t *testing.T) {
 	collector, _ := buildWith(t, entries, buildOpts{pub: pub,
 		resume: &runner.Resume{State: parked.State, Answer: "posted",
 			Bridged: play(t, req, deliver(t, "posted")),
-			Run:     runner.RunRecord{LaunchID: "job-2", CodingAgent: "claude-code"},
+			Run:     runner.RunRecord{LaunchID: "job-2", Harness: "claude-code"},
 			Steered: []steer.Read{
 				read("earlier-round", types.SteerBoundaryToolBatch, types.PhaseExecute, 1, "job-0"),
 				read("reviewer", types.SteerBoundaryRound, types.PhaseReview, 1, ""),

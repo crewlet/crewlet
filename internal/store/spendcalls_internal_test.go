@@ -24,12 +24,12 @@ func TestASpendRowCountsItsProviderCalls(t *testing.T) {
 		want:    Spend{Phase: "subagent", Calls: 5},
 	}, {
 		name: "an executor's own record", eventType: "agent_phase_completed",
-		payload: `{"phase":"execute","rounds":[{}],"rounds_used":1,"cli_turns":4}`,
+		payload: `{"phase":"execute","rounds":[{}],"rounds_used":1,"harness_turns":4}`,
 		want:    Spend{Phase: "execute", Calls: 0},
 	}, {
 		name: "a collected launch's own turns", eventType: "executor_collected",
 		payload: `{"turn_id":"t-1","iteration":2,"launch_id":"job-1","model":"sonnet",` +
-			`"provider_key":"plan","cli_turns":12,"input_tokens":30,"output_tokens":10,` +
+			`"provider_key":"plan","harness_turns":12,"input_tokens":30,"output_tokens":10,` +
 			`"total_tokens":40,"cache_read_tokens":20,"cost_usd":0.4}`,
 		want: Spend{Phase: "execute", TurnID: "t-1", Iteration: 2, Model: "sonnet",
 			ProviderKey: "plan", InputTokens: 30, OutputTokens: 10, TotalTokens: 40,

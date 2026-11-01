@@ -2529,7 +2529,7 @@ test("a parked run is answered from its seat with its context and options", asyn
         role: "SWE",
         agent_handle: "swe",
         agent_id: "a-swe",
-        coding_agent: "claude",
+        harness: "claude",
         sandbox_id: "box-1",
         status: "awaiting_clarification",
         started_at: "2026-09-21T09:45:50Z",

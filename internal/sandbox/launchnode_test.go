@@ -58,13 +58,13 @@ func (r *hostRig) launchIn(turnID string, cell Placement, node string) PendingRu
 	}
 	if _, err := r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: sweID, Role: "SWE",
-		CodingAgent: "claude-code", TraceID: "tr-1", CreatedAt: r.now, LaunchNode: node,
+		Harness: "claude-code", TraceID: "tr-1", CreatedAt: r.now, LaunchNode: node,
 	}, rigLease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := r.pending.AttachSandbox(ctx, turnID, BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-1", Placement: string(cell),
-		CodingAgent: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
+		Harness: "claude-code", PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, rigLease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -468,7 +468,7 @@ func TestAHostReclaimsTheBoxesNoRunNamesAnyMore(t *testing.T) {
 		t.Fatalf("killed %s while its run was launching anew, which may continue in it", moved.SandboxID)
 	}
 	if err := rig.pending.AttachSandbox(t.Context(), "t-moved", BoxRef{
-		SandboxID: "box-on-b", Placement: string(Direct), CodingAgent: "claude-code",
+		SandboxID: "box-on-b", Placement: string(Direct), Harness: "claude-code",
 	}, rigLease); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}

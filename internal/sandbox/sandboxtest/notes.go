@@ -620,20 +620,20 @@ func testAStartedJobsBriefStaysReadThroughEveryWriteThatForgetsItsBox(t *testing
 		ctx := t.Context()
 		mustBeginLaunch(t, s, briefed(turnID))
 		if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{SandboxID: "box-" + turnID,
-			CodingAgent: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+			Harness: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
 			t.Fatalf("AttachSandbox: %v", err)
 		}
 		if got := unread(turnID); !slices.Equal(got, []string{"briefed"}) || mustGet(t, s, turnID).Launch.Started {
 			t.Fatalf("a job whose command is not attached has %v unread, want its brief's note", got)
 		}
 		if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{SandboxID: "box-" + turnID, CommandID: "cmd-1",
-			CodingAgent: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+			Harness: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
 			t.Fatalf("AttachSandbox: %v", err)
 		}
 		// AN ATTACH NAMING NO COMMAND UNSAYS NOTHING: the job's record
 		// keeps what the attach before it recorded.
 		if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{SandboxID: "box-" + turnID,
-			CodingAgent: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+			Harness: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
 			t.Fatalf("AttachSandbox: %v", err)
 		}
 		if ok, err := s.MarkSuspended(ctx, turnID, suspension()); err != nil || !ok {

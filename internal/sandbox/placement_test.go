@@ -189,7 +189,7 @@ func TestARunReconnectsThroughTheBackendThatCreatedIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	spec := m.BuildSpec(SpecInput{Placement: E2B, CodingAgent: "claude-code"})
+	spec := m.BuildSpec(SpecInput{Placement: E2B, Harness: "claude-code"})
 	box, _, err := m.Acquire(t.Context(), spec, nil)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
@@ -198,8 +198,8 @@ func TestARunReconnectsThroughTheBackendThatCreatedIt(t *testing.T) {
 		t.Fatalf("the box was created on the wrong backend")
 	}
 	// The row's placement, which is what a later turn actually holds.
-	run := PendingRun{Placement: string(E2B), SandboxID: box.ID(), CodingAgent: "claude-code"}
-	again, _, err := m.Reconnect(t.Context(), Placement(run.Placement), run.SandboxID, run.CodingAgent)
+	run := PendingRun{Placement: string(E2B), SandboxID: box.ID(), Harness: "claude-code"}
+	again, _, err := m.Reconnect(t.Context(), Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		t.Fatalf("Reconnect: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestASpecNamingNoCellTakesTheDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	spec := m.BuildSpec(SpecInput{CodingAgent: "claude-code"})
+	spec := m.BuildSpec(SpecInput{Harness: "claude-code"})
 	if spec.Placement != Direct {
 		t.Fatalf("a spec naming no cell resolved to %q, want the catalogue default %q",
 			spec.Placement, Direct)
@@ -232,8 +232,8 @@ func TestASpecNamingNoCellTakesTheDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
-	run := PendingRun{SandboxID: box.ID(), CodingAgent: "claude-code", Placement: string(spec.Placement)}
-	if _, _, err := m.Reconnect(t.Context(), Placement(run.Placement), run.SandboxID, run.CodingAgent); err != nil {
+	run := PendingRun{SandboxID: box.ID(), Harness: "claude-code", Placement: string(spec.Placement)}
+	if _, _, err := m.Reconnect(t.Context(), Placement(run.Placement), run.SandboxID, run.Harness); err != nil {
 		t.Fatalf("the row a launch writes could not reconnect: %v", err)
 	}
 }
@@ -262,7 +262,7 @@ func TestALaunchRecordsWhereTheRunIs(t *testing.T) {
 	rig.manager = manager
 
 	req := launchReq("t1")
-	req.Spec = manager.BuildSpec(SpecInput{Placement: E2B, CodingAgent: "claude-code"})
+	req.Spec = manager.BuildSpec(SpecInput{Placement: E2B, Harness: "claude-code"})
 	res, err := rig.launchVia(t.Context(), manager, req)
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -282,7 +282,7 @@ func TestALaunchRecordsWhereTheRunIs(t *testing.T) {
 	// And the row is enough on its own to get back to the box, which is all
 	// a completion turn in another process ever has.
 	box, _, err := manager.Reconnect(t.Context(), Placement(run.Placement),
-		run.SandboxID, run.CodingAgent)
+		run.SandboxID, run.Harness)
 	if err != nil {
 		t.Fatalf("reconnect from the row alone: %v", err)
 	}

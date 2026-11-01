@@ -428,7 +428,7 @@ executor_collected         # one LAUNCH of an executor's run, as its
                            # collection read it off the box — published once
                            # per launch, a person's stop and a lost host's
                            # cut-off included: its tokens and cache share,
-                           # `cli_turns` (the model turns its CLI reported),
+                           # `harness_turns` (the model turns its CLI reported),
                            # what its CLI said it cost, its report
                            # (`response`), delivered refs, activity
                            # transcript, CLI, box, model and entry, and how
@@ -466,7 +466,7 @@ provider_fallback          # the chain moved to its next provider. One per
                            # where the next event is llm_unavailable.
                            # A `rate_limit` hand-off carries `resets_at`
                            # where the vendor named when the limit lifts,
-                           # and `from_cli` and `from_subscription`: what
+                           # and `from_harness` and `from_subscription`: what
                            # the limit is called on a screen
 seat_provider_parked       # every member of the seat's chain refused for a
                            # rate limit, so the seat is parked until the
@@ -474,7 +474,7 @@ seat_provider_parked       # every member of the seat's chain refused for a
                            # each time the engine's probe meets the limit.
                            # Carries the chain's keys, `resets_at` where
                            # every vendor named one, the head's sentence, its
-                           # `cli` and whether it signs in on a
+                           # `harness` and whether it signs in on a
                            # `subscription`. The seat reads
                            # `stopped`/`provider` until a call through its
                            # chain answers

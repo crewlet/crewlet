@@ -705,7 +705,7 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 				}}},
 			},
 			Run: runner.RunRecord{
-				CodingAgent: "claude-code", SandboxID: "box-7",
+				Harness: "claude-code", SandboxID: "box-7",
 				ProviderKey: "fallback-plan", Model: "claude-sonnet-5",
 				DeliveredRefs: []string{"https://example.com/pr/9"},
 			},
@@ -742,8 +742,8 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	}
 	// AND WHICH BOX: the harness that did the work and the box it ran in, which
 	// only the run knows and nothing on the resuming side could re-derive.
-	if done.CodingAgent != "claude-code" || done.SandboxID != "box-7" {
-		t.Errorf("the box is unnamed: agent=%q id=%q", done.CodingAgent, done.SandboxID)
+	if done.Harness != "claude-code" || done.SandboxID != "box-7" {
+		t.Errorf("the box is unnamed: agent=%q id=%q", done.Harness, done.SandboxID)
 	}
 	if len(done.DeliveredRefs) != 1 {
 		t.Errorf("delivered_refs = %v, want what the run produced", done.DeliveredRefs)
@@ -829,7 +829,7 @@ func TestAPhaseThatRanHereNamesNoBox(t *testing.T) {
 		t.Fatalf("Review: %v", err)
 	}
 	done := completedPhase(t, pub, "review")
-	if done.CodingAgent != "" || done.SandboxID != "" {
-		t.Errorf("a phase that ran here named a box: agent=%q id=%q", done.CodingAgent, done.SandboxID)
+	if done.Harness != "" || done.SandboxID != "" {
+		t.Errorf("a phase that ran here named a box: agent=%q id=%q", done.Harness, done.SandboxID)
 	}
 }

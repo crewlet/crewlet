@@ -434,12 +434,12 @@ type Error struct {
 	// [KindRateLimit]: the plan's session window, its weekly one, or one
 	// model's own ([LimitWindow]). Empty where the backend cannot tell.
 	Window LimitWindow
-	// Agent is the harness the entry drives (`claude-code`), and Subscription
+	// Harness is the harness the entry drives (`claude-code`), and Subscription
 	// whether that harness signs in on a plan rather than a metered key: what
 	// a person is told a limit is OF ("Claude Code subscription limit
 	// reached"), without the entry's configuration, which only an admin
 	// reads. Empty and false for a backend that is not a harness's.
-	Agent        string
+	Harness      string
 	Subscription bool
 	Err          error
 }

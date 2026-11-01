@@ -626,13 +626,13 @@ func TestBothWaitersKeepARunsTokenFileCurrent(t *testing.T) {
 		turn := "turn-" + string(cell)
 		if _, err := pending.BeginLaunch(ctx, sandbox.PendingRun{
 			TurnID: turn, AgentHandle: "builder", Role: "Builder",
-			Placement: string(cell), CodingAgent: "claude-code", LaunchNode: e.id,
+			Placement: string(cell), Harness: "claude-code", LaunchNode: e.id,
 		}, sandbox.Fence{}); err != nil {
 			t.Fatalf("BeginLaunch %s: %v", cell, err)
 		}
 		if err := pending.AttachSandbox(ctx, turn, sandbox.BoxRef{
 			SandboxID: box.ID(), CommandID: "cmd-1", Placement: string(cell), Node: e.id,
-			CodingAgent: "claude-code",
+			Harness: "claude-code",
 		}, sandbox.Fence{}); err != nil {
 			t.Fatalf("AttachSandbox %s: %v", cell, err)
 		}
@@ -725,14 +725,14 @@ func TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile(t *testing.T) {
 	cell := string(sandbox.Direct)
 	opened, err := pending.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: "turn-1", AgentHandle: "builder", Role: "Builder",
-		Placement: cell, CodingAgent: "claude-code", LaunchNode: e.id,
+		Placement: cell, Harness: "claude-code", LaunchNode: e.id,
 	}, sandbox.Fence{})
 	if err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := pending.AttachSandbox(ctx, "turn-1", sandbox.BoxRef{
 		SandboxID: box.ID(), CommandID: "cmd-0", Placement: cell, Node: e.id,
-		CodingAgent: "claude-code", SessionID: "sess-ask",
+		Harness: "claude-code", SessionID: "sess-ask",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
@@ -752,7 +752,7 @@ func TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile(t *testing.T) {
 	res, err := rt.coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:     sandbox.TurnRef{TurnID: "turn-1", AgentHandle: "builder", Role: "Builder"},
 		Brief:    "the round's brief, with the question and the answer",
-		Spec:     sandbox.Spec{Placement: sandbox.Direct, CodingAgent: "claude-code"},
+		Spec:     sandbox.Spec{Placement: sandbox.Direct, Harness: "claude-code"},
 		Continue: &sandbox.Continuation{SessionID: "sess-ask", Brief: "the answer: push it"},
 	})
 	if err != nil {

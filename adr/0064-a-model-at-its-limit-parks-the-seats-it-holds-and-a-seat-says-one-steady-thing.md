@@ -75,7 +75,7 @@ reader's zone; "Resume time unknown." where the vendor did not say; who runs on
 a fallback model where one carries them) from `provider_limit` alone, the CLI
 named through `CLI_PRODUCTS`, one condition per CLI and sign-in kind. **The
 event carries the CLI and whether it signs in on a plan** (`seat_provider_parked`'s
-`cli` and `subscription`, `provider_fallback`'s `from_cli` and
+`harness` and `subscription`, `provider_fallback`'s `from_harness` and
 `from_subscription`) rather than the reader resolving the entry against the org
 projection's `models` list: which entries a company configures is an admin's to
 read (the org projection hands only an admin each seat's chain), and a reader

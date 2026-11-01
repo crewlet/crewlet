@@ -543,7 +543,7 @@ function runNodes(
     const record = launch ? records.find((r) => r.launchId === launch) : undefined;
     const id = `run:${launch || ev.id}`;
     const label = "Launch";
-    const sub = str(p.coding_agent);
+    const sub = str(p.harness);
     if (record) {
       seen.add(record.key);
       const node = recordRun(record, id);
@@ -596,7 +596,7 @@ function runNodes(
     const id = `run:${r.launchId || r.key}`;
     const node = recordRun(r, id);
     if (node) out.push(node);
-    else untimed.push({ id, kind: "run", label: "Launch", sub: r.codingAgent, phaseKey: r.key });
+    else untimed.push({ id, kind: "run", label: "Launch", sub: r.harness, phaseKey: r.key });
   }
   return out;
 }
@@ -609,7 +609,7 @@ function recordRun(r: PhaseRecord, id: string): Node | null {
       id,
       kind: "run",
       label: "Launch",
-      sub: r.codingAgent,
+      sub: r.harness,
       start,
       end: start + r.durationMs,
       failed: r.failed,

@@ -16,13 +16,13 @@ func (r *coordRig) launchAnchored(turnID string) PendingRun {
 	}
 	if _, err = r.pending.BeginLaunch(ctx, PendingRun{
 		TurnID: turnID, AgentHandle: "swe", AgentID: sweID, Role: "SWE",
-		CodingAgent: "claude-code", TraceID: "tr-1", CreatedAt: r.now,
+		Harness: "claude-code", TraceID: "tr-1", CreatedAt: r.now,
 		Steer: RunSteer{Seat: []byte("sealed-seat")},
 	}, rigLease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err = r.pending.AttachSandbox(ctx, turnID, BoxRef{
-		SandboxID: box.ID(), CommandID: "cmd-1", CodingAgent: "claude-code",
+		SandboxID: box.ID(), CommandID: "cmd-1", Harness: "claude-code",
 		PauseTTLSec: DefaultPauseTTL.Seconds(),
 	}, rigLease); err != nil {
 		r.t.Fatalf("AttachSandbox: %v", err)

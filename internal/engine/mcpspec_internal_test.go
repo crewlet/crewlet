@@ -402,7 +402,7 @@ func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 // authenticate": the agent then spent a round finding that out, or the server
 // acted as nobody. The neighbour whose credential resolves is still offered,
 // with it.
-func TestACodingAgentIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.T) {
+func TestAHarnessIsNotOfferedAServerWhoseSeatCredentialIsMissing(t *testing.T) {
 	t.Parallel()
 	company := heldBackCompany(t)
 	seat := company.Org.AgentSeatByHandle("ceo")

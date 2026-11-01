@@ -1359,8 +1359,8 @@ func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
 		// thing that can say a phase ran in a sandbox rather than in this
 		// process's own tool loop.
 		Run: runner.RunRecord{
-			CodingAgent: in.Run.CodingAgent,
-			SandboxID:   in.Run.SandboxID,
+			Harness:   in.Run.Harness,
+			SandboxID: in.Run.SandboxID,
 			// AND WHICH ENTRY RAN IT, as the launch recorded the member it
 			// picked: the executor's record and its spend are charged to
 			// that entry and model, which a fallback makes other than the

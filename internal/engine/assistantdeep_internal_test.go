@@ -484,7 +484,7 @@ func TestADeepWorkBoxIsReachedAfterItsBoxRootMoves(t *testing.T) {
 	moved.Config.Providers.Sandbox.Local = &config.LocalSandbox{StateDir: after}
 	moved.catalogue = catalogue
 	rig.deep.e.epoch.current.Store(moved)
-	kept := assistant.DeepBox{Placement: string(sandbox.Direct), Sandbox: made.ID(), Agent: "claude-code"}
+	kept := assistant.DeepBox{Placement: string(sandbox.Direct), Sandbox: made.ID(), Harness: "claude-code"}
 	if err := rig.deep.Keep(t.Context(), kept); err != nil {
 		t.Fatalf("a box made under the earlier box root was not kept: %v", err)
 	}

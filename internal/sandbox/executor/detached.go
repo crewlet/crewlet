@@ -487,7 +487,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: starting %s: %w", r.harness.Name(), err)
 	}
-	log.InfoContext(ctx, "coding_agent_started", "agent", r.harness.Name(), "pid", pid)
+	log.InfoContext(ctx, "harness_started", "harness", r.harness.Name(), "pid", pid)
 	return sandbox.RunHandle{CommandID: pid}, nil
 }
 
@@ -696,8 +696,8 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 			return sandbox.JobEnded, nil
 		}
 	}
-	log.WarnContext(ctx, "coding_agent_process_gone",
-		"agent", r.harness.Name(), "pid", handle.CommandID, "job", string(state))
+	log.WarnContext(ctx, "harness_process_gone",
+		"harness", r.harness.Name(), "pid", handle.CommandID, "job", string(state))
 	return state, nil
 }
 
@@ -773,7 +773,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 				why = "was refused"
 			}
 			raw, refusal = last.resultLine(out.Stdout)
-			log.WarnContext(ctx, "coding_agent_result_from_stream", "agent", r.harness.Name(),
+			log.WarnContext(ctx, "harness_result_from_stream", "harness", r.harness.Name(),
 				"detail", "the result file "+why+", so the event stream's last line, which the "+
 					"wrapper copies into it, was read in its place")
 		}

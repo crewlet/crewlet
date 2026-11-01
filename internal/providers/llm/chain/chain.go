@@ -361,9 +361,9 @@ type Limit struct {
 	ResetsAt time.Time
 	// Said is the head member's own sentence, for whoever is shown why.
 	Said string
-	// Agent and Subscription are the head member's harness and whether it signs
-	// in on a plan ([llm.Error.Agent]): what the limit is called.
-	Agent        string
+	// Harness and Subscription are the head member's harness and whether it signs
+	// in on a plan ([llm.Error.Harness]): what the limit is called.
+	Harness      string
 	Subscription bool
 }
 
@@ -401,7 +401,7 @@ func Limited(err error) (Limit, bool) {
 			limit.Said = saidOf(failure)
 			var head *llm.Error
 			if errors.As(failure, &head) {
-				limit.Agent, limit.Subscription = head.Agent, head.Subscription
+				limit.Harness, limit.Subscription = head.Harness, head.Subscription
 			}
 		}
 	}

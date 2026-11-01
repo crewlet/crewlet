@@ -68,7 +68,7 @@ func TestASpentPlanSitsTheEntryOutUntilItsReset(t *testing.T) {
 	// WHAT THE LIMIT IS OF, for whoever tells a person: the entry's harness and
 	// that it signs in on a plan.
 	var failure *llm.Error
-	if !errors.As(first, &failure) || failure.Agent != "custom" || !failure.Subscription {
+	if !errors.As(first, &failure) || failure.Harness != "custom" || !failure.Subscription {
 		t.Errorf("the limit names %+v, want the entry's harness on a subscription", failure)
 	}
 	p.profile.Binary = "/nonexistent/crewlet-no-cli"

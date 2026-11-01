@@ -116,7 +116,7 @@ func TestSummaries(t *testing.T) {
 		want: "2 messages from alice: Thread",
 	}, {
 		name:    "a phase that ran in a box is badged with its harness",
-		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, CodingAgent: "claude-code"},
+		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, Harness: "claude-code"},
 		want:    "Dev execute [sandbox:claude-code]",
 	}, {
 		name:    "a phase that names its box and no harness is still badged",
@@ -133,7 +133,7 @@ func TestSummaries(t *testing.T) {
 	}, {
 		// The harness and the tokens: which run it was, and what it cost.
 		name: "a collected launch names its harness and what it spent",
-		payload: ExecutorCollected{RoleName: "Dev", CodingAgent: "claude-code",
+		payload: ExecutorCollected{RoleName: "Dev", Harness: "claude-code",
 			InputTokens: 9000, OutputTokens: 700, TotalTokens: 9700},
 		want: "Dev's executor launch was collected (claude-code, 9700 tokens)",
 	}, {

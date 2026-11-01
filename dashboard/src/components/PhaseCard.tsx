@@ -749,9 +749,9 @@ function Launches({ launches, now }: { launches: readonly PhaseRecord[]; now: nu
                 <span className="run-name">
                   {launches.length > 1 ? `Launch ${i + 1}` : "Launch"}
                 </span>
-                {l.codingAgent && (
+                {l.harness && (
                   <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
-                    {l.codingAgent}
+                    {l.harness}
                   </Tag>
                 )}
                 {l.model && (
@@ -985,9 +985,9 @@ export function PhaseCard({
             executor that collected a run and on each launch's own record. A
             phase that ran on the engine host names neither, so it has no
             badge. */}
-        {(record.codingAgent !== "" || record.sandboxId !== "") && (
+        {(record.harness !== "" || record.sandboxId !== "") && (
           <Tag variant="info" leadingIcon={<SquareTerminalGlyph />}>
-            {record.codingAgent || "sandbox"}
+            {record.harness || "sandbox"}
           </Tag>
         )}
         {record.failed && <Tag variant="danger">{failureWords(record.errorKind).tag}</Tag>}

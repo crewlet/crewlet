@@ -295,7 +295,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	run := newCodingRun(agent, runEnv.env)
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       cell,
-		CodingAgent:     agent.Harness(),
+		Harness:         agent.Harness(),
 		PauseTTL:        pauseTTL(settings),
 		MaxTurns:        maxTurnsFor(settings),
 		Env:             run.env,

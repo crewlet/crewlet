@@ -617,7 +617,7 @@ func TestAModelAtItsLimitIsTheWaitItIs(t *testing.T) {
 		rig := newAnswerRig()
 		now := time.Now()
 		limit := &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
-			Model: "aux-small", Agent: "claude-code", Subscription: true,
+			Model: "aux-small", Harness: "claude-code", Subscription: true,
 			RetryAt: now.Add(c.retryIn), Err: errors.New("usage limit reached")}
 		lifts := ""
 		if c.liftsIn > 0 {
@@ -966,7 +966,7 @@ func TestAFailedAnswerIsToldInWordsNotTheError(t *testing.T) {
 			errors.New("phase: no providers configured")),
 			says: "No model is set up to answer questions"},
 		"a spent plan": {complete: &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
-			Model: "aux-small", Agent: "claude-code", Subscription: true,
+			Model: "aux-small", Harness: "claude-code", Subscription: true,
 			RetryAt: time.Now().Add(14 * time.Minute), ResetsAt: time.Now().Add(14 * time.Minute),
 			Err: errors.New("Claude AI usage limit reached|1761600000")},
 			says: "has reached its usage limit", waits: true},
