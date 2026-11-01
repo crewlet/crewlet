@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -623,9 +624,11 @@ func TestSeatsOnOneLimitedEntryShareOneProbe(t *testing.T) {
 }
 
 // heldCall is a model whose calls the case scripts: the first `limited` calls
-// refuse for a limit at once, and every later one is held until its context
-// ends (or the case does), lingering a moment after, so a case can see who
-// waited for it. started is told of each held call, and ended counts them.
+// refuse for a limit at once, naming a next try later than the one a case
+// parks on (so the renewal is news, which is published), and every later one
+// is held until its context ends (or the case does), lingering a moment after,
+// so a case can see who waited for it. started is told of each held call, and
+// ended counts them.
 type heldCall struct {
 	limited int
 	linger  time.Duration
@@ -644,7 +647,7 @@ func (*heldCall) Model() string { return "opus" }
 func (m *heldCall) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
 	if int(m.calls.Add(1)) <= m.limited {
 		return nil, &llm.Error{Kind: llm.KindRateLimit, Key: "default",
-			RetryAt: parkedAt.Add(time.Hour), Err: errors.New("You've hit your 5-hour limit")}
+			RetryAt: parkedAt.Add(2 * time.Hour), Err: errors.New("You've hit your 5-hour limit")}
 	}
 	m.started <- struct{}{}
 	select {
@@ -826,5 +829,64 @@ func TestAParkItsSeatsReleaseForgotFirstIsUndoneWhole(t *testing.T) {
 	}
 	if got := released.Load(); got != 1 {
 		t.Fatalf("%d releases published, want the one saying the seat was released", got)
+	}
+}
+
+// pastLimit is a model that refuses every call for a limit naming a next try
+// already past: what an entry kept on the monotonic clock said after its host
+// slept inside its window. calls counts what reached it.
+type pastLimit struct{ calls atomic.Int32 }
+
+func (*pastLimit) Model() string { return "opus" }
+
+func (m *pastLimit) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	m.calls.Add(1)
+	return nil, &llm.Error{Kind: llm.KindRateLimit, Key: "default",
+		RetryAt: parkedAt.Add(-time.Minute), Err: errors.New("You've hit your 5-hour limit")}
+}
+
+// A PROBE REFUSED WITH A NEXT TRY ALREADY PAST WAITS BEFORE IT ASKS AGAIN.
+// Armed for the instant its models named, a probe whose models named one
+// already past was due at once: it asked, was refused and asked again as fast
+// as the call returned, renewing every parked seat's park on each pass. After
+// a host slept inside a limit's window that was thousands of probes a second,
+// with a WARN per seat per probe while the broker was down. So the renewal
+// waits the shortest window an entry sits out, and says when it is tried
+// again by that.
+//
+// Mutation: arm the renewal for the instant the models named, and its alarm
+// is due at once.
+func TestAProbeRefusedWithANextTryAlreadyPastWaitsBeforeItAsksAgain(t *testing.T) {
+	t.Parallel()
+	model := &pastLimit{}
+	r := newProbeRig(t, model)
+	var parks []types.SeatProviderParked
+	var mu sync.Mutex
+	r.q.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+		if p, ok := events.DataAs[*types.SeatProviderParked](ev); ok && p != nil {
+			mu.Lock()
+			parks = append(parks, *p)
+			mu.Unlock()
+		}
+	})
+	r.park(t, "lead", parkedAt.Add(-time.Minute))
+	live := r.alarms.live()
+	if len(live) != 1 || live[0].wait != 0 {
+		t.Fatalf("alarms = %+v, want the park's one probe due now", live)
+	}
+	live[0].fire()
+	if got := model.calls.Load(); got != 1 {
+		t.Fatalf("the probe asked the models %d times, want once", got)
+	}
+	next := r.alarms.live()
+	if len(next) != 1 || next[0].wait != harness.ShortestSitOut {
+		t.Fatalf("alarms = %+v, want the renewal's one armed %s on, not at once",
+			next, harness.ShortestSitOut)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(parks) != 2 || !parks[1].RetryAt.Equal(parkedAt.Add(harness.ShortestSitOut)) {
+		t.Errorf("parks = %+v, want the renewal saying the seat is tried again %s on",
+			parks, harness.ShortestSitOut)
 	}
 }

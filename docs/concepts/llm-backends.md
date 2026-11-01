@@ -734,6 +734,11 @@ sentence, until the window ends:
   the window ends, before the first of them answers); every call queued behind
   them is refused as soon as one reports the plan still spent.
 
+The window is kept on the wall clock, the clock a vendor names its reset on.
+A host that sleeps through the window's end wakes with the entry tried again,
+rather than refusing for the length of the sleep while naming an end that has
+already passed.
+
 **A seat whose whole chain is limited is parked, not retried.** When every
 entry of the chain a turn ran on refused for a rate limit, the engine holds the
 seat's inbox until the first entry is tried again (`seat_provider_parked`), the
@@ -744,7 +749,16 @@ own, outside any delivery: **one probe for every seat parked on the same
 entries**, never one per seat. A limit that still holds arms the probe again for
 the next instant and touches nothing on any inbox, however long the limit
 lasts, and an answer lifts every park on the chain (`seat_provider_released`),
-after which each seat's messages are delivered once, in order. A probe is a full
+after which each seat's messages are delivered once, in order. A probe whose
+entries refuse while naming a next try that has already passed waits a minute
+(the shortest window an entry sits out) rather than asking again at once, and
+logs `seat_provider_probe_retry_past`. Each park, renewal and release is
+published once per change: a renewal that names what the last one named is not
+published again. While the broker refuses, the engine keeps each seat's newest
+notice and retries on a backoff from one second to thirty, logging
+`seat_provider_park_notices_held` when the outage starts and
+`seat_provider_park_notices_published` when the notices land. The parks
+themselves hold whether or not the broker is up. A probe is a full
 run of the entry's harness, so it costs what the harness's smallest request costs (its
 own fixed overhead, which the one-word prompt does not shrink), not what the
 prompt costs; it is charged to the parked seat it runs as (the one that sorts
