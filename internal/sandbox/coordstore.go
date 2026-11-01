@@ -47,18 +47,20 @@ import (
 // again on the record as it then stands. That is what makes the SECOND writer
 // see the first one's decision instead of overwriting it.
 //
-// # A lost race is the store's to retry, for its patience
+// # A lost race is the store's to retry
 //
-// Not a count of attempts made here. A run's record has more writers than a
-// count can be set for: every tool call its box makes over the bridge appends
-// to it — from as many as twenty subagents at once, Claude Code's default —
-// beside its seat's own turns, a peer recovering it, a person's answer and a
-// person's stop, so the sixteen immediate attempts this file once made could
-// report a healthy, busy record as one that "kept changing" and drop the
-// write. The store retries a lost race after a jittered wait for as long as
-// its patience allows (internal/coord/kv's race.go: a lost race measures load,
-// not health), and answers [coord.ErrUnavailable] only once a write has lost
-// for all of it. What the coordinator still loops on here is never a lost race
+// Never a count of attempts made here. A run's record has many writers:
+// every tool call its box makes over the bridge appends to it — from as many
+// as twenty subagents at once, Claude Code's default — beside its seat's own
+// turns, a peer recovering it, a person's answer and a person's stop, so the
+// sixteen immediate attempts this file once made could report a healthy,
+// busy record as one that "kept changing" and drop the write. The store
+// decides a lost race again on the record as it then stands, within the bound
+// every fleet key shares (internal/coord/kv's casRetry: twice the writers a
+// fleet key is sized for, each attempt after a loss waiting a window of round
+// trips), which outlasts the overlap of the calls one run's box can make at
+// once, and answers [coord.ErrUnavailable] only once a write has lost every
+// attempt of it. What the coordinator still loops on here is never a lost race
 // but an OUTCOME — a decision refused, a row gone between two operations — and
 // each such loop carries a bound of its own, with its reason.
 type CoordStore struct {
