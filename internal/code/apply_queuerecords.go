@@ -440,11 +440,12 @@ func addQueuePack(ctx context.Context, tx *sql.Tx, at applyContext, repoID strin
 		}
 		return 1, nil
 	}
-	// ITS CONTENT DATES FROM ITS OWN POSITION, as a push's pack's does: what
-	// it brings reaches the repository here.
+	// ITS CONTENT DATES FROM ITS OWN POSITION, and arrived at its own broker
+	// instant, as a push's pack's does: what it brings reaches the repository
+	// here.
 	res, err := tx.ExecContext(ctx, addQueuePackSQL, repoID, pack.PackID, pack.Object.String(), string(pack.Hash),
 		pack.Size, pack.IndexBytes, pack.ReverseBytes, pack.GitChecksum, pack.Objects, string(kind), at.packed,
-		at.packed)
+		at.packed, at.at())
 	if err != nil {
 		return 0, fmt.Errorf("code: write pack %s at %s: %w", pack.PackID, at.position, err)
 	}
@@ -651,8 +652,8 @@ const (
 	dropLandedSQL = `DELETE FROM code_candidates WHERE rowid IN (SELECT rowid FROM code_candidates
 		INDEXED BY code_candidates_train_idx WHERE repo_id = ? AND target_ref = ? AND train = ? AND ordinal <= ?)`
 	addQueuePackSQL = `INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
-			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position)
-		VALUES (?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?)
+			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position, arrived_at)
+		VALUES (?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?)
 		ON CONFLICT (repo_id, pack_id, part) DO NOTHING`
 	queuePackCountersSQL = `UPDATE code_repos SET live_packs = live_packs + ?, live_bytes = live_bytes + ?,
 		live_objects = live_objects + ?, version = ? WHERE id = ?`

@@ -1411,10 +1411,20 @@
 // outputs after it, and a purge's cycle takes the live packs that date from
 // before the request it serves. While an expunge is open, a second begin is
 // stale and so is a publication (publication.go's rule 6g); a compaction of
-// live packs is decided as ever. The repository's maintainer finds the
-// expunges it owes by the [ReadExpungeDue] listing — the active and archived
+// live packs is decided as ever. A pack row also names WHEN its newest
+// content arrived ([PackRow.Arrived], replicated 0099): a push's and a queue
+// merge's pack its record's broker instant, and every rewrite's output the
+// latest of the rows it retires — the record's own instant where it retires
+// none — so the maintainer's own expunge keeps every pack that arrived within
+// [PruneGrace] whole by a column, never a position, which says nothing of
+// time. The repository's maintainer finds the expunges it owes by the
+// [ReadExpungeDue] listing, in two arms: first the active and archived
 // repositories with an expunge open or a request waiting, by id, one walk of
-// code_repos_expunging_idx (replicated 0064), the engine's own read — and
+// code_repos_expunging_idx (replicated 0064); then, asked with
+// [ReadQuery.ExpungedBefore], every other active or archived repository of
+// any kind last expunged at or before that instant or never, least recently
+// expunged first, one seek of code_repos_expunge_due_idx (the same
+// migration) — the engine's own read, its maintainer's weekly schedule — and
 // reads what a cycle keeps beside the refs by the [ReadExpungeTips] read: the
 // objects the repository's ref drops left since an instant, one covering seek
 // of code_ref_drops' key, which replicated 0061 led with the instant for it;

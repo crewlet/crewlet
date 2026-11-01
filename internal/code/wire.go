@@ -271,6 +271,16 @@ type PackRow struct {
 	// moves past the request without judging anything. A read's answer,
 	// never a record's field: no versionedFields row.
 	Content statelog.Position `json:"content"`
+	// Arrived is the broker instant the pack's NEWEST content arrived at:
+	// nothing in it reached the repository after it. A push's pack and a
+	// merge's arrived at their own record; every rewrite's output — a
+	// compaction's, an expunge's, a rescue — at the latest of the packs it
+	// replaced, since moving content brings none (replicated 0099). An
+	// expunge on its maintainer's schedule keeps a pack that arrived within
+	// [PruneGrace] whole (internal/code/compact). Zero where it is not known:
+	// a pack a cache adopted before a round served its row. A read's
+	// answer, never a record's field: no versionedFields row.
+	Arrived time.Time `json:"arrived,omitzero"`
 }
 
 // Ref is the PackRef a cache installs and [CheckBundle] reads.
@@ -939,8 +949,12 @@ const (
 	ReadPublicationDue ReadKind = "publication_due"
 	// ReadExpungeDue is the active and archived repositories with an
 	// expunge open or a purge requested, by id, each with what its
-	// maintainer finishes or serves it by: the listing a repository's
-	// maintainer polls for the expunges it owes. The engine's own read, as
+	// maintainer finishes or serves it by — and, asked with
+	// [ReadQuery.ExpungedBefore], then every other active or archived
+	// repository last expunged at or before that instant or never, least
+	// recently expunged first, whose maintainer judges whether an expunge
+	// is due on its own schedule: the listing a repository's maintainer
+	// polls for the expunges it owes. The engine's own read, as
 	// `compaction_due` is.
 	ReadExpungeDue ReadKind = "expunge_due"
 	// ReadExpungeTips is the objects one repository's expunge keeps beside
@@ -1327,6 +1341,19 @@ type ReadQuery struct {
 	// build that predates the kind refuses the read as a kind it does not
 	// know (ErrInvalid) — the scan unread, never answered as no tips.
 	ExpungeTips *ExpungeTipsQuery `json:"expunge_tips,omitempty"`
+	// ExpungedBefore asks an `expunge_due` read for its WEEKLY ARM beside
+	// its open one: after every repository with an expunge open or a purge
+	// requested, every other active or archived repository — a scratch one
+	// as much as a project — last expunged at or before it, or never,
+	// least recently expunged first; the maintainer asks from its clock
+	// less [ExpungeInterval]. Zero asks the open arm alone. Refused on every
+	// other kind. An estate request's field and no record's, so it takes
+	// no versionedFields row: under the code domain's stated condition (no
+	// build of main carries internal/code while it is unmerged) every node
+	// that serves the read reads it; were the domain to reach main first, a
+	// node of a build that predates it would answer the open arm alone,
+	// which delays an expunge on the schedule and drops no object.
+	ExpungedBefore time.Time `json:"expunged_before,omitzero"`
 	// BranchChanges is a `branch_changes` read's repository and branches:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
@@ -1488,7 +1515,8 @@ type IndexedRepo struct {
 
 // ExpungeCandidate is one repository an `expunge_due` read lists: the expunge
 // open on it and the purge requested of it, whichever it holds — what its
-// maintainer finishes or serves first — when it was last expunged, its live
+// maintainer finishes or serves first — or neither, a repository of the
+// listing's weekly arm, when it was last expunged, its live
 // packs, bytes and objects — which a cycle's inputs are cut from, and the last
 // of which places the repository's maintenance on the node that compacts and
 // publishes it too, by its maintenance's charge (internal/code/compact) — and

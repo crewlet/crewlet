@@ -332,6 +332,12 @@ type Compactor struct {
 	// pack may be among and whose cap is its own ([ExpungeInputByteCap]),
 	// floored at its lightest input.
 	expungeCaps map[string]int64
+	// clean is every repository an expunge's scan on the maintainer's own
+	// schedule found NOT DUE, and when it scanned it: left unscanned for
+	// code.ExpungeInterval after, so a repository with little garbage is
+	// walked at most weekly however often the weekly arm lists it
+	// ([Compactor.cleanAt]).
+	clean map[string]time.Time
 	// held is what a full object store holds back of each loop.
 	held [loops]holds
 	// behind is the last compaction pass's repositories this node maintains
@@ -380,10 +386,14 @@ type behindRepo struct {
 type bounds struct {
 	cut, maxBundle int64
 	minMerge       int
+	// expungeMin is the unreachable bytes below which an expunge on the
+	// maintainer's own schedule is never due (code.ExpungeMinBytes).
+	expungeMin int64
 }
 
 // production is what every compactor the engine builds is held to.
-var production = bounds{cut: code.CompactPackBytes, maxBundle: code.MaxPackBytes, minMerge: code.CompactMinMerge}
+var production = bounds{cut: code.CompactPackBytes, maxBundle: code.MaxPackBytes, minMerge: code.CompactMinMerge,
+	expungeMin: code.ExpungeMinBytes}
 
 // New builds a Compactor, refusing every required field missing, by name, in
 // one error listing them all. It starts nothing: [Compactor.Start] does.
@@ -407,7 +417,7 @@ func New(o Options) (*Compactor, error) {
 		compactions: map[string]bool{}, publications: map[string]map[string]bool{}, expunges: map[string]bool{},
 		notDue: map[string]memo{}, nothing: map[string]statelog.Position{}, built: map[string]lastBuild{},
 		tails: map[string]time.Time{}, caps: map[string]int64{}, expungeCaps: map[string]int64{},
-		done: make(chan struct{})}
+		clean: map[string]time.Time{}, done: make(chan struct{})}
 	for i := range c.held {
 		c.held[i].repos = map[string]int64{}
 	}

@@ -1,0 +1,50 @@
+-- A pack row dates when its newest content arrived.
+--
+-- An expunge on its maintainer's own schedule — weekly, once a quarter of a
+-- repository's live bytes is unreachable — keeps every pack whose content
+-- arrived within code.PruneGrace WHOLE, as git keeps an object younger than
+-- gc.pruneExpire: what reached the repository in the last fortnight stays,
+-- reachable or not, and only the packs older than that are its inputs. Nothing
+-- on a pack's row said when it arrived. added_position is a place on the log,
+-- not an instant — a position carries no time, and the log's records are not
+-- dense in time, so no grace counted in days reads off it — and
+-- content_position (0067) is the OLDEST content a pack holds as a purge reads
+-- it, the wrong end for a grace: a compaction's output of a month-old pack and
+-- yesterday's dates from the month-old one while it holds yesterday's objects.
+--
+-- So every pack row names the instant its NEWEST content arrived, arrived_at
+-- (store.EncodeTime): nothing in the pack reached the repository after it. The
+-- applier writes it from the record and the rows the record retires, so no
+-- payload carries it:
+--
+--   - a push's pack, and a merge's (M5's queue): the record's own broker
+--     instant — what it brings reaches the repository there;
+--   - a rewrite's outputs — a compaction's, a publication's repack, an
+--     expunge's kept, dropping and rescue packs: the GREATEST of the rows it
+--     retires, since moving content brings none — and the record's own
+--     instant where it retires none (a record whose inputs a later one moved
+--     first), whose outputs then claim nothing older than the record itself.
+--
+-- An expunge on the schedule takes as inputs only packs whose arrived_at is
+-- at least PruneGrace before its maintainer's clock (internal/code/compact);
+-- a purge, which keeps no grace, reads content_position as before.
+--
+-- code_packs_retired carries the column too, so a retired row is the row
+-- code_packs held but its state, as 0057 states.
+--
+-- Every date is derived from the records alone, so a node replaying the log
+-- writes every one again. And every node writes it from the first record it
+-- applies, under the code domain's stated condition (internal/code's
+-- record.go): no build that carries the domain has run without this column —
+-- none of it is on main — so no node holds rows an older build applied while
+-- another holds their dates.
+--
+-- The default, 0, is the epoch: SQLite requires a default of a NOT NULL column
+-- added to a table, and every row the applier writes states its own. No index:
+-- the maintainer reads a repository's live packs from its own cache's copy of
+-- the rows, never by a seek of this column.
+--
+-- Class: code_packs and code_packs_retired stay reproducible: the column is
+-- written only by the applier, from the records that add and retire packs.
+ALTER TABLE code_packs ADD COLUMN arrived_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE code_packs_retired ADD COLUMN arrived_at INTEGER NOT NULL DEFAULT 0;
