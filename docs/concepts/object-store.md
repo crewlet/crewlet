@@ -980,11 +980,30 @@ pack list, or a clone that began on it, finishes its read.
 The `code-retention` duty then removes the rows past their day — by a record
 on the code log for each repository holding some, which every data node
 applies — and the collector's next pass deletes their objects. A deleted
-repository's purge takes its retired rows with the rest. The decision is
+repository's purge takes its retired rows with the rest.
+
+An [expunge](code-host.md#expunge) retires packs the same way, and these
+are the ones whose bytes somebody may want gone: the packs holding what no
+ref reached, a secret force-pushed away among them. Its begin leaves them
+**dropping** — still `code_packs` rows, so still live references: kept,
+audited, and carried by a backup taken then — and its commit moves them to
+`code_packs_retired`, where they keep their objects for the same day, for a
+clone already reading one, before the duty's sweep removes the rows and the
+collector's next pass deletes the bytes. So a purged object leaves the store
+a day and at most about an hour and a quarter after its purge commits, and
+the purge's answer says so. Two copies outlive that: every backup taken
+before the commit — on `nats`, every backup taken before the collector
+deleted the bytes, since the bucket's stream snapshot carries every object
+the bucket holds, retired ones included ([A purge and the backups before
+it](../guides/backup.md#a-purge-and-the-backups-before-it)) — and, on a
+[versioned bucket](#choosing-a-backend), the noncurrent version the deletion
+leaves, for as long as the bucket's lifecycle rule keeps one. The decision is
 [ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-retired-reference-keeps-its-object-for-a-grace.md),
 and the compaction's own rules — what a merge keeps, and why a retired pack
 outlives its longest read — are
-[ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-compaction-merges-packs-without-judging-reachability.md).
+[ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-compaction-merges-packs-without-judging-reachability.md),
+and the expunge's — what it keeps, and why it drops in two records — are
+[ADR-0069](https://github.com/crewlet/crewlet/blob/main/adr/0069-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md).
 
 The first derived rows are the code host's too: `code_layer_parts`, the
 stored bytes of each repository's **published layers** — a multi-pack-index

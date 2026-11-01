@@ -88,11 +88,6 @@ This is the product's current shape, not a configuration choice:
   rename, archive, delete, restore and protect repositories through the same
   tools, a seat's own scratch repositories among them
   ([Repositories made by tools](#repositories-made-by-tools)).
-- **Nothing drops an object a push stored.** A force-push or a deletion
-  leaves the history behind it in the repository's packs, fetchable by its
-  id, for as long as the repository lives. The object each such push left is
-  recorded for two weeks ([ref drops](#retention-and-history)): the grace
-  that history keeps once a repository's unreachable objects can be dropped.
 
 ---
 
@@ -1059,7 +1054,9 @@ hold took 27 seconds and the 10 000 of a history nothing merged over two
 minutes ([The cache on a git node](#the-cache-on-a-git-node)).
 
 **What it does not do.** It removes no object: what no ref reaches stays in
-the repository's packs for as long as it lives. And it never touches a
+the repository's packs until an [expunge](#expunge) drops it. And it never
+merges a full pack — an expunge is the one rewrite that takes one — and never
+touches a
 published chain: a merge takes only the tail's packs, so a copy serving from
 the chain keeps it, and its tip, through the swap. On a copy serving in own
 mode a merge drops the copy's own multi-pack index and its bitmap — the
@@ -1117,6 +1114,186 @@ pass rather than guess (`code_compaction_maintainer_unknown`,
 maintains**: each merge and publication syncs the repository into its cache,
 so a maintainer's cache budget holds the repositories it maintains, or each of
 its publications begins with a whole download of its repository.
+
+---
+
+## Expunge
+
+Nothing else removes an object a push stored. A force-push or a deletion
+moves a ref and leaves the history behind it in the repository's packs,
+fetchable by its id from every git node and counted against
+`code.limits.repo_max_bytes`, which a push is refused `repo_size` on. An
+**expunge** is the one rewrite that drops objects — what no ref reaches,
+past a grace — run by the repository's
+[maintainer](#who-maintains-a-repository) beside its compaction and its
+publication, one rewrite of a repository at a time
+([ADR-0069](https://github.com/crewlet/crewlet/blob/main/adr/0069-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md)).
+
+**When it runs.** Two ways, and nothing to configure:
+
+- **Weekly, on the maintainer's own schedule.** Every minute a git node lists
+  the repositories it may owe an expunge — first those with one open or a
+  purge requested, then every active or archived repository last expunged a
+  week ago or never, least recently expunged first, a seat's
+  [scratch repositories](#repositories-made-by-tools) as much as projects —
+  and for each it maintains, it **scans**: one walk of the repository's
+  history from what it keeps (below) weighs what nothing reaches. The expunge
+  is **due** once that is more than a quarter of the repository's live pack
+  bytes and at least 64 MiB; below either, rewriting the kept packs, which
+  every git node holding the repository then downloads again, costs more
+  than the bytes it frees, and the repository is not scanned again on that
+  node for a week, so a clean repository's history is walked at most once a
+  week. The 64 MiB is provisional, until the expunge's benchmark has priced a
+  cycle against what it frees.
+- **At once, when a person purges** the repository's unreachable objects —
+  `code_purge_unreachable` from your own assistant, or
+  [`crewlet code purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable).
+  The purge is a request recorded on the repository's subject and answered
+  as soon as it is, long before it is served; its maintainer serves it at its
+  next minute's look, with **no grace**: what a force-push or a deletion left
+  goes however recently it was left. A purge asked while another is open
+  widens that one. Its cycles take only the packs whose content dates from
+  before the request, so a purge of a busy repository rewrites what it was
+  asked about and nothing pushed since, and it is served once nothing from
+  before the latest request is left. A purge is a person's alone, on a fresh
+  proof of who they are: no seat may ask for one
+  ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
+
+**What it keeps.** Whatever began it, an expunge keeps what every ref
+reaches and what a row still names for work in flight, although no ref does:
+every revision head of a draft or open [change](#changes), which its
+reviewers compare however often its branch was force-pushed; every live
+[merge queue](#the-merge-queue) entry's head and every candidate's tip, which
+a landing moves its target onto; and every protected branch's
+[green](#tip-checks-and-code_green) commit. On the schedule it keeps two
+things more, for **14 days**, git's own `gc.pruneExpire` default: every
+object a force-push or a deletion left within them — the
+[ref drops](#retention-and-history) — and every pack that arrived within
+them, whole, so history force-pushed away stays fetchable by its id for two
+weeks, and no push in flight loses an object it relies on. A purge keeps
+neither: it is asked because something must go now.
+
+**Two records.** Each is decided alone by the repository's
+[committer](#the-committer) in its one queue, as a compaction is.
+
+```mermaid
+sequenceDiagram
+    participant P as Person
+    participant M as Maintainer
+    participant S as Object store
+    participant C as Committer
+    participant G as Every git node's cache
+    alt a person's purge
+        P->>C: request the purge
+        C-->>P: answered once the request is recorded
+        M->>M: the next minute's listing names the request: scan with no grace
+    else the weekly schedule
+        M->>M: the listing names the repository: scan, due past a quarter and 64 MiB
+    end
+    Note over M: the scan keeps what the refs, the drops the grace keeps and the rows in flight reach
+    M->>M: build the kept and the dropping packs in a scratch
+    M->>S: store every output, at once
+    M->>C: propose the begin
+    C-->>M: applied: inputs retired, kept packs live, the rest dropping, drop epoch moved
+    G->>G: next sync: kept packs in, dropping packs beside the copy
+    M->>M: rescue: what a push landed since the scan reaches again
+    M->>S: store the rescue
+    M->>C: propose the commit
+    C-->>M: applied: dropping packs retired, rescue live
+    G->>G: next sync: dropping packs out, with the commit-graph and seats' read answers
+    M->>M: publish the repository's layers again
+```
+
+1. **The begin keeps every object.** It rewrites some live packs — a
+   [full](#compaction) pack among them, which nothing else rewrites — into
+   packs holding what the scan kept, which stay live, and packs holding the
+   rest, which are **dropping**: still rows naming their objects, still
+   served to a clone, a fetch and a seat's read, and never a pack a push may
+   build on ([Packs an expunge is dropping](#the-cache-on-a-git-node)). To
+   every reader it is a merge. It removes the
+   [published layers](#published-layers) over the packs it rewrote, so each
+   git node serves from the layers below them, or from its own index, until
+   the maintainer publishes again after the commit. And it moves the
+   repository's **drop epoch**: a push, an engine write, a coding box's push,
+   a pull mirror's sync, a merge, a queue's candidate or its landing that was
+   built from a copy read before the begin is refused `expunging`, nothing of
+   it decided, and built again over the copy the begin left
+   ([What git prints](#what-git-prints-and-what-it-means)), since it may rely
+   on an object the begin made dropping.
+2. **Between the two**, compaction goes on with the live packs, and a
+   publication of the repository waits for the commit.
+3. **The commit retires the dropping packs** into the table of retired
+   packs, and keeps live, as a **rescue**, whatever of them a push that
+   landed between the scan and the begin reaches again. Its one precondition
+   is its own expunge, still open with exactly those dropping packs — never a
+   ref — so a repository pushed to all day still commits. Each git node then
+   drops the dropping packs at its next sync, by its copy's next directory, and
+   with them the commit-graph, the answers it keeps for seats' reads, its tip
+   over a published chain and its code index, since each may name or quote
+   what left ([What the cache writes beside the
+   packs](#the-cache-on-a-git-node)).
+
+A cycle stopped at any point — a crash, a restart, the maintainer moving to
+another git node — leaves nothing, an expunge open, which the next pass on
+whichever node then maintains the repository finishes from the rows, or an
+expunge committed; what it stored that no row names is the
+[object collector's](object-store.md#collection-and-audit). A begin takes at
+most 1 024 packs and writes at most 32, so a repository with more to rewrite
+takes several cycles, each a week apart on the schedule and back to back for
+a purge.
+
+**What still holds a purged object.** The commit takes it out of the
+repository: no row names it live, no git node serves it once it has synced,
+and no clone or fetch receives it again. It is still held:
+
+- by **every git node's cache that has not synced the repository since** — a
+  node syncs it at the next request it serves for it, or drops it with the
+  repository when its budget evicts it — and a request already reading the
+  old copy finishes on it. The purge's answer names the git nodes that may
+  hold a copy;
+- by **the object store, for a day** after the commit — the retired packs'
+  grace, so a clone already reading one finishes — then until the
+  `code-retention` duty's next quarter-hour removes their rows and the
+  collector's next hourly pass deletes the bytes
+  ([Live, retired and derived references](object-store.md#live-retired-and-derived-references)),
+  and on a **versioned** S3 bucket for as long as the bucket's own rules keep
+  a deleted object's old version ([Choosing a
+  backend](object-store.md#choosing-a-backend));
+- by **every backup taken before the commit**, for as long as the backup is
+  kept, and on the `nats` object store every backup taken before the store
+  deletes the bytes ([A purge and the backups before
+  it](../guides/backup.md#a-purge-and-the-backups-before-it));
+- by **every clone and fetch that already took it** — a person's clone, a
+  coding box's, a push mirror's target, a CI runner's checkout — which
+  nothing on the server reaches.
+
+So a secret that was ever pushed is a secret to **rotate** first, and the
+purge is what takes it off the server afterwards ([A leaked secret is
+rotated, then purged](../guides/code.md#a-leaked-secret-is-rotated-then-purged)).
+
+**Watching it.** `code_get_repo`'s `expunge` and `crewlet code status -repo
+<name>`'s `expunge:` line say whether one is open, which purge is waiting,
+and when the last commit landed and what it dropped. On the maintainer,
+`crewlet.code.expunge.runs` counts its cycles by outcome,
+`crewlet.code.expunge.duration` times their stages,
+`crewlet.code.expunge.dropped_bytes` sums what they took out, and on every
+git node `crewlet.code.cache.dropping.bytes` is what its cache holds of
+dropping packs ([metrics reference](../reference/metrics.md)); its log says
+`code_expunge_due` when a scan finds one due, `code_expunge_begun` and
+`code_expunge_committed` for its two records, and `code_expunge_refused` or
+`code_expunge_failed` with why when a cycle stops — each tried again at the
+next pass.
+
+**What it costs.** On the schedule, the scan that judges an expunge due is
+one `git rev-list --disk-usage` over the repository's whole history, and every
+build is a walk of it from every tip kept,
+admitted in the node's maintenance lane at a publication's charge — about
+600 bytes an object of the repository — so a refused expunge is a purge
+waiting, never a push refused. The begin's record writes at most 2 625 rows
+and applied in 75 ms at its widest, measured on two cores, the commit's at
+most 97 rows in 13.5 ms. Every other git node holding the repository downloads
+the kept and rescue packs once — the maintainer links its own — which is why
+the schedule waits for a quarter of the repository to be unreachable.
 
 ---
 
@@ -2482,10 +2659,13 @@ repository, never by a node's own sweep:
   row an object, naming the ref, the object and when the push landed. A
   merge or a queue's landing that deletes its change's source branch records
   the head it held the same way. It is
-  kept **14 days**, git's own `gc.pruneExpire` default, because dropping a
-  repository's unreachable objects keeps what such a push left for that
-  long: history force-pushed away or deleted stays fetchable by its id for
-  two weeks after the push. The repository's later pushes forget the rows
+  kept **14 days**, git's own `gc.pruneExpire` default, because the weekly
+  [expunge](#expunge) of a repository's unreachable objects keeps what such a
+  push left for that long: history force-pushed away or deleted stays
+  fetchable by its id for two weeks after the push, and after them only until
+  the next expunge — unless a person's purge of the repository's unreachable
+  objects, which keeps no grace, takes it sooner. The repository's later
+  pushes forget the rows
   past that, oldest first, with whatever room each push's record leaves once
   its tombstones are forgotten. That is room for at least as many as the
   push records, except behind the busiest records: two pushes of forced
@@ -2524,7 +2704,10 @@ packs stay, and declaring it again under its name restores it. Once it has been
 deleted longer than **`code.deleted_retention_days`** (1 to 365 days; unset is
 7, the trim's default `min_age`, so a deletion is undone from the same window
 the log can replay), the fleet-singleton `code-retention` duty purges it (see
-[Singleton duties](seat-ownership.md#singleton-duties)):
+[Singleton duties](seat-ownership.md#singleton-duties)) — a deleted
+repository's purge of everything it holds, which is not the purge a person
+asks of a live repository's unreachable objects
+([Expunge](#expunge)):
 
 - every 15 minutes, it first removes the rows of the packs a compaction
   retired more than a day ago, so the collector can take their objects (see
@@ -2660,7 +2843,10 @@ them. Its row in the push history — `via` `expiry`, `actor_kind` `system` —
 keeps every branch it deleted beside the commit it was at, so a branch is
 **restored** with `code_create_branch` at that commit for as long as the push
 history keeps the row (181 days) and the repository still holds the commit,
-which a deletion keeps for its [prune grace](#retention-and-history) at least.
+which is bounded by the deletion's [prune grace](#retention-and-history): the
+weekly [expunge](#expunge) keeps it for 14 days after the deletion and may
+drop it at any run after them, and a person's purge keeps no grace at all.
+Restore a branch you need within two weeks of its deletion.
 
 Each push deletes up to 1 000 branches, fewer where their names are long
 enough to fill a push's record, and a repository with more idle branches is
@@ -2922,9 +3108,8 @@ the commit-graph came along, was dropped or was never there to keep —
 layers move with it, a placement of one included
 ([Published layers](#published-layers)) — and every one that failed.
 
-**Packs an expunge is dropping.** An expunge of a repository's unreachable
-objects — which nothing in this build begins yet ([what it does not do
-yet](#what-it-does-not-do-yet)) — first rewrites the packs it takes into
+**Packs an expunge is dropping.** An [expunge](#expunge) of a repository's
+unreachable objects first rewrites the packs it takes into
 packs of what the refs reach, kept, and packs of what nothing reached when it
 read the refs, **dropping**, and only a second record takes the dropping ones
 out. Between the two, a git node keeps the repository's dropping packs in a
@@ -7346,7 +7531,7 @@ words, since git does not read the header.
 | A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home git node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
 | A seat's push past the pushes one seat may land in a day on the company's calendar, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has landed <n> pushes since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat land <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
 | A push moving the branches of more open changes than one record can carry beside its own refs — hundreds of change branches force-pushed at once ([Revisions](#revisions)) — or a person's push landing on hundreds of protected branches, each landing a row and its green row ([The merge queue](#the-merge-queue)) | `(too_many_changes: this push moves <n> live changes[ and lands on <m> protected branches], and their rows beside its own would take its record to <rows> of the 4000 rows one record may write: nothing was decided; push their branches in fewer pushes)` | Push the branches in groups: each group's revisions are written in its own record. Nothing of the push was decided. A push whose changes fit a record of its own, but not beside the pushes batched before it, is never refused: the committer decides it first in its next record. |
-| A push its node checked against the repository just before an expunge of the repository's unreachable objects began — which nothing in this build begins yet ([what it does not do yet](#what-it-does-not-do-yet)) | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
+| A push its node checked against the repository just before an [expunge](#expunge) of the repository's unreachable objects began | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
 | Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
 | The object store has no room — the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](object-store.md#an-s3-bucket--s3) | `(store_full: the object store has no room for the <size> this push stores, and nothing was stored; it lands only once <room>)`, the room the store names: on NATS, `an operator makes room — moves the files to a bucket (crewlet objects migrate -to s3), raises the bucket's byte reservation on an external broker, or lets the collector remove what nothing names`; on S3, `an operator makes room in the bucket — frees space on the storage its provider keeps it on, or raises the quota the provider holds it to — or lets the collector remove what nothing names` | Nothing was stored, and pushing again is refused the same until room is made: tell an operator. The node logs `code_push_store_full` at `WARN` with the store's own answer; on NATS, the [`objects_bucket_near_ceiling`](object-store.md#alarms) alarm says how full the bucket is. |
 | The object store failed | `(unavailable: object store unavailable: …)` | Nothing was stored; push again. |

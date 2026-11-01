@@ -1230,9 +1230,11 @@ the push history — `GET /code/repos/{name}/pushes` and `crewlet code status
 `actor_kind` `system`) for the 181 days the history keeps it. The row says
 where the branch was; restoring it needs the commit itself, which the
 repository is held to keep only for the deletion's **14-day** prune grace
-([ref drops](../concepts/code-host.md#retention-and-history)). Restore a
+([ref drops](../concepts/code-host.md#retention-and-history)), and not even
+that once a person purges the repository's unreachable objects. Restore a
 branch you need within two weeks of its deletion: after that, it comes back
-only while the repository still holds the commit. A repository
+only until the repository's next [expunge](../concepts/code-host.md#expunge)
+drops the commit. A repository
 setting refs faster than they go idle raises `code_refs_near_limit` before it
 reaches the 100 000 live refs it may hold ([alarms](../reference/alarms.md)).
 
@@ -1484,13 +1486,52 @@ it with now. Past the window it is purged, in bounded steps, and its name is
 free again. A purge cannot be undone, which is why the window exists; see
 [Deletion and purge](../concepts/code-host.md#deletion-and-purge).
 
-## A leaked secret is rotated, not force-pushed away
+## A leaked secret is rotated, then purged
 
-A force-push moves a branch; it does not remove a commit's objects. Every push
-is stored as it arrived, a repository's packs are kept for as long as the
-repository is, and an object is fetchable by its id from any node that holds
-it. A credential that was ever pushed is a credential to **rotate** — and then
-to remove from the history you keep, for tidiness rather than for safety.
+A force-push moves a branch; it does not remove a commit's objects. What no
+branch or tag reaches stays in the repository's packs, fetchable by its id,
+until an [expunge](../concepts/code-host.md#expunge) drops it — on the
+repository's maintainer every week once a quarter of the repository, and at
+least 64 MiB, is unreachable, keeping what a force-push or a deletion left
+for two weeks. A
+credential that was ever pushed is in every clone that fetched it, so:
+
+1. **Rotate it** at whatever issued it. This is the step that makes you
+   safe; everything after is tidiness.
+2. **Take it out of the history you keep**: rewrite the branches and tags
+   that reach it (`git filter-repo` — a revert keeps the commit in the
+   history), and force-push them; a protected branch takes the push only
+   where its rule's `direct_push` lets a person push and its `allow_force`
+   lets the branch be rewritten, so loosen the rule for the push and tighten
+   it again ([Protecting a branch](#protecting-a-branch)). An expunge also keeps what work in flight
+   still names: every revision of a draft or open change, so close a change
+   that ever carried the secret and open a new one from the rewritten
+   branch; a queued change's head, so take it out of its queue; and a
+   protected branch's last green commit, until a newer commit's checks pass.
+3. **Purge the repository's unreachable objects**, so the commit goes now
+   rather than two weeks on:
+
+   ```sh
+   crewlet code purge-unreachable web
+   ```
+
+   or `code_purge_unreachable` from your assistant ([`crewlet code
+   purge-unreachable`](../reference/cli.md#crewlet-code-purge-unreachable)).
+   It is a person's alone, on your own token, and it keeps no grace: every
+   object nothing reaches goes, whoever left it and however recently. The
+   answer comes once the request is recorded; `crewlet code status -repo web`
+   shows it until the maintainer has served it, then when it committed and
+   what it dropped.
+
+The answer also says what still holds the secret after the purge: each git
+node's cache until it next syncs the repository, the object store for a day,
+every backup taken before the purge (on the `nats` store, before the store
+deletes it — [A purge and the backups before
+it](backup.md#a-purge-and-the-backups-before-it)) and, on a versioned S3
+bucket, the old version its own rules keep — and nothing on the server
+reaches a clone that already fetched it. Which is why the rotation comes
+first ([What still holds a purged
+object](../concepts/code-host.md#expunge)).
 
 ## See also
 

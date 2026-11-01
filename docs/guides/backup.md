@@ -504,6 +504,38 @@ this path makes them easier to forget: the directory holds every credential
 the company has, so treat it exactly as you treat the secret store; and the
 **keyring must not travel with it**, or the sealing is undone.
 
+### A purge and the backups before it
+
+A backup is never rewritten. When a person purges a repository's
+unreachable objects — the commit a leaked secret was force-pushed away from,
+the history a deleted branch left ([Expunge](../concepts/code-host.md#expunge))
+— the purge takes them out of the repository, every git node's cache and,
+a day later, the object store, but not out of a backup that already holds
+them:
+
+- **A backup taken before the purge commits holds them, for as long as it is
+  kept.** Its replicated copy names the packs that held them as live, and
+  its objects carry those packs: on `s3` in its `objects/`, on `nats` in the
+  bucket's stream snapshot.
+- **On `nats`, so does a backup taken after the commit and before the store
+  deletes them** — a day after the commit, then the collector's next hourly
+  pass. Its stream snapshot carries every byte the bucket holds, the retired
+  packs' among them, uncounted. On `s3` a backup taken after the commit
+  copies only what a live row names, so it holds none of them.
+- **Restoring a backup taken before the commit brings them back.** Its rows name the
+  packs as the repository's own again, served to every clone. On `s3`, copy
+  the backup's `objects/` into the bucket as [Restoring](#restoring) says
+  even where the bucket otherwise needs nothing — the collector has deleted
+  those packs, and without them the next audit raises `objects_missing` —
+  then purge the repository again once the fleet runs.
+
+So what a purge is for is tidiness after the credential has been
+**rotated**, never instead of it: expire the backups taken before it on
+your own schedule, and treat each as holding the old secret until it goes.
+`code_get_repo`'s `expunge.expunged_at` — and `crewlet code status -repo
+<name>`'s `expunge:` line — is the instant the purge committed: a backup
+whose manifest's `taken_at` is earlier holds the purged objects.
+
 ## Moving the files to a bucket
 
 `crewlet objects migrate --to s3` moves the company's files from the fleet's
@@ -594,7 +626,10 @@ aws s3 sync objects/ s3://acme-files/crewlet/
 tool or `--endpoint-url` for a store that is not Amazon's. An object a live
 row of the restored copy names and the store does not hold is reported by the
 collector's next audit (`objects_missing`); `crewlet objects status` lists the
-files. One only a
+files. A backup taken before a repository's purge restores what the purge
+took out, and its packs are among those the bucket no longer holds: copy
+them back, then purge again ([A purge and the backups before
+it](#a-purge-and-the-backups-before-it)). One only a
 [retired or derived](../concepts/object-store.md#live-retired-and-derived-references)
 row names is never reported: the backup never carried it and nothing is owed
 it — a retired row goes once its grace has passed, and the engine builds a

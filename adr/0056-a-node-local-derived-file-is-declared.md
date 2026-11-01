@@ -97,3 +97,19 @@ reads. The tip is a function of the packs and the refs over its exact base, so i
 every placement and every pack removed, and crosses a retirement that keeps the whole chain beneath it,
 since a merge drops no commit; one that fails its check is dropped and written again, never fetched, since
 no row names it.
+
+## Amendment — a pack an expunge takes out
+
+[ADR-0069](0069-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md)
+adds one change a declaration answers: a DROPPING pack leaving a copy once its
+expunge commits (`OnPackExpunged`, `EventPackExpunged`). It is not a
+retirement — the commits in the pack leave the repository — so it is the one
+change that drops the commit-graph where a retirement keeps it (a graph still
+naming a commit git no longer holds has git walk through it as though it were
+there), and it drops the node's tip over an installed chain, the answers of
+seats' reads and the code index too, since each may name or quote what was
+purged. The multi-pack index, the push provenance and the installed layers
+keep their files, none of them covering a dropping pack. A declaration states
+this answer as it states every other, and a dropping pack lives outside the
+copy's `objects/` (`objects-dropping/pack`), read only by a serving git
+process.

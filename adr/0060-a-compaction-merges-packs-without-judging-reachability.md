@@ -92,3 +92,15 @@ names is never a compaction's input**, unless the compaction is the
 publication that replaces that layer, since a node's chain loads only over
 every pack it names. A published repository's small packs are merged by its
 publications' repacks instead.
+
+## Amendment — an expunge drops what no ref reaches, and takes a full pack
+
+[ADR-0069](0069-an-expunge-drops-only-what-no-ref-or-in-flight-row-reached-within-its-grace-in-two-records.md)
+decides the expunge this record left out. It is the one rewrite that drops
+objects and the one that takes a FULL pack as an input, so rule 2's "a full
+pack is never merged again" binds compaction alone. Its begin keeps every
+object of its inputs, as rule 1 asks of a merge, and leaves what no ref
+reached in DROPPING packs, which are no compaction's input; its commit
+retires them through `code_packs_retired` under rule 3, so a reader already on
+one finishes. A compaction of live packs is decided as ever while an expunge
+is open.
