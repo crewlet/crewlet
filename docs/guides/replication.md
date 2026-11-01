@@ -697,6 +697,15 @@ a prefix of their history again rather than a hole. A record still above the
 new build's version stays retained, with everything it covers, until a build
 that reads it boots.
 
+**The object store's collection waits too.** A collection deletes nothing
+while a data node it counts runs a state log its own build does not register,
+or while its own copy of the estate carries a newer build's migrations after
+a rollback: that log's rows, or those tables, may name files its build's
+declarations do not ([What a build cannot
+see](../concepts/object-store.md#what-a-build-cannot-see)). A rollout that
+finishes within the day's grace costs nothing, and a node rolled back past a
+log keeps every file until a build that knows the log runs on it again.
+
 ### Which records an upgrade holds back
 
 Only the ones that need the newer build. A record is stamped with the
