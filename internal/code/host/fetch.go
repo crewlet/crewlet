@@ -27,7 +27,12 @@ import (
 // want, which means the client's refs came from a node further ahead, and
 // then ONE linearizable sync runs before it is served — a coding box's too,
 // a rare barrier the box's floor cannot spare, paid from its run's re-syncs
-// and answered at its floor once they are spent (boxlimit.go). An `ls-refs` names refs and is
+// and answered at its floor once they are spent (boxlimit.go). A CHECK'S
+// BOX knows its want from no ref: it fetches the commit its attempt measures,
+// whose push precedes the position the attempt was queued at, so its wants
+// are looked for at that check's session (admission.objects) and a cache
+// behind the push pays no barrier for them; a want even the session lacks is
+// the check's re-syncs' to pay, as a coding box's is. An `ls-refs` names refs and is
 // read at the request's refs level, as every answer naming a ref is
 // (admission.refs): linearizable for a person, the run's session for a box,
 // whose floor it raises before its first byte (raiseFloor) — and a check's
@@ -79,7 +84,7 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 		s.noRefs(w, r, adm, start)
 		return
 	}
-	fresh := statelog.Freshness{Level: statelog.ReadStale}
+	fresh := adm.objects()
 	if n.namesRefs() {
 		fresh = adm.refs()
 	}

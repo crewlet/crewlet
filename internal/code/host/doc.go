@@ -150,7 +150,10 @@
 // names ids that mean the same bytes everywhere, so both take whatever the
 // cache holds — and a fetch whose wants this node lacks takes ONE linearizable
 // sync (the client's refs came from a node further ahead) before it is
-// served. A fetch never names a ref: the host offers no ref-in-want, because
+// served. A check's box's fetch is the exception: it learned its want from no
+// ref but from its attempt, so its wants are looked for at its check's
+// session, which holds its commit, and a cache behind that commit's push
+// pays no barrier for them (admission.objects). A fetch never names a ref: the host offers no ref-in-want, because
 // git's own upload-pack and fetch-pack disagree on the order of a shallow
 // fetch's sections once a client fetches by want-ref (cache.ServeConfig). The
 // barrier is single-flighted per log and the cache's sync per repository, so a
