@@ -34,7 +34,9 @@
 // tri-state below is ADR-0005, why [ProtocolVersion] REFUSES a lower-protocol
 // peer where an event envelope round-trips one is ADR-0016, and why a token
 // budget is counted per calendar window — rolled inside the charge that
-// crosses a boundary, with no reset — is ADR-0019 (budget.go).
+// crosses a boundary, with no reset — is ADR-0019 (budget.go). Why every node
+// publishes what its MCP servers list, under its presence epoch, and the fleet
+// reads the union of the live nodes' listings is ADR-0074 (mcplisting.go).
 //
 // Three rules carry the correctness of everything above:
 //
