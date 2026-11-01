@@ -29,7 +29,6 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -1382,18 +1381,24 @@ func TestNeitherTransportTakesTheOthersCredential(t *testing.T) {
 	}))
 	t.Cleanup(signedIn.Close)
 
-	// A POOL OF ITS OWN: the rows ask the node's real listener and the
-	// signed-in server alike, and http.DefaultClient's pool is swept by
-	// every httptest.Server.Close in the binary (httpx's guard).
-	client := httpxtest.Pool(t)
-	do := func(base, path string, set func(*http.Request)) (*http.Response, string) {
+	// EACH SERVER IS ASKED THROUGH ITS OWN CLIENT, never http.DefaultClient:
+	// every httptest.Server.Close in the binary sweeps the process-global
+	// pool, and a bodyless answer sits in it while its caller still waits
+	// (internal/httpx/httpxtest). And do fails the test it is handed, since a
+	// subtest calling its parent's Fatal ends the binary rather than the case.
+	type server struct {
+		url    string
+		client *http.Client
+	}
+	viaNode, viaSignedIn := server{n.URL(), n.Client()}, server{signedIn.URL, signedIn.Client()}
+	do := func(t *testing.T, via server, path string, set func(*http.Request)) (*http.Response, string) {
 		t.Helper()
-		req, err := http.NewRequestWithContext(c.Ctx, http.MethodGet, base+path, nil)
+		req, err := http.NewRequestWithContext(c.Ctx, http.MethodGet, via.url+path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		set(req)
-		resp, err := client.Do(req)
+		resp, err := via.client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1405,33 +1410,33 @@ func TestNeitherTransportTakesTheOthersCredential(t *testing.T) {
 	person := "/git/" + codetest.RepoName + ".git/" + boxFetchAdvert
 	for _, row := range []struct {
 		name   string
-		base   string
+		via    server
 		path   string
 		set    func(*http.Request)
 		status int
 		says   string
 	}{
-		{"an operator's bearer on a box route", n.URL(), box, func(r *http.Request) {
+		{"an operator's bearer on a box route", viaNode, box, func(r *http.Request) {
 			r.Header.Set("Authorization", "Bearer "+operator)
 		}, http.StatusUnauthorized, "a coding box authenticates as `run`"},
-		{"a signed-in person on a box route", signedIn.URL, box, func(*http.Request) {},
+		{"a signed-in person on a box route", viaSignedIn, box, func(*http.Request) {},
 			http.StatusUnauthorized, "a coding box authenticates as `run`"},
-		{"an operator token as a box's password", n.URL(), box, func(r *http.Request) {
+		{"an operator token as a box's password", viaNode, box, func(r *http.Request) {
 			r.SetBasicAuth(host.BoxUser, operator)
 		}, http.StatusUnauthorized, "this run token is not valid here"},
-		{"an operator token under another user", n.URL(), box, func(r *http.Request) {
+		{"an operator token under another user", viaNode, box, func(r *http.Request) {
 			r.SetBasicAuth("x", operator)
 		}, http.StatusUnauthorized, "a coding box authenticates as `run` with its run token"},
-		{"a run's token as a person's password", n.URL(), person, func(r *http.Request) {
+		{"a run's token as a person's password", viaNode, person, func(r *http.Request) {
 			r.SetBasicAuth(host.BoxUser, runToken)
 		}, http.StatusUnauthorized, ""},
-		{"a run's token as a person's bearer", n.URL(), person, func(r *http.Request) {
+		{"a run's token as a person's bearer", viaNode, person, func(r *http.Request) {
 			r.Header.Set("Authorization", "Bearer "+runToken)
 		}, http.StatusUnauthorized, ""},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			reads, resolves := runs.Reads(), len(rec.seen("resolve"))
-			resp, answer := do(row.base, row.path, row.set)
+			resp, answer := do(t, row.via, row.path, row.set)
 			if resp.StatusCode != row.status || !strings.Contains(answer, row.says) {
 				t.Errorf("answered %d %q, want %d saying %q", resp.StatusCode, answer, row.status, row.says)
 			}
@@ -1441,7 +1446,7 @@ func TestNeitherTransportTakesTheOthersCredential(t *testing.T) {
 			}
 		})
 	}
-	if resp, _ := do(n.URL(), box, func(r *http.Request) { r.SetBasicAuth(host.BoxUser, runToken) }); resp.StatusCode !=
+	if resp, _ := do(t, viaNode, box, func(r *http.Request) { r.SetBasicAuth(host.BoxUser, runToken) }); resp.StatusCode !=
 		http.StatusOK {
 		t.Errorf("a live run's token on its box route answered %d", resp.StatusCode)
 	}
@@ -1511,6 +1516,8 @@ func TestEveryBoxIsOneSpoolCredential(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", host.UploadPackRequestType)
 	req.Header.Set("Git-Protocol", v2)
+	// The server's own client: http.DefaultClient's pool is swept by every
+	// httptest.Server.Close in the binary (internal/httpx/httpxtest).
 	resp, err := runsLogin.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)

@@ -27,7 +27,6 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
@@ -753,7 +752,10 @@ func TestACodingRunChecksOutPushesAndIsHeldToItsGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.SetBasicAuth("run", string(token))
-	resp, err := httpxtest.Pool(t).Do(req)
+	// Through the client of the server this listener is, never
+	// http.DefaultClient: its pool is swept by every httptest.Server.Close in
+	// the binary (internal/httpx/httpxtest).
+	resp, err := n.server.Client().Do(req)
 	if err != nil {
 		t.Fatalf("ask with the ended run's token: %v", err)
 	}
