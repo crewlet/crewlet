@@ -273,11 +273,10 @@ checks:
 	}
 }
 
-// A DIRECT CHECK IS REFUSED (U1 a), and so is a check in a seat's own box: a
-// check runs a change's own code, which `direct` would run as the engine's
-// own user on the engine host, and `self` is an executor box no check has.
-// Each is refused by name, with why, at its field — in a file and on a
-// definition a record carries alike — while every cell a check runs in parses.
+// A DIRECT CHECK IS REFUSED (U1 a): a check runs a change's own code, which
+// `direct` would run as the engine's own user on the engine host. It is
+// refused by name, with why, at its field — in a file and on a definition a
+// record carries alike — while every cell a check runs in parses.
 // And the cells are the sandbox's own placements that need a backend, less
 // direct, BOTH WAYS, so a placement the sandbox adds is a decision here.
 //
@@ -286,21 +285,20 @@ checks:
 // and it parses — red.
 func TestADirectCheckIsRefused(t *testing.T) {
 	t.Parallel()
-	for cell, why := range map[string]string{"direct": "engine host", "self": "executor box"} {
-		doc := "checks:\n  - name: unit\n    run: make test\n    timeout_seconds: 60\n    run_in: " + cell + "\n"
-		_, err := code.ParseChecks([]byte(doc))
-		faults := faultsOf(t, err)
-		if len(faults) != 1 || faults[0].Path.String() != "checks[0].run_in" ||
-			!errors.Is(faults[0].Kind, config.ErrUnknownValue) || !strings.Contains(faults[0].Detail, why) ||
-			faults[0].Line != 5 {
-			t.Errorf("run_in: %s drew %v; want one unknown value at checks[0].run_in, line 5, saying %q",
-				cell, err, why)
-		}
-		def := code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 60, RunIn: code.CheckCell(cell)}
-		if err := def.Validate(); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "run_in") ||
-			!strings.Contains(err.Error(), why) {
-			t.Errorf("a definition in %s validated as %v; want ErrInvalid naming run_in and why", cell, err)
-		}
+	const why = "engine host"
+	doc := "checks:\n  - name: unit\n    run: make test\n    timeout_seconds: 60\n    run_in: direct\n"
+	_, err := code.ParseChecks([]byte(doc))
+	faults := faultsOf(t, err)
+	if len(faults) != 1 || faults[0].Path.String() != "checks[0].run_in" ||
+		!errors.Is(faults[0].Kind, config.ErrUnknownValue) || !strings.Contains(faults[0].Detail, why) ||
+		faults[0].Line != 5 {
+		t.Errorf("run_in: direct drew %v; want one unknown value at checks[0].run_in, line 5, saying %q", err, why)
+	}
+	def := code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 60,
+		RunIn: code.CheckCell(config.PlacementDirect)}
+	if err := def.Validate(); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "run_in") ||
+		!strings.Contains(err.Error(), why) {
+		t.Errorf("a definition in direct validated as %v; want ErrInvalid naming run_in and why", err)
 	}
 	for _, cell := range code.CheckCells() {
 		doc := "checks:\n  - name: unit\n    run: make test\n    timeout_seconds: 60\n    run_in: " +

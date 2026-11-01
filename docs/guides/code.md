@@ -431,8 +431,7 @@ checks file](../concepts/code-host.md#the-checks-file).
    ```
 
 2. **Never `run_in: direct`.** A check runs a change's own code; `direct` would
-   run it as the engine's own user on the engine host, so the file refuses it,
-   as it refuses `self`.
+   run it as the engine's own user on the engine host, so the file refuses it.
 
 3. **Land it on the branch it governs.** A change's checks are the ones its
    *target* branch defines, never its own: a change that edits `checks.yaml` is

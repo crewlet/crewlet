@@ -177,13 +177,13 @@ func (l checkList) over(n int) (string, bool) {
 
 // CheckCell is the kind of box a check runs in.
 //
-// TWO OF THE SANDBOX'S FOUR PLACEMENTS: a container on a git node, or a remote
+// TWO OF THE SANDBOX'S THREE PLACEMENTS: a container on a git node, or a remote
 // E2B box — config.CodeCheckCells, the one list the company's code.checks is
 // held to as well, so a file can name no cell the company could not allow and
 // the company allow none a file could not name. A check runs a change's own
 // code — its build, its tests, whatever its author put there — so it never
-// runs where that code reaches the engine: `direct` and `self` are refused by
-// name, each with config.CodeCheckCellRefusal's sentence (U1 a).
+// runs where that code reaches the engine: `direct` is refused by name, with
+// config.CodeCheckCellRefusal's sentence (U1 a).
 type CheckCell string
 
 const (
@@ -318,7 +318,7 @@ func (e *checksFileError) Is(target error) bool { return target == ErrInvalid }
 //	timeout_seconds  required; a whole number, 1 to CheckTimeoutCeiling
 //	paths            a list of at most MaxCheckPaths path globs (gitref)
 //	report           a mapping of junit and sarif, each a path in the checkout
-//	run_in           container or e2b (never direct or self)
+//	run_in           container or e2b (never direct)
 //	checkout         a list of a cone's directories, or the scalar none
 //	env              a list of at most MaxCheckEnv variable names
 //
