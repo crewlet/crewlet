@@ -200,8 +200,11 @@ type Loop struct {
 	log *slog.Logger
 	now func() time.Time
 	// backstop is the passes' interval and a turn's bound: [Backstop], a
-	// suite's own (export_test.go).
+	// suite's own (export_test.go). ticks, nil in production, is a suite's
+	// own pacing of the passes in place of a ticker of backstop
+	// (export_test.go), so a case says exactly when a paced pass begins.
 	backstop time.Duration
+	ticks    <-chan time.Time
 	// turnsAtOnce is how many turns run at once: [Concurrency], a
 	// benchmark's own (export_test.go).
 	turnsAtOnce int
@@ -285,7 +288,7 @@ func New(o Options) (*Loop, error) {
 	reads := OwnReads(o.Share.Units())
 	o.Estate = ownReads{Estate: o.Estate, reads: semaphore.NewWeighted(int64(reads)), n: reads}
 	l.changes = &changes{estate: o.Estate, cache: o.Cache, git: o.Git, node: o.NodeID, metrics: o.Metrics,
-		log: l.log, now: l.now, rechecks: newRecheckBudget(Backstop)}
+		log: l.log, now: l.now, rechecks: newRecheckBudget()}
 	l.checks = &checks{estate: o.Estate, node: o.NodeID, log: l.log, now: l.now}
 	l.merges = &queue{estate: o.Estate, chains: o.Chains, tasks: o.Tasks, checks: l.checks, node: o.NodeID,
 		log: l.log, now: l.now}
@@ -396,13 +399,24 @@ func (l *Loop) Stop(ctx context.Context) {
 }
 
 // passes runs a pass at once and then at every tick, or at once again where a
-// Gap asks for one, each after asking for the watch where none runs.
+// Gap asks for one, each after asking for the watch where none runs. The
+// first pass and every tick's are PACED, and renew each repository's share of
+// a pass's rechecks before they list ([recheckBudget]); a pass a Gap asks
+// early renews nothing.
 func (l *Loop) passes() {
 	defer l.wg.Done()
-	tick := time.NewTicker(l.backstop)
-	defer tick.Stop()
+	ticks := l.ticks
+	if ticks == nil {
+		ticker := time.NewTicker(l.backstop)
+		defer ticker.Stop()
+		ticks = ticker.C
+	}
+	paced := true
 	for {
 		l.ensureWatch()
+		if paced {
+			l.changes.rechecks.newPass()
+		}
 		floor := l.takeGap()
 		if _, err := l.Poll(l.life, floor); err != nil && l.life.Err() == nil {
 			l.log.Warn("code_home_pass_failed", "error", err)
@@ -410,8 +424,10 @@ func (l *Loop) passes() {
 		select {
 		case <-l.life.Done():
 			return
-		case <-tick.C:
+		case <-ticks:
+			paced = true
 		case <-l.kick:
+			paced = false
 		}
 	}
 }

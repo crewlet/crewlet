@@ -458,18 +458,21 @@ func (c *clock) advance(d time.Duration) {
 }
 
 // A TARGET MOVE RECHECKS WITHIN ITS BUDGET: the changes a moved target asks
-// merged again are merged the oldest first, and no more of them in one window
-// of the home's backstop than a repository's budget — whichever turns, a
+// merged again are merged the oldest first, and no more of them between two
+// of the home's paced passes than a repository's budget — whichever turns, a
 // pass's or a nudge's, run them — each listing asking only what is left of the
 // budget, and asked at the home's clock less its refresh; a new head
 // revision's merge takes none of the budget, merged at once while the budget
-// is spent; and the next window merges the recheck the last one had no room
-// for.
+// is spent; a pass a watch's gap asks early renews nothing; and the next paced
+// pass merges the recheck the last one had no room for, however soon after
+// the last one's its turn runs on the clock.
 //
 // Mutations: spend nothing on a recheck, and the third is merged in the first
-// window; count a new revision's merge against the budget, and it waits for
-// the next window; ask the listing for the whole budget every turn, and the
-// nudged turn merges past it.
+// pass; count a new revision's merge against the budget, and it waits for the
+// next pass; ask the listing for the whole budget every turn, and the nudged
+// turn merges past it; renew the share on a gap's pass, and the gap's turn
+// merges the leftover; renew it on no tick, and the next paced pass merges
+// nothing.
 func TestATargetMoveRechecksWithinItsBudget(t *testing.T) {
 	t.Parallel()
 	h := newGitHome(t, codetest.Settings())
@@ -492,7 +495,11 @@ func TestATargetMoveRechecksWithinItsBudget(t *testing.T) {
 		h.e.recheck(h.repo, again)
 	}
 	n := newNudges()
-	_, rec := h.homeLoop(t, n, time.Hour, c.Now, func(l *home.Loop) { home.SetMergesPerPass(l, 2) })
+	ticks := make(chan time.Time)
+	_, rec := h.homeLoop(t, n, time.Hour, c.Now, func(l *home.Loop) {
+		home.SetMergesPerPass(l, 2)
+		home.SetTicks(l, ticks)
+	})
 
 	merged := h.e.waitMerged(t, 2, 30*time.Second)
 	waitTurns(t, rec, 1)
@@ -530,9 +537,23 @@ func TestATargetMoveRechecksWithinItsBudget(t *testing.T) {
 		t.Fatalf("the nudged turn asked %d rechecks, want none: the window's budget is spent", last.Rechecks)
 	}
 
-	// THE NEXT WINDOW merges the recheck the first had no room for.
-	c.advance(time.Hour)
-	n.subject(t, h.repo, 91)
+	// A PASS A GAP ASKS EARLY is no paced pass, and renews no share: its turn
+	// merges nothing.
+	n.gap(t, 91)
+	waitTurns(t, rec, 3)
+	h.e.mu.Lock()
+	last = h.e.asked[len(h.e.asked)-1]
+	h.e.mu.Unlock()
+	if last.Rechecks != 0 || len(h.e.merged()) != 3 {
+		t.Fatalf("the gap's pass asked %d rechecks and the home merged %d, want none past the 3: a gap renews "+
+			"no share", last.Rechecks, len(h.e.merged()))
+	}
+
+	// THE NEXT PACED PASS merges the recheck the first had no room for —
+	// whenever its turn comes on the clock, here a backstop less a
+	// millisecond after the first's.
+	c.advance(home.Backstop - time.Millisecond)
+	ticks <- c.Now()
 	merged = h.e.waitMerged(t, 4, 30*time.Second)
 	if merged[3].HeadOID != heads[2] {
 		t.Fatalf("the next window merged %s, want the recheck left over, %s", merged[3].HeadOID, heads[2])

@@ -173,7 +173,7 @@
 // queue. A MERGE holds one slot of the node's maintenance lane,
 // which never waits — a lane full of other maintenance answers the merge busy,
 // the turn's failure — within [MergeabilityDeadline]; a moved target's merges
-// are at most [MergeabilityPerPass] a repository a window, each once
+// are at most [MergeabilityPerPass] a repository a paced pass, each once
 // [MergeabilityRefresh] old.
 //
 // ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host,
