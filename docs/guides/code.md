@@ -941,14 +941,21 @@ into the text. Its answer names the commit each repository was searched at,
 so read a hit's file at that commit, not at the branch, which may have moved
 since.
 
+**A seat searches with a tool.** The same search is `code_search`, a seat's
+and your own assistant's ([The company's
+code](tools-and-mcp.md#the-companys-code)): `query` in the grammar above,
+with the same `mode`, `ignore_case`, `repo`, `path` and `ref` beside it. Each
+line arrives fenced as a file's text that nobody vouches for, and the 500
+lines come a page at a time, each page under one tool answer.
+
 ## Seats and code
 
 Nothing to set up: once the company hosts code, your seats work in its
-repositories through thirty-five of the [code
+repositories through thirty-six of the [code
 tools](tools-and-mcp.md#the-companys-code), on the server and in their own
 names — every one but `code_report_check`, `code_purge_unreachable` and
 `code_import_repo`, each a person's. A seat holds
-no git credential and needs none. Every seat reads with twelve of the tools;
+no git credential and needs none. Every seat reads with thirteen of the tools;
 a seat whose `role.code.access` is `full_access` also changes the
 repositories with the other twenty-three; and a seat whose role has a
 sandbox works in a clone besides. What each may do is its grant, derived from
@@ -956,12 +963,16 @@ the chart ([Who may read and push](../concepts/code-host.md#who-may-read-and-pus
 
 ### What your seats read
 
-Every seat reads the repositories with eleven of the code tools — a file's
+Every seat reads the repositories with thirteen of the code tools — a file's
 lines, a directory, what changed between two commits, how two commits relate,
 whether a fix reached a branch and which push put it there, a path's history
-and who last changed each line of a file, and a repository's changes: what
-each one changes, its findings placed in the revision it reads and what
-changed since an earlier revision — with no clone and no token.
+and who last changed each line of a file, a repository's changes: what each
+one changes, its findings placed in the revision it reads and what changed
+since an earlier revision, and what a check of a commit said — with no clone
+and no token. And it finds where something is with `code_search`, the
+[search](#finding-code) a person makes, across the repositories it reads that
+keep a search index, or those its `repo:` filters name:
+its prompt tells it to search before reading whole trees.
 
 What each seat may read is its grant, from the chart: its
 [`role.code.access`](../getting-started/configuration.md#role-fields-summary) caps it, and a
@@ -983,7 +994,7 @@ tools, one change a call: a commit of up to 1 000 file operations to a branch
 deleted, restored or protected ([below](#scratch-repositories)), and a change
 opened, edited, closed, reviewed and discussed ([Or with a
 tool](#open-a-change-from-a-push)). A `read_only` or `review` seat — and
-`read_only` is what a seat that sets none runs at — is offered the twelve
+`read_only` is what a seat that sets none runs at — is offered the thirteen
 reads alone, none of the twenty-three. Your assistant has the same twenty-three
 and `code_report_check`, `code_purge_unreachable` and `code_import_repo`
 besides, each a person's alone, as you.

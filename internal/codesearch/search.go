@@ -446,8 +446,8 @@ func (s *Searcher) scatter(ctx context.Context, q Query, sq code.SearchQuery, re
 	for _, a := range all {
 		classify(&out.Coverage, a, tips)
 	}
-	slices.SortFunc(hits, compareHits)
-	hits = slices.CompactFunc(hits, func(x, y Hit) bool { return compareHits(x, y) == 0 })
+	slices.SortFunc(hits, CompareHits)
+	hits = slices.CompactFunc(hits, func(x, y Hit) bool { return CompareHits(x, y) == 0 })
 	limit := sq.Hits()
 	if len(hits) > limit {
 		hits, cut = hits[:limit], true

@@ -26,7 +26,8 @@ import (
 // the server rather than in a clone — code_list_repos, code_get_repo,
 // code_resolve, code_read, code_diff, code_compare, code_landed_in, code_log
 // and code_blame, and a repository's changes, code_list_changes and
-// code_get_change (codechanges.go) — each named for its authority row, and ONE
+// code_get_change (codechanges.go), and a search across every repository the
+// caller reads, code_search (codesearch.go) — each named for its authority row, and ONE
 // list ([CodeTools]) that a seat's registry and the operator catalogue both
 // take, so a schema, a default and a refusal's words are written once. The
 // code WRITES join the same list where the code host's writes are wired
@@ -231,6 +232,13 @@ type CodeDeps struct {
 	// call naming a log page is told this node reads none.
 	Logs CheckLogReader
 
+	// Searcher is the code search over the fleet's git nodes, which
+	// code_search asks (codesearch.go). Nil omits code_search and leaves the
+	// reads as they are: a surface that reads repositories one at a time and
+	// searches none. The engine wires it wherever it wires Code, so a seat
+	// that reads the company's code can search it.
+	Searcher CodeSearcher
+
 	// Placement is where a repository's work is placed — its maintainer and
 	// the nodes that may hold a copy — which a purge's answer names
 	// ([CodePlacement]). Nil names neither, and a purge's answer says so:
@@ -254,9 +262,11 @@ func (d CodeDeps) serves() bool { return d.Code != nil && d.Requesters != nil &&
 // CodeTools are the code tools a seat and an operator share: ONE list, so a
 // schema, a default and a refusal's words are written once, and nil where
 // deps are not wholly wired ([CodeDeps.serves]) — a company that hosts no
-// code. The reads first, which deliver nothing; then, where the code host's
-// writes are wired ([CodeDeps.Writer]), the writes ([CodeWrites]), each a
-// delivery to the code host's surface.
+// code. The reads first, which deliver nothing — the twelve
+// ([CodeToolNames]), then, where the search is wired ([CodeDeps.Searcher]),
+// code_search, a read across them all; then, where the code host's writes are
+// wired ([CodeDeps.Writer]), the writes ([CodeWrites]), each a delivery to
+// the code host's surface.
 func CodeTools(deps CodeDeps) []tools.Callable {
 	if !deps.serves() {
 		return nil
@@ -266,6 +276,9 @@ func CodeTools(deps CodeDeps) []tools.Callable {
 		&codeRead{deps: deps}, &codeDiff{deps: deps}, &codeCompare{deps: deps},
 		&codeLandedIn{deps: deps}, &codeLog{deps: deps}, &codeBlame{deps: deps},
 		&codeListChanges{deps: deps}, &codeGetChange{deps: deps}, &codeGetCheckFailures{deps: deps},
+	}
+	if deps.Searcher != nil {
+		out = append(out, &codeSearch{deps: deps})
 	}
 	if deps.Writer != nil {
 		out = append(out, codeWriteTools(deps)...)
@@ -321,7 +334,7 @@ func codeCandidates(deps CodeDeps) []candidate {
 // of each change keeping what it replaced; and an archive, a close and a
 // draft are each undone by their opposite.
 func codeAnnotations(name string) (tools.Annotations, bool) {
-	for _, tool := range append(CodeToolNames(), CodeRepoReadersTool) {
+	for _, tool := range append(CodeToolNames(), CodeSearchTool, CodeRepoReadersTool) {
 		if tool == name {
 			return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}, true
 		}

@@ -113,7 +113,7 @@ func (s *Server) search(ctx context.Context, req Request, asked []Assigned) Repl
 	wg.Wait()
 	all := slices.Concat(hits...)
 	limit := req.Search.Hits()
-	slices.SortFunc(all, compareHits)
+	slices.SortFunc(all, CompareHits)
 	out := Reply{Version: Protocol, Request: req.ID, Node: s.node, Repos: results}
 	if len(all) > limit {
 		all, out.Cut = all[:limit], true
@@ -153,12 +153,15 @@ func (s *Server) one(ctx context.Context, req Request, a Assigned) (RepoResult, 
 	return r, nil
 }
 
-// compareHits is the merge's one order: repository name, path, line — the
+// CompareHits is the merge's one order: repository name, path, line — the
 // path by its BYTES, as a repository's own answer orders it (code.SearchAnswer),
 // so a path that is not UTF-8, whose text carries U+FFFD where its bytes
 // differ, is placed by what it is. Two hits of one repository, path and line
-// are one line, which a repository answers once.
-func compareHits(a, b Hit) int {
+// are one line, which a repository answers once. Exported because a surface
+// that pages an answer (builtin's `code_search` cursor) places its pages by
+// this same order: a copy of it there would page by an order the search no
+// longer answers in the day either one changes.
+func CompareHits(a, b Hit) int {
 	return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(rawPath(a), rawPath(b)), cmp.Compare(a.Line, b.Line))
 }
 

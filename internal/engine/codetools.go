@@ -61,8 +61,13 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	//
 	// AND WHERE A REPOSITORY'S WORK IS PLACED, which a person's purge is
 	// answered with: the router's own view of the git nodes, read per call.
+	//
+	// AND THE SEARCH, the engine itself ([Engine.CodeSearch]): the one
+	// scatter over the git nodes the `code_search` question asks too, which
+	// finds the runtime as it stands when it is asked — so the seat's tool
+	// and a person's route search on the same terms.
 	deps := builtin.CodeDeps{Code: seam, Writer: seam, Holder: seam, CloneURL: e.cloneURL,
-		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e),
+		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e), Searcher: e,
 		Placement: codePlacement{router: e.router, limits: e.codeLimits}}
 	// AND THE OBJECT STORE A CHECK'S KEPT LOG IS READ FROM, where this node
 	// has one: the log a failed run kept is one object the fleet shares,

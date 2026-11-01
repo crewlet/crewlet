@@ -126,6 +126,12 @@ const (
 	// the change's repository, as every read of the repository's rows is.
 	ActionCodeListChanges Action = "code_list_changes"
 	ActionCodeGetChange   Action = "code_get_change"
+	// ActionCodeSearch is the tool `code_search`: the lines matching a
+	// search across every repository the asker may read, each repository
+	// judged by the grant its answering git node derives. The question of
+	// the same name, on REST and the socket, is decided by ActionCodeRead,
+	// the dotted verb every code question is decided by.
+	ActionCodeSearch Action = "code_search"
 	// ActionCodeRepoReaders is WHO READ a `visibility: unit` repository —
 	// the operator tool `code_repo_readers` and the query registry's
 	// question of the same name, on `GET /code/repos/{name}/readers` and
@@ -816,6 +822,11 @@ var rules = map[Action]rule{
 	// read of one such change is refused `not_permitted`.
 	ActionCodeListChanges: {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeGetChange:   {class: ClassEverybody, recency: iam.RecencyAny},
+	// A SEARCH IS A READ OF EVERY REPOSITORY IT COVERS, on the same footing:
+	// admitted for every principal, and judged per repository where it is
+	// answered — a repository the asker may not read is never searched, and
+	// one a repo: filter names is refused `not_permitted`.
+	ActionCodeSearch: {class: ClassEverybody, recency: iam.RecencyAny},
 	// AND THE CODE WRITE TOOLS, on code.git's own footing: the gate admits
 	// every principal and the repository decides — an engine write by the
 	// grant's ref rule and the protections, a lifecycle request by the one

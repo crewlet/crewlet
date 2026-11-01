@@ -4703,7 +4703,13 @@ unfiltered search of a company would make thousands of
 (`internal/codesearch`). A search naming one repository is the read above.
 A person or a script asks it as the question `code_search`
 ([`GET /code/search`](../reference/api-endpoints.md#get-codesearch)), which
-takes no `session` floor: it answers at the tip it names.
+takes no `session` floor: it answers at the tip it names. A seat, and a
+person's own assistant, ask it as the tool of the same name
+([The company's code](../guides/tools-and-mcp.md#the-companys-code)), its
+lines fenced and paged under one tool answer; in a seat's turn, the
+repositories it names are resolved first, as every code tool's are, and the
+search is floored at this node's own pushes to them, so a seat finds what it
+pushed.
 
 ```mermaid
 sequenceDiagram

@@ -55,7 +55,7 @@ read as `Unknown`.
 
 First-party builtins declare their own annotations in code, registered
 with `tools.Registry.RegisterWith`, so the same classification works for
-them. The [code tools](../guides/tools-and-mcp.md#the-companys-code)' twelve
+them. The [code tools](../guides/tools-and-mcp.md#the-companys-code)' thirteen
 reads, for one, are each a proven, idempotent read: a worker may be handed any
 of them, a turn that only read code delivered nothing, and the operator
 catalogue records no call to one. Two of them read a repository's changes —
@@ -69,7 +69,14 @@ wakes](code-host.md#who-a-change-wakes); a person's side of the same
 conversation is [Review a change](../guides/code.md#review-a-change)). So is
 `code_get_check_failures`, what a check of a commit said and a page of its
 kept log: a seat that read why a check failed has delivered nothing until it
-fixes the code or reruns the check. Each change tool also names, in one table its tests
+fixes the code or reruns the check. And so is `code_search`, the lines
+matching a search across the repositories the caller may read that keep a
+search index, or those its `repo:` filters name: a seat that
+found where something lives has delivered nothing until it acts on it, and a
+worker may be handed the search as it may any read — each repository still
+judged by the grant of whoever the search is made as, on the git node that
+answers it. A seat holding it is told, in its executor prompt's
+`code_search` section, to search before reading whole trees. Each change tool also names, in one table its tests
 hold to the tool list, the access its call needs on the change's repository —
 of its caller, and in a turn a colleague seat woke of that seat too; a read's
 is read, which the node that answers judges both at, and a write's is the
@@ -147,7 +154,7 @@ second. A seat holding the
 writes is also told, in its executor prompt's `code_writes` section, the one
 choice no description can carry: a small change is committed on the server,
 and anything to build or test belongs in a checkout. The operator-only
-`code_repo_readers` beside them is a proven, idempotent read like the twelve,
+`code_repo_readers` beside them is a proven, idempotent read like the thirteen,
 which no seat's registry ever holds: annotations say what a tool does,
 never who may call it, and who read a unit's repository is an admin's — a
 person's — question, decided by the authority table before anything is read

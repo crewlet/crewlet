@@ -248,10 +248,11 @@ func (c *codeWrites) changesAsked() ([]code.ChangeProposal, []code.ConversationW
 }
 
 // writeDeps is codeDeps over host, with the code host's writes and the turn's
-// holds wired to writer.
+// holds wired to writer — and a code search finding nothing, so every code
+// tool a surface can offer is offered, as the engine offers them all.
 func writeDeps(host builtin.CodeReader, writer *codeWrites) builtin.CodeDeps {
 	deps := codeDeps(host)
-	deps.Writer, deps.Holder = writer, writer
+	deps.Writer, deps.Holder, deps.Searcher = writer, writer, &codeSearches{}
 	return deps
 }
 
@@ -1256,6 +1257,7 @@ func holdingCall(name string) (map[string]any, bool) {
 			"expected_head": revHead(3)},
 		builtin.CodeRebaseChangeTool:     {"repo": repo, "change": 7, "expected_head": revHead(3)},
 		builtin.CodeGetCheckFailuresTool: {"repo": repo, "sha": mainOID, "checked_for": "main", "name": "unit"},
+		builtin.CodeSearchTool:           {"repo": repo, "query": "needle"},
 		builtin.CodeRerunChecksTool: {"repo": repo, "sha": mainOID, "checked_for": "main",
 			"checks": []any{map[string]any{"name": "unit", "attempt": 1}}},
 		// A REPORT IS A PERSON'S (TestAReportIsAPersons): no seat's turn

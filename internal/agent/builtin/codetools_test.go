@@ -477,7 +477,7 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 	host := newCodeHost()
 	reg := codeRegistry(t, writeDeps(host, &codeWrites{}))
 	operator := operatorCode(t, host, nil)
-	every := slices.Concat(builtin.CodeToolNames(), builtin.CodeWrites())
+	every := slices.Concat(builtin.CodeToolNames(), []string{builtin.CodeSearchTool}, builtin.CodeWrites())
 	for _, name := range every {
 		entry, ok := reg.Lookup(name)
 		if !ok {
@@ -557,8 +557,8 @@ func TestEveryCodeToolIsAProvenRead(t *testing.T) {
 			reads = append(reads, tool.Name())
 		}
 	}
-	if !slices.Equal(reads, builtin.CodeToolNames()) {
-		t.Fatalf("the code tools that are not writes are %v, want the reads %v", reads, builtin.CodeToolNames())
+	if want := append(builtin.CodeToolNames(), builtin.CodeSearchTool); !slices.Equal(reads, want) {
+		t.Fatalf("the code tools that are not writes are %v, want the reads %v", reads, want)
 	}
 	for _, name := range reads {
 		entry, ok := reg.Lookup(name)
@@ -1757,7 +1757,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the thirty-eight code tools'
+// codeCatalogueBudget is the most bytes the thirty-nine code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // a seat at full_access carries, the one tier offered the writes
 // (CodeWritesWithheld) — but for code_report_check, code_purge_unreachable
@@ -1833,10 +1833,15 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // arguments, the owner's shape and the credential's one rule said once) and
 // code_protect_branch's item-at-a-time list changes landed between, not
 // measured apart — none of which a seat is shown (the import is human-only);
-// ~6% headroom again.
-const codeCatalogueBudget = 55_600
+// ~6% headroom again. And 55 600 → 57 500 when code_search joined,
+// deliberately, with its measured cost: 52 427 → 54 223 (~13 556 tokens),
+// 1 796 bytes (~449 tokens) — the one grammar's filters said once in
+// `query`'s description, the answer's shape (hits, tips, coverage, pages)
+// once in the tool's — the cost codeReadsCatalogueBudget pays too, since
+// every seat carries it; ~6% headroom again.
+const codeCatalogueBudget = 57_500
 
-// codeReadsCatalogueBudget is the most bytes the twelve code reads'
+// codeReadsCatalogueBudget is the most bytes the thirteen code reads'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // every seat of a company hosting code carries on every round, whatever its
 // tier, since a seat below full_access is offered the reads alone
@@ -1853,17 +1858,20 @@ const codeCatalogueBudget = 55_600
 // joined, deliberately, with its measured cost: 17 649 → 19 082 (~4 771
 // tokens), 1 433 bytes (~358 tokens), the check named as its siblings name a
 // commit and how its log is paged said once, in `cursor`'s description; ~6%
-// headroom again.
-const codeReadsCatalogueBudget = 20_300
+// headroom again. And 20 300 → 22 100 when code_search joined the reads,
+// deliberately, with its measured cost: 19 082 → 20 878 (~5 220 tokens),
+// 1 796 bytes (~449 tokens), its grammar said once in `query`'s description
+// and its answer's shape once in its own; ~6% headroom again.
+const codeReadsCatalogueBudget = 22_100
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
-// code carries the twelve reads' definitions on every round of every turn, and
+// code carries the thirteen reads' definitions on every round of every turn, and
 // a seat at full_access twenty-three writes' beside them: a CLI's catalogue
 // rides in the user text (cliagent.RenderPrompt), so nothing caches them, and
 // each byte is paid again every round. Measured as that catalogue renders them
 // — indented, HTML-escaped, added to a catalogue already holding a tool, so
 // each one's separator and indentation count — the reads alone and all
-// thirty-eight, each held to a budget, so a later description edit is a
+// thirty-nine, each held to a budget, so a later description edit is a
 // decision rather than drift, as the executor prompt's budgets make a sentence
 // one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1890,8 +1898,9 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		what        string
 		got, budget int
 	}{
-		{"the twelve code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all thirty-eight code tools (a full_access seat's and the operator's)",
+		{"the thirteen code reads (every seat's)", added(withSearch(codeDeps(newCodeHost()), &codeSearches{})),
+			codeReadsCatalogueBudget},
+		{"all thirty-nine code tools (a full_access seat's and the operator's)",
 			added(writeDeps(newCodeHost(), &codeWrites{})),
 			codeCatalogueBudget},
 	} {
@@ -1940,7 +1949,7 @@ func TestThePagesNameEveryCodeTool(t *testing.T) {
 	for _, m := range regexp.MustCompile("\\| `(code_[a-z_]+)` \\|").FindAllStringSubmatch(guide[start:end], -1) {
 		rows = append(rows, m[1])
 	}
-	every := slices.Concat(builtin.CodeToolNames(), builtin.CodeWrites())
+	every := slices.Concat(builtin.CodeToolNames(), []string{builtin.CodeSearchTool}, builtin.CodeWrites())
 	if !slices.Equal(rows, every) {
 		t.Errorf("the tools guide's code table lists %v, want %v in that order", rows, every)
 	}
