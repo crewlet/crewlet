@@ -193,7 +193,16 @@ func (s *Store) NameOf(ctx context.Context, id string) string {
 // THEIR CHANGE, the changes in number order ([changesNumberKey]) and each
 // one's rows by its key — the dependents carry no repo_id — which is also how
 // the final purge reaches them, so the count is of exactly the rows it would
-// delete.
+// delete. And each such term is DRIVEN FROM THE REPOSITORY'S FIRST ?2 CHANGES
+// ALONE (firstChanges), never from all of them: the LIMIT of a term bounds the
+// rows it FINDS, not the changes it WALKS, so a table most changes hold no row
+// of — a body, a review, a finding, a comment; a busy repository's undiscussed
+// changes are most of its changes — walked every remaining change of the
+// repository before ending short, seven index seeks a change, and purging a
+// repository of N changes cost O(N²/PurgePartRows) in all. Driven from the
+// first ?2 it answers the decide's question exactly: past PurgePartRows
+// changes the changes' own term forms a part whatever the rest count, and at
+// or below it the first ?2 are every change.
 const (
 	repoNameSQL  = `SELECT name FROM code_repos WHERE id = ?`
 	remainingSQL = `SELECT
@@ -202,30 +211,30 @@ const (
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_packs_retired WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_ref_drops WHERE repo_id = ?1 LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_revisions AS r WHERE c.repo_id = ?1 AND r.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_change_authors AS a WHERE c.repo_id = ?1 AND a.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_change_bodies AS b WHERE c.repo_id = ?1 AND b.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_reviewers AS r WHERE c.repo_id = ?1 AND r.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_participants AS p WHERE c.repo_id = ?1 AND p.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_findings AS f WHERE c.repo_id = ?1 AND f.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_comments AS m WHERE c.repo_id = ?1 AND m.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_finding_texts AS x WHERE c.repo_id = ?1 AND x.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_reviews AS w WHERE c.repo_id = ?1 AND w.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_revision_facts AS t WHERE c.repo_id = ?1 AND t.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_mergeability AS g WHERE c.repo_id = ?1 AND g.change_id = c.id LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-			CROSS JOIN code_conversations AS v WHERE c.repo_id = ?1 AND v.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_revisions AS r WHERE r.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_change_authors AS a WHERE a.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_change_bodies AS b WHERE b.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_reviewers AS r WHERE r.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_participants AS p WHERE p.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_findings AS f WHERE f.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_comments AS m WHERE m.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_finding_texts AS x WHERE x.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_reviews AS w WHERE w.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_revision_facts AS t WHERE t.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_mergeability AS g WHERE g.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_conversations AS v WHERE v.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes INDEXED BY ` + changesNumberKey + `
 			WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_checks INDEXED BY ` + checksEndedKey + `
@@ -245,9 +254,13 @@ const (
 			(SELECT body_bytes FROM code_changes INDEXED BY ` + changesNumberKey + `
 				WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COALESCE(SUM(text_bytes), 0) FROM
-			(SELECT v.text_bytes FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-				CROSS JOIN code_conversations AS v WHERE c.repo_id = ?1 AND v.change_id = c.id LIMIT ?2))
+			(SELECT v.text_bytes FROM ` + firstChanges + `
+				CROSS JOIN code_conversations AS v WHERE v.change_id = c.id LIMIT ?2))
 		+ (SELECT COALESCE(SUM(row_bytes), 0) FROM
 			(SELECT row_bytes FROM code_checks INDEXED BY ` + checksEndedKey + `
 				WHERE repo_id = ?1 LIMIT ?2))`
+	// firstChanges is the repository ?1's first ?2 changes in number order,
+	// as c: what every term counting a change's dependents is driven from.
+	firstChanges = `(SELECT id FROM code_changes INDEXED BY ` + changesNumberKey + `
+			WHERE repo_id = ?1 ORDER BY number LIMIT ?2) AS c`
 )

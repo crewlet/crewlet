@@ -710,6 +710,72 @@ func partOf(t testing.TB, id string, n int) built {
 	return rec(t, RepoSubject(id), OpPurgePart, Scope{RepoPath(id)}, PurgePart{RepoID: id, Part: n})
 }
 
+// THE REMAINING COUNT WALKS A REPOSITORY'S FIRST CHANGES ALONE: every term of
+// the purge decide's bounded count that counts a change's dependents — its
+// revisions, authors, body and conversation, the tables most changes hold no
+// row of among them — is driven from the repository's first ?2 changes in
+// number order (firstChanges), never from every change it holds, so a
+// repository of many changes nobody discussed is counted by a walk of
+// PurgePartRows + 1 changes a term rather than all of them, every pass. And
+// the count still answers the decide exactly: a repository of PurgePartRows+1
+// changes nobody discussed forms a part on the changes' own term — and the
+// body of a change past them is never walked to, so it is not counted — and a
+// repository of a few changes is counted whole, every dependent row of them.
+//
+// Mutation: drive a term from every change of the repository again, its
+// LIMIT bounding the rows it finds and not the changes it walks → the
+// statement check names it; drop firstChanges' LIMIT, and every term walks
+// every change again → the body past the first PurgePartRows + 1 is counted.
+func TestTheRemainingCountWalksTheFirstChangesAlone(t *testing.T) {
+	t.Parallel()
+	terms := strings.Split(remainingSQL, "CROSS JOIN")
+	if len(terms) < 13 {
+		t.Fatalf("the remaining count joins %d tables to their changes, want every change's dependent "+
+			"table's, twelve and the conversations' bytes", len(terms)-1)
+	}
+	for i, before := range terms[:len(terms)-1] {
+		if !strings.HasSuffix(strings.TrimSpace(before), strings.TrimSpace(firstChanges)) {
+			t.Errorf("the remaining count's join %d is not driven from the repository's first changes "+
+				"(firstChanges): %s", i+1, strings.TrimSpace(terms[i+1])[:40])
+		}
+	}
+
+	e := openApplyEstate(t)
+	e.apply(create(t, "repo-a", "a"), create(t, "repo-b", "b"))
+	remaining := func(repo string) int {
+		t.Helper()
+		var n int
+		var weighed int64
+		if err := e.db.Tx(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(), remainingSQL, repo, PurgePartRows+1).Scan(&n, &weighed)
+		}); err != nil {
+			t.Fatalf("count %s's rows: %v", repo, err)
+		}
+		return n
+	}
+	before := remaining("repo-b")
+	e.seedChangeRows("repo-a", PurgePartRows+1, 0, 0, 0)
+	// ONE CHANGE PAST THE FIRST ?2, WITH A BODY: a term driven from every
+	// change reaches it and counts its body; one driven from the first ?2
+	// never walks that far.
+	e.exec(`INSERT INTO code_changes (id, repo_id, number, title, body_bytes, state, source_ref, target_ref,
+			head_oid, revision, owner, owner_kind, opened_at, opened_position, version, position)
+		VALUES ('repo-a-change-last', 'repo-a', ?, 'a change', 1, 'open', 'refs/heads/change-last',
+			'refs/heads/main', ?, 0, 'seat', 'agent', 0, 1, 1, 1)`, PurgePartRows+2, oid("l"))
+	e.exec(`INSERT INTO code_change_bodies (change_id, body) VALUES ('repo-a-change-last', 'b')`)
+	if got := remaining("repo-a") - before; got != PurgePartRows+1 {
+		t.Fatalf("a repository of %d changes nobody discussed and one past them with a body counts %d rows, "+
+			"want its changes' own term alone, %d: it forms a part, and the body of a change past the first "+
+			"PurgePartRows + 1 is never walked to", PurgePartRows+2, got, PurgePartRows+1)
+	}
+	// THREE CHANGES, each of two revisions, an author and a body: fifteen
+	// rows, every one counted.
+	e.seedChangeRows("repo-b", 3, 2, 1, 10)
+	if got := remaining("repo-b") - before; got != 3+6+3+3 {
+		t.Fatalf("three changes of two revisions, an author and a body each count %d rows, want 15", got)
+	}
+}
+
 // A PURGE PART IS BOUNDED AND IDEMPOTENT: it deletes exactly PurgePartRows
 // rows, pushes first, and only the next part deletes anything — a redelivered
 // or skipped one deletes nothing more.
