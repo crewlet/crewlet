@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -63,6 +64,8 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 			topics.AssistantLogWildcard},
 		chatlet.Domain{}.Name(): {topics.ChatLogStream, topics.ChatLogPrefix,
 			topics.ChatLogWildcard},
+		executordomain.Domain{}.Name(): {topics.ExecutorLogStream, topics.ExecutorLogPrefix,
+			topics.ExecutorLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {

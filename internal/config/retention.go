@@ -288,6 +288,47 @@ const (
 	AssistantLogMaxBytesFloor   int64 = 64 << 20
 	AssistantLogMaxBytesCeiling int64 = 64 << 30
 
+	// DefaultExecutorLogMaxBytes is the executor log's ceiling, where every
+	// seat's executor sessions are named (internal/executordomain), and
+	// ExecutorLogMaxBytesFloor and ExecutorLogMaxBytesCeiling bound it.
+	//
+	// # Half a gibibyte, and the arithmetic behind it
+	//
+	// THE LOG GROWS WITH THE TURNS SEATS RUN, NOT WITH THE DISK, so unset takes
+	// a fixed default rather than a share of the volume, as the assistant's
+	// does. At the reference company's thirty turns a seat a day over its 100
+	// seats, a turn writes about six captures (a collection for each of about
+	// two launches, and the bounded saves a long launch takes between them),
+	// about a kibibyte each signed; one end of about three kibibytes; one
+	// retention delete of about 400 bytes; and two linearizable reads, each a
+	// barrier of about 140 bytes (executordomain.LinearizableReadsPerSeatDay).
+	// That is about 29 MB a day: a healthily trimming log holds one `min_age`
+	// window of it, and 512 MiB is about eighteen days of a COMPLETELY
+	// BLOCKED trim, against a `trim_blocked` alarm raised after a day. A
+	// record is bounded at executordomain.MaxRecordBytes, 128 KiB, so a fleet
+	// writing every record at its caps would spend it in under a day; the
+	// bound is on one record, and the census is what the ceiling is sized for.
+	//
+	// SCALED DOWN TO ITS FLOOR WHERE THE BROKER IS SHORT, for the assistant's
+	// reason: a fixed 512 MiB counted in full on every fresh node would move
+	// the least a node boots in past the volumes crewlet-operator admits. Its
+	// register entry lets scaling take it down to this field's 64 MiB floor,
+	// all a fresh node has to find for it, so a company at the operator's
+	// smallest data volumes (11Gi with its objects in S3, 14Gi on the nats
+	// bucket) still boots with this log beside the nine before it, and one
+	// whose nine logs already exist creates it out of the room they leave;
+	// the default is what it gets wherever the broker has the room.
+	//
+	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor] records:
+	// ten seats write a tenth of the reference rate, for which 64 MiB is about
+	// three weeks; the reference company at the floor keeps about two days,
+	// past the one `min_age` window a healthy trim keeps. THE CEILING IS A
+	// TYPO GUARD: sixty-four times the default is far past any modelled
+	// company.
+	DefaultExecutorLogMaxBytes int64 = 512 << 20
+	ExecutorLogMaxBytesFloor   int64 = 64 << 20
+	ExecutorLogMaxBytesCeiling int64 = 64 << 30
+
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's ceiling.
 	//
@@ -340,21 +381,21 @@ const (
 	// to be created at 8.8 GiB or more. A first boot under an embedded
 	// broker creates it there from about 100 GiB free with chat's ask
 	// capped at a quarter, from 102 at a third or with the whole 8 GiB
-	// asked, and from 92 with no chat log at all: of the three, the quarter
+	// asked, and from 93 with no chat log at all: of the three, the quarter
 	// costs the changelog least. None of them reaches it on a 64 GiB volume.
 	// The logs share 18 GiB there — half of what the broker's three quarters
 	// of the volume leave once the object bucket has reserved a quarter of
-	// them — and the changelog is created at 5.4 GiB with the quarter, 5.3
+	// them — and the changelog is created at 5.4 GiB with the quarter, 5.2
 	// at a third and 5.0 with the whole ask (5.9 with no chat log), under
 	// the change itself, so a volume that size sets
 	// `stream.tracker_vectors_max_bytes` (docs/guides/retention.md says to
 	// what).
 	//
 	// WHAT IT COSTS the chat log, stated: its horizon under a completely
-	// blocked trim on a small volume. Created at 1.4 GiB on that 64 GiB
+	// blocked trim on a small volume. Created at 1.3 GiB on that 64 GiB
 	// first boot, rather than 2.5 with the whole ask, it refuses ordinary
 	// writes after about 42 days of a fully blocked trim at the declared
-	// census rather than 78, and after about 17 at the supported 50 000
+	// census rather than 77, and after about 17 at the supported 50 000
 	// messages a day rather than 32 — its read barriers counted in both.
 	// The log_headroom alarm names the log a tenth of the way before
 	// either, and from 128 GiB free the cap no longer binds.
@@ -616,7 +657,8 @@ func (s Stream) ArtifactDataMaxBytes(free int64) (int64, bool) {
 func (s Stream) DeclaredLogCeilings() int64 {
 	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
 		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.ArtifactsLogMaxBytes +
-		s.ArtifactDataLogMaxBytes + s.AssistantLogMaxBytes + s.ChatLogMaxBytes
+		s.ArtifactDataLogMaxBytes + s.AssistantLogMaxBytes + s.ChatLogMaxBytes +
+		s.ExecutorLogMaxBytes
 }
 
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
@@ -715,6 +757,21 @@ func (s Stream) AssistantMaxBytes() (int64, bool) {
 		return s.AssistantLogMaxBytes, false
 	}
 	return DefaultAssistantLogMaxBytes, true
+}
+
+// ExecutorMaxBytes is the executor log's ceiling, and whether it was derived:
+// the operator's value, or the fixed default ([DefaultExecutorLogMaxBytes]),
+// which reports `true` because a value nobody wrote is one the shared-budget
+// scaling may lower.
+//
+// IT TAKES NO FREE-SPACE ARGUMENT, for [Stream.IamMaxBytes]'s reason: the log
+// grows with the turns the company's seats run, which a volume has nothing to
+// say about.
+func (s Stream) ExecutorMaxBytes() (int64, bool) {
+	if s.ExecutorLogMaxBytes > 0 {
+		return s.ExecutorLogMaxBytes, false
+	}
+	return DefaultExecutorLogMaxBytes, true
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

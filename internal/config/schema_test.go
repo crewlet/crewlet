@@ -1379,6 +1379,7 @@ func byteBounds() map[string][2]int64 {
 		"artifact_data_log_max_bytes": {ArtifactDataLogMaxBytesFloor, ArtifactDataLogMaxBytesCeiling},
 		"assistant_log_max_bytes":     {AssistantLogMaxBytesFloor, AssistantLogMaxBytesCeiling},
 		"chat_log_max_bytes":          {ChatLogMaxBytesFloor, ChatLogMaxBytesCeiling},
+		"executor_log_max_bytes":      {ExecutorLogMaxBytesFloor, ExecutorLogMaxBytesCeiling},
 		"store_max_bytes":             {StoreMaxBytesFloor, StoreMaxBytesCeiling},
 	}
 }

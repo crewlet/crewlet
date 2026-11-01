@@ -260,12 +260,13 @@ type gateWrite func(ctx context.Context, by iam.Principal, opID, node string,
 
 // register is every domain this build runs, in a FIXED order.
 //
-// THE ARTIFACTS DOMAINS AND THE ASSISTANT'S ARE APPENDED LAST, artifacts before
-// its datastore and the assistant after both, from entries declared beside
-// their wiring (artifactsregister.go, artifactdataregister.go and
-// assistantregister.go) so each domain's entry is written where the rest of its
-// engine wiring lives. Appending keeps every existing domain's position,
-// which is the order every operator surface already reports in.
+// THE ARTIFACTS DOMAINS, THE ASSISTANT'S, CHAT AND THE EXECUTOR LOG ARE
+// APPENDED LAST, in the order they joined, from entries declared beside their
+// wiring (artifactsregister.go, artifactdataregister.go, assistantregister.go,
+// chatregister.go and executorregister.go) so each domain's entry is written
+// where the rest of its engine wiring lives. Appending keeps every existing
+// domain's position, which is the order every operator surface already
+// reports in.
 func register() []registration {
 	return slices.Concat([]registration{
 		{
@@ -580,7 +581,7 @@ func register() []registration {
 			},
 		},
 	}, artifactsRegistrations(), artifactDataRegistrations(), assistantRegistrations(),
-		chatRegistrations())
+		chatRegistrations(), executorRegistrations())
 }
 
 // checkRegister refuses a register whose entries are not complete, BEFORE

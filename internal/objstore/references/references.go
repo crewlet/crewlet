@@ -29,6 +29,7 @@ package references
 import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -40,6 +41,7 @@ var All = []objstore.ReferenceTable{
 	artifactsdomain.AssetReferences,
 	artifactsdomain.BrandFileReferences,
 	assistantdomain.FileObjectReferences,
+	executordomain.SessionObjectReferences,
 }
 
 // ObjectColumn is the name every referencing table gives its key column, and

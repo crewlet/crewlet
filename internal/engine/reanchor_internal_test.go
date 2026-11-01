@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
@@ -968,6 +969,78 @@ func TestAReanchorOfTheChatLogIsChatsOwn(t *testing.T) {
 	}
 	waitUntil(t, 10*time.Second, "the chat write to apply in the new generation", func() bool {
 		return countRows(t, e, `SELECT COUNT(*) FROM chat_evictions
+			WHERE node_id = 'node-y' AND from_position >= ?`,
+			int64(gen)*statelog.GenerationStride) == 1
+	})
+}
+
+// A REANCHOR OF THE EXECUTOR LOG IS THE EXECUTOR LOG'S, on chat's terms: the
+// log gets its own generation record and audit row, the tracker's checkpoint,
+// audit and rows are untouched, and a record after the reanchor lands in the
+// generation the log moved to — which is what keeps every session row's
+// version guard, and every end's position a later absorption compares, above
+// what the rebuilt stream counts from.
+//
+// THROUGH THE NODE GATE'S OWN WRITER, the one executor write that needs no turn
+// and no object: what is under test is the log and its generation.
+//
+// Mutation: hand the executor's register entry another domain's generation
+// encoder and its audit row is written to that domain's table.
+func TestAReanchorOfTheExecutorLogIsItsOwn(t *testing.T) {
+	t.Parallel()
+	e, js := aRunningNode(t)
+	s := e.core.Load().log
+	running := s.Domain(executordomain.Domain{}.Name())
+	if running == nil {
+		t.Fatal("the node runs no executor log")
+	}
+	gate, err := executordomain.NewGateWriter(running.publisher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res, err := gate.EvictNode(t.Context(), reanchorOperator,
+		statelog.NewOpID(time.Now(), ""), "node-x"); err != nil || res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("an executor write before the rebuild: %+v, %v", res, err)
+	}
+	trackerBefore := readCursorRow(t, e, worklet.Domain{}.Name())
+
+	rebuildLog(t, js, executordomain.Domain{}.Stream())
+	s.publishPositions(t.Context())
+	stream := executordomain.Domain{}.Stream().Name
+	view, err := e.ReanchorStatus(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("ReanchorStatus: %v", err)
+	}
+	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
+		Stream: stream, Confirm: statelog.ConfirmationOf(view.CreatedAt), By: reanchorOperator,
+	})
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	gen := plan.Generation
+
+	waitUntil(t, 10*time.Second, "the executor log's generation record to apply", func() bool {
+		return countRows(t, e, `SELECT COUNT(*) FROM executor_log_generations
+			WHERE generation = ? AND by = 'ops-1'`, gen) == 1
+	})
+	if n := countRows(t, e, `SELECT COUNT(*) FROM tracker_log_generations`); n != 0 {
+		t.Fatalf("a reanchor of the executor log wrote %d tracker audit row(s)", n)
+	}
+	if got := readCursorRow(t, e, worklet.Domain{}.Name()); got != trackerBefore {
+		t.Fatalf("the tracker's checkpoint moved from %+v to %+v", trackerBefore, got)
+	}
+
+	waitUntil(t, 10*time.Second, "the executor applier to resume", func() bool {
+		r := running.runner
+		return r.StreamIdentity() == nil && r.Committed().Generation == gen
+	})
+	res, err := gate.EvictNode(t.Context(), reanchorOperator, statelog.NewOpID(time.Now(), ""), "node-y")
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.Generation != gen {
+		t.Fatalf("an executor write after the reanchor: %+v, %v — want applied in generation %d",
+			res, err, gen)
+	}
+	waitUntil(t, 10*time.Second, "the executor write to apply in the new generation", func() bool {
+		return countRows(t, e, `SELECT COUNT(*) FROM executor_evictions
 			WHERE node_id = 'node-y' AND from_position >= ?`,
 			int64(gen)*statelog.GenerationStride) == 1
 	})

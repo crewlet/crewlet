@@ -115,6 +115,13 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
+		// THE EXECUTOR LOG'S anchor table and operation ledger, per node,
+		// for the reason every registered domain's pair is. Its sessions
+		// are NOT here: they are Replicated, so their retention rides a
+		// record (the trash reaper's retention delete) rather than a local
+		// delete.
+		"executor_anchors",
+		"executor_ops",
 		// THE IDENTITY ESTATE'S TWO, which sort here, swept on every
 		// data node by the same per-node jobs every other domain's are:
 		// every data node runs every domain in the register, whatever its

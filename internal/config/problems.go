@@ -930,9 +930,11 @@ func (b *Bootstrap) Warnings() []Warning {
 				"`stream.artifact_data_log_max_bytes`, "+
 				"`stream.iam_log_max_bytes`, where a full log refuses every "+
 				"sign-in, `stream.assistant_log_max_bytes`, where it refuses "+
-				"every question somebody puts to Ask Crewlet, and "+
+				"every question somebody puts to Ask Crewlet, "+
 				"`stream.chat_log_max_bytes`, where it refuses a message "+
-				"somebody typed. The two compacted logs "+
+				"somebody typed, and `stream.executor_log_max_bytes`, where "+
+				"it refuses to record an executor's session, so the seat's "+
+				"next turn starts fresh. The two compacted logs "+
 				"(`stream.tracker_vectors_max_bytes`, "+
 				"`stream.usage_log_max_bytes`) age their records out on the "+
 				"broker regardless, but wait on an acknowledgement just the "+

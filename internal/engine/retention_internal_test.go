@@ -1111,10 +1111,11 @@ func TestALogPastItsCensusNamesItsOwnCeilingField(t *testing.T) {
 			uint64(3*statelog.Census{Reads: *entry.Reads, Seats: 1}.Expected()+1),
 			metrics.Attrs{"domain": entry.Domain.Name(), "stream": entry.Domain.Stream().Name})
 	}
-	if len(want) < 7 {
+	if len(want) < 8 {
 		t.Fatalf("%d registered log(s) take barriers, want at least the tracker's, "+
 			"the knowledge base's, the identity estate's, the artifacts log's, the "+
-			"artifact datastore's, the assistant's and chat's: %v", len(want), want)
+			"artifact datastore's, the assistant's, chat's and the executor log's: %v",
+			len(want), want)
 	}
 	r := &retention{state: e.core.Load().log, fleet: e.backends.Fleet, nodeID: "node-a",
 		metrics: recorder, seats: func() int { return 1 }}

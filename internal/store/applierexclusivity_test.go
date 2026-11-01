@@ -632,6 +632,16 @@ var allowedReplicatedWriter = []allowance{
 			"would become a claim about how synchronised they are.",
 	},
 	{
+		Prefix: "internal/executordomain/apply", Kind: mechanism,
+		Why: "The executor domain's applier, across a turn's captures, its end " +
+			"and a retention's or a seat's delete: every row is a pure function " +
+			"of a committed record and same-log rows, the seat's byte budget " +
+			"rides the capture rather than being read from a revision, a release " +
+			"and an absorption choose their rows in one total order of the log's " +
+			"own positions, and a tombstone keeps an ended or removed turn from " +
+			"being captured again.",
+	},
+	{
 		Prefix: "internal/chatlet/apply", Kind: mechanism,
 		Why: "The chat domain's applier, across the files it is split " +
 			"over: the record and the gate, the channel half and the " +

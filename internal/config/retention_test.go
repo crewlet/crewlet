@@ -287,6 +287,7 @@ func TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes(t *testing.T) {
 		"iam_log_max_bytes":       config.IamLogMaxBytesFloor,
 		"usage_log_max_bytes":     config.UsageLogMaxBytesFloor,
 		"assistant_log_max_bytes": config.AssistantLogMaxBytesFloor,
+		"executor_log_max_bytes":  config.ExecutorLogMaxBytesFloor,
 	}
 	// EVERY LOG IS IN EXACTLY ONE OF THE TWO, read off config.Stream rather
 	// than listed: a log that joins the broker with a ceiling and is in
@@ -451,6 +452,12 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"assistant at its floor":    {func(b *config.Bootstrap) { b.Stream.AssistantLogMaxBytes = mib * 64 }, true, ""},
 		"assistant at 64 GiB":       {func(b *config.Bootstrap) { b.Stream.AssistantLogMaxBytes = 64 * gib }, true, ""},
 		"assistant past 64 GiB":     {func(b *config.Bootstrap) { b.Stream.AssistantLogMaxBytes = 64*gib + 1 }, false, "assistant_log_max_bytes"},
+		// AND THE EXECUTOR LOG'S, for the same reason: it grows with the
+		// turns the company's seats run, not with a corpus.
+		"executor below its floor": {func(b *config.Bootstrap) { b.Stream.ExecutorLogMaxBytes = mib*64 - 1 }, false, "executor_log_max_bytes"},
+		"executor at its floor":    {func(b *config.Bootstrap) { b.Stream.ExecutorLogMaxBytes = mib * 64 }, true, ""},
+		"executor at 64 GiB":       {func(b *config.Bootstrap) { b.Stream.ExecutorLogMaxBytes = 64 * gib }, true, ""},
+		"executor past 64 GiB":     {func(b *config.Bootstrap) { b.Stream.ExecutorLogMaxBytes = 64*gib + 1 }, false, "executor_log_max_bytes"},
 		// THE ARTIFACTS LOG AND THE ARTIFACT DATASTORE'S TAKE THE CORPUS-SIZED
 		// LOGS' GIBIBYTE, each under a ceiling of its own.
 		"artifacts below a gibibyte":     {func(b *config.Bootstrap) { b.Stream.ArtifactsLogMaxBytes = gib - 1 }, false, "artifacts_log_max_bytes"},
@@ -619,6 +626,11 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 			b.Stream.ChatLogMaxBytes = 1 * gib
 		}, false, "chat_log_max_bytes"},
+		"tipped past it by the executor log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.ExecutorLogMaxBytes = 64 * mib
+		}, false, "executor_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.RunnableBootstrap()

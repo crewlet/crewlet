@@ -199,14 +199,59 @@ func (r *runRetirements) fail(err error) {
 	r.failure = err
 }
 
+// sessionRetirements records every call a retirement makes to remove a seat's
+// executor sessions, what the retirement had done by then, and can be made to
+// fail.
+type sessionRetirements struct {
+	mu      sync.Mutex
+	calls   []sessionRetirement
+	failure error
+	// runs is the run retirer of the same harness, read inside each call so
+	// a case can say whether the seat's runs were ended first.
+	runs *runRetirements
+}
+
+type sessionRetirement struct {
+	seat        uuid.UUID
+	handle      string
+	absentSince time.Time
+	// runsEnded is how many run retirements had been made when the
+	// sessions were removed.
+	runsEnded int
+}
+
+func (r *sessionRetirements) retire(_ context.Context, seat uuid.UUID, handle string,
+	absentSince time.Time) error {
+
+	ended := len(r.runs.recorded())
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, sessionRetirement{seat: seat, handle: handle,
+		absentSince: absentSince, runsEnded: ended})
+	return r.failure
+}
+
+func (r *sessionRetirements) recorded() []sessionRetirement {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.calls)
+}
+
+func (r *sessionRetirements) fail(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failure = err
+}
+
 type mailboxHarness struct {
-	t       *testing.T
-	records *coordmem.Fleet
-	queue   *gatedQueue
-	leases  coord.Backend
-	roster  *roster
-	runs    *runRetirements
-	m       *maintenance.Mailboxes
+	t        *testing.T
+	records  *coordmem.Fleet
+	queue    *gatedQueue
+	leases   coord.Backend
+	roster   *roster
+	runs     *runRetirements
+	sessions *sessionRetirements
+	m        *maintenance.Mailboxes
 	// builds numbers every Mailboxes this harness makes, so each claims
 	// seat leases under an owner of its own, as each process does.
 	builds atomic.Int32
@@ -224,9 +269,11 @@ func newMailboxHarness(t *testing.T, tune func(*maintenance.MailboxOptions)) *ma
 		t.Fatalf("queue.Start: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	runs := &runRetirements{}
 	h := &mailboxHarness{
 		t: t, records: coordmem.NewFleet(), queue: &gatedQueue{Queue: q},
-		leases: &coordmem.Backend{}, roster: &roster{}, runs: &runRetirements{},
+		leases: &coordmem.Backend{}, roster: &roster{}, runs: runs,
+		sessions: &sessionRetirements{runs: runs},
 	}
 	h.m = h.build(tune)
 	return h
@@ -239,6 +286,7 @@ func (h *mailboxHarness) build(tune func(*maintenance.MailboxOptions)) *maintena
 	opts := maintenance.MailboxOptions{
 		Records: h.records, Queue: h.queue, Leases: h.leases, Roster: h.roster.read,
 		Runs:         h.runs.retire,
+		Sessions:     h.sessions.retire,
 		Owner:        fmt.Sprintf("retirement-%d", h.builds.Add(1)),
 		LeaseTTL:     harnessLeaseTTL,
 		RegisterPoll: 5 * time.Millisecond,
@@ -1115,6 +1163,62 @@ func TestARetirementThatCannotEndTheSeatsRunsIsRetried(t *testing.T) {
 	}
 }
 
+// A RETIREMENT REMOVES THE SEAT'S EXECUTOR SESSIONS ONCE ITS RUNS ARE ENDED, by
+// the seat's id and under the absence the retirement acts on, so a retried
+// retirement of that one absence removes them under one operation.
+//
+// Mutation: remove the sessions before the runs are ended and this fails on the
+// call's order; pass the retirement's own clock rather than the absence and it
+// fails on the instant.
+func TestARetirementRemovesTheSeatsSessionsAfterItsRuns(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.removed()
+	if n := h.mustTick(base.Add(grace + time.Minute)); n != 1 {
+		t.Fatalf("the sweep after the grace period retired %d mailboxes, want 1", n)
+	}
+	calls := h.sessions.recorded()
+	if len(calls) != 1 || calls[0].seat != seatID("swe") || calls[0].handle != "swe" {
+		t.Fatalf("sessions were removed for %+v, want once for the retired seat swe", calls)
+	}
+	if !calls[0].absentSince.Equal(base) {
+		t.Errorf("the removal was asked under the absence of %s, want the one observed at %s",
+			calls[0].absentSince, base)
+	}
+	if calls[0].runsEnded != 1 {
+		t.Errorf("the sessions were removed after %d run retirements, want after the seat's runs "+
+			"were ended", calls[0].runsEnded)
+	}
+}
+
+// A SEAT WHOSE SESSIONS CANNOT BE REMOVED KEEPS ITS MAILBOX: the retirement is
+// undone and retried on the next tick, because a seat whose mailbox is gone is
+// one no later sweep retires again, and its sessions would be left for the
+// retention alone.
+//
+// Mutation: ignore the session retirer's error and the mailbox is deleted with
+// the seat's sessions left behind.
+func TestARetirementThatCannotRemoveTheSeatsSessionsIsRetried(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.removed()
+	unknown := errors.New("whether the removal landed is unknown")
+	h.sessions.fail(unknown)
+
+	if _, err := h.tick(h.m, base.Add(grace+time.Minute)); !errors.Is(err, unknown) {
+		t.Fatalf("tick = %v, want the session removal's failure", err)
+	}
+	if got := h.queue.deletes.Load(); got != 0 {
+		t.Fatalf("%d subscriptions were deleted although the seat's sessions were not removed", got)
+	}
+	if rec, _ := h.record("swe"); rec.Retiring() || !rec.AbsentSince.Equal(base) {
+		t.Fatalf("the record is %+v, want it absent since %s and unmarked", rec, base)
+	}
+
+	h.sessions.fail(nil)
+	if n := h.mustTick(base.Add(grace + time.Hour)); n != 1 {
+		t.Fatalf("the retry retired %d mailboxes, want 1", n)
+	}
+}
+
 // observeRetirement is what a run retirement can see of the seat it is ending
 // the runs of: whether the seat's inbox and control subscription are still
 // there, and whether another node could claim the seat — all asked by the
@@ -1450,7 +1554,8 @@ func TestNewMailboxesNamesEveryMissingDependency(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewMailboxes accepted no dependencies")
 	}
-	for _, field := range []string{"Records", "Queue", "Leases", "Owner", "LeaseTTL", "Roster", "Runs"} {
+	for _, field := range []string{"Records", "Queue", "Leases", "Owner", "LeaseTTL", "Roster", "Runs",
+		"Sessions"} {
 		if !strings.Contains(err.Error(), "MailboxOptions."+field) {
 			t.Errorf("the error does not name %s: %v", field, err)
 		}

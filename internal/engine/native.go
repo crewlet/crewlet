@@ -575,10 +575,11 @@ func (e *Engine) startNativeCollector(ctx context.Context) {
 	if n == nil {
 		return
 	}
-	// THE NATIVE HALF'S AND THE CORE'S: the artifacts and assistant logs run
-	// on every data node, and an artifact's versions and assets and a
-	// conversation's files name objects the same store keeps.
-	estates := objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader())
+	// THE NATIVE HALF'S AND THE CORE'S: the artifacts, assistant and executor
+	// logs run on every data node, and an artifact's versions and assets, a
+	// conversation's files and a seat's executor sessions name objects the
+	// same store keeps.
+	estates := objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader(), e.ExecutorReader())
 	if len(estates) == 0 {
 		return
 	}

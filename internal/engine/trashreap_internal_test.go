@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -102,8 +103,9 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 //
 // THE NAMED SOURCE'S FAILURE, NOT THE PASS'S. A pass's error joins every
 // source's, and on these nodes, whose company no activation has named, the
-// assistant's term is unknown and its source's part fails by design
-// ([Engine.assistantRetention]); the cases are about the source they name.
+// assistant's term and the executor sessions' are unknown and their sources'
+// parts fail by design ([Engine.assistantRetention],
+// [Engine.executorRetention]); the cases are about the source they name.
 func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	source string) trashreap.SourceReport {
 
@@ -121,12 +123,14 @@ func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	for _, src := range sources {
 		names = append(names, src.Name())
 	}
-	// THE ASSISTANT'S TOO: a conversation untouched for its retention is
-	// purged through the same reaper, a Termed source of its own.
+	// THE ASSISTANT'S TOO, and the executor sessions': a conversation
+	// untouched for its retention is purged through the same reaper, and a
+	// session untouched for the company's conversation retention is deleted
+	// through it, each a Termed source of its own.
 	if !slices.Equal(names, []string{"pages", artifactsdomain.Domain{}.Name(),
-		assistantdomain.Domain{}.Name()}) {
+		assistantdomain.Domain{}.Name(), executordomain.Domain{}.Name()}) {
 		t.Fatalf("the node arms the sources %v, want the knowledge base's, the "+
-			"artifacts' and the assistant's", names)
+			"artifacts', the assistant's and the executor sessions'", names)
 	}
 	for _, got := range report.Sources {
 		if got.Source == source {

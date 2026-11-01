@@ -196,7 +196,7 @@ func (e *Engine) migrationReferences() (collect.References, error) {
 		return nil, migrationRefused("this node holds no copy of the company's records; run the " +
 			"migration against a data node")
 	}
-	estates := objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader())
+	estates := objectEstatesFor(n, e.ArtifactsReader(), e.AssistantReader(), e.ExecutorReader())
 	if len(estates) == 0 {
 		return nil, migrationRefused("this node holds no copy of the company's records; run the " +
 			"migration against a data node")

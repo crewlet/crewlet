@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -294,19 +295,20 @@ func (c *secretsClient) Rekey(ctx context.Context, activeKeyID string) (rotation
 }
 
 // EngineKeys reads the counts the node's listing carries beside the operator's
-// names: the engine's own keys, the identity estate's values and the
-// assistant's, per keyring key, none of them named.
+// names: the engine's own keys, the identity estate's values, the assistant's
+// and the executor sessions', per keyring key, none of them named.
 func (c *secretsClient) EngineKeys(ctx context.Context) (engineHeld, error) {
 	var body struct {
 		EngineKeys secrets.EngineKeys           `json:"engine_keys"`
 		Identity   *iamdomain.SealedCount       `json:"identity_values"`
 		Assistant  *assistantdomain.SealedCount `json:"assistant_values"`
+		Executor   *executordomain.SealedCount  `json:"executor_values"`
 	}
 	if err := c.listing(ctx, &body); err != nil {
 		return engineHeld{}, err
 	}
 	return engineHeld{Keys: body.EngineKeys, Identity: body.Identity,
-		Assistant: body.Assistant}, nil
+		Assistant: body.Assistant, Executor: body.Executor}, nil
 }
 
 // call performs one request whose body, where it has one, is a credential, and

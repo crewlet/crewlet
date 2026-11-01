@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 )
@@ -210,7 +211,8 @@ func TestAStoreLimitBelowTheFloorIsAnAdvisory(t *testing.T) {
 // THAT LIMIT IS 10.5 GiB, three quarters of a 14Gi volume. It was 9 GiB, of
 // 12Gi, when the assistant's scaling was written; then the chat log joined the
 // register at the gibibyte every corpus-sized log is scaled no lower than
-// ([config.ChatLogMaxBytesFloor]), and a fresh node reserves 10826896725 bytes.
+// ([config.ChatLogMaxBytesFloor]), and a fresh node reserved 10826896725 bytes
+// (10916375210 once the executor log joined at its own 64 MiB floor).
 // Chat does not give way on a short broker as the assistant does: it is not a
 // feature a company may never turn on — it is the company's chat unless a
 // vendor's is declared — and the room a 9 GiB limit leaves it, 192 MiB beside
@@ -220,7 +222,7 @@ func TestAStoreLimitBelowTheFloorIsAnAdvisory(t *testing.T) {
 // the register, as it did when the artifact logs joined, and
 // crewlet-operator's smallest volume moved with it. The assistant's scaling
 // still decides whether that volume boots: counted at its 512 MiB, a fresh
-// node would need 11453246122 bytes.
+// node would need 11542724607 bytes.
 func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
 	t.Parallel()
 	boot := config.DefaultBootstrap()
@@ -282,5 +284,79 @@ func TestTheTestBrokerSizeHoldsAFreshNode(t *testing.T) {
 		t.Fatalf("brokertest.StoreMaxBytes is %d bytes and %s: raise it, or every "+
 			"suite booting a node is refused at whichever state log no longer fits",
 			brokertest.StoreMaxBytes, floor.Sentence())
+	}
+}
+
+// THE EXECUTOR LOG FITS BESIDE THE NINE AT THE OPERATOR'S SMALLEST VOLUMES, as
+// a fresh node and as a node whose nine logs already exist.
+//
+// crewlet-operator admits no data volume smaller than 11Gi with the objects in
+// S3 and 14Gi on the nats bucket, and states three quarters of it as the
+// broker's limit. A log the register gains is created on every existing node at
+// its next boot, out of whatever the logs already there leave — 704 MiB at
+// 11Gi, 320 MiB at 14Gi beside the bucket — and a ceiling that does not fit
+// refuses the boot. So the tenth log reserves its 64 MiB floor there
+// ([config.ExecutorLogMaxBytesFloor], what its register entry scales to), and a
+// fresh node of the default document still boots on either volume: no
+// operator floor moves for it.
+//
+// Mutation: drop ScalesTo from the executor's register entry, so it holds at
+// the gibibyte every corpus-sized log does, and the 14Gi node whose nine logs
+// exist is refused it; raise the floor past 320 MiB and the same.
+func TestTheExecutorLogFitsBesideTheNineAtTheOperatorsSmallestVolumes(t *testing.T) {
+	t.Parallel()
+	executor := executordomain.Domain{}.Name()
+	var nine int64
+	held := map[string]int64{}
+	for _, entry := range register() {
+		if entry.Domain.Name() == executor {
+			continue
+		}
+		ceiling := entry.Ceiling(config.Stream{}, 0)
+		floor := min(ceiling.Bytes, ceiling.scaleFloor())
+		held[entry.Domain.Stream().Name] = floor
+		nine += floor
+	}
+	for name, tc := range map[string]struct {
+		volume int64
+		nats   bool
+	}{
+		"11Gi with the objects in S3":              {volume: 11 << 30},
+		"14Gi with the objects on the nats bucket": {volume: 14 << 30, nats: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			limit := tc.volume / embeddedShareDen * embeddedShareNum
+			boot := config.DefaultBootstrap()
+			var bucket int64
+			if tc.nats {
+				bucket = derivedObjectsReservation(limit, 0)
+			} else {
+				boot.Store.Objects.Backend = config.ObjectBackendS3
+			}
+			if floor := BrokerFloorFor(&boot); floor.Limit > limit {
+				t.Errorf("a fresh node needs a %d-byte limit and the volume states %d: %s",
+					floor.Limit, limit, floor.Sentence())
+			}
+			host := sizingHost{
+				budget: jetstream.StorageBudget{Limit: limit, Committed: bucket + nine,
+					Source: jetstream.BudgetServerStore},
+				held: held,
+			}
+			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, tc.volume,
+				"/var/lib/crewlet/stream")
+			if err != nil {
+				t.Fatalf("sizeCeilings: %v", err)
+			}
+			created := sized[executor].Bytes
+			if created != config.ExecutorLogMaxBytesFloor {
+				t.Errorf("beside nine logs at their floors the executor log is created "+
+					"at %d bytes, want its %d-byte floor", created, config.ExecutorLogMaxBytesFloor)
+			}
+			if total := bucket + nine + created; total > limit {
+				t.Errorf("the bucket, the nine logs and the executor log reserve %d bytes "+
+					"of a %d-byte limit: an existing node is refused the tenth log", total, limit)
+			}
+		})
 	}
 }
