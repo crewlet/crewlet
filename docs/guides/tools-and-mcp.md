@@ -522,8 +522,36 @@ and an integration's Agents tab says the agent's tool is not running where
 every server that reads the integration's credential is off.
 
 Set it back to `true`, or remove the key (on is the default), and the next apply
-starts it with the credentials its seats kept. Removing a server instead means
-clearing every block that names it first, and losing what they held.
+starts it with the credentials its seats kept. Removing a server instead takes
+every block that names it with it, and what they held: see
+[Removing a server](#removing-a-server).
+
+### Removing a server
+
+A server is named from two places beside its own entry: every seat's and unit's
+`mcp_env` block keyed on its name, and every seat's `sandbox.mcp.servers` entry
+listing it. A field naming a server the company does not declare is refused,
+whichever of the two it is: an `mcp_env` block for no server is read by
+nothing, and a box entry for no server gives the seat's executor nothing. So a
+server leaves the document with everything that names it, in one revision.
+
+`DELETE /config/mcp-servers/{name}` is that write. Sent with no body (or as a
+`?dry_run=true` check) it is refused with the list of every field that names
+the server, each located where it is written; sent with `"clear": true` it
+removes the server and clears all of them. An `mcp_env` block the engine reads
+for an integration under the same name (`github`, `gitlab`, `datadog`,
+`atlassian`, `jira`, `confluence`) stays, since the integration still reads it
+once the server is gone.
+
+The values a server and its blocks read are `${VAR}` references into the
+credential store. Once it is gone some of them are read by nothing, and the
+dry run lists the ones the store holds under `dependants.secrets`; name any of
+them in `"delete_secrets"` and they are deleted once the removal is written.
+Only those: a value another server, a seat's integration or a model still
+reads is refused, since deleting it would sign that reader out. Deleting a
+value also takes `secrets.write`, so Ask Crewlet can remove a server for you
+and leaves its values to you. The whole request and its answers are in
+[the API reference](../reference/api-endpoints.md#delete-configmcp-serversid-remove-an-mcp-server-and-clear-what-names-it).
 
 ### Saying what a server is for
 

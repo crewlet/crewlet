@@ -26,6 +26,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -82,6 +83,11 @@ type surface struct {
 	plane   coord.Plane
 	svc     *configapi.Service
 	cipher  secrets.Cipher
+
+	// secrets is the fleet's credential store the surface was handed
+	// ([configapi.Options.Secrets]), over the plane's own fleet and under
+	// its keyring, for a case that seeds a value a removal may delete.
+	secrets *fleetsecrets.Store
 
 	// grants are what the caller [surface.do] attaches carries: every one,
 	// unless a case about authority narrows them, so a case about what the
@@ -163,12 +169,13 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
+	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 	s := &surface{
 		mux: http.NewServeMux(), configs: db.Configs(), db: db,
-		plane: coordmemory.NewFleet(), grants: iam.AllGrants,
+		plane: fleet, grants: iam.AllGrants, secrets: fleetsecrets.New(fleet, cipher),
 	}
 	opts := configapi.Options{
-		Store: db, Plane: s.plane, Cipher: testCipher(t),
+		Store: db, Plane: s.plane, Cipher: cipher, Secrets: s.secrets,
 		Holders: s.holders, Node: thisNode,
 		Now: func() time.Time { return pinned },
 	}
@@ -1303,6 +1310,10 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 // the caller to this node to diff or revert it — by a name an empty one is
 // not.
 //
+// AND THE CREDENTIAL STORE: a removal of an MCP server deletes the values only
+// it read, and a surface built without the store would answer that removal by
+// keeping them.
+//
 // The control is the same options with all of them: built.
 //
 // Mutation: drop any one refusal and its row builds a surface.
@@ -1317,12 +1328,14 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 
 		return nil, nil
 	}
+	vault := fleetsecrets.New(fleet, cipher)
 	for field, opts := range map[string]configapi.Options{
-		"Store":   {Plane: fleet, Cipher: cipher, Holders: nobody, Node: thisNode},
-		"Plane":   {Store: db, Cipher: cipher, Holders: nobody, Node: thisNode},
-		"Cipher":  {Store: db, Plane: fleet, Holders: nobody, Node: thisNode},
-		"Holders": {Store: db, Plane: fleet, Cipher: cipher, Node: thisNode},
-		"Node":    {Store: db, Plane: fleet, Cipher: cipher, Holders: nobody, Node: " "},
+		"Store":   {Plane: fleet, Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault},
+		"Plane":   {Store: db, Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault},
+		"Cipher":  {Store: db, Plane: fleet, Holders: nobody, Node: thisNode, Secrets: vault},
+		"Holders": {Store: db, Plane: fleet, Cipher: cipher, Node: thisNode, Secrets: vault},
+		"Node":    {Store: db, Plane: fleet, Cipher: cipher, Holders: nobody, Node: " ", Secrets: vault},
+		"Secrets": {Store: db, Plane: fleet, Cipher: cipher, Holders: nobody, Node: thisNode},
 	} {
 		svc, err := configapi.New(opts)
 		if err == nil {
@@ -1334,8 +1347,9 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 		}
 	}
 	if _, err := configapi.New(configapi.Options{Store: db, Plane: fleet,
-		Cipher: cipher, Holders: nobody, Node: thisNode}); err != nil {
-		t.Errorf("a store, a plane, a keyring, a directory and a node were refused: %v", err)
+		Cipher: cipher, Holders: nobody, Node: thisNode, Secrets: vault}); err != nil {
+		t.Errorf("a store, a plane, a keyring, a directory, a node and a credential "+
+			"store were refused: %v", err)
 	}
 }
 

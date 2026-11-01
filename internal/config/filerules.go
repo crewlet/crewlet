@@ -4,6 +4,7 @@ import (
 	"errors"
 	"iter"
 	"maps"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -38,7 +39,7 @@ import (
 // validateFileRules is the five whole-document rules, run together.
 func (c *Company) validateFileRules() error {
 	return errors.Join(
-		c.validateMCPEnvServers(),
+		c.validateMCPServerReferences(),
 		c.validateOptionalKeys(),
 		c.validateHeaderSpellings(),
 		c.validateSeatEmails(),
@@ -322,83 +323,245 @@ func spelledUnlike(p *problems, server *MCPServer, path Path, block, unit map[st
 	}
 }
 
-// validateMCPEnvServers refuses an `mcp_env` block keyed on a name nothing
-// reads.
+// MCPReferenceField is the kind of field an [MCPServerReference] is written in.
+type MCPReferenceField string
+
+const (
+	// MCPReferenceEnv is an `mcp_env` block keyed on the server's name: a
+	// seat's own, or a unit's, which the unit's agent seats inherit.
+	MCPReferenceEnv MCPReferenceField = "mcp_env"
+	// MCPReferenceSandbox is an entry of a seat's `sandbox.mcp.servers`,
+	// which gives the seat's executor box the server.
+	MCPReferenceSandbox MCPReferenceField = "sandbox"
+)
+
+// MCPServerReference is one field of the document that names an MCP server by
+// its name: where it is written, whose it is, and what kind of field it is.
+type MCPServerReference struct {
+	// Server is the name the field names, as written.
+	Server string
+	// Field is the kind of field.
+	Field MCPReferenceField
+	// Seat is the handle of the seat whose field it is, and Unit the key of
+	// the unit whose `mcp_env` block it is: exactly one of the two is set.
+	Seat, Unit string
+	// Name is that seat's or unit's display name, for a sentence a person
+	// reads.
+	Name string
+	// Segments is the written field: ["roles", 0, "mcp_env", "linear"],
+	// ["units", 1, "children", 0, "mcp_env", "linear"] or
+	// ["units", 0, "roles", 2, "sandbox", "mcp", "servers", 1].
+	Segments Path
+	// EngineRead is an `mcp_env` block the engine reads by its name whether
+	// or not a server of that name is declared ([org.EngineReadMCPEnv]): a
+	// GitHub App's per-seat token, a GitLab or Atlassian account. Such a
+	// block names something with no server at all, so it is never a
+	// server's alone, and removing the server leaves it in place.
+	EngineRead bool
+}
+
+// MCPServerReferences is every field of the document that names the MCP server
+// called name, in document order: each seat's `mcp_env` block keyed on it and
+// each entry of its `sandbox.mcp.servers` listing it, at any depth, then each
+// unit's `mcp_env` block keyed on it.
+//
+// THE WRITTEN FIELDS, whether or not a server of that name is declared and
+// whether or not it is on: a block kept for a server turned off is still in
+// the document, still what a removal has to clear, and still what
+// [Company.validateMCPServerReferences] reports once the server is gone.
+//
+// ONE IMPLEMENTATION with every reader: that rule, and the removal of a
+// server (`DELETE /config/mcp-servers/{name}`), which clears what this
+// answers in the same revision or is refused naming all of it.
+func (c *Company) MCPServerReferences(name string) []MCPServerReference {
+	var out []MCPServerReference
+	for _, ref := range c.mcpServerReferences() {
+		if ref.Server == name {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// MCPServerDependants is every field that names the server called name and
+// nothing else, in document order: its [Company.MCPServerReferences] but a
+// block the engine reads by its name besides ([MCPServerReference.EngineRead]).
+// It is what [Company.RemoveMCPServer] clears with the server.
+//
+// A BLOCK THE ENGINE READS BY ITS NAME IS NOT ONE: a seat's `mcp_env.github`
+// is its GitHub App token as much as the `github` server's credentials, and
+// the engine goes on reading it once the server is gone.
+func (c *Company) MCPServerDependants(name string) []MCPServerReference {
+	var out []MCPServerReference
+	for _, ref := range c.MCPServerReferences(name) {
+		if !ref.EngineRead {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// RemoveMCPServer takes the server called name out of the document with every
+// field that names it alone ([Company.MCPServerDependants]): each seat's and
+// unit's `mcp_env` block for it and each `sandbox.mcp.servers` entry listing
+// it. It answers what it cleared, and whether the server was declared; a
+// server that is not leaves the document as it was. A mapping left empty is
+// dropped rather than written as `{}`.
+func (c *Company) RemoveMCPServer(name string) (cleared []MCPServerReference, found bool) {
+	i := slices.IndexFunc(c.MCPServers, func(s MCPServer) bool { return s.Name == name })
+	if i < 0 {
+		return nil, false
+	}
+	cleared = c.MCPServerDependants(name)
+	c.MCPServers = slices.Delete(c.MCPServers, i, i+1)
+	alone := !engineReadsMCPEnv(name)
+	drop := func(env org.MCPEnv) org.MCPEnv {
+		if !alone {
+			return env
+		}
+		delete(env, name)
+		if len(env) == 0 {
+			return nil
+		}
+		return env
+	}
+	for role := range c.EachRole() {
+		role.MCPEnv = drop(role.MCPEnv)
+		if role.Sandbox == nil {
+			continue
+		}
+		role.Sandbox.MCP.Servers = slices.DeleteFunc(role.Sandbox.MCP.Servers,
+			func(server string) bool { return server == name })
+		if len(role.Sandbox.MCP.Servers) == 0 {
+			role.Sandbox.MCP.Servers = nil
+		}
+		if reflect.ValueOf(*role.Sandbox).IsZero() {
+			role.Sandbox = nil
+		}
+	}
+	for unit := range c.EachUnit() {
+		unit.MCPEnv = drop(unit.MCPEnv)
+	}
+	return cleared, true
+}
+
+// engineReadsMCPEnv reports an `mcp_env` block the engine reads by its name
+// whatever servers are declared ([org.EngineReadMCPEnv]). The one decision of
+// it, which [MCPServerReference.EngineRead] and [Company.RemoveMCPServer] both
+// read.
+func engineReadsMCPEnv(server string) bool {
+	return slices.Contains(org.EngineReadMCPEnv(), server)
+}
+
+// mcpServerReferences is every written field that names an MCP server,
+// whichever server it names: [Company.MCPServerReferences] before it is
+// narrowed to one.
+//
+// A BLOCK'S KEYS SORTED, because a map's iteration order is random and an
+// error listing three undeclared servers in a different order on every run is
+// one nobody can diff a CI log against.
+func (c *Company) mcpServerReferences() []MCPServerReference {
+	var out []MCPServerReference
+	blocks := func(seat, unit, name string, path Path, env org.MCPEnv) {
+		for _, server := range slices.Sorted(maps.Keys(env)) {
+			out = append(out, MCPServerReference{
+				Server: server, Field: MCPReferenceEnv, Seat: seat, Unit: unit, Name: name,
+				Segments:   entry(at(path, "mcp_env"), server),
+				EngineRead: engineReadsMCPEnv(server),
+			})
+		}
+	}
+	for role, path := range c.EachRole() {
+		seat := role.IdentityKey()
+		blocks(seat, "", role.Name, path, role.MCPEnv)
+		if role.Sandbox == nil {
+			continue
+		}
+		for i, server := range role.Sandbox.MCP.Servers {
+			out = append(out, MCPServerReference{
+				Server: server, Field: MCPReferenceSandbox, Seat: seat, Name: role.Name,
+				Segments: idx(at(path, "sandbox.mcp.servers"), i),
+			})
+		}
+	}
+	for unit, path := range c.EachUnit() {
+		blocks("", unit.IdentityKey(), unit.Name, path, unit.MCPEnv)
+	}
+	return out
+}
+
+// validateMCPServerReferences refuses a field that names an MCP server nothing
+// declares: an `mcp_env` block keyed on one, or a `sandbox.mcp.servers` entry
+// listing one.
 //
 // A SEAT'S `mcp_env` IS KEYED BY SERVER NAME, and the engine reads it from
 // the other end: it walks `mcp_servers`, and for each one looks up that
 // seat's block (internal/engine/mcp.go). A key naming no server is therefore
 // never read by anything. It is not an error at run time, it is not a
-// warning, and it does not appear in any prompt — the credentials sit in the
+// warning, and it does not appear in any prompt: the credentials sit in the
 // document looking configured, the tool server they were meant for starts
 // with no credentials at all, and the seat's tools fail to authenticate
 // against a vendor nobody typed wrong.
+//
+// A BOX ENTRY IS READ THE SAME WAY ROUND. An executor box is given each
+// listed server the company declares (internal/engine/sandbox.go), and an
+// entry naming none gives it nothing but a log line on every launch: the
+// seat's run goes without the server it was listed for, and nothing the
+// operator reads says why. It is the same mistake one field over, and the
+// one a removal of a server leaves behind when it does not clear the entry.
 //
 // It is the exact fault the provider-key rule already catches one field over
 // ([Company.validateProviderRefs]), for the same reason: a key that misses
 // has no run-time symptom, so the document is the only place it can be seen.
 //
 // THE VENDOR BLOCKS ARE NAMED EVEN WITH NO SERVER, and leaving them out is
-// what makes this rule wrong rather than strict. Six blocks are read by the
-// ENGINE directly, by name, whether or not a tool server of that name exists
-// — a GitHub App's per-seat token, a GitLab account's, a Datadog application
-// key, an Atlassian account's under the shared block or either product's own
-// — so a company running the GitHub App with an empty `mcp_servers:` is an
-// ordinary arrangement this must admit. The set comes from
-// [org.EngineReadMCPEnv] rather than being listed here, because a private
-// seventh copy of it is precisely the drift that table exists to end.
+// what makes this rule wrong rather than strict. Six `mcp_env` blocks are
+// read by the ENGINE directly, by name, whether or not a tool server of that
+// name exists (a GitHub App's per-seat token, a GitLab account's, a Datadog
+// application key, an Atlassian account's under the shared block or either
+// product's own), so a company running the GitHub App with an empty
+// `mcp_servers:` is an ordinary arrangement this must admit. The set comes
+// from [org.EngineReadMCPEnv], through [MCPServerReference.EngineRead],
+// rather than being listed here, because a private seventh copy of it is
+// precisely the drift that table exists to end. A box is given declared
+// servers only, so a box entry naming a vendor is refused like any other.
 //
 // THE BRIDGE NAME NEEDS NO CASE OF ITS OWN. A server may not be called
-// [ToolServerName] — that is refused where servers are declared — so an
-// `mcp_env` block keyed on it names no server and is reported by this rule
-// like any other. Writing a second, better-worded case for it would be a
-// second place to keep the reserved name.
-func (c *Company) validateMCPEnvServers() error {
-	vendor := org.EngineReadMCPEnv()
-	declared := make(map[string]struct{}, len(c.MCPServers)+len(vendor))
+// [ToolServerName] (that is refused where servers are declared), so a field
+// naming it names no server and is reported by this rule like any other.
+// Writing a second, better-worded case for it would be a second place to keep
+// the reserved name.
+func (c *Company) validateMCPServerReferences() error {
+	// KEPT TO THE COMPANY'S OWN SERVERS, which is what the message lists:
+	// telling an operator who misspelled one of their two servers that the
+	// allowed set also holds `datadog` and `confluence` describes the engine
+	// rather than their file.
+	declared := make(map[string]struct{}, len(c.MCPServers))
 	for i := range c.MCPServers {
 		if name := strings.TrimSpace(c.MCPServers[i].Name); name != "" {
 			declared[name] = struct{}{}
 		}
 	}
-	// KEPT OUT OF THE MESSAGE'S LIST, which names the company's own servers:
-	// telling an operator who misspelled one of their two servers that the
-	// allowed set also holds `datadog` and `confluence` describes the engine
-	// rather than their file.
-	readable := make(map[string]struct{}, len(declared)+len(vendor))
-	maps.Copy(readable, declared)
-	for _, name := range vendor {
-		readable[name] = struct{}{}
-	}
-
 	var p problems
-	check := func(path Path, env org.MCPEnv) {
-		// SORTED, because a map's iteration order is random and an error
-		// listing three undeclared servers in a different order on every
-		// run is one nobody can diff a CI log against.
-		keys := make([]string, 0, len(env))
-		for key := range env {
-			keys = append(keys, key)
+	for _, ref := range c.mcpServerReferences() {
+		if _, ok := declared[ref.Server]; ok || ref.EngineRead {
+			continue
 		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			if _, ok := readable[key]; ok {
-				continue
-			}
-			p.add(entry(at(path, "mcp_env"), key), ErrUnknownValue,
+		switch ref.Field {
+		case MCPReferenceEnv:
+			p.add(ref.Segments, ErrUnknownValue,
 				"%q is not a declared tool server: mcp_servers has %s. "+
 					"Nothing reads this block: the engine looks the "+
 					"credentials up per SERVER, so a key naming none is never "+
 					"consulted and the server it was meant for starts with "+
-					"none", key, listOrNone(declared))
+					"none", ref.Server, listOrNone(declared))
+		case MCPReferenceSandbox:
+			p.add(ref.Segments, ErrUnknownValue,
+				"%q is not a declared tool server: mcp_servers has %s. "+
+					"A box is given only a server the company declares, so this "+
+					"entry gives the seat's executor nothing: name a declared "+
+					"server, or remove the entry", ref.Server, listOrNone(declared))
 		}
-	}
-
-	for role, path := range c.EachRole() {
-		check(path, role.MCPEnv)
-	}
-	for unit, path := range c.EachUnit() {
-		check(path, unit.MCPEnv)
 	}
 	return p.err()
 }

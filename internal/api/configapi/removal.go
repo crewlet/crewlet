@@ -433,10 +433,100 @@ func resolutionMoves(id string) func(next, prior *config.Company) []config.Warni
 	}
 }
 
-// deleteEntity serves DELETE /config/llm-providers/{id}: the entry removed and
-// every dependant repointed in one revision, or with `dry_run=true` the same
-// request checked and stored nowhere.
-func (s *Service) deleteEntity(kind string) http.HandlerFunc {
+// THE SKELETON EVERY REMOVAL SHARES.
+//
+// A collection whose members something else names is removed by address, one
+// route per collection: `DELETE /config/<kind>/{id}`, its body read strictly,
+// held to the entry's own If-Match, summarised, tried again while other writes
+// move the revision, and checked by `?dry_run=true`. What differs between two
+// collections is what their body says, the write it drafts, a verb it asks
+// beyond `config.write`, and what only it answers: a [removalRoute] carries
+// that, and [Service.deleteEntity] is the rest, written once.
+
+// removalRoute is one collection's removal: how its body is read, and the words
+// only it has.
+type removalRoute struct {
+	// kind is the collection, as its URL segment names it.
+	kind string
+	// what is one member in a sentence: "a model".
+	what string
+	// read reads the removal of id from its body strictly, answering it and
+	// the body's `_summary`. An empty body is a removal that answers nothing,
+	// which a dry run of an entry with dependants answers with the list of
+	// them.
+	read func(s *Service, id string, text []byte) (removing, string, error)
+	// bodyHint is what a body that does not read is told to send.
+	bodyHint string
+	// summaryHint is what a removal sent with no summary is told to name.
+	summaryHint string
+}
+
+// removing is the removal of one entry, read from its body.
+type removing interface {
+	// admit decides every verb the request asks beyond the route's own,
+	// answering a refusal itself; false when it has.
+	admit(w http.ResponseWriter, r *http.Request) bool
+	// draft is the removal, built on the revision expect.
+	draft(expect string) draft
+	// refuse answers a refusal only this removal makes, reporting whether
+	// err was one.
+	refuse(w http.ResponseWriter, r *http.Request, err error) bool
+	// checked answers a dry run that passed.
+	checked(w http.ResponseWriter, r *http.Request, p *prepared)
+	// applied answers the removal once it is written, after whatever the
+	// write leaves to do.
+	applied(w http.ResponseWriter, r *http.Request, p *prepared, a Applied)
+}
+
+// removalRoutes is every collection removed by address.
+var removalRoutes = []removalRoute{modelRemoval, serverRemoval}
+
+// modelRemoval is `DELETE /config/llm-providers/{id}`.
+var modelRemoval = removalRoute{
+	kind: EntityLLMProviders, what: "a model",
+	read: func(_ *Service, id string, text []byte) (removing, string, error) {
+		req, summary, err := readRemoval(text)
+		return providerRemoval{id: id, req: req}, summary, err
+	},
+	bodyHint: "name every field that runs on the model by its seat and job, or " +
+		"Ask Crewlet's chat or deep work, with the model it moves to " +
+		"(null to leave it unset)",
+	summaryHint: "name the model removed and where its work moves",
+}
+
+// providerRemoval is a model's removal, read: the entry's key, and the repoint
+// of every reference to it.
+type providerRemoval struct {
+	id  string
+	req RemovalRequest
+}
+
+// admit asks nothing: a model's removal writes the document and nothing else.
+func (providerRemoval) admit(http.ResponseWriter, *http.Request) bool { return true }
+
+func (m providerRemoval) draft(expect string) draft { return removalDraft(m.id, m.req, expect) }
+
+func (providerRemoval) refuse(w http.ResponseWriter, _ *http.Request, err error) bool {
+	var refused *RemovalError
+	if !errors.As(err, &refused) {
+		return false
+	}
+	refuseRemoval(w, refused)
+	return true
+}
+
+func (providerRemoval) checked(w http.ResponseWriter, _ *http.Request, p *prepared) {
+	writeChecked(w, p)
+}
+
+func (providerRemoval) applied(w http.ResponseWriter, _ *http.Request, _ *prepared, a Applied) {
+	writeApplied(w, a)
+}
+
+// deleteEntity serves one collection's `DELETE /config/<kind>/{id}`: the entry
+// removed, with what its route takes with it, in one revision, or with
+// `dry_run=true` the same request checked and stored nowhere.
+func (s *Service) deleteEntity(route removalRoute) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.refusedManaged(w, r) {
 			return
@@ -451,13 +541,10 @@ func (s *Service) deleteEntity(kind string) http.HandlerFunc {
 			refuseBody(w, err)
 			return
 		}
-		req, summary, err := readRemoval(body)
+		req, summary, err := route.read(s, id, body)
 		if err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-				"detail": err.Error(),
-				"hint": "name every field that runs on the model by its seat and job, or " +
-					"Ask Crewlet's chat or deep work, with the model it moves to " +
-					"(null to leave it unset)",
+				"detail": err.Error(), "hint": route.bodyHint,
 			})
 			return
 		}
@@ -480,9 +567,15 @@ func (s *Service) deleteEntity(kind string) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		// WHAT THE BODY ASKS BEYOND THE ROUTE'S VERB, decided once and
+		// before anything is read, so a caller who may remove the entry and
+		// may not do the rest is refused with nothing written.
+		if !req.admit(w, r) {
+			return
+		}
 		var raced error
 		for range entityAttempts {
-			done, err := s.removeEntity(w, r, removal{kind: kind, id: id, req: req,
+			done, err := s.removeEntity(w, r, route, removal{id: id, req: req,
 				summary: summary, dryRun: dryRun, expected: expected, principal: principal})
 			var lost *RacedError
 			if errors.As(err, &lost) {
@@ -499,8 +592,8 @@ func (s *Service) deleteEntity(kind string) http.HandlerFunc {
 
 // removal is one removal, as every attempt makes it.
 type removal struct {
-	kind, id  string
-	req       RemovalRequest
+	id        string
+	req       removing
 	summary   string
 	dryRun    bool
 	expected  string
@@ -511,7 +604,9 @@ type removal struct {
 // the entry's precondition against it, and writes the removal onto it. done
 // reports that the request has been answered; a [*RacedError] is a revision
 // that moved meanwhile, which the caller tries again.
-func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal) (done bool, err error) {
+func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, route removalRoute,
+	e removal) (done bool, err error) {
+
 	ctx := r.Context()
 	cur, found, err := s.current(ctx)
 	if err != nil {
@@ -520,7 +615,7 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 	}
 	if !found {
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
-			map[string]string{"hint": "the fleet runs no company to remove a model from"})
+			map[string]string{"hint": "the fleet runs no company to remove " + route.what + " from"})
 		return true, nil
 	}
 	active := cur.revision
@@ -531,17 +626,17 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 		}
 		return true, nil
 	}
-	current, held := entityKinds[e.kind].find(company.Redact(), e.id)
+	current, held := entityKinds[route.kind].find(company.Redact(), e.id)
 	if !held {
 		// NOTHING TO REMOVE, said as that: the entity routes' 404 tells a
 		// PUT how to add what it named, which a removal never wants.
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
-			map[string]string{"hint": NotFound(e.kind, e.id) + ", so there is nothing to remove"})
+			map[string]string{"hint": NotFound(route.kind, e.id) + ", so there is nothing to remove"})
 		return true, nil
 	}
 	// THE PRECONDITION IS THE ENTRY'S, as an edit's is: what its GET served.
 	if e.expected != "" {
-		tag, tagErr := entityTag(e.kind, current)
+		tag, tagErr := entityTag(route.kind, current)
 		if tagErr != nil {
 			s.fail(w, r, "tag the entity", tagErr)
 			return true, nil
@@ -551,35 +646,32 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 			httpjson.FailWithFields(w, http.StatusPreconditionFailed,
 				httpjson.CodeVersionMoved, httpjson.Detail{
 					"current": current, "etag": tag,
-					"hint": e.kind + "/" + e.id + " changed after you read it; read it " +
+					"hint": route.kind + "/" + e.id + " changed after you read it; read it " +
 						"again and decide the removal on top of it",
 				})
 			return true, nil
 		}
 	}
-	d := removalDraft(e.id, e.req, active.ID)
+	d := e.req.draft(active.ID)
 	d.principal = e.principal
 	d.by = attributionOf(r)
 	prepared, err := s.prepare(ctx, d)
 	var lost *RacedError
-	var refused *RemovalError
 	switch {
 	case errors.As(err, &lost):
 		return false, err
-	case errors.As(err, &refused):
-		refuseRemoval(w, refused)
+	case err != nil && e.req.refuse(w, r, err):
 		return true, nil
 	case err != nil:
-		s.refuseRemovalApply(w, r, e.kind, e.id, err)
+		s.refuseRemovalApply(w, r, route.kind, e.id, err)
 		return true, nil
 	}
 	if e.dryRun {
-		writeChecked(w, prepared)
+		e.req.checked(w, r, prepared)
 		return true, nil
 	}
 	if !requireSummary(w, e.summary, "a removal needs an audit summary in the "+
-		"X-Summary header or the body's `_summary`: name the model removed and where "+
-		"its work moves") {
+		"X-Summary header or the body's `_summary`: "+route.summaryHint) {
 		return true, nil
 	}
 	applied, err := s.commit(ctx, prepared, e.summary)
@@ -590,7 +682,7 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 		s.refuseApply(w, r, err)
 		return true, nil
 	}
-	writeApplied(w, applied)
+	e.req.applied(w, r, prepared, applied)
 	return true, nil
 }
 
@@ -610,8 +702,8 @@ func refuseRemoval(w http.ResponseWriter, e *RemovalError) {
 
 // refuseRemovalApply answers a removal the document refused: 422 with the
 // problems for a company the removal leaves invalid (an executor job moved to
-// a harness that cannot run one, an assistant target that allows web tools), the
-// entity's own refusals, and every other as any write's.
+// a harness that cannot run one, an assistant target that allows web tools),
+// the entity's own refusals, and every other as any write's.
 func (s *Service) refuseRemovalApply(w http.ResponseWriter, r *http.Request, kind, id string, err error) {
 	var invalid *ValidationError
 	var entityErr *EntityError
@@ -619,8 +711,8 @@ func (s *Service) refuseRemovalApply(w http.ResponseWriter, r *http.Request, kin
 	case errors.As(err, &invalid):
 		fields := RefusalFields(err)
 		fields["detail"] = invalid.Err.Error()
-		fields["hint"] = "the WHOLE document the removal produces is validated, so a " +
-			"repoint the company cannot run is refused at its field"
+		fields["hint"] = "the WHOLE document the removal produces is validated, so " +
+			"a change it makes that the company cannot run is refused at its field"
 		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
 	case errors.As(err, &entityErr):
 		s.refuseEntity(w, r, kind, id, err)

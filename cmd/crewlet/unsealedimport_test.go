@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -37,6 +38,7 @@ func TestAnImportThroughARunningNodeReplacesAnUnsealedRevision(t *testing.T) {
 	plane := coordmemory.NewFleet()
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: fixtureCipher, Node: "core-1",
+		Secrets: fleetsecrets.New(plane, fixtureCipher),
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 

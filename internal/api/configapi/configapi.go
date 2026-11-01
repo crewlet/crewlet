@@ -162,6 +162,21 @@ type Service struct {
 	now  func() time.Time
 	// raises is which agent seats a write raises ([Options.Raises]).
 	raises Raises
+
+	// secrets is the company's credential store ([Options.Secrets]).
+	secrets Secrets
+}
+
+// Secrets is the company's credential store as a removal reads and writes it:
+// whether a value is stored under a name, and deleting one (mcpremoval.go).
+// The fleet's store, fleetsecrets.Store, in `crewlet run`.
+type Secrets interface {
+	// Describe answers what is stored under name, never the value, and
+	// whether anything is.
+	Describe(ctx context.Context, name string) (secrets.Record, bool, error)
+	// Unset deletes the value stored under name, reporting whether there
+	// was one.
+	Unset(ctx context.Context, name string) (bool, error)
 }
 
 // Options wire the service.
@@ -227,6 +242,14 @@ type Options struct {
 	// offer. Nil judges with no vendor asked, failing closed: every turn-on
 	// or change of level on a lane the engine provisions is a raise.
 	Raises Raises
+
+	// Secrets is the company's credential store: what a removal of an MCP
+	// server reads to offer the values only that server read, and deletes
+	// the ones the caller names. Required, for Plane's reason: every node
+	// serving this surface opens the fleet's coordination store that holds
+	// the rows, and a surface built without it would answer a removal that
+	// asked for a credential to go by keeping it.
+	Secrets Secrets
 }
 
 // New builds the service.
@@ -262,6 +285,10 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("configapi: Options.Node is required: a write whose " +
 			"activation goes unanswered names the node whose history alone holds " +
 			"the revision it stored, and the engine's node id is that name")
+	case opts.Secrets == nil:
+		return nil, errors.New("configapi: Options.Secrets is required: removing an " +
+			"MCP server deletes the stored values only it read, and those live in " +
+			"the fleet's credential store")
 	}
 	now := opts.Now
 	if now == nil {
@@ -271,7 +298,7 @@ func New(opts Options) (*Service, error) {
 		configs: opts.Store.Configs(), plane: opts.Plane,
 		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
 		writers: config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
-		node:    opts.Node, raises: opts.Raises,
+		node:    opts.Node, raises: opts.Raises, secrets: opts.Secrets,
 	}
 	if s.raises == nil {
 		s.raises = failClosedRaises(s.Managed)
@@ -412,12 +439,16 @@ func (s *Service) Routes(mux authz.Mux) error {
 		entity("PUT /config/"+kind+"/{id}", entityPolicy(kind, authz.ActionConfigWrite),
 			s.putEntity(kind))
 	}
-	// A MODEL IS REMOVED WITH ITS DEPENDANTS REPOINTED, in one revision
-	// (removal.go): the one collection whose members everything else names
-	// by key, so a removal by itself would leave the company invalid.
-	entity("DELETE /config/"+EntityLLMProviders+"/{id}",
-		authz.Policy{Action: authz.ActionConfigWrite}.Checked().Summarised(),
-		s.deleteEntity(EntityLLMProviders))
+	// A MODEL OR AN MCP SERVER IS REMOVED WITH ITS DEPENDANTS, in one
+	// revision (removal.go): the two collections whose members other parts
+	// of the document name by key, so a removal by itself would leave the
+	// company invalid. A model's are repointed, a server's cleared
+	// (mcpremoval.go).
+	for _, route := range removalRoutes {
+		entity("DELETE /config/"+route.kind+"/{id}",
+			authz.Policy{Action: authz.ActionConfigWrite}.Checked().Summarised(),
+			s.deleteEntity(route))
+	}
 	// AND THOSE TWO ARE JSON, like every other answer here: see
 	// [httpjson.Mux].
 	surface := noStore(httpjson.Mux(routes))
@@ -936,18 +967,30 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 // built on learns about a write that landed between its read and this check
 // without a second request.
 func writeChecked(w http.ResponseWriter, p *prepared) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusOK, checkedAnswer(p))
+}
+
+// checkedAnswer is [writeChecked]'s body, for a route whose check answers
+// more beside it (a server's removal names what it takes with it).
+func checkedAnswer(p *prepared) map[string]any {
+	return map[string]any{
 		"valid": true, "base_revision_id": p.base.ID,
 		"warnings": checkedWarnings(p), "derived": p.derived,
-	})
+	}
 }
 
 // writeApplied answers a write that stored and activated a revision.
 func writeApplied(w http.ResponseWriter, applied Applied) {
-	writeJSON(w, http.StatusCreated, map[string]any{
+	writeJSON(w, http.StatusCreated, appliedAnswer(applied))
+}
+
+// appliedAnswer is [writeApplied]'s body, for a route whose write answers
+// more beside it.
+func appliedAnswer(applied Applied) map[string]any {
+	return map[string]any{
 		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
 		"warnings": applied.Warnings, "derived": applied.Derived,
-	})
+	}
 }
 
 // refuseWrite is [Service.refuseApply] for a write that may have been

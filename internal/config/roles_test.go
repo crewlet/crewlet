@@ -112,6 +112,8 @@ name: Acme
 providers:
   sandbox:
     fake: true
+mcp_servers:
+  - {name: gitlab, command: glab, args: [mcp, serve], shared: false}
 roles:
   - name: Agent SWE
     handle: swe

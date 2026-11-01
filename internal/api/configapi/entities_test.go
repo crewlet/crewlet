@@ -281,11 +281,11 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 // — a *routing* answer rather than a handler that 404s or, worse, one that
 // quietly succeeds having done nothing.
 //
-// Removal is a full-document edit on purpose: deleting a seat strands its
-// mailbox and its in-flight work, deleting a provider silently repoints every
-// seat whose model chain named it, and deleting a server leaves every
-// `mcp_env` block keyed on it read by nothing. Each belongs in a document
-// somebody looked at.
+// Removing a seat or a unit is a full-document edit on purpose: deleting a
+// seat strands its mailbox and its in-flight work, and deleting a unit every
+// `lead:` and `manages:` that names it. Each belongs in a document somebody
+// looked at. A model and an MCP server are removed by address, each with what
+// names it answered in the same write (removal.go, mcpremoval.go).
 // docs/guides/configure-via-api.md states this status code, which is why it is
 // asserted rather than assumed.
 func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
@@ -297,9 +297,11 @@ func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 		for _, method := range []string{
 			http.MethodDelete, http.MethodPost, http.MethodPatch,
 		} {
-			// A MODEL IS THE ONE COLLECTION REMOVED BY ADDRESS, with every
-			// dependant repointed in the same write (removal_test.go).
-			if kind == configapi.EntityLLMProviders && method == http.MethodDelete {
+			// A MODEL AND A SERVER ARE REMOVED BY ADDRESS, with every
+			// dependant answered in the same write (removal_test.go,
+			// mcpremoval_test.go).
+			if method == http.MethodDelete && (kind == configapi.EntityLLMProviders ||
+				kind == configapi.EntityMCPServers) {
 				continue
 			}
 			res := s.do(t, method, "/config/"+kind+"/ceo", "", nil)

@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -105,6 +106,7 @@ func TestTheEnginesConfigWriterRecordsTheActorItIsHanded(t *testing.T) {
 	}
 	surface, err := configapi.New(configapi.Options{
 		Store: db, Plane: fleet, Cipher: fixtureCipher, Node: "core-1",
+		Secrets: fleetsecrets.New(fleet, fixtureCipher),
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 

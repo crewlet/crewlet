@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -253,10 +254,11 @@ func newConfigSurface(t *testing.T, writers ...string) configFixture {
 	t.Helper()
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
-	gate := &gatedPlane{Plane: coordmemory.NewFleet()}
+	fleet := coordmemory.NewFleet()
+	gate := &gatedPlane{Plane: fleet}
 	f := configFixture{db: db, cipher: testCipher(t), plane: gate, gate: gate}
 	cfg, err := configapi.New(configapi.Options{
-		Store: db, Plane: f.plane, Cipher: f.cipher,
+		Store: db, Plane: f.plane, Cipher: f.cipher, Secrets: fleetsecrets.New(fleet, f.cipher),
 		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
