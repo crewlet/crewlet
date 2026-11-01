@@ -1200,15 +1200,20 @@ func Catalogue() []Instrument {
 			Name: CodeExpungeRuns, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
 			Shows: "Expunges this node ran as the MAINTAINER of their " +
-				"repositories — a person's purge served, or an expunge left open " +
-				"finished from its rows — each one cycle: a scan of what a ref " +
+				"repositories — a person's purge served, a repository its weekly " +
+				"listing names judged, or an expunge left open finished from its " +
+				"rows — each one cycle: a scan of what a ref " +
 				"reaches, a build sorting some live packs into kept and dropping " +
 				"ones, their begin, a rescue of what a push revived meanwhile and " +
 				"their commit — by `outcome`. `applied`: its commit landed, and " +
 				"what no ref reached left the repository's live packs. `pending`, " +
 				"`unknown`: a record was appended and is not yet known to have " +
 				"applied — the next pass reads the rows and finishes it. " +
-				"`not_due`: nothing was left to rewrite. `stale`: a compaction, a " +
+				"`not_due`: nothing was left to rewrite — a purge already served, " +
+				"every live pack arrived within the two weeks' grace the weekly " +
+				"expunge keeps whole, or what no ref reaches is a quarter of the " +
+				"live bytes or less, or under 64 MiB — each but a served purge leaving the " +
+				"repository unscanned on this node for a week. `stale`: a compaction, a " +
 				"publication or a purge moved an input first, or the expunge was " +
 				"finished elsewhere. `busy`: no maintenance slot or memory room " +
 				"was free, another build of the repository was running on the " +
