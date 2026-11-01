@@ -105,6 +105,10 @@ type Timing struct {
 	// Renew is how often a remote check's slot is renewed and its box's
 	// minutes charged: [RemoteSlotRenew].
 	Renew time.Duration
+	// End is how long a run's ending may be read from its box — its exit
+	// status, reports, summary, tail and kept log: [EndPolls] polls, which
+	// the home's sweep counts into its patience ([SweepPolls]).
+	End time.Duration
 }
 
 // The production cadences.
@@ -154,12 +158,12 @@ const (
 // Production is the engine's timing.
 func Production() Timing {
 	return Timing{Poll: CheckPoll, Stagger: ClaimStagger, Walk: WalkGap, Backstop: WalkBackstop,
-		Renew: RemoteSlotRenew}
+		Renew: RemoteSlotRenew, End: EndPolls * CheckPoll}
 }
 
 // valid reports whether every cadence is one: a duration above zero.
 func (t Timing) valid() bool {
-	return t.Poll > 0 && t.Stagger > 0 && t.Walk > 0 && t.Backstop > 0 && t.Renew > 0
+	return t.Poll > 0 && t.Stagger > 0 && t.Walk > 0 && t.Backstop > 0 && t.Renew > 0 && t.End > 0
 }
 
 // Options build a [Runner]. Every field but Logs, Nudges, Faults, Metrics,

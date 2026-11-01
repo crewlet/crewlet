@@ -795,7 +795,11 @@ checks](../concepts/code-host.md#reading-a-repositorys-checks)):
    fleet's object store and read a page at a time — never in a row. A passed
    check keeps its summary alone, so nothing of a green run is stored. Where
    the object store has no room, the check ends without its log and its
-   summary says so; its failures and its tail are kept either way.
+   summary says so; its failures and its tail are kept either way. Only those
+   64 MiB are read from the box, however much more the check wrote, and its
+   reports and its log are read within a minute of its end: a box slower than
+   that ends its check without what was still unread, its summary saying so,
+   rather than leaving it running.
 
 A check that ran past its `timeout_seconds` is **failed** `timed_out` — the
 time is the check's own, so it measured the commit — with its tail and its

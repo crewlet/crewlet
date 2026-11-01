@@ -23,13 +23,16 @@ const WorkerCheckRunners = "check_runners"
 
 // SweepPolls is how many polls past its check's own timeout and a setup's
 // grace a running attempt's claim may age before the home takes its runner for
-// lost: FOUR, a minute at CheckPoll — the poll at which its runner finds the
-// command past its timeout, FinishPolls polls of asking for its ending again,
-// and one more for the clocks of two nodes and a loaded one's lateness. A
-// runner holding an attempt ends it by its claim, the setup's grace, its
-// timeout and that much, or it is not running it: a node restarted mid-run,
-// in the git order again but holding nothing.
-const SweepPolls = 4
+// lost: EIGHT, two minutes at CheckPoll — the poll at which its runner finds
+// the command ended or past its timeout, EndPolls polls of reading its ending
+// from the box (its reports and its kept log, bounded by Timing.End),
+// FinishPolls polls of asking for its ending again, and one more for the
+// clocks of two nodes and a loaded one's lateness. A runner holding an attempt
+// ends it by its claim, the setup's grace, its timeout and that much, or it is
+// not running it: a node restarted mid-run, in the git order again but holding
+// nothing. Four, with no time for the ending's reads, took a runner still
+// uploading a large log for lost and queued its attempt again beside it.
+const SweepPolls = 1 + EndPolls + FinishPolls + 1
 
 // SweeperOptions build a [Sweeper]. Every field but Logger and Now is
 // required.

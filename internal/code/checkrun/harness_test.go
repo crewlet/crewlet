@@ -34,9 +34,10 @@ import (
 const gitBase = "https://git.example.com/box/git"
 
 // fast is the timing every case runs its runners at: a poll of twenty
-// milliseconds, a stagger long enough to order two runners' claims.
+// milliseconds, a stagger long enough to order two runners' claims, and an
+// ending read for as long as a loaded runner takes to read one from memory.
 var fast = checkrun.Timing{Poll: 20 * time.Millisecond, Stagger: 300 * time.Millisecond,
-	Walk: 5 * time.Millisecond, Backstop: 50 * time.Millisecond, Renew: 20 * time.Millisecond}
+	Walk: 5 * time.Millisecond, Backstop: 50 * time.Millisecond, Renew: 20 * time.Millisecond, End: 10 * time.Second}
 
 // estate is a data node's code domain as a runner reaches it: its reads and
 // its checks writer, in process.

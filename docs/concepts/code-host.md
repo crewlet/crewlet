@@ -2629,7 +2629,9 @@ how long each took on `crewlet.code.checks.duration`, by placement
 rows running. The repository's **home** sweeps them, at every pass of its
 loop: a running attempt whose runner has **left the repository's git order** —
 a node that left the fleet — or whose claim is older than its check's timeout,
-the ten minutes of setup and a minute more — a node that restarted mid-run and
+the ten minutes of setup and two minutes more (the minute a runner has to read
+a run's reports and keep its log, and the half minute it asks for the ending
+to be recorded) — a node that restarted mid-run and
 so is in the order again holding nothing — is ended `errored` `runner_lost`,
 and its box killed where it is an `e2b` one; a container box on a node that
 left is that node's own container runtime's to reclaim. The home queues such
