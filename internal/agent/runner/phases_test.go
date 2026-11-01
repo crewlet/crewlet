@@ -473,8 +473,8 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	}
 	// What the run CALLED, arguments and all: the delivery check, the
 	// citations and the ledger read it.
-	if len(w.Calls) != 3 || w.Calls[1].Name != "slack_post" || w.Calls[1].Args["channel"] != "C1" {
-		t.Errorf("calls = %+v, want the run's own three", w.Calls)
+	if len(w.Calls) != 2 || w.Calls[0].Name != "slack_post" || w.Calls[0].Args["channel"] != "C1" {
+		t.Errorf("calls = %+v, want the run's own two", w.Calls)
 	}
 	// The surface handed back is what the delivery check judges against, so
 	// it must describe the whole catalogue and not just what was offered.
