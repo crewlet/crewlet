@@ -707,7 +707,7 @@ func TestAWatchThatBeginsAsTheLoopStopsIsStopped(t *testing.T) {
 	n := &slowWatch{entered: make(chan struct{}), release: make(chan struct{})}
 	l, _ := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: &placement{}, node: "node-a"},
 		Nudges: n, Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t}, Tasks: unqueued{t: t},
-		NodeID: "node-a"}, time.Hour)
+		Share: units(2), NodeID: "node-a"}, time.Hour)
 	select {
 	case <-n.entered:
 	case <-time.After(10 * time.Second):
@@ -831,7 +831,8 @@ func TestALandingThatDecidedNothingFailsTheTurn(t *testing.T) {
 			p := &placement{homes: map[string]string{repoA: "node-a"}}
 			_, rec := loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: "node-a"},
 				Nudges: newNudges(), Cache: unmerged{t: t}, Git: unmerged{t: t}, Chains: unqueued{t: t},
-				Tasks: unqueued{t: t}, NodeID: "node-a", Logger: slog.New(slog.NewTextHandler(logs, nil))},
+				Tasks: unqueued{t: t}, NodeID: "node-a", Share: units(2),
+				Logger: slog.New(slog.NewTextHandler(logs, nil))},
 				time.Hour)
 			waitTurns(t, rec, 1)
 			assertTurnFailed(t, rec, logs)
