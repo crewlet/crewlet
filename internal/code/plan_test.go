@@ -564,6 +564,8 @@ func registeredStatements() map[string]statement {
 			[]string{factsKey + " (change_id=?)"}},
 		"purge a cut change's facts": {purgeCutFactsSQL, []any{"repo-1-change-000001", 3},
 			[]string{factsKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"count a cut change's notices again": {uncountNoticesSQL, []any{PurgePartRows, "repo-1-change-000001"},
+			[]string{changeKey + " (id=?)"}},
 		"weigh a cut conversation again": {unweighConversationSQL, []any{1024, "repo-1-change-000001"},
 			[]string{conversationKey + " (change_id=?)"}},
 		"purge all reviewers": {purgeAllReviewersSQL, []any{"repo-1"},
@@ -950,15 +952,18 @@ func registeredStatements() map[string]statement {
 			[]string{participantKey + " (change_id=?)"}},
 		"thread participants": {threadParticipantsSQL, []any{"repo-1-change-000001", "comment-1",
 			threadParticipantRows}, []string{"code_comments_thread_idx (change_id=? AND thread_id=?)"}},
-		// WHOM A RECORD REACHED (apply_notices.go, noticesweep.go): the notices of a list
-		// of changes a purge removes, read and deleted by the change index
-		// one seek an element; a kind's sweep, a range of the swept index;
-		// and the changes a repository still holds, for its final purge.
-		"notices of changes": {noticesOfChangesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
-			[]string{"SCAN json_each AS j", "code_notifications_change_idx (change_id=?)"}},
+		// WHOM A RECORD REACHED (apply_notices.go, noticesweep.go): a
+		// change's count of its notices, by its key; the notices of a list
+		// of changes a purge removes, deleted by the change index one seek
+		// an element, and the oldest of the change a part cuts, a range of
+		// it; a kind's sweep, a range of the swept index; and the changes a
+		// repository still holds, for its final purge.
+		"count notices": {countNoticesSQL, []any{3, "repo-1-change-000001"}, []string{changeKey + " (id=?)"}},
 		"remove notices": {removeNoticesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", "code_notifications_change_idx (change_id=?)",
 				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"remove a cut change's notices": {removeCutNoticesSQL, []any{"repo-1-change-000001", PurgePartRows},
+			[]string{"code_notifications_change_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"sweep notices": {sweepNoticesSQL, []any{string(PartyAgent), 3000},
 			[]string{"code_notifications_swept_idx (recipient_kind=? AND created_at<?)"}},
 		"purged changes": {purgedChangesSQL, []any{"repo-1"}, []string{"code_changes_number_idx (repo_id=?)"}},

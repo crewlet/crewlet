@@ -34,9 +34,10 @@
 -- whether a row is written depends on the batch's own instant and on the
 -- horizon the epoch states, so two nodes applying one record at two moments,
 -- or on two epochs, legitimately hold different rows — which is also why
--- each node sweeps its own (maintenance.NodeLocal) and a repository's purge
--- removes a purged change's notices without counting them against its
--- bounded parts, whose counts must agree on every node.
+-- each node sweeps its own (maintenance.NodeLocal), and why a repository's
+-- purge charges a purged change's notices to its bounded parts, whose counts
+-- must agree on every node, by the count the change keeps of them rather
+-- than by these rows (0101).
 --
 -- # The columns
 --

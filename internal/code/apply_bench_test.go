@@ -125,6 +125,22 @@ func (e *estate) seedChangeRows(id string, changes, revisions, authors, body int
 	}
 }
 
+// seedNotices writes perChange notices of each of a repository's first
+// changes changes seedChangeRows wrote — each read by a handle of its own and
+// carrying an excerpt at MaxNoticeExcerpt, the widest a notice is — and
+// counts them on their change, as the applier does (code_changes.notices).
+func (e *estate) seedNotices(id string, changes, perChange int) {
+	e.t.Helper()
+	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+		INSERT INTO code_notifications (record_id, recipient, recipient_kind, repo_id, change_id, change_ref,
+			reason, addressed, fallback_only, fallback_rank, excerpt, created_at, log_seq, log_stream,
+			log_generation)
+		SELECT printf('%s-record-%06d', ?, i / ?), printf('reader-%05d', i % ?), 'person', ?,
+			printf('%s-change-%06d', ?, i / ?), 'r!1', 'thread', 0, 0, 0, ?, 0, i + 1, 'code', 1 FROM k`,
+		changes*perChange, id, perChange, perChange, id, id, perChange, strings.Repeat("e", MaxNoticeExcerpt))
+	e.exec(`UPDATE code_changes SET notices = ? WHERE repo_id = ? AND number <= ?`, perChange, id, changes)
+}
+
 // seedLiveChanges writes n live changes of a repository at one revision each,
 // as seedChangeRows does, and what a live change stands on: its source branch
 // (liveSource), live at the change's head (liveHead) and counted, as a push's
@@ -594,7 +610,18 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 //     MaxProtectionsPerRepo rules;
 //   - cut: one change of PurgePartRows revisions, an author and a body at the
 //     bound, which the part cuts, its oldest revisions first, leaving the
-//     author, the body and the row.
+//     author, the body and the row;
+//   - notices: changes of a revision, an author and the notices of the
+//     widest audience one comment tells — MaxRoutedParticipants of its
+//     thread, MaxMentions and its raiser, each excerpt at MaxNoticeExcerpt —
+//     a hundred rows a change, which the part takes whole, thirty of them:
+//     PurgePartRows rows, 2 910 of them notices, each deleted and announced;
+//   - cut+notices: one change of a revision, an author and PurgePartRows
+//     notices, which the part cuts through its notices, oldest first, and
+//     takes what it charged off the change's count;
+//   - final+notices: the purge itself over twenty-nine such changes of a
+//     hundred rows, with MaxProtectionsPerRepo rules: the most notices its
+//     unbounded statements meet, since the decide counts them.
 //
 // Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot
 // split a record; doc.go's measured section records the figures.
@@ -621,6 +648,15 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 			SELECT ?, printf('refs/heads/rule-%03d', i), 'persons' FROM k`,
 			MaxProtectionsPerRepo, repo)
 	}
+	// A CHANGE THE WIDEST COMMENT'S AUDIENCE HEARD OF is a hundred rows: its
+	// own, a revision, an author and heard notices.
+	heard := MaxRoutedParticipants + MaxMentions + 1
+	perNoticed := 3 + heard
+	noticed := func(e *estate, repo string, n int) {
+		e.seedChangeRows(repo, n, 1, 1, 0)
+		e.seedNotices(repo, n, heard)
+	}
+	wholeNoticed := PurgePartRows / perNoticed
 	for _, shape := range []struct {
 		name  string
 		seed  func(e *estate, repo string)
@@ -660,6 +696,16 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 		}, true, mixed + beside*perChange + MaxProtectionsPerRepo, 0, 0},
 		{"cut", func(e *estate, repo string) { e.seedChangeRows(repo, 1, PurgePartRows, 1, MaxChangeBodyBytes) },
 			false, PurgePartRows, 0, 3},
+		{"notices", func(e *estate, repo string) { noticed(e, repo, wholeNoticed+10) },
+			false, wholeNoticed * perNoticed, 0, 10 * 3},
+		{"cut+notices", func(e *estate, repo string) {
+			e.seedChangeRows(repo, 1, 1, 1, 0)
+			e.seedNotices(repo, 1, PurgePartRows)
+		}, false, PurgePartRows, 0, 1},
+		{"final+notices", func(e *estate, repo string) {
+			noticed(e, repo, wholeNoticed-1)
+			ruled(e, repo)
+		}, true, (wholeNoticed-1)*perNoticed + MaxProtectionsPerRepo, 0, 0},
 	} {
 		b.Run(shape.name, func(b *testing.B) {
 			e := openApplyEstate(b)
@@ -682,6 +728,13 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 				}
 				if left := e.changeRowsOf(repo); left != int64(shape.changes) {
 					b.Fatalf("the record left %d rows of the changes, want %d", left, shape.changes)
+				}
+				// AND THE NOTICES ITS CHANGES STILL COUNT, no more and no
+				// fewer: a cut takes off its change's count what it took.
+				if left, counted := e.num(`SELECT COUNT(*) FROM code_notifications WHERE repo_id = ?`, repo),
+					e.num(`SELECT COALESCE(SUM(notices), 0) FROM code_changes WHERE repo_id = ?`,
+						repo); left != counted {
+					b.Fatalf("the record left %d notices of changes that count %d", left, counted)
 				}
 			}
 		})

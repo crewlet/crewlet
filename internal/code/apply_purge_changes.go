@@ -18,7 +18,8 @@ type purgedChange struct {
 	id              string
 	bodyBytes, text int64
 	// revisions, authors, reviewers, participants and findings are the
-	// narrow rows a cut takes first, in this order; comments, findingTexts,
+	// narrow rows a cut takes first, in this order, and then its notices;
+	// comments, findingTexts,
 	// reviews and facts the wide ones it takes after them, by bytes as well
 	// as rows; body, mergeability and conversation the rows that go only
 	// with their change, whole — a mergeability one row a change, whose
@@ -27,12 +28,28 @@ type purgedChange struct {
 	revisions, authors, reviewers, participants, findings int
 	comments, findingTexts, reviews, facts                int
 	body, mergeability, conversation                      int
+	// notices is the change's count of its notices (code_changes.notices,
+	// apply_notices.go): never below the rows any node holds of them, and
+	// the same on every node, so it is what a part charges for them —
+	// never the rows this node finds, which another may not.
+	notices int
 }
 
-// rows is every row of c a part deletes taking it whole, its own included.
+// rows is every row of c a part charges taking it whole, its own included
+// and its notices by their count.
 func (c purgedChange) rows() int {
 	return c.revisions + c.authors + c.reviewers + c.participants + c.findings + c.comments + c.findingTexts +
-		c.reviews + c.facts + c.body + c.mergeability + c.conversation + 1
+		c.reviews + c.facts + c.body + c.mergeability + c.conversation + c.notices + 1
+}
+
+// changesPurged is what a purge part did to a repository's changes: spent,
+// the rows it charged its bound — the replicated rows it deleted and the
+// notices by the counts it charged, the same on every node — deleted, every
+// row it deleted or rewrote, the notices this node held among them, and
+// weighed, what the part's wide rows weigh with them.
+type changesPurged struct {
+	spent, deleted int
+	weighed        int64
 }
 
 // wideCut is a cut change's wide rows as [purgeCutWide] takes them, one table
@@ -45,11 +62,24 @@ type wideCut struct {
 }
 
 // purgeChanges deletes, for a purge part, at most budget rows of a deleted
-// repository's changes, and only while what the part's wide rows weigh —
-// weighed, the push rows it already took, and then each change's body and
-// conversation it takes — is under PurgePartBytes; it answers how many rows it
-// deleted and what the part's wide rows weigh with them, which the part's
-// checks take what is left of ([purgeChecks]).
+// repository's changes and their notices, and only while what the part's wide
+// rows weigh — weighed, the push rows it already took, and then each change's
+// body and conversation it takes — is under PurgePartBytes; it answers the
+// rows it charged the bound, the rows it deleted and what the part's wide rows
+// weigh with them, the part's checks taking what is left of the first and the
+// last ([purgeChecks]).
+//
+// ITS NOTICES ARE CHARGED BY THEIR COUNT. A change's notices
+// (code_notifications, DIVERGENT) are the rows of it most numerous — up to
+// about a hundred a comment, kept a year for persons — and a part removes them
+// with the change, so they are its rows as much as its revisions are. But
+// what a part charges decides which replicated rows it takes after them,
+// which every node must agree on, and the notices a node holds depend on when
+// it applied each record: so a change is charged its count
+// (code_changes.notices, apply_notices.go), which every node holds alike and
+// which no node holds fewer rows than. A change taken whole loses every notice
+// this node holds of it; the cut loses at most what is left of the bound,
+// oldest first, after its narrow rows, and its count loses exactly that.
 //
 // A CHANGE GOES WHOLE, AND ITS ROW LAST. A change's revisions, authors and
 // body, and every row of its conversation, carry no repo_id: the only way to
@@ -67,7 +97,8 @@ type wideCut struct {
 //
 //   - stopped by its ROWS, it loses its narrow rows — its oldest revisions,
 //     then its authors, its reviewers, its participants and its findings, each
-//     in its key's order — and then its wide ones — its comments, oldest
+//     in its key's order, then its notices, oldest first — and then its wide
+//     ones — its comments, oldest
 //     thread first, its findings' texts and its reviews — up to what is left
 //     of both bounds;
 //   - stopped by its CONVERSATION'S TEXT — rows that fit, and wide rows that
@@ -99,26 +130,28 @@ type wideCut struct {
 // their own widths, read off the rows it then deletes, so it reads no wide row
 // it keeps. A part whose push rows reached the bound takes no change; it
 // advanced by those.
-func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
-	weighed int64) (int, int64, []string, error) {
+func (a *Applier) purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
+	weighed int64) (changesPurged, error) {
 	if weighed >= PurgePartBytes {
-		return 0, weighed, nil, nil
+		return changesPurged{weighed: weighed}, nil
 	}
 	rows, err := tx.QueryContext(ctx, purgeChangeWalkSQL, repoID, budget)
 	if err != nil {
-		return 0, 0, nil, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
+		return changesPurged{}, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
 	}
 	var whole []string
 	left := budget
 	var cut purgedChange
 	var byText bool
+	// counted is the notices of the changes taken whole, by their counts.
+	counted := 0
 	for weighed < PurgePartBytes && rows.Next() {
 		var c purgedChange
-		if err := rows.Scan(&c.id, &c.bodyBytes, &c.text, &c.revisions, &c.authors, &c.reviewers,
+		if err := rows.Scan(&c.id, &c.bodyBytes, &c.text, &c.notices, &c.revisions, &c.authors, &c.reviewers,
 			&c.participants, &c.findings, &c.comments, &c.findingTexts, &c.reviews, &c.facts, &c.body,
 			&c.mergeability, &c.conversation); err != nil {
 			_ = rows.Close()
-			return 0, 0, nil, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
+			return changesPurged{}, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
 		}
 		switch {
 		case c.rows() > left:
@@ -132,6 +165,7 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 		default:
 			whole = append(whole, c.id)
 			left -= c.rows()
+			counted += c.notices
 			weighed += c.bodyBytes + c.text
 			continue
 		}
@@ -139,15 +173,15 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return 0, 0, nil, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
+		return changesPurged{}, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
 	}
 	_ = rows.Close()
 
-	deleted := 0
+	var done changesPurged
 	if len(whole) > 0 {
 		list, err := jsonList(whole)
 		if err != nil {
-			return 0, 0, nil, err
+			return changesPurged{}, err
 		}
 		for _, stmt := range []string{purgeChangeRevisionsSQL, purgeChangeAuthorsSQL, purgeChangeReviewersSQL,
 			purgeChangeParticipantsSQL, purgeChangeFindingsSQL, purgeChangeCommentsSQL, purgeChangeFindingTextsSQL,
@@ -155,14 +189,24 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 			purgeChangeConversationsSQL, purgeChangeRowsSQL} {
 			res, err := tx.ExecContext(ctx, stmt, list)
 			if err != nil {
-				return 0, 0, nil, fmt.Errorf("code: purge %s's changes: %w", repoID, err)
+				return changesPurged{}, fmt.Errorf("code: purge %s's changes: %w", repoID, err)
 			}
 			n, _ := res.RowsAffected()
-			deleted += int(n)
+			done.spent += int(n)
+			done.deleted += int(n)
 		}
+		// AND THEIR NOTICES, charged by their counts: as many as this node
+		// holds, which is never more.
+		removed, err := a.removeNotices(ctx, tx, whole)
+		if err != nil {
+			return changesPurged{}, err
+		}
+		done.spent += counted
+		done.deleted += removed
 	}
 	if cut.id == "" {
-		return deleted, weighed, whole, nil
+		done.weighed = weighed
+		return done, nil
 	}
 	// THE CUT CHANGE needs more than is left — of the rows, or of the bytes
 	// its conversation's text needs — so its body, its mergeability and its
@@ -175,11 +219,27 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 			}
 			res, err := tx.ExecContext(ctx, stmt, cut.id, left)
 			if err != nil {
-				return 0, 0, nil, fmt.Errorf("code: purge change %s of %s: %w", cut.id, repoID, err)
+				return changesPurged{}, fmt.Errorf("code: purge change %s of %s: %w", cut.id, repoID, err)
 			}
 			n, _ := res.RowsAffected()
-			deleted += int(n)
+			done.spent += int(n)
+			done.deleted += int(n)
 			left -= int(n)
+		}
+		// ITS NOTICES, oldest first, charged what is left of the part's
+		// rows and taken off its count by exactly that, so the count stays
+		// the same on every node and never below the rows any node holds.
+		if take := min(left, cut.notices); take > 0 {
+			removed, err := a.removeCutNotices(ctx, tx, cut.id, take)
+			if err != nil {
+				return changesPurged{}, err
+			}
+			if _, err := tx.ExecContext(ctx, uncountNoticesSQL, take, cut.id); err != nil {
+				return changesPurged{}, fmt.Errorf("code: count change %s's notices again: %w", cut.id, err)
+			}
+			done.spent += take + 1
+			done.deleted += removed + 1
+			left -= take
 		}
 	}
 	// ITS WIDE ROWS, every one's text counted in its conversation's
@@ -189,27 +249,31 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 	wide := wideCut{left: left, weighed: weighed}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutCommentWidthsSQL, purgeCutCommentsSQL, cut.id,
 		wide); err != nil {
-		return 0, 0, nil, fmt.Errorf("code: purge change %s's comments of %s: %w", cut.id, repoID, err)
+		return changesPurged{}, fmt.Errorf("code: purge change %s's comments of %s: %w", cut.id, repoID, err)
 	}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutFindingTextWidthsSQL, purgeCutFindingTextsSQL, cut.id,
 		wide); err != nil {
-		return 0, 0, nil, fmt.Errorf("code: purge change %s's findings' texts of %s: %w", cut.id, repoID, err)
+		return changesPurged{}, fmt.Errorf("code: purge change %s's findings' texts of %s: %w", cut.id, repoID, err)
 	}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutReviewWidthsSQL, purgeCutReviewsSQL, cut.id,
 		wide); err != nil {
-		return 0, 0, nil, fmt.Errorf("code: purge change %s's reviews of %s: %w", cut.id, repoID, err)
+		return changesPurged{}, fmt.Errorf("code: purge change %s's reviews of %s: %w", cut.id, repoID, err)
 	}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutFactWidthsSQL, purgeCutFactsSQL, cut.id, wide); err != nil {
-		return 0, 0, nil, fmt.Errorf("code: purge change %s's revisions' facts of %s: %w", cut.id, repoID, err)
+		return changesPurged{}, fmt.Errorf("code: purge change %s's revisions' facts of %s: %w", cut.id,
+			repoID, err)
 	}
-	deleted += wide.deleted
+	done.spent += wide.deleted
+	done.deleted += wide.deleted
 	if wide.freed > 0 {
 		if _, err := tx.ExecContext(ctx, unweighConversationSQL, wide.freed, cut.id); err != nil {
-			return 0, 0, nil, fmt.Errorf("code: weigh change %s's conversation again: %w", cut.id, err)
+			return changesPurged{}, fmt.Errorf("code: weigh change %s's conversation again: %w", cut.id, err)
 		}
-		deleted++
+		done.spent++
+		done.deleted++
 	}
-	return deleted, wide.weighed, whole, nil
+	done.weighed = wide.weighed
+	return done, nil
 }
 
 // purgeCutWide deletes a cut change's rows of one wide table — widthsSQL its
@@ -280,7 +344,7 @@ const (
 	// they weigh is read off the narrow rows of the change and its
 	// conversation.
 	purgeChangeWalkSQL = `SELECT c.id, c.body_bytes,
-		COALESCE((SELECT text_bytes FROM code_conversations WHERE change_id = c.id), 0),
+		COALESCE((SELECT text_bytes FROM code_conversations WHERE change_id = c.id), 0), c.notices,
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_revisions WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_change_authors WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_reviewers WHERE change_id = c.id LIMIT ?2)),
@@ -371,6 +435,9 @@ const (
 	purgeCutFactsSQL = `DELETE FROM code_revision_facts WHERE rowid IN (SELECT rowid
 		FROM code_revision_facts WHERE change_id = ? ORDER BY n LIMIT ?)`
 	unweighConversationSQL = `UPDATE code_conversations SET text_bytes = text_bytes - ? WHERE change_id = ?`
+	// uncountNoticesSQL takes the notices a cut charged off its change's
+	// count, by the change's key.
+	uncountNoticesSQL = `UPDATE code_changes SET notices = notices - ? WHERE id = ?`
 	// The final purge's, unbounded because the decide forms it only once its
 	// bounded count found at most PurgePartRows rows left, and what the
 	// bodies and the conversations among them weigh within PurgePartBytes —

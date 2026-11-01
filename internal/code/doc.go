@@ -1601,7 +1601,15 @@
 // which by their rows alone the part would take 732, 24 MB more (the review
 // that weighed them measured that shape, its bodies then on the change's
 // row, at 112 ms against 64 ms without bodies); and 23 ms for a part that
-// cuts one change of [PurgePartRows] revisions, oldest first.
+// cuts one change of [PurgePartRows] revisions, oldest first. A part of
+// changes' NOTICES, charged by each change's count of them (the notices,
+// cut+notices and final+notices arms, two bounded runs, -benchtime 3x and one
+// count, on two E-cores of a Core Ultra 7 265U, where narrow took 75 and 41
+// ms): 55–56 ms for thirty changes of a hundred rows each — 2 910 of them
+// notices with their excerpts at [MaxNoticeExcerpt] — taken whole; 49–55 ms
+// for a part that cuts one change through 2 998 of its notices, oldest first;
+// and 50–58 ms for the final purge over twenty-nine such changes, with the
+// rules — each deleted notice read back by its own delete to announce it.
 //
 // A RETIRE SWEEP (BenchmarkApplyARetireSweep, the record applied and
 // committed; BenchmarkRetireSweepStep, the whole step — the decide's read,

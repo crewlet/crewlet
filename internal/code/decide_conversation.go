@@ -660,9 +660,9 @@ func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, ros
 	case w.Comment != nil, w.Review != nil:
 		d.rows += len(r.Mentions)
 	}
-	// AND A NOTICE EACH HANDLE IT TELLS, the rows its apply writes beside
-	// the conversation's (apply_notices.go).
-	d.rows += heardCount(r)
+	// AND A NOTICE EACH HANDLE IT TELLS, and the change's count of them, the
+	// rows its apply writes beside the conversation's (apply_notices.go).
+	d.rows += noticeWrites(r)
 	d.payload = withRouting(d.payload, r)
 	return d, nil
 }

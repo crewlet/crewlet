@@ -714,9 +714,13 @@ const (
 	// MaxRecordRows with room for the record's own bookkeeping — and for
 	// the final purge's, which also removes every protection rule
 	// (MaxProtectionsPerRepo), the name claim, the repository's row and
-	// writes the marker — which the limits test pins. PurgePartBytes bounds
-	// a part's wide rows — its push rows and its changes' bodies — by what
-	// they weigh as well.
+	// writes the marker — which the limits test pins. A change's notices
+	// count among a part's rows by the count the change keeps of them
+	// (code_changes.notices), which every node agrees on and no node holds
+	// fewer rows than (apply_notices.go), so a part's deletes of
+	// code_notifications are inside it too. PurgePartBytes bounds a part's
+	// wide rows — its push rows and its changes' bodies — by what they weigh
+	// as well.
 	PurgePartRows = 3_000
 
 	// PurgePartBytes is how many BYTES of wide rows one purge step deletes

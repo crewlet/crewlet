@@ -456,15 +456,44 @@ func Concerns(routings []*ChangeRouting) []Concern {
 // under the one reason that is news to its own actor ([Reason.WakesActor]).
 func (c Concern) Hears() bool { return c.Candidate.Hears(c.Change.Actor, Reason.WakesActor) }
 
-// heardCount is how many handles routings tell — the notice rows their
-// record's apply may write ([Applier.writeNotices]), which every decide
-// counts with the record's rows.
-func heardCount(routings ...*ChangeRouting) int {
-	n := 0
+// changeNotices is how many handles one record tells about one change: the
+// notices its apply may write about it.
+type changeNotices struct {
+	changeID string
+	notices  int
+}
+
+// noticesByChange is, for every change routings tell anybody about, how many
+// handles hear of it ([Concern.Hears]), in the order each change's first
+// hearer comes in [Concerns]. PURE OVER THE ROUTINGS, as [Concerns] is: the
+// count a change's notices column takes from a record (code_changes.notices,
+// replicated 0101) is the same on every node, whatever the horizon let each
+// write.
+func noticesByChange(routings ...*ChangeRouting) []changeNotices {
+	var out []changeNotices
 	for _, c := range Concerns(routings) {
-		if c.Hears() {
-			n++
+		if !c.Hears() {
+			continue
 		}
+		i := slices.IndexFunc(out, func(n changeNotices) bool { return n.changeID == c.Change.ChangeID })
+		if i < 0 {
+			out = append(out, changeNotices{changeID: c.Change.ChangeID})
+			i = len(out) - 1
+		}
+		out[i].notices++
+	}
+	return out
+}
+
+// noticeWrites is the rows a record's apply writes for whom routings tell —
+// a notice a handle ([Applier.writeNotices]) and, for each change they tell
+// anybody about, the one row its count is kept on — which every decide counts
+// with the record's rows.
+func noticeWrites(routings ...*ChangeRouting) int {
+	by := noticesByChange(routings...)
+	n := len(by)
+	for _, c := range by {
+		n += c.notices
 	}
 	return n
 }
