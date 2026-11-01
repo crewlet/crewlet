@@ -5,14 +5,14 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // THE DOCTOR'S LIST AND THE ENGINE'S REGISTRY ARE THE SAME LIST.
 //
 // `crewlet llm doctor` checks an executor entry's CLI against
-// codingagent.Names(); the engine builds its runner map here. Nothing connects
+// executor.Names(); the engine builds its runner map here. Nothing connects
 // them, and a drift fails in the direction that is hardest to see: the doctor
 // passes the entry, the deploy script goes green, and the seat's first turn
 // refuses with "no coding-agent runner registered" — which is precisely the
@@ -25,7 +25,7 @@ func TestTheDoctorsRunnerListIsTheEngineList(t *testing.T) {
 		names = append(names, name)
 	}
 	slices.Sort(names)
-	want := slices.Clone(codingagent.Names())
+	want := slices.Clone(executor.Names())
 	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Fatalf("the engine registers %v and the doctor checks against %v", names, want)
@@ -45,7 +45,7 @@ func TestTheDoctorsRunnerListIsTheEngineList(t *testing.T) {
 // variable the engine never reads.
 func TestTheBridgeVariableIsSpelledOnce(t *testing.T) {
 	t.Parallel()
-	if got := cliagent.BridgeURLVar(); got != mcpbridge.BaseURLVar {
+	if got := harness.BridgeURLVar(); got != mcpbridge.BaseURLVar {
 		t.Fatalf("the doctor names %q and the bridge reads %q", got, mcpbridge.BaseURLVar)
 	}
 }

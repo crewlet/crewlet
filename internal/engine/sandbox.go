@@ -34,12 +34,12 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/schedule"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -112,13 +112,13 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 // A FUNCTION rather than a literal at the one call site, because two other
 // readers need the same list: `crewlet llm doctor` reports an executor-chain
 // member whose CLI has no runner as skipped, and config refuses a chain with
-// none, both against codingagent.Names(). Tests hold all three together — a
+// none, both against executor.Names(). Tests hold all three together — a
 // drift would have config pass a chain the engine then refuses at the seat's
 // first launch.
 func sandboxRunners() map[string]sandbox.Runner {
 	return map[string]sandbox.Runner{
-		codingagent.ClaudeCodeName: codingagent.NewClaudeCode(),
-		codingagent.OpenCodeName:   codingagent.NewOpenCode(),
+		executor.ClaudeCodeName: executor.NewClaudeCode(),
+		executor.OpenCodeName:   executor.NewOpenCode(),
 	}
 }
 
@@ -140,8 +140,8 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 	if play == nil {
 		play = demoRun
 	}
-	runners := make(map[string]sandbox.Runner, len(codingagent.Names()))
-	for _, name := range codingagent.Names() {
+	runners := make(map[string]sandbox.Runner, len(executor.Names()))
+	for _, name := range executor.Names() {
 		runner := sandbox.NewFakeRunner(name)
 		runner.Player = play
 		runners[name] = runner
@@ -1418,7 +1418,7 @@ func runnerLost(lost *sandbox.LostRun) *runner.Lost {
 
 // noteRunEnded sits out the entry a collected run launched on, where the run
 // ended on its vendor's report of a spent plan or a rate limit
-// ([cliagent.Provider.RunEnded]) — on this node, in the epoch this resume runs
+// ([harness.Provider.RunEnded]) — on this node, in the epoch this resume runs
 // in, which is the epoch every launch the resumed turn makes picks its member
 // from.
 //
@@ -1451,8 +1451,8 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 	if !ok {
 		return
 	}
-	agent, isCLI := provider.(*cliagent.Provider)
-	if !isCLI {
+	agent, isHarness := provider.(*harness.Provider)
+	if !isHarness {
 		return
 	}
 	if launched := run.Launch.SignInID; launched != "" && launched != string(agent.SignInID()) {
@@ -1463,7 +1463,7 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 				"recorded on none the entry signs in with now")
 		return
 	}
-	if agent.RunEnded(ctx, cliagent.RunEnd{Answer: ended.Text, Error: ended.Error,
+	if agent.RunEnded(ctx, harness.RunEnd{Answer: ended.Text, Error: ended.Error,
 		Failed: !ended.Success, Event: ended.Event, At: ended.At}) {
 		log.InfoContext(ctx, "executor_run_spent_its_entry",
 			"turn_id", run.TurnID, "seat", run.AgentHandle,
@@ -3328,7 +3328,7 @@ type codingRun struct {
 // and its env and sign-in, which that CLI reads, are always ones the runner can
 // use — and a launch that fell back past the head runs on the member it fell
 // back to, with that member's environment and login rather than the head's.
-func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun {
+func newCodingRun(agent *harness.Provider, seatEnv map[string]string) codingRun {
 	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE CLI IT IS
 	// WRITTEN FOR. An entry's model is in that CLI's own grammar — OpenCode
 	// reads `<provider>/<model>`, Claude Code an alias — so the run is handed
@@ -3348,12 +3348,12 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 	// A LOGIN THE CLI KEEPS IN ITS OWN DATABASE travels as the document its
 	// export printed, mapped where the runner imports it from — the runner's
 	// path, not the profile's, because the runner is what reads it
-	// ([codingagent.Paths.CredentialDocument]).
+	// ([executor.Paths.CredentialDocument]).
 	if doc := agent.SandboxCredentialDocument(); doc != "" {
 		if run.files == nil {
 			run.files = map[string]string{}
 		}
-		run.files[codingagent.CredentialDocument] = doc
+		run.files[executor.CredentialDocument] = doc
 	}
 	return run
 }
@@ -3361,7 +3361,7 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 // entryEnv is what an entry contributes to a run's environment, beneath what
 // the seat brought: its whole env with its sign-in — its headless token, its
 // API key, a provider key or a gateway's address in its env
-// ([cliagent.Provider.SandboxEnv]).
+// ([harness.Provider.SandboxEnv]).
 //
 // UNDERLAID BY NAME, so a variable the seat names in role.sandbox.env or a
 // setup step wins. For OpenCode that is the whole rule: it reads one key per
@@ -3370,8 +3370,8 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 //
 // ONE UNIT FOR THE SIGN-IN OF A CLI THAT HAS SEVERAL: when the entry's profile
 // lists names that sign its CLI in beyond its token and its key
-// ([cliprofile.Profile.SignInEnv]) and the seat's own environment already signs
-// the CLI in ([cliagent.Provider.CredentialEnvNames], which reads that list),
+// ([harnessprofile.Profile.SignInEnv]) and the seat's own environment already signs
+// the CLI in ([harness.Provider.CredentialEnvNames], which reads that list),
 // the entry adds none of its own sign-in
 // ([entrySignInName]). Such a CLI ranks its sign-ins by name (Claude Code's
 // cloud toggle routes away from the Anthropic API altogether, and
@@ -3393,7 +3393,7 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 // to bypass it names the variable itself. Dropped whole for such a seat, as
 // the entry's sign-in alone once was, its run would lose the gateway every
 // other phase of its entry goes through.
-func entryEnv(agent *cliagent.Provider, seatEnv map[string]string) map[string]string {
+func entryEnv(agent *harness.Provider, seatEnv map[string]string) map[string]string {
 	env := agent.SandboxEnv()
 	if len(agent.Profile().SignInEnv) == 0 || !signsIn(seatEnv, agent.CredentialEnvNames()) {
 		return env
@@ -3410,15 +3410,15 @@ func entryEnv(agent *cliagent.Provider, seatEnv map[string]string) map[string]st
 // seat signing the CLI in itself replaces as one unit ([entryEnv]): a name the
 // CLI signs in by, its profile's token and key variables (which an override may
 // have renamed) and its sign_in_env, such as Claude Code's gateway bearer token
-// and its cloud toggles ([cliagent.Provider.CredentialEnvNames]); and any
+// and its cloud toggles ([harness.Provider.CredentialEnvNames]); and any
 // credential-named variable
-// ([cliprofile.IsCredentialName]), such as a cloud sign-in's own key (Bedrock's
+// ([harnessprofile.IsCredentialName]), such as a cloud sign-in's own key (Bedrock's
 // AWS_BEARER_TOKEN_BEDROCK or the AWS key pair), which with the entry's toggle
 // gone no request of the run reads, and which would sit in a box whose agent
 // runs with every permission as a company credential the seat's run never
 // uses.
-func entrySignInName(agent *cliagent.Provider, name string) bool {
-	return slices.Contains(agent.CredentialEnvNames(), name) || cliprofile.IsCredentialName(name)
+func entrySignInName(agent *harness.Provider, name string) bool {
+	return slices.Contains(agent.CredentialEnvNames(), name) || harnessprofile.IsCredentialName(name)
 }
 
 // signsIn reports whether env carries a non-blank value under any of names.
@@ -3471,7 +3471,7 @@ func (e *SandboxCredentialError) Error() string { return e.msg }
 // THE PICKED MEMBER'S ENTRY, the one whose login the box runs under ([newCodingRun]):
 // a guard that asked the chain's head would wave through a fallback launch on a
 // member with no travelling token, and refuse one whose own entry mints one.
-func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sandbox.Placement,
+func sandboxCredentials(agent *harness.Provider, key, seat string, placement sandbox.Placement,
 	env map[string]string) error {
 	if placement.OnEngineHost() {
 		// A local box seeds the credential files and writes a refreshed
@@ -3487,9 +3487,9 @@ func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sa
 // entrySignsIn reports whether env signs agent's CLI in, in a box that is not on
 // the engine host: the rule a seat's remote run and the assistant's deep work
 // are both held to before a box is started.
-func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
-	// THE PROFILE'S OTHER SIGN-INS COUNT TOO ([cliprofile.Profile.SignInEnv],
-	// which [cliagent.Provider.CredentialEnvNames] reads): for Claude Code a
+func entrySignsIn(agent *harness.Provider, env map[string]string) bool {
+	// THE PROFILE'S OTHER SIGN-INS COUNT TOO ([harnessprofile.Profile.SignInEnv],
+	// which [harness.Provider.CredentialEnvNames] reads): for Claude Code a
 	// bearer token, or a Bedrock, Vertex AI or Foundry toggle, whether the seat
 	// brought one, which is then handed none of the entry's sign-in
 	// ([entryEnv]), or the entry's own env carries it into the box: a gateway's
@@ -3519,7 +3519,7 @@ func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
 	// `moonshotai` MOONSHOT_API_KEY, `amazon-bedrock` the AWS pair.
 	if agent.SignsInThroughEnv() {
 		for name, value := range env {
-			if cliprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
+			if harnessprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
 				return true
 			}
 		}
@@ -3542,7 +3542,7 @@ func saidNames(names []string) []words.Said {
 // in whose environment signs its CLI in, carrying the remedy for THIS entry.
 //
 // THE REMEDY FOLLOWS THE AUTH MODE BEFORE THE PROFILE, because the mode decides
-// what the entry reads at all ([cliagent.Provider.ModeSignIn]). Chosen by the
+// what the entry reads at all ([harness.Provider.ModeSignIn]). Chosen by the
 // profile alone, an api-key Claude Code entry whose key resolved to nothing was
 // told to mint a subscription token: `-capture-token` stored one the entry
 // never reads (api-key gives the token no fallback, and the child has the token
@@ -3551,7 +3551,7 @@ func saidNames(names []string) []words.Said {
 // store the token lands in; its credential files are seeded as under every
 // mode, but those never leave the engine host. So:
 //
-//   - api-key: the key, worded once in cliagent for every message that names
+//   - api-key: the key, worded once in harness for every message that names
 //     it, or the seat's own in role.sandbox.env;
 //   - inherit-env: one of the variables it forwards, in the engine's
 //     environment or the seat's role.sandbox.env, or a local cell, which is
@@ -3561,14 +3561,14 @@ func saidNames(names []string) []words.Said {
 //     otherwise a local cell, which is seeded with the login itself.
 //
 // A variable the profile names outside the reference grammar is never offered
-// ([cliagent.ModeSignIn]'s Misnamed): no secret store, ${VAR}, export or token
+// ([harness.ModeSignIn]'s Misnamed): no secret store, ${VAR}, export or token
 // mint can carry a credential under it, so where it is the route the mode or
 // the CLI would take, the remedy names the overrides field that names it —
 // beside every route the entry still has, and alone only where it has none.
 //
 // Its own function rather than the tail of [sandboxCredentials] so that the
 // guard's VERDICT — which runs are refused — reads apart from its wording.
-func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) error {
+func credentialRefusal(agent *harness.Provider, key, seat string, placement sandbox.Placement) error {
 	// THE ENTRY'S CELL, which is what places an executor: its own run_in,
 	// or the catalogue's default for an entry that names none. A seat has
 	// no cell of its own to move.
@@ -3579,11 +3579,11 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		lead := fmt.Sprintf("seat %q's executor runs on %q in %q, and nothing in this run's "+
 			"environment authenticates it: %s", seat, key, placement, sign.Missing())
 		switch {
-		case sign.Mode == cliagent.AuthEnv && len(sign.Variables) == 0:
+		case sign.Mode == harness.AuthEnv && len(sign.Variables) == 0:
 			// The entry's env is its whole sign-in and seeds no login, so
 			// no cell helps: the remedy is the env, which the lead names.
 			return &SandboxCredentialError{msg: lead}
-		case sign.Mode == cliagent.AuthEnv:
+		case sign.Mode == harness.AuthEnv:
 			// No login either way, so a local cell is no remedy here: the
 			// env is, the entry's or the seat's.
 			return &SandboxCredentialError{msg: fmt.Sprintf(
@@ -3593,7 +3593,7 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			// — and the login it names reaches a box only in a local cell.
 			return refusedCredential(fmt.Sprintf(
 				"%s; that login reaches the box only in a local cell (%s)", lead, localCell))
-		case len(sign.Variables) == 0 && sign.Mode == cliagent.AuthAPIKey:
+		case len(sign.Variables) == 0 && sign.Mode == harness.AuthAPIKey:
 			// Its one variable is outside the grammar, and the lead names
 			// that field as the remedy. Not role.sandbox.env: every write
 			// refuses the entry until the field changes, and a name
@@ -3605,7 +3605,7 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			return refusedCredential(fmt.Sprintf(
 				"%s; or run the entry in a local cell (%s), which is seeded with its login",
 				lead, localCell))
-		case sign.Mode == cliagent.AuthAPIKey:
+		case sign.Mode == harness.AuthAPIKey:
 			return refusedCredential(fmt.Sprintf(
 				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0]))
 		default:
@@ -3644,7 +3644,7 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			"that provider, in providers.llm.%s.env or in this seat's "+
 			"role.sandbox.env — both are exported into the box — or run the entry in "+
 			"a local cell (%s)",
-			provider, agent.Agent(), key, localCell)
+			provider, agent.Harness(), key, localCell)
 		// The key travels whatever token_env says, so it stays the remedy,
 		// and the field the doctor reports is named beside it.
 		if misnamedToken != "" {
@@ -3721,11 +3721,11 @@ func (e *Engine) signInReplaced(ctx context.Context, c *Company, in resumeInput)
 	if !ok {
 		return nil
 	}
-	agent, isCLI := provider.(*cliagent.Provider)
-	if !isCLI {
+	agent, isHarness := provider.(*harness.Provider)
+	if !isHarness {
 		return nil
 	}
-	kind, classified := agent.EndedKind(cliagent.RunEnd{Answer: in.Ended.Text, Error: in.Ended.Error,
+	kind, classified := agent.EndedKind(harness.RunEnd{Answer: in.Ended.Text, Error: in.Ended.Error,
 		Failed: !in.Ended.Success, Event: in.Ended.Event, At: in.Ended.At})
 	if !classified || kind != llm.KindAuth {
 		return nil

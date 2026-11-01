@@ -175,36 +175,36 @@ var allowed = []Allowance{
 	// supply-chain surface no Dependabot ecosystem watches.
 	// -----------------------------------------------------------------
 	{
-		Package: "internal/providers/llm/cliagent",
-		Test:    "TestTheGrokProfileArgvParsesAgainstTheRealCLI",
+		Package: "internal/providers/llm/harness",
+		Test:    "TestTheGrokProfileArgvParsesAgainstTheRealHarness",
 		When:    Environment,
 		Why: "Needs xAI's own `grok` on PATH. Nothing else can catch a vendor flag rename: " +
 			"the fake CLI accepts any argv and a unit test over the slice re-states the " +
 			"profile back to itself. `crewlet llm doctor` reports the same drift to an operator.",
 	},
 	{
-		Package: "internal/providers/llm/cliagent",
-		Test:    "TestTheKimiProfileArgvParsesAgainstTheRealCLI",
+		Package: "internal/providers/llm/harness",
+		Test:    "TestTheKimiProfileArgvParsesAgainstTheRealHarness",
 		When:    Environment,
 		Why: "Needs MoonshotAI's own `kimi` on PATH. Same reasoning as grok and muse: " +
 			"only the real binary can refuse a profile's argv, and the fake accepts any.",
 	},
 	{
-		Package: "internal/providers/llm/cliagent",
-		Test:    "TestThePiProfileArgvParsesAgainstTheRealCLI",
+		Package: "internal/providers/llm/harness",
+		Test:    "TestThePiProfileArgvParsesAgainstTheRealHarness",
 		When:    Environment,
 		Why: "Needs `pi` on PATH. Same reasoning as the other real-CLI argv cases; the " +
 			"profile's isolation flags are what it proves and the fake cannot refuse them.",
 	},
 	{
-		Package: "internal/providers/llm/cliagent",
-		Test:    "TestTheHermesProfileArgvParsesAgainstTheRealCLI",
+		Package: "internal/providers/llm/harness",
+		Test:    "TestTheHermesProfileArgvParsesAgainstTheRealHarness",
 		When:    Environment,
 		Why:     "Needs `hermes` on PATH. Same reasoning as the other real-CLI argv cases.",
 	},
 	{
-		Package: "internal/providers/llm/cliagent",
-		Test:    "TestTheMuseProfileArgvParsesAgainstTheRealCLI",
+		Package: "internal/providers/llm/harness",
+		Test:    "TestTheMuseProfileArgvParsesAgainstTheRealHarness",
 		When:    Environment,
 		Why: "Needs `muse` on PATH. Same reasoning as the grok case, and the flags it " +
 			"proves — --disable-shell and --disable-write — are absent from the vendor's " +

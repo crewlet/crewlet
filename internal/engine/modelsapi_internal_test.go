@@ -20,9 +20,9 @@ func sonnetEntry(t *testing.T) config.LLMProvider {
 // modelsEngine is a bare engine running one entry, resolving through env.
 func modelsEngine(t *testing.T, entry config.LLMProvider, env config.MapSource) *Engine {
 	t.Helper()
-	built, err := BuildCLIAgent("sonnet", entry, config.NewResolver(env), nil)
+	built, err := BuildHarness("sonnet", entry, config.NewResolver(env), nil)
 	if err != nil {
-		t.Fatalf("BuildCLIAgent: %v", err)
+		t.Fatalf("BuildHarness: %v", err)
 	}
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "sonnet", Provider: built}})
 	if err != nil {

@@ -3109,7 +3109,7 @@ so and to set `auth.mode: subscription` and sign the CLI in with a login, in
 place of the variables. A `subscription` entry is told:
 
 ```
-cliagent: this CLI has no such login command: the "claude-code" CLI
+harness: this CLI has no such login command: the "claude-code" CLI
 authenticates through the vendor's browser OAuth flow — there is no
 username/password login to drive: run `crewlet llm login default`, or mint
 a headless CLAUDE_CODE_OAUTH_TOKEN with `crewlet llm login default
@@ -4010,7 +4010,7 @@ endpoint that reports its own clock and applies the same test:
 
 ```
 provider      : default
-cli agent     : claude-code
+harness       : claude-code
 model         : sonnet
 binary        : /usr/local/bin/claude
 version       : 2.1.310 (Claude Code)

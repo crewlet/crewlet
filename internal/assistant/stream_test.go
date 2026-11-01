@@ -84,7 +84,7 @@ func TestAStreamedRoundShowsItsProseBeforeTheRoundEnds(t *testing.T) {
 // A CLI THAT CANNOT STREAM STILL SENDS ONE DELTA, AT THE ROUND'S END. Streaming
 // is asked for on every turn, and a backend with no streaming mode never sends
 // a fragment: its round is drawn once, whole, when it commits.
-func TestANonStreamingCLISendsOneDeltaAtTheRoundsEnd(t *testing.T) {
+func TestANonStreamingHarnessSendsOneDeltaAtTheRoundsEnd(t *testing.T) {
 	t.Parallel()
 	f := assistanttest.NewRig(t, evals.RigOptions{Rounds: []evals.Round{
 		evals.Say("The keys rotate weekly."),

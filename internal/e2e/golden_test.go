@@ -1954,7 +1954,7 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	// request the model answered is summed: each is one model request of a
 	// scripted CLI run, whose usage the backend reads off the record the CLI
 	// prints for it, and a stop never lands between the model's answer and
-	// that record ([cliRun.handleStop]) — so there is no request the engine
+	// that record ([harnessRun.handleStop]) — so there is no request the engine
 	// was billed for and never read.
 	var used, want int
 	var calls []string

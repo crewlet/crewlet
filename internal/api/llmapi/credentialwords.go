@@ -7,7 +7,7 @@ import (
 	"unicode"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -25,11 +25,11 @@ func trimValues(values map[string]string) {
 
 // builtinProfile is the shipped profile of the entry's CLI, Claude Code's for
 // an entry that names none, and whether there is one.
-func builtinProfile(entry *config.LLMProvider) (cliprofile.Profile, bool) {
+func builtinProfile(entry *config.LLMProvider) (harnessprofile.Profile, bool) {
 	if entry.Harness == "" {
-		return cliprofile.Builtin("claude-code")
+		return harnessprofile.Builtin("claude-code")
 	}
-	return cliprofile.Builtin(string(entry.Harness))
+	return harnessprofile.Builtin(string(entry.Harness))
 }
 
 // credentialWords is how a refusal names the credential a write carries.
@@ -75,16 +75,16 @@ func wordsFor(entry *config.LLMProvider, key string, names []string) credentialW
 }
 
 // refused is the sentence for a test the credential did not pass, by what the
-// CLI's own words meant ([cliprofile.Profile.AuthMeaning]).
+// CLI's own words meant ([harnessprofile.Profile.AuthMeaning]).
 //
 // NEVER THE STORED CREDENTIAL'S HEALTH. The write stores nothing, so the model
 // keeps the credential it had; whether that one still answers is the model's
 // own test to say, and an earlier wording that vouched for it was wrong
 // whenever it had expired or met its limit.
-func (w credentialWords) refused(meaning cliprofile.AuthMeaning) string {
+func (w credentialWords) refused(meaning harnessprofile.AuthMeaning) string {
 	var cause string
 	switch meaning {
-	case cliprofile.AuthUnread:
+	case harnessprofile.AuthUnread:
 		cause = fmt.Sprintf("%s did not use this %s, so the vendor never saw it. "+
 			"Copy the whole %s again as one unbroken line", w.agent, w.noun, w.noun)
 		if w.prefix != "" {
@@ -104,7 +104,7 @@ func (w credentialWords) refused(meaning cliprofile.AuthMeaning) string {
 
 // meaningOf is what the first failing line of a check said about the
 // credential it was handed.
-func meaningOf(c Check) cliprofile.AuthMeaning {
+func meaningOf(c Check) harnessprofile.AuthMeaning {
 	for _, line := range c.Lines {
 		if !line.OK {
 			return line.Meaning

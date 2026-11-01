@@ -173,7 +173,7 @@ var modelCalls = map[string]modelCall{
 	"internal/engine/providerpark.go:providerProbe": {
 		none: "the probe asks a fixed prompt the engine wrote, and reads nothing of " +
 			"its answer but whether one came"},
-	"internal/providers/llm/cliagent/doctor.go:probeRequest": {
+	"internal/providers/llm/harness/doctor.go:probeRequest": {
 		none: "every probe the doctor sends (the smoke test, the shell probe and " +
 			"the web probe) asks a fixed prompt the engine wrote"},
 	"internal/assistant/conversations.go:nameConversation": {

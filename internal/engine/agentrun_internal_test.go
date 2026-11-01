@@ -30,7 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -55,17 +55,17 @@ type chainMember struct {
 	env map[string]string
 }
 
-// cliProvider is a REAL cliagent provider for m: the question every case here
+// harnessProvider is a REAL harness provider for m: the question every case here
 // asks is what the provider's own answer makes the launch do, and a fake would
 // answer whatever the case wanted. Its binary does not exist, so no case can
 // start a CLI on the machine running the suite — except an entry that has to
 // sit out, whose stand-in prints the CLI's own usage-limit line once.
-func cliProvider(t *testing.T, m chainMember) *cliagent.Provider {
+func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 	t.Helper()
 	overrides := map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
-	auth := cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"}
+	auth := harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-not-real"}
 	if m.subscription {
-		auth = cliagent.Auth{Mode: cliagent.AuthSubscription}
+		auth = harness.Auth{Mode: harness.AuthSubscription}
 	}
 	if m.spent {
 		script := filepath.Join(t.TempDir(), "spent-cli")
@@ -86,12 +86,12 @@ func cliProvider(t *testing.T, m chainMember) *cliagent.Provider {
 			"mcp": map[string]any{"failure_events": []any{}},
 		}
 	}
-	provider, err := cliagent.New(cliagent.Config{
-		Key: m.key, Agent: m.agent, Model: m.model, StateDir: t.TempDir(),
+	provider, err := harness.New(harness.Config{
+		Key: m.key, Harness: m.agent, Model: m.model, StateDir: t.TempDir(),
 		Overrides: overrides, Timeout: time.Minute, Auth: auth, Env: m.env,
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New(%s): %v", m.key, err)
+		t.Fatalf("harness.New(%s): %v", m.key, err)
 	}
 	if m.spent {
 		_, err := provider.Complete(t.Context(), llm.Request{Messages: []llm.Message{
@@ -106,14 +106,14 @@ func cliProvider(t *testing.T, m chainMember) *cliagent.Provider {
 }
 
 // chainCompany is a one-seat epoch whose seat's `llm` is members, in order, over
-// real cliagent providers and the providers.llm entries that place them.
+// real harness providers and the providers.llm entries that place them.
 func chainCompany(t *testing.T, members ...chainMember) (*Company, *org.Role) {
 	t.Helper()
 	entries := make([]phase.Entry, 0, len(members))
 	configured := make(map[string]config.LLMProvider, len(members))
 	keys := make(org.ProviderKeys, 0, len(members))
 	for _, m := range members {
-		entries = append(entries, phase.Entry{Key: m.key, Provider: cliProvider(t, m)})
+		entries = append(entries, phase.Entry{Key: m.key, Provider: harnessProvider(t, m)})
 		configured[m.key] = config.LLMProvider{
 			Harness: config.Harness(m.agent), Model: m.model, RunIn: m.runIn, Env: m.env,
 		}
@@ -371,7 +371,7 @@ func TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt(t *testing.T) {
 // OpenCode member alone, and one taking the launch from a spent Claude Code
 // head, both start on the OpenCode runner, with the entry's model as written,
 // and the row records the CLI the job runs.
-func TestALaunchRunsOnItsMembersOwnCLI(t *testing.T) {
+func TestALaunchRunsOnItsMembersOwnHarness(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string

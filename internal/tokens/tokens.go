@@ -236,7 +236,7 @@ func PhaseCalls(c PhaseCounts) int {
 // projection count a launch by it — so the executor's calls are the same on
 // either side of the live edge. A negative count is none reported, as the
 // collection that floors a launch's usage reads it.
-func LaunchCalls(cliTurns int) int { return max(cliTurns, 1) }
+func LaunchCalls(harnessTurns int) int { return max(harnessTurns, 1) }
 
 // Bucket is an accumulated total. Embedded rather than nested, because the
 // wire shape spreads it into each row: {"phase": "execute", "total_tokens":

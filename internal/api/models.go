@@ -20,8 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/modelcatalog"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -101,7 +101,7 @@ func (m modelEngine) CheckModel(ctx context.Context, key string, draft *config.L
 		// own timeout capped at the credential budget.
 		smoke = true
 		budget = min(llmapi.CredentialBudget, time.Duration(spec.Timeout()*float64(time.Second)))
-		profile, err := cliprofile.Load(spec.HarnessName(), spec.Overrides)
+		profile, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides)
 		if err != nil {
 			out.Failure, out.Said = "fatal", err.Error()
 			return out, nil
@@ -121,13 +121,13 @@ func (m modelEngine) CheckModel(ctx context.Context, key string, draft *config.L
 		// AN ENTRY THAT DOES NOT BUILD is the entry's to fix, said at its
 		// CLI, as the doctor reports it.
 		out.Failure, out.Said = "fatal", err.Error()
-		out.Lines = []cliagent.Check{{Name: cliagent.CheckBinary, Detail: err.Error(), Kind: "fatal"}}
+		out.Lines = []harness.Check{{Name: harness.CheckBinary, Detail: err.Error(), Kind: "fatal"}}
 		return out, nil
 	}
 	out.Lines = diagnosis.Checks
 	for _, line := range out.Lines {
 		if !line.OK {
-			out.Failure, out.Said = cmp.Or(line.Kind, cliagent.CheckKindConfig), line.Detail
+			out.Failure, out.Said = cmp.Or(line.Kind, harness.CheckKindConfig), line.Detail
 			break
 		}
 	}
@@ -146,7 +146,7 @@ func (m modelEngine) CheckModel(ctx context.Context, key string, draft *config.L
 // variables, and an env entry by its own name. A name none of them reads is
 // kept, so the doctor reports it rather than vouching for a value nothing
 // tried.
-func candidateVariables(key string, entry *config.LLMProvider, profile cliprofile.Profile,
+func candidateVariables(key string, entry *config.LLMProvider, profile harnessprofile.Profile,
 	values map[string]string) map[string]string {
 
 	slot := map[string]string{}
@@ -183,11 +183,11 @@ func slotName(src config.CredentialSource) string {
 }
 
 // candidateHints is each candidate value's hint by the prefixes of the entry
-// it is for ([cliagent.Provider.CredentialHintOf]); none for an entry that
+// it is for ([harness.Provider.CredentialHintOf]); none for an entry that
 // does not build, whose check says why.
 func candidateHints(key string, entry *config.LLMProvider, values map[string]string) map[string]string {
 	out := map[string]string{}
-	built, err := engine.BuildCLIAgent(key, *entry, config.NewResolver(config.MapSource(values)), nil)
+	built, err := engine.BuildHarness(key, *entry, config.NewResolver(config.MapSource(values)), nil)
 	if err != nil {
 		return out
 	}

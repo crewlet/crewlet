@@ -59,7 +59,7 @@ func TestAFailingMessageBacksOffToACeiling(t *testing.T) {
 	// AND THE SHIPPED DEFAULTS SPAN THE OUTAGE THEY EXIST FOR: a message's
 	// whole budget must outlast the minute an LLM entry sits out after its
 	// CLI reports a spent plan with no reset instant
-	// (internal/providers/llm/cliagent, bench.go) several times over — the
+	// (internal/providers/llm/harness, bench.go) several times over — the
 	// failure flat spacing consumed the budget on in 25 seconds.
 	var total time.Duration
 	shipped := &Queue{}

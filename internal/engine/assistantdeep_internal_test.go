@@ -25,7 +25,7 @@ import (
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -37,13 +37,13 @@ import (
 // deepCompany is a company whose deep work runs on a Claude Code entry, in the e2b cell it configures, signed in by an API key.
 func deepCompany(t *testing.T) *Company {
 	t.Helper()
-	deep, err := cliagent.New(cliagent.Config{
-		Key: "deep", Agent: "claude-code", Model: "sonnet",
+	deep, err := harness.New(harness.Config{
+		Key: "deep", Harness: "claude-code", Model: "sonnet",
 		StateDir: t.TempDir(), Timeout: time.Minute,
-		Auth: cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"},
+		Auth: harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-not-real"},
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
+		t.Fatalf("harness.New: %v", err)
 	}
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "deep", Provider: deep}})
 	if err != nil {

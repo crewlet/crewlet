@@ -23,8 +23,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -333,7 +333,7 @@ func newRigOver(t *testing.T, caller iam.Principal, store *fakeSecrets) *rig {
 	}
 	r := &rig{engine: &fakeEngine{check: llmapi.Check{At: clock, Node: "node-a", OK: true,
 		Elapsed: 3400 * time.Millisecond, Hints: map[string]string{"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-…7d2K"},
-		Lines: []cliagent.Check{{Name: cliagent.CheckBinary, OK: true, Detail: "claude at /usr/local/bin/claude"}}},
+		Lines: []harness.Check{{Name: harness.CheckBinary, OK: true, Detail: "claude at /usr/local/bin/claude"}}},
 		running: 1},
 		config: &fakeConfig{doc: doc}, secrets: store,
 		audit: &audit{}, leases: coordmemory.New(), guard: &recordingGuard{deny: map[authz.Action]bool{}}}
@@ -1178,17 +1178,17 @@ func TestAValueWithStrayCharactersIsRefusedBeforeItsTest(t *testing.T) {
 func TestARefusedTestSaysWhatItMeant(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	failed := func(meaning cliprofile.AuthMeaning) llmapi.Check {
+	failed := func(meaning harnessprofile.AuthMeaning) llmapi.Check {
 		return llmapi.Check{At: clock, Node: "node-a", Failure: "auth",
 			Said: "Not logged in · Please run /login",
-			Lines: []cliagent.Check{{Name: cliagent.CheckSmoke, Kind: "auth", Meaning: meaning,
+			Lines: []harness.Check{{Name: harness.CheckSmoke, Kind: "auth", Meaning: meaning,
 				Detail: "failed: auth: Not logged in · Please run /login"}}}
 	}
-	for meaning, want := range map[cliprofile.AuthMeaning]string{
-		cliprofile.AuthUnread: "Claude Code did not use this token, so the vendor never saw it. Copy the " +
+	for meaning, want := range map[harnessprofile.AuthMeaning]string{
+		harnessprofile.AuthUnread: "Claude Code did not use this token, so the vendor never saw it. Copy the " +
 			"whole token again as one unbroken line starting with sk-ant-oat01-. Nothing was stored, " +
 			"and the model still uses its current token.",
-		cliprofile.AuthRefused: "The vendor refused this token: it is wrong, expired, or revoked. Make a " +
+		harnessprofile.AuthRefused: "The vendor refused this token: it is wrong, expired, or revoked. Make a " +
 			"new one with claude setup-token and paste it here. Nothing was stored, and the model " +
 			"still uses its current token.",
 	} {

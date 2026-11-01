@@ -15,7 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // A PERSON STEERS A LIVE EXECUTOR, END TO END.
@@ -76,7 +76,7 @@ func TestAPersonSteersALiveCodingRun(t *testing.T) {
 		t.Fatalf("the held run is not the CLI started with its hooks and told of notes: %q", args)
 	}
 	if text, err := os.ReadFile(system); err != nil || //nolint:gosec // the run's own box, under the case's state dir
-		!strings.Contains(string(text), codingagent.ClaudeCodeSteerInstruction) {
+		!strings.Contains(string(text), executor.ClaudeCodeSteerInstruction) {
 		t.Errorf("the run's standing instructions are not told of notes (%v):\n%s", err, text)
 	}
 
@@ -172,7 +172,7 @@ func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the run's system text: %v", err)
 	}
-	if strings.Contains(string(text), codingagent.ClaudeCodeSteerInstruction) {
+	if strings.Contains(string(text), executor.ClaudeCodeSteerInstruction) {
 		t.Errorf("a run started without its hooks was told of notes:\n%s", text)
 	}
 	said, err := os.ReadFile(filepath.Join(filepath.Dir(system), "err.log")) //nolint:gosec // as above

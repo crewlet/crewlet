@@ -149,7 +149,7 @@ func text(res *mcp.CallToolResult) string {
 // Through the real relay rather than a connection to the socket, because the
 // command line is the contract a CLI is given and the one part a direct
 // connection skips.
-func TestACLIReachesTheSeatsToolsThroughTheRelay(t *testing.T) {
+func TestAHarnessReachesTheSeatsToolsThroughTheRelay(t *testing.T) {
 	t.Parallel()
 	h := host(t)
 	d := &fakeDispatcher{offered: []toolsession.Tool{tool("get_item")}}

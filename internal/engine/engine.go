@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -148,8 +148,8 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 }
 
 // newCompany builds an epoch whose coding-CLI entries keep their sit-outs on
-// plans, the node's registry ([cliagent.Plans]); nil for an epoch nothing runs.
-func newCompany(c *config.Company, env *config.Resolver, plans *cliagent.Plans) (*Company, error) {
+// plans, the node's registry ([harness.Plans]); nil for an epoch nothing runs.
+func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (*Company, error) {
 	if c == nil {
 		return nil, fmt.Errorf("engine: no company config")
 	}

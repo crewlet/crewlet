@@ -34,8 +34,8 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
@@ -43,9 +43,9 @@ import (
 // what Claude Code is.
 //
 // Every model call the engine makes goes through a coding CLI
-// (internal/providers/llm/cliagent), so the golden company's model entry is a
+// (internal/providers/llm/harness), so the golden company's model entry is a
 // real one whose CLI is this binary ([scriptedEntry]). Re-executed with
-// [scriptedCLIEnv] set, the binary does what Claude Code does in print mode:
+// [scriptedHarnessEnv] set, the binary does what Claude Code does in print mode:
 // it reads the transcript on stdin and the system prompt from the file its
 // channel names; on a call that offers tools it starts the `crewlet` MCP server
 // the configuration file on `--mcp-config` names — `crewlet mcp-relay
@@ -67,14 +67,14 @@ import (
 // model reads the transcript the backend rendered, and the record the backend
 // reads back.
 
-// scriptedCLIEnv makes a re-execution of this binary the scripted CLI rather
+// scriptedHarnessEnv makes a re-execution of this binary the scripted CLI rather
 // than the suite, and its value is the address of the model that answers.
 //
 // ONE VARIABLE FOR BOTH, so there is no way to launch a child that is the CLI
 // and does not know where its model is. It reaches the child through the
 // entry's own `env`, which is the only route there is: the backend hands its
 // child an allowlisted environment, never the engine's.
-const scriptedCLIEnv = "CREWLET_E2E_SCRIPTED_CLI"
+const scriptedHarnessEnv = "CREWLET_E2E_SCRIPTED_CLI"
 
 // scriptedSystemFlag and scriptedAppendFlag are Claude Code's two channels for
 // a system prompt's file — the first replacing the CLI's own prompt, the
@@ -82,7 +82,7 @@ const scriptedCLIEnv = "CREWLET_E2E_SCRIPTED_CLI"
 // channels from passes ([claudeCodeRun]). So the system prompt reaches the
 // model on its own channel exactly as it does for the default agent, by the
 // route the default agent's would take: a seat's phase on the append channel,
-// a side pass on the replace one ([cliprofile.Profile.RouteFor]).
+// a side pass on the replace one ([harnessprofile.Profile.RouteFor]).
 const (
 	scriptedSystemFlag = "--system-prompt-file"
 	scriptedAppendFlag = "--append-system-prompt-file"
@@ -116,16 +116,16 @@ const unnamedModel = "the-cli-default-model"
 // it: a process killed by SIGTERM, as a shell reports one.
 const stoppedExit = 128 + int(syscall.SIGTERM)
 
-// scriptedCLIBinary is this test binary's own path, which the entry names as
+// scriptedHarnessBinary is this test binary's own path, which the entry names as
 // its CLI. Set once by [TestMain], before any case runs.
 //
 // [os.Executable] rather than os.Args[0]: the backend runs its child in the
 // call's own working directory, so a binary launched by a relative path —
 // `./e2e.test` — would name nothing there.
-var scriptedCLIBinary string
+var scriptedHarnessBinary string
 
 // scriptedShape is the claude-code profile's run, as overrides
-// ([claudeCodeRun]), set once by [TestMain] beside [scriptedCLIBinary].
+// ([claudeCodeRun]), set once by [TestMain] beside [scriptedHarnessBinary].
 var scriptedShape map[string]any
 
 // claudeCodeFields are the claude-code profile's fields that shape a run and
@@ -154,10 +154,10 @@ var claudeCodeFields = []string{
 // claudeCodeRun is [claudeCodeFields] out of the built-in claude-code profile,
 // as an entry's `overrides` takes them, and binary the CLI they run.
 //
-// By the profile's own YAML, which is how [cliprofile.Load] merges overrides
+// By the profile's own YAML, which is how [harnessprofile.Load] merges overrides
 // into a profile, so what an override carries is what the loader reads.
 func claudeCodeRun(binary string) (map[string]any, error) {
-	profile, ok := cliprofile.Builtin("claude-code")
+	profile, ok := harnessprofile.Builtin("claude-code")
 	if !ok {
 		return nil, errors.New("this build ships no claude-code profile")
 	}
@@ -170,7 +170,7 @@ func claudeCodeRun(binary string) (map[string]any, error) {
 		return nil, fmt.Errorf("re-reading the claude-code profile: %w", err)
 	}
 	// complete_args NAMES NO TEST, as a FORK-BOMB GUARD rather than a
-	// selector: [TestMain] dispatches on [scriptedCLIEnv] alone, so a child
+	// selector: [TestMain] dispatches on [scriptedHarnessEnv] alone, so a child
 	// launched without it falls through to the suite, and a filter matching
 	// nothing ends that child at once instead of running every case of the
 	// package again, once per call.
@@ -236,7 +236,7 @@ func scriptedEntry(key, endpoint, stateDir string) string {
         %s: %q
       overrides:
 %s`, key, stateDir,
-		scriptedCLIEnv, endpoint,
+		scriptedHarnessEnv, endpoint,
 		procgrouptest.GORACE, procgrouptest.StandInRaceOptions(),
 		overrides.String())
 }
@@ -322,14 +322,14 @@ func (r modelRequest) toolResults() []string {
 
 // --- the CLI ---------------------------------------------------------------- //
 
-// cliRun is one run of the scripted CLI.
-type cliRun struct {
+// harnessRun is one run of the scripted CLI.
+type harnessRun struct {
 	endpoint string
 	model    string
 	out      *json.Encoder
 
 	// turn is held from a request's post to the model until its record is
-	// printed, and the stop waits for it: see [cliRun.handleStop].
+	// printed, and the stop waits for it: see [harnessRun.handleStop].
 	turn     sync.Mutex
 	stopping atomic.Bool
 
@@ -341,24 +341,24 @@ type cliRun struct {
 	last  string
 }
 
-// runScriptedCLI is the scripted CLI. It returns the exit status.
+// runScriptedHarness is the scripted CLI. It returns the exit status.
 //
 // A FAILURE IS THE CLI'S OWN, on stderr with a non-zero exit, which the
 // backend reports as the CLI failing — the reason reaches the engine's log
 // rather than a wait in some case timing out with nothing said.
-func runScriptedCLI(endpoint string) int {
-	run := &cliRun{endpoint: endpoint, model: argAfter("--model"), out: json.NewEncoder(os.Stdout)}
+func runScriptedHarness(endpoint string) int {
+	run := &harnessRun{endpoint: endpoint, model: argAfter("--model"), out: json.NewEncoder(os.Stdout)}
 	if run.model == "" {
 		run.model = unnamedModel
 	}
 	run.handleStop()
 	prompt, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		return failCLI("reading the prompt: %v", err)
+		return failHarness("reading the prompt: %v", err)
 	}
 	system, channel, err := systemPrompt()
 	if err != nil {
-		return failCLI("%v", err)
+		return failHarness("%v", err)
 	}
 	req := modelRequest{System: system, Channel: channel, Prompt: string(prompt)}
 
@@ -367,7 +367,7 @@ func runScriptedCLI(endpoint string) int {
 		// A TEXT FUNCTION: no server, one request, its answer the result.
 		reply, _, err := run.respond(req)
 		if err != nil {
-			return failCLI("%v", err)
+			return failHarness("%v", err)
 		}
 		run.last = reply.Text
 		run.result()
@@ -379,16 +379,16 @@ func runScriptedCLI(endpoint string) int {
 // loop is a run with tools: the server its configuration names started and
 // listed, then the model asked, its calls made and their results handed back,
 // until a response calls nothing.
-func (c *cliRun) loop(req modelRequest, config string) int {
+func (c *harnessRun) loop(req modelRequest, config string) int {
 	cs, err := c.connect(config)
 	if err != nil {
-		return failCLI("starting the %s MCP server %s names: %v", claudeCodeServer, config, err)
+		return failHarness("starting the %s MCP server %s names: %v", claudeCodeServer, config, err)
 	}
 	// Closing the session closes the relay's stdin, which the engine reads as
 	// the CLI being done: it answers what is in flight and closes its end.
 	defer cs.Close()
 	if req.Tools, err = listTools(cs); err != nil {
-		return failCLI("listing the %s server's tools: %v", claudeCodeServer, err)
+		return failHarness("listing the %s server's tools: %v", claudeCodeServer, err)
 	}
 	offered := []string{"WebFetch", "WebSearch"}
 	for _, name := range req.Tools {
@@ -400,12 +400,12 @@ func (c *cliRun) loop(req modelRequest, config string) int {
 	for {
 		if c.stale.Swap(false) {
 			if req.Tools, err = listTools(cs); err != nil {
-				return failCLI("listing the %s server's tools again: %v", claudeCodeServer, err)
+				return failHarness("listing the %s server's tools again: %v", claudeCodeServer, err)
 			}
 		}
 		reply, ids, err := c.respond(req)
 		if err != nil {
-			return failCLI("%v", err)
+			return failHarness("%v", err)
 		}
 		c.last = reply.Text
 		if len(reply.Calls) == 0 {
@@ -429,7 +429,7 @@ func (c *cliRun) loop(req modelRequest, config string) int {
 				// run, or its end failed. A CLI whose server died has no
 				// tools to go on with, and asking its model again would be
 				// a request the engine never sees the end of.
-				return failCLI("calling %s: %v", call.Name, err)
+				return failHarness("calling %s: %v", call.Name, err)
 			}
 			ex.Results = append(ex.Results, res)
 		}
@@ -451,7 +451,7 @@ func (c *cliRun) loop(req modelRequest, config string) int {
 // So the stop waits for a request in flight to be printed, and no request is
 // posted once it has come. Everywhere else — a call the engine is holding its
 // answer to, above all — it ends the run at once.
-func (c *cliRun) handleStop() {
+func (c *harnessRun) handleStop() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
@@ -470,9 +470,9 @@ func (c *cliRun) handleStop() {
 const stopNotice = "scripted CLI: stopped; ending at the edge of the request in flight"
 
 // respond asks the model for its next response and prints it as Claude Code's
-// record of one request, as one step a stop cannot split ([cliRun.handleStop]),
+// record of one request, as one step a stop cannot split ([harnessRun.handleStop]),
 // returning the ids it gave the response's calls.
-func (c *cliRun) respond(req modelRequest) (modelReply, []string, error) {
+func (c *harnessRun) respond(req modelRequest) (modelReply, []string, error) {
 	c.turn.Lock()
 	defer c.turn.Unlock()
 	if c.stopping.Load() {
@@ -494,7 +494,7 @@ func (c *cliRun) respond(req modelRequest) (modelReply, []string, error) {
 //
 // NO DEADLINE OF ITS OWN: the request is bounded by the run's, since the
 // backend stops this whole process when its clock runs out.
-func (c *cliRun) ask(req modelRequest) (modelReply, error) {
+func (c *harnessRun) ask(req modelRequest) (modelReply, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return modelReply{}, fmt.Errorf("encoding the request: %w", err)
@@ -524,7 +524,7 @@ func (c *cliRun) ask(req modelRequest) (modelReply, error) {
 // call as an assistant event of its own; and message_delta closing it with its
 // stop reason and its true output count — every figure the claude-code
 // profile's requests block reads.
-func (c *cliRun) record(reply modelReply, ids []string) {
+func (c *harnessRun) record(reply modelReply, ids []string) {
 	id := claudeID("msg_")
 	u := reply.Usage
 	c.total = c.total.plus(u)
@@ -560,7 +560,7 @@ func (c *cliRun) record(reply modelReply, ids []string) {
 // `_meta` as Claude Code does, prints its result as the user event Claude Code
 // prints, and returns it for the model. An error is the session failing; a
 // call the server refused is a result.
-func (c *cliRun) call(cs *mcpsdk.ClientSession, call modelCall, id string) (callResult, error) {
+func (c *harnessRun) call(cs *mcpsdk.ClientSession, call modelCall, id string) (callResult, error) {
 	res, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{
 		Name: call.Name, Arguments: orEmptyArgs(call.Args),
 		Meta: mcpsdk.Meta{claudeCodeToolUseMeta: id},
@@ -586,7 +586,7 @@ func (c *cliRun) call(cs *mcpsdk.ClientSession, call modelCall, id string) (call
 // result prints the run's last event, Claude Code's result: the last
 // response's prose and the run's counts, every request summed. A run already
 // stopped prints none: it did not finish.
-func (c *cliRun) result() {
+func (c *harnessRun) result() {
 	c.turn.Lock()
 	defer c.turn.Unlock()
 	if c.stopping.Load() {
@@ -597,13 +597,13 @@ func (c *cliRun) result() {
 }
 
 // emit prints one event of the record, as one line.
-func (c *cliRun) emit(event map[string]any) {
+func (c *harnessRun) emit(event map[string]any) {
 	// A map of strings, numbers and decoded JSON always encodes, and a write
 	// to a stdout the backend has closed is a run it already ended.
 	_ = c.out.Encode(event)
 }
 
-func (c *cliRun) assistant(id string, block map[string]any) map[string]any {
+func (c *harnessRun) assistant(id string, block map[string]any) map[string]any {
 	return map[string]any{"type": "assistant", "parent_tool_use_id": nil, "message": map[string]any{
 		"id": id, "type": "message", "role": "assistant", "model": c.model,
 		"content": []any{block},
@@ -616,8 +616,8 @@ func (c *cliRun) assistant(id string, block map[string]any) map[string]any {
 // connect starts the server the configuration file names and connects to it, as
 // Claude Code does with an `--mcp-config` file: its `mcpServers.crewlet` entry's
 // command and arguments, over stdio — re-reading the tool list when the server
-// says it changed ([cliRun.stale]), which the profile declares it does.
-func (c *cliRun) connect(path string) (*mcpsdk.ClientSession, error) {
+// says it changed ([harnessRun.stale]), which the profile declares it does.
+func (c *harnessRun) connect(path string) (*mcpsdk.ClientSession, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // the configuration the engine wrote for this run
 	if err != nil {
 		return nil, err
@@ -692,7 +692,7 @@ func systemPrompt() (string, string, error) {
 	return string(system), channel, nil
 }
 
-func failCLI(format string, args ...any) int {
+func failHarness(format string, args ...any) int {
 	fmt.Fprintf(os.Stderr, "scripted CLI: "+format+"\n", args...)
 	return 1
 }
@@ -757,7 +757,7 @@ func answer(w http.ResponseWriter, reply modelReply) {
 }
 
 // partHeading is a line that opens a part of the transcript a run with tools is
-// handed (cliagent's renderTranscript): `=== <nonce> <heading> ===`, the nonce
+// handed (harness's renderTranscript): `=== <nonce> <heading> ===`, the nonce
 // drawn for that one render.
 var partHeading = regexp.MustCompile(`(?m)^=== ([0-9a-f]+) (.+) ===$`)
 
@@ -816,7 +816,7 @@ var (
 // tokens is what the engine charges for one such response: the CLI backend
 // counts the prompt whole, both cache figures folded into its input, and the
 // output beside it — so every one of them is counted (the profile's usage
-// arithmetic, [cliprofile.UsagePaths.PromptTokens]).
+// arithmetic, [harnessprofile.UsagePaths.PromptTokens]).
 func (u replyUsage) tokens() int { return u.prompt() + u.Output }
 
 // prompt is the whole prompt one such response read.
@@ -879,7 +879,7 @@ func TestTheScriptedModelReadsTheTranscriptTheBackendRenders(t *testing.T) {
 			{Role: llm.RoleTool, Name: "read_page", ToolCallID: "toolu_3", Content: pending},
 		}},
 	}
-	prompt, err := cliagent.RenderPrompt(req)
+	prompt, err := harness.RenderPrompt(req)
 	if err != nil {
 		t.Fatalf("RenderPrompt: %v", err)
 	}
@@ -912,7 +912,7 @@ func (renderOnly) Halted() bool             { return false }
 func (h renderOnly) Pending() []llm.Message { return h.pending }
 
 // THE SCRIPTED CLI ANSWERS THE BACKEND THE GOLDEN COMPANY BUILDS — built from
-// the document as every node here builds it ([engine.BuildCLIAgent]) and driven
+// the document as every node here builds it ([engine.BuildHarness]) and driven
 // as a phase and an auxiliary pass drive it. Every case in this package stands
 // on this round trip, and a break in it — the marker not reaching the child,
 // the relay not starting, the seat's tools not listed, a call not reaching the
@@ -924,7 +924,7 @@ func (h renderOnly) Pending() []llm.Message { return h.pending }
 // toolsession host), because that is the only way a CLI reaches a phase's
 // tools now: the relay this binary starts, the socket, the listing, the call
 // joined to the request the record shows.
-func TestTheScriptedCLIAnswersTheBackendTheCompanyBuilds(t *testing.T) {
+func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	t.Parallel()
 	// WHAT THE CLI DOES IS WHAT THE PROFILE READS: the name it shows its
 	// model a seat's tool under, and the `_meta` key it hands the server its
@@ -932,7 +932,7 @@ func TestTheScriptedCLIAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	// arguments where the key is not read, so the phase below would pass
 	// with the two out of step, and every call in a response of two alike
 	// would be joined by guesswork.
-	claude, _ := cliprofile.Builtin("claude-code")
+	claude, _ := harnessprofile.Builtin("claude-code")
 	if r := claude.Requests; r == nil || r.HostPrefix != claudeCodeToolPrefix ||
 		r.CallIDMeta != claudeCodeToolUseMeta {
 		t.Fatalf("the claude-code profile reads the record by %+v, and the scripted CLI "+
@@ -944,10 +944,10 @@ func TestTheScriptedCLIAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	provider, err := engine.BuildCLIAgent("scripted", cfg.Providers.LLM["scripted"],
+	provider, err := engine.BuildHarness("scripted", cfg.Providers.LLM["scripted"],
 		config.NewResolver(nodeEnvironment(nil)), nil)
 	if err != nil {
-		t.Fatalf("BuildCLIAgent: %v", err)
+		t.Fatalf("BuildHarness: %v", err)
 	}
 	host, err := toolsession.NewHost()
 	if err != nil {
@@ -1078,10 +1078,10 @@ func TestTheScriptedCLIAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 // and charged. A real CLI's answer and its record are one stream; the scripted
 // CLI's are two steps, the post and the printing, so the fact holds only
 // because a stop landing between them waits for the printing
-// ([cliRun.handleStop]). Held here, where the stop can be put exactly there,
+// ([harnessRun.handleStop]). Held here, where the stop can be put exactly there,
 // rather than only in the budget cases, which would wait out their budget on
 // its absence and say nothing of why.
-func TestAStoppedScriptedCLIPrintsTheRequestItsModelAnswered(t *testing.T) {
+func TestAStoppedScriptedHarnessPrintsTheRequestItsModelAnswered(t *testing.T) {
 	t.Parallel()
 	asked, release := make(chan struct{}), make(chan struct{})
 	var once sync.Once
@@ -1102,8 +1102,8 @@ func TestAStoppedScriptedCLIPrintsTheRequestItsModelAnswered(t *testing.T) {
 	// A TEXT FUNCTION'S RUN, launched as the backend launches one: the
 	// fork-bomb guard, the model, the transcript on stdin, and the entry's
 	// environment alone.
-	cmd := exec.Command(scriptedCLIBinary, "-test.run=^$", "--model", "claude-golden") //nolint:gosec // this test binary
-	cmd.Env = []string{scriptedCLIEnv + "=" + model.url,
+	cmd := exec.Command(scriptedHarnessBinary, "-test.run=^$", "--model", "claude-golden") //nolint:gosec // this test binary
+	cmd.Env = []string{scriptedHarnessEnv + "=" + model.url,
 		procgrouptest.GORACE + "=" + procgrouptest.StandInRaceOptions()}
 	cmd.Stdin = strings.NewReader("## user\n\nHow did the week go?\n")
 	var stdout bytes.Buffer

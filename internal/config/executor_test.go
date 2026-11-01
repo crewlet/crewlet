@@ -9,7 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // stubModel is an llm.Provider that is never called: the registry below is
@@ -109,7 +109,7 @@ func TestTheExecutorHarnessesAreTheInBoxRunners(t *testing.T) {
 	for _, harness := range ExecutorHarnesses {
 		got = append(got, string(harness))
 	}
-	if want := codingagent.Names(); !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+	if want := executor.Names(); !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
 		t.Errorf("config.ExecutorHarnesses = %v, the in-box runners are %v", got, want)
 	}
 	for _, harness := range ExecutorHarnesses {

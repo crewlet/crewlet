@@ -206,7 +206,7 @@ const (
 	// LimitWaitingGrace is how long a seat may wait parked on a model's
 	// limit before the limit is a person's problem: FIFTEEN MINUTES, fixed
 	// by the owner, and equal to the provider park's longest re-probe step
-	// (cliagent's limitBackoff), so a park that has outlived the slowest
+	// (harness's limitBackoff), so a park that has outlived the slowest
 	// re-probe is one the engine will not end on its own soon.
 	LimitWaitingGrace = 15 * time.Minute
 )

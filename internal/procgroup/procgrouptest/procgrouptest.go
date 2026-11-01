@@ -40,7 +40,7 @@ const GORACE = "GORACE"
 // still running at exit has a moment to report a race. A stand-in is a test
 // binary, race-built whenever its suite is, so every clean exit cost a second
 // of nothing, and the suites that launch one per case spent most of their wall
-// clock asleep: cliagent's fake CLI took ~1.02 s per call against 0.05 s for
+// clock asleep: harness's fake CLI took ~1.02 s per call against 0.05 s for
 // the same exec path exiting 1, and the MCP helper ~1.005 s from stdin-EOF to
 // exit against ~320 µs for `cat`.
 //
@@ -56,7 +56,7 @@ const GORACE = "GORACE"
 //
 // A caller passes it EXPLICITLY, in the environment it launches the stand-in
 // with, rather than trusting the GORACE the suite inherited to arrive: a
-// launcher that builds its child's environment from an allowlist — cliagent's
+// launcher that builds its child's environment from an allowlist — harness's
 // does — drops it, so a GORACE exported by make or CI never gets there.
 func StandInRaceOptions() string {
 	return strings.TrimSpace(os.Getenv(GORACE) + " atexit_sleep_ms=0")

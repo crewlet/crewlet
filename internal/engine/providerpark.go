@@ -30,7 +30,7 @@ import (
 // A model's usage limit has an end the vendor usually names: Claude Code's
 // "You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)". The
 // backend reads it and sits its entry out until then
-// (internal/providers/llm/cliagent), so a call in that window is refused
+// (internal/providers/llm/harness), so a call in that window is refused
 // without a process being started. Before this park, nothing above the backend
 // used it. A turn every member of whose chain was refused failed, the
 // dispatcher NAKed its delivery, and the redelivery a second later ran a turn
@@ -99,7 +99,7 @@ import (
 // another ([Engine.reconcileProviderParks]): the redelivery asks the new
 // entries, and a limit that still holds parks the seat again at the cost of one
 // delivery. An entry that still calls as the same account finds the sit-out
-// its sign-in is serving on the node's registry ([cliagent.Plans]), so that
+// its sign-in is serving on the node's registry ([harness.Plans]), so that
 // re-park costs the delivery and no process: the entry refuses before any CLI
 // is started. The park is not
 // carried across instead, because whether the seat's chain is still the one

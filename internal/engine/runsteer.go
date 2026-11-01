@@ -23,7 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -794,16 +794,16 @@ func (i *runInbox) Take(ctx context.Context, event string) string {
 	for _, c := range candidates {
 		messages = append(messages, prompts.SteerMessage(c.note.By, c.note.Text))
 	}
-	candidates = candidates[:codingagent.ClaudeNotesThatFit(messages)]
+	candidates = candidates[:executor.ClaudeNotesThatFit(messages)]
 	taken := i.take(ctx, launch, candidates, boundary)
 	if len(taken) == 0 {
 		return ""
 	}
-	hook := make([]codingagent.HookNote, 0, len(taken))
+	hook := make([]executor.HookNote, 0, len(taken))
 	for _, n := range taken {
-		hook = append(hook, codingagent.HookNote{By: n.By, Message: prompts.SteerMessage(n.By, n.Text)})
+		hook = append(hook, executor.HookNote{By: n.By, Message: prompts.SteerMessage(n.By, n.Text)})
 	}
-	return codingagent.ClaudeHookAnswer(event, hook)
+	return executor.ClaudeHookAnswer(event, hook)
 }
 
 // take records candidates read by the job at boundary, publishes them delivered
@@ -901,7 +901,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 			continue
 		}
 		out = append(out, mcpbridge.SteerNote{
-			Seq: o.held.Seq, ID: o.held.ID, Inbox: codingagent.OpenCodeInboxID(launch, o.held.ID),
+			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.OpenCodeInboxID(launch, o.held.ID),
 			Message: prompts.SteerMessage(o.note.By, o.note.Text),
 		})
 	}

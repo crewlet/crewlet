@@ -3,7 +3,7 @@
 //
 // THE BACKEND IS A CODING CLI, and no model is reached over a vendor's HTTP
 // API (ADR-0045). Every providers.llm entry is one
-// (internal/providers/llm/cliagent), and the only other implementations are
+// (internal/providers/llm/harness), and the only other implementations are
 // the seat's fallback chain (internal/providers/llm/chain) and test doubles.
 // So the contract is what a CLI can be handed and what it can honestly
 // report: a conversation in, an answer and its usage out — and, for a seat at
@@ -347,7 +347,7 @@ const (
 
 	// KindRateLimit is a spent plan or a rate limit the CLI reported in its
 	// vendor's own words. The backend sits the entry out for a while
-	// (internal/providers/llm/cliagent), and the chain moves on — a call to
+	// (internal/providers/llm/harness), and the chain moves on — a call to
 	// its next member, and a seat's executor launch to the next member that
 	// can run it.
 	KindRateLimit

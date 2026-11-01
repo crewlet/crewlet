@@ -38,7 +38,7 @@ func TestAProviderParkedSeatWithWaitingResumesStaysQuiet(t *testing.T) {
 		}
 	}
 	e := r.start(t)
-	withLaunchModels(t, e, cliProvider(t, chainMember{key: "default", agent: "claude-code",
+	withLaunchModels(t, e, harnessProvider(t, chainMember{key: "default", agent: "claude-code",
 		model: "opus", spent: true}))
 	stopWaiters(e)
 
@@ -64,7 +64,7 @@ func TestAProviderParkedSeatWithWaitingResumesStaysQuiet(t *testing.T) {
 
 	// THE LIMIT LIFTS, as an apply that hands the seat an entry with a plan
 	// to spend does: both are tried again, and claimed.
-	withLaunchModels(t, e, cliProvider(t, chainMember{key: "default", agent: "claude-code",
+	withLaunchModels(t, e, harnessProvider(t, chainMember{key: "default", agent: "claude-code",
 		model: "opus"}))
 	e.readmitResumes(waitProvider)
 	eventually(t, "both answers to be claimed for their resumes", func() bool {

@@ -312,7 +312,7 @@ export interface PhaseRecord {
    * which the engine neither made nor timed — and 0 where it reported none,
    * and on every phase.
    */
-  cliTurns: number;
+  harnessTurns: number;
   /**
    * A launch's own account of what it did — what the agent said, one line per
    * tool call, the calls that failed — on a launch only. Redacted by the
@@ -777,7 +777,7 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     deliveredRefs: [],
     deliveredRefsElided: 0,
     launchId: "",
-    cliTurns: 0,
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,
@@ -879,7 +879,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     // reads as nothing left out, which is what such a record is.
     deliveredRefsElided: num(p.delivered_refs_elided),
     launchId,
-    cliTurns: 0,
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,
@@ -981,7 +981,7 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
     deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
     deliveredRefsElided: num(p.delivered_refs_elided),
     launchId,
-    cliTurns: num(p.cli_turns),
+    harnessTurns: num(p.cli_turns),
     transcript: String(p.activity_transcript ?? ""),
     transcriptElidedLines: num(p.activity_transcript_elided_lines),
     transcriptElidedBytes: num(p.activity_transcript_elided_bytes),

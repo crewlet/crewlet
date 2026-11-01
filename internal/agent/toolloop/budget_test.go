@@ -265,7 +265,7 @@ func TestARefusedChargeLeavesItsRoundOnTheFailureRecord(t *testing.T) {
 // shows no request, so the host learns its cost only when it is over — one
 // charge of the run's total, on the round the run is, on the run's own record
 // and on the phase's.
-func TestAnUnobservedCLIsSpendIsChargedOnceAtTheEnd(t *testing.T) {
+func TestAnUnobservedHarnessSpendIsChargedOnceAtTheEnd(t *testing.T) {
 	t.Parallel()
 	m := &weekMeter{}
 	prov := &llmtest.Script{Unobserved: true, Runs: []llmtest.Run{runOf(

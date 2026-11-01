@@ -179,7 +179,7 @@ type ModelStatus struct {
 	Plan string
 
 	// SignIn is the route this node resolves the entry's sign-in through,
-	// in cliagent's words (token, credentials, api-key, env, inherit-env,
+	// in harness's words (token, credentials, api-key, env, inherit-env,
 	// environment, none), and Resolves whether its credential resolved
 	// here.
 	SignIn   string
@@ -218,7 +218,7 @@ type ModelSitOut struct {
 	// report that opened the window.
 	Until, ResetsAt, Since time.Time
 
-	// Window is which of the vendor's limits it is, in cliagent's words
+	// Window is which of the vendor's limits it is, in harness's words
 	// (session, weekly, model, unknown).
 	Window string
 

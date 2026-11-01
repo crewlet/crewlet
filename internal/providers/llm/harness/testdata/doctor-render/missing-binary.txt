@@ -1,0 +1,19 @@
+provider      : sub
+harness       : custom
+binary        : not on PATH
+version       : unknown
+written for   : unknown
+state dir     : <state>
+credentials   : none on disk
+token env     : n/a — this CLI mints no headless token
+sign-in       : none
+token usage   : estimated (4 characters per token)
+system prompt : seats: in the transcript, under the CLI's own (the profile declares no channel)
+              : side passes: in the transcript, under the CLI's own (the profile declares no channel)
+smoke test    : skipped: no binary to run
+local tools   : not declared by profile; probe skipped, no binary to run
+web           : allowed; probe skipped, no binary to run
+problems:
+  - "crewlet-no-such-cli-binary" is not on this host's PATH — the CLI runs on the ENGINE host, so it must be installed here; set overrides.binary to an absolute path if it lives somewhere unusual
+  - no sign-in for "sub": no credential files in <state>/custom/credentials, and nothing in the environment the CLI is given authenticates it — the "custom" profile names no place a login is kept and no key variable: declare one under providers.llm.sub.overrides
+  - the "custom" profile reads no usage figures, so budgets for seats on this provider run on estimates

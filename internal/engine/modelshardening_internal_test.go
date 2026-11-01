@@ -20,8 +20,8 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -64,8 +64,8 @@ func TestAStartWhoseCodeCannotBeRecordedSaysSo(t *testing.T) {
 // finish is closed, whatever its context says: a CLI slow to exit.
 type stubbornLogin struct{ finish chan struct{} }
 
-func (f *stubbornLogin) login(_ context.Context, _ *cliagent.Provider, out func(cliagent.DeviceCode)) error {
-	out(cliagent.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
+func (f *stubbornLogin) login(_ context.Context, _ *harness.Provider, out func(harness.DeviceCode)) error {
+	out(harness.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
 		ExpiresAt: time.Now().Add(15 * time.Minute)})
 	<-f.finish
 	return errors.New("cancelled")
@@ -123,7 +123,7 @@ func (w *slowWriter) Reload(ctx context.Context, _ string, _ iam.Actor) error {
 
 // adoptLogin gives p a login of its CLI's own files, as an approved device
 // sign-in leaves one.
-func adoptLogin(ctx context.Context, t *testing.T, p *cliagent.Provider, file, content string) error {
+func adoptLogin(ctx context.Context, t *testing.T, p *harness.Provider, file, content string) error {
 	t.Helper()
 	home := t.TempDir()
 	path := filepath.Join(home, filepath.FromSlash(file))
@@ -157,8 +157,8 @@ func TestAnApprovalIsStoredReactivatedAndSaid(t *testing.T) {
 	writer := &slowWriter{delay: 300 * time.Millisecond}
 	e.UseConfigWriter(writer)
 	e.signIns.finalBudget = 50 * time.Millisecond
-	e.signIns.login = func(ctx context.Context, p *cliagent.Provider, out func(cliagent.DeviceCode)) error {
-		out(cliagent.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
+	e.signIns.login = func(ctx context.Context, p *harness.Provider, out func(harness.DeviceCode)) error {
+		out(harness.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
 			ExpiresAt: time.Now().Add(15 * time.Minute)})
 		<-approve
 		return adoptLogin(ctx, t, p, ".codex/auth.json", `{"tokens":{"access_token":"approved"}}`)
@@ -180,7 +180,7 @@ func TestAnApprovalIsStoredReactivatedAndSaid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	name := cliprofile.BundleVarName("codex-review")
+	name := harnessprofile.BundleVarName("codex-review")
 	found := false
 	for _, r := range rows {
 		found = found || r.Name == name
@@ -277,8 +277,8 @@ func TestACancelHonoursItsCaller(t *testing.T) {
 	login := &fakeDeviceLogin{finish: make(chan error)}
 	e := signInNode(t, fleet, leases, "node-1", login)
 	release := make(chan struct{})
-	e.signIns.login = func(ctx context.Context, _ *cliagent.Provider, out func(cliagent.DeviceCode)) error {
-		out(cliagent.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
+	e.signIns.login = func(ctx context.Context, _ *harness.Provider, out func(harness.DeviceCode)) error {
+		out(harness.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
 			ExpiresAt: time.Now().Add(15 * time.Minute)})
 		<-release
 		return ctx.Err()
@@ -355,15 +355,15 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 		}
 	}
 	spec := config.LLMProvider{Harness: "claude-code", Model: "opus", StateDir: stateDir,
-		Overrides: map[string]any{"binary": rotatingCLI(t, root, "r0")}}
-	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
+		Overrides: map[string]any{"binary": rotatingHarness(t, root, "r0")}}
+	live, err := BuildHarness("plan", spec, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := adoptLogin(t.Context(), t, live, ".claude/.credentials.json", `{"claudeAiOauth":{"refreshToken":"r0"}}`); err != nil {
 		t.Fatalf("the live login: %v", err)
 	}
-	newer, err := BuildCLIAgent("plan", config.LLMProvider{Harness: "claude-code", Model: "opus",
+	newer, err := BuildHarness("plan", config.LLMProvider{Harness: "claude-code", Model: "opus",
 		StateDir: t.TempDir(), Overrides: missing}, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -404,13 +404,13 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 	}
 }
 
-// rotatingCLI is a claude-code CLI on a vendor that rotates its refresh
+// rotatingHarness is a claude-code CLI on a vendor that rotates its refresh
 // token: every run that signs in with the token the vendor holds (root/vendor)
 // is handed a new one, written over its credentials file, and the old one is
 // retired; a run on any other token is refused and noted in root/refused. It
 // answers --version, fails every other run after signing in, and reads and
 // writes only under root, never the credentials of the host it runs on.
-func rotatingCLI(t *testing.T, root, first string) string {
+func rotatingHarness(t *testing.T, root, first string) string {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(root, "vendor"), []byte(first), 0o600); err != nil {
 		t.Fatal(err)
@@ -455,8 +455,8 @@ func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
 		}
 	}
 	spec := config.LLMProvider{Harness: "claude-code", Model: "opus", StateDir: stateDir,
-		Overrides: map[string]any{"binary": rotatingCLI(t, root, "r0")}}
-	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
+		Overrides: map[string]any{"binary": rotatingHarness(t, root, "r0")}}
+	live, err := BuildHarness("plan", spec, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

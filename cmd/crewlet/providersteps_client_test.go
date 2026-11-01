@@ -266,7 +266,7 @@ func (w *stepWalk) llm(line string, args []string) {
 		w.t.Fatalf("`%s` reads the company from %s, and cannot: %v",
 			line, companyPath, err)
 	}
-	if _, err := cliAgents(company, keys, resolver); err != nil {
+	if _, err := harnessProviders(company, keys, resolver); err != nil {
 		w.t.Fatalf("`%s`: %v", line, err)
 	}
 	if !slices.Contains(w.signedIn, key) {

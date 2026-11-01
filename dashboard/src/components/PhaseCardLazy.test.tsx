@@ -84,7 +84,7 @@ function record() {
     codingAgent: "",
     sandboxId: "",
     launchId: "",
-    cliTurns: 0,
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,

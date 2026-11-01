@@ -1605,7 +1605,7 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 }
 
 // noteReader is a [Runner] whose CLI takes a person's notes to its run's turn
-// between its own steps (internal/sandbox/codingagent's Runner, for a CLI it
+// between its own steps (internal/sandbox/executor's Runner, for a CLI it
 // has taught to). Optional, as a runner that reads none — a CLI not yet taught,
 // a test's — says nothing about notes at all.
 type noteReader interface{ ReadsNotes() bool }
@@ -1620,7 +1620,7 @@ type noteReader interface{ ReadsNotes() bool }
 // succeeded without asking is one whose reading never ran — for Claude Code, a
 // managed policy that allows only managed hooks or disables them all, or a
 // release older than 2.1.163, which its script starts without the hooks
-// (codingagent, claudeNotesFloor); for OpenCode, a managed policy that denies
+// (executor, claudeNotesFloor); for OpenCode, a managed policy that denies
 // the plugin, or a plugin that failed to load — and every note sent while it
 // worked waited for its review, which a person sending one is told reads at its
 // next step.

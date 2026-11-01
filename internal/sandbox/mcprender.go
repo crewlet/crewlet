@@ -90,7 +90,7 @@ func (t Transport) Valid() bool {
 //
 // It answers in the SAME type it takes — not a generic `map[string]any` of
 // each CLI's own config keys. That shape erased everything a runner needed:
-// internal/sandbox/codingagent's OpenCode writer had to assert its way back
+// internal/sandbox/executor's OpenCode writer had to assert its way back
 // out of it, and its args branch carried two fallbacks (`[]string` and
 // `[]any`) because nothing but a convention said which one it would find. The
 // keys it erased into were Claude Code's, which this package's own doc said

@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
@@ -133,7 +133,7 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 // is no model (each case plays its own script): a nil provider and a closer
 // with nothing to close.
 func evalModel(ctx context.Context, environ config.Source, companyPath string, storeAt storeFlags,
-	key string, stderr io.Writer) (*cliagent.Provider, func(), error) {
+	key string, stderr io.Writer) (*harness.Provider, func(), error) {
 
 	if key == "" {
 		return nil, func() {}, nil
@@ -160,13 +160,13 @@ func evalModel(ctx context.Context, environ config.Source, companyPath string, s
 // assistantProvider is the CLI agent entry key names, refused when the
 // company may not run the assistant on it.
 func assistantProvider(company *config.Company, keys []string, resolver *config.Resolver,
-	key string) (*cliagent.Provider, error) {
+	key string) (*harness.Provider, error) {
 
 	if problem := company.AssistantEntryProblems(key); problem != nil {
 		return nil, fmt.Errorf("crewlet assistant eval: %s may not run Ask Crewlet: %w",
 			key, problem)
 	}
-	providers, err := cliAgents(company, keys, resolver)
+	providers, err := harnessProviders(company, keys, resolver)
 	if err != nil {
 		return nil, err
 	}

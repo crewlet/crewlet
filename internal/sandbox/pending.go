@@ -2379,7 +2379,7 @@ type LaunchRecord struct {
 	ProviderKey string `json:"provider_key,omitempty"`
 
 	// SignInID is the sign-in identity the job's CLI was handed at its
-	// launch: the entry's cliagent SignInID, a keyed digest of its
+	// launch: the entry's harness SignInID, a keyed digest of its
 	// credentials that names no credential. Empty where the launch had none
 	// to name.
 	//

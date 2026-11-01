@@ -48,7 +48,7 @@ import (
 // every phase on this host takes (onboarding, the reviewer, workers, side passes), and
 // `coder`, a Claude Code entry, which the executor's launch takes, skipping the
 // head. Its run happens in a real `direct` box whose `claude` is this binary
-// again ([codingCLIEnv]), asking the SAME scripted model each round.
+// again ([harnessEnv]), asking the SAME scripted model each round.
 //
 // The three `%s` are the box catalogue, the scripted entry and the coder entry
 // — rendered by [goldenCompany], which is the one way to fill them.

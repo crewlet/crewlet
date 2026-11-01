@@ -9,38 +9,38 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // creditedCompany is a one-seat company whose executor is the named
 // subscription CLI.
 //
-// A REAL cliagent provider rather than a stand-in, because the whole question
+// A REAL harness provider rather than a stand-in, because the whole question
 // is which credentials that provider's profile can actually put inside a box —
 // a fake would answer whatever the test wanted and prove nothing about the CLI.
 func creditedCompany(t *testing.T, agent string) (*Company, *org.Role) {
 	t.Helper()
-	return creditedCompanyAuth(t, agent, cliagent.Auth{})
+	return creditedCompanyAuth(t, agent, harness.Auth{})
 }
 
 // creditedCompanyAuth is [creditedCompany] signed in under auth.
-func creditedCompanyAuth(t *testing.T, agent string, auth cliagent.Auth) (*Company, *org.Role) {
+func creditedCompanyAuth(t *testing.T, agent string, auth harness.Auth) (*Company, *org.Role) {
 	t.Helper()
 	return creditedCompanyOverrides(t, agent, auth, nil)
 }
 
 // creditedCompanyOverrides is [creditedCompanyAuth] with the entry's profile
 // overrides.
-func creditedCompanyOverrides(t *testing.T, agent string, auth cliagent.Auth,
+func creditedCompanyOverrides(t *testing.T, agent string, auth harness.Auth,
 	overrides map[string]any) (*Company, *org.Role) {
 	t.Helper()
-	provider, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: agent, StateDir: t.TempDir(), Timeout: time.Minute, Auth: auth,
+	provider, err := harness.New(harness.Config{
+		Key: "sub", Harness: agent, StateDir: t.TempDir(), Timeout: time.Minute, Auth: auth,
 		Overrides: overrides,
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New(%s): %v", agent, err)
+		t.Fatalf("harness.New(%s): %v", agent, err)
 	}
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "sub", Provider: provider}})
 	if err != nil {
@@ -60,7 +60,7 @@ func guardOn(t *testing.T, c *Company, seat *org.Role, placement sandbox.Placeme
 	if err != nil {
 		t.Fatalf("%s's executor chain: %v", seat.Name, err)
 	}
-	return sandboxCredentials(member.Provider.(*cliagent.Provider), member.Key, seat.Handle(),
+	return sandboxCredentials(member.Provider.(*harness.Provider), member.Key, seat.Handle(),
 		placement, env)
 }
 
@@ -105,7 +105,7 @@ func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 // that travels to any box, so the operator's fix is one command rather than a
 // placement change — and offering only the placement change would move a seat
 // onto the engine host for no reason.
-func TestTheRemedyNamesTheTokenWhereTheCLIMintsOne(t *testing.T) {
+func TestTheRemedyNamesTheTokenWhereTheHarnessMintsOne(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "claude-code")
 	err := guardOn(t, c, seat, sandbox.E2B, nil)
@@ -135,35 +135,35 @@ func TestTheRemedyFollowsTheEntrysAuthMode(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	for _, tc := range []struct {
-		mode    cliagent.AuthMode
+		mode    harness.AuthMode
 		want    []string
 		notWant []string
 	}{
 		{
-			mode:    cliagent.AuthAPIKey,
+			mode:    harness.AuthAPIKey,
 			want:    []string{"api-key", "providers.llm.sub.auth.api_key", "ANTHROPIC_API_KEY", "crewlet secrets set", "role.sandbox.env"},
 			notWant: []string{"capture-token", "subscription login", "CLAUDE_CODE_OAUTH_TOKEN"},
 		},
 		{
-			mode:    cliagent.AuthInheritEnv,
+			mode:    harness.AuthInheritEnv,
 			want:    []string{"inherit-env", "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "engine's", "never from the secret store", "role.sandbox.env", string(sandbox.Direct)},
 			notWant: []string{"capture-token", "subscription login", "crewlet secrets set"},
 		},
 		{
 			// The env is the whole sign-in and seeds no login, so a local
 			// cell is no remedy and a token is never asked for.
-			mode:    cliagent.AuthEnv,
+			mode:    harness.AuthEnv,
 			want:    []string{"env", "CLAUDE_CODE_USE_BEDROCK", "providers.llm.sub.env", "role.sandbox.env"},
 			notWant: []string{"capture-token", "local cell", "seeded with its login", "crewlet secrets set"},
 		},
 		{
-			mode:    cliagent.AuthSubscription,
+			mode:    harness.AuthSubscription,
 			want:    []string{"subscription login", "crewlet llm login sub -capture-token", string(sandbox.Direct)},
 			notWant: []string{"auth.api_key", "inherit-env"},
 		},
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
-			c, seat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: tc.mode})
+			c, seat := creditedCompanyAuth(t, "claude-code", harness.Auth{Mode: tc.mode})
 			err := guardOn(t, c, seat, sandbox.E2B, nil)
 			var credErr *SandboxCredentialError
 			if !errors.As(err, &credErr) {
@@ -197,7 +197,7 @@ func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 		return guardOn(t, c, seat, sandbox.E2B, runOn(t, c, seat, seatEnv).env)
 	}
 
-	key, keySeat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: cliagent.AuthAPIKey})
+	key, keySeat := creditedCompanyAuth(t, "claude-code", harness.Auth{Mode: harness.AuthAPIKey})
 	if err := launch(key, keySeat, map[string]string{"ANTHROPIC_API_KEY": "sk-ant-not-a-real-key"}); err != nil {
 		t.Errorf("an api-key entry whose seat brings the key was refused: %v", err)
 	}
@@ -205,12 +205,12 @@ func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 		t.Error("an api-key entry with no key anywhere was launched")
 	}
 	stored, storedSeat := creditedCompanyAuth(t, "claude-code",
-		cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-a-real-key"})
+		harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-not-a-real-key"})
 	if err := launch(stored, storedSeat, nil); err != nil {
 		t.Errorf("an api-key entry whose key resolved was refused: %v", err)
 	}
 
-	inherit, inheritSeat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: cliagent.AuthInheritEnv})
+	inherit, inheritSeat := creditedCompanyAuth(t, "claude-code", harness.Auth{Mode: harness.AuthInheritEnv})
 	if err := launch(inherit, inheritSeat, nil); err == nil {
 		t.Error("an inherit-env entry with nothing in the engine's environment was launched")
 	}
@@ -228,7 +228,7 @@ func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 // signs in with needs; never a variable to set, since none would reach the CLI.
 func TestARemedyNamesNoVariableTheModeDoesNotHave(t *testing.T) {
 	t.Parallel()
-	c, seat := creditedCompanyAuth(t, "opencode", cliagent.Auth{Mode: cliagent.AuthAPIKey})
+	c, seat := creditedCompanyAuth(t, "opencode", harness.Auth{Mode: harness.AuthAPIKey})
 	err := guardOn(t, c, seat, sandbox.E2B, nil)
 	var credErr *SandboxCredentialError
 	if !errors.As(err, &credErr) {
@@ -276,12 +276,12 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		agent         string
-		mode          cliagent.AuthMode
+		mode          harness.AuthMode
 		overrides     map[string]any
 		want, notWant []string
 	}{
 		{
-			name: "subscription", mode: cliagent.AuthSubscription,
+			name: "subscription", mode: harness.AuthSubscription,
 			overrides: map[string]any{"token_env": "MY-TOKEN"},
 			want: []string{`providers.llm.sub.overrides.token_env is "MY-TOKEN"`,
 				"Name the variable your build of the CLI reads", string(sandbox.Direct)},
@@ -289,27 +289,27 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 		},
 		{
 			name: "subscription on a CLI that reads its provider's key", agent: "opencode",
-			mode: cliagent.AuthSubscription, overrides: map[string]any{"token_env": "MY-TOKEN"},
+			mode: harness.AuthSubscription, overrides: map[string]any{"token_env": "MY-TOKEN"},
 			want: []string{"Set the key of", "providers.llm.sub.env",
 				`providers.llm.sub.overrides.token_env is "MY-TOKEN"`, string(sandbox.Direct)},
 			notWant: []string{"crewlet llm login sub -capture-token"},
 		},
 		{
-			name: "api-key", mode: cliagent.AuthAPIKey,
+			name: "api-key", mode: harness.AuthAPIKey,
 			overrides: map[string]any{"api_key_env": "MY=KEY"},
 			want: []string{"providers.llm.sub.overrides.api_key_env",
 				"name the variable your build of the CLI reads"},
 			notWant: []string{"role.sandbox.env", "crewlet secrets set", "capture-token", "local cell"},
 		},
 		{
-			name: "inherit-env with one variable a shell can export", mode: cliagent.AuthInheritEnv,
+			name: "inherit-env with one variable a shell can export", mode: harness.AuthInheritEnv,
 			overrides: map[string]any{"token_env": "MY-TOKEN"},
 			want: []string{"export ANTHROPIC_API_KEY in the engine's environment",
 				"set ANTHROPIC_API_KEY in this seat's role.sandbox.env", string(sandbox.Direct)},
 			notWant: []string{"MY-TOKEN or ANTHROPIC_API_KEY in this seat's", "capture-token"},
 		},
 		{
-			name: "inherit-env with none", mode: cliagent.AuthInheritEnv,
+			name: "inherit-env with none", mode: harness.AuthInheritEnv,
 			overrides: map[string]any{"token_env": "MY-TOKEN", "api_key_env": "MY-KEY"},
 			want: []string{"providers.llm.sub.overrides.token_env and providers.llm.sub.overrides.api_key_env",
 				"seeded with its login", string(sandbox.Direct)},
@@ -321,7 +321,7 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 			if agent == "" {
 				agent = "claude-code"
 			}
-			c, seat := creditedCompanyOverrides(t, agent, cliagent.Auth{Mode: tc.mode}, tc.overrides)
+			c, seat := creditedCompanyOverrides(t, agent, harness.Auth{Mode: tc.mode}, tc.overrides)
 			err := guardOn(t, c, seat, sandbox.E2B, nil)
 			var credErr *SandboxCredentialError
 			if !errors.As(err, &credErr) {
@@ -412,15 +412,15 @@ func TestALocalRunNeedsNoTravellingCredential(t *testing.T) {
 // run environment carried only the token and the api-key variable, so an
 // executor run on such an entry started its CLI signed in to nothing, and a
 // remote one was refused as having no credential at all.
-func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
+func TestAHarnessEnvSignInTravelsIntoTheRun(t *testing.T) {
 	t.Parallel()
 	company := func(env map[string]string) (*Company, *org.Role) {
-		provider, err := cliagent.New(cliagent.Config{
-			Key: "sub", Agent: "opencode", Model: "anthropic/claude-sonnet-4",
+		provider, err := harness.New(harness.Config{
+			Key: "sub", Harness: "opencode", Model: "anthropic/claude-sonnet-4",
 			StateDir: t.TempDir(), Timeout: time.Minute, Env: env,
 		})
 		if err != nil {
-			t.Fatalf("cliagent.New: %v", err)
+			t.Fatalf("harness.New: %v", err)
 		}
 		models, err := phase.NewRegistry([]phase.Entry{{Key: "sub", Provider: provider}})
 		if err != nil {

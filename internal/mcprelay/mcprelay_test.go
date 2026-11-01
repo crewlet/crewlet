@@ -72,7 +72,7 @@ func TestTheEngineClosingTheSocketEndsTheRelay(t *testing.T) {
 //
 // Mutation: close the whole socket when stdin ends and the engine's answer is
 // lost — stdout comes back empty.
-func TestTheCLIFinishingStillGetsTheAnswerToItsLastCall(t *testing.T) {
+func TestTheHarnessFinishingStillGetsTheAnswerToItsLastCall(t *testing.T) {
 	t.Parallel()
 	path, ln := socket(t)
 	go func() {

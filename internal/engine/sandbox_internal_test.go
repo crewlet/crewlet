@@ -26,10 +26,10 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // The knob has three states and the manager's input carries a pointer for
@@ -99,7 +99,7 @@ func runOn(t *testing.T, c *Company, seat *org.Role, seatEnv map[string]string) 
 	if err != nil {
 		t.Fatalf("%s's executor chain: %v", seat.Name, err)
 	}
-	return newCodingRun(member.Provider.(*cliagent.Provider), seatEnv)
+	return newCodingRun(member.Provider.(*harness.Provider), seatEnv)
 }
 
 // AN API-KEY ENTRY'S BOX IS HANDED THE KEY ITS OWN CALLS USE, RESOLVED.
@@ -223,7 +223,7 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := member.Provider.(*cliagent.Provider).ModelArgument()
+	text := member.Provider.(*harness.Provider).ModelArgument()
 	if text != "openrouter/anthropic/claude-sonnet-5" {
 		t.Fatalf("the text calls' model = %q, want the resolved model as written", text)
 	}
@@ -232,7 +232,7 @@ roles:
 	}
 	// The run is a script quoted for `sh -c`; its quoting undone, the model
 	// is an argument of its own.
-	cmd := codingagent.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", Model: run.model}, codingagent.Paths{}, "")
+	cmd := executor.OpenCode{}.Command(sandbox.RunRequest{Brief: "x", Model: run.model}, executor.Paths{}, "")
 	if script := strings.ReplaceAll(cmd, `'\''`, "'"); !strings.Contains(script, "--model '"+text+"'") {
 		t.Errorf("the agent run gave:\n%s\nwant --model %q, the value every text call passes", cmd, text)
 	}
@@ -264,8 +264,8 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
-	doc := filepath.Join(shared, cliprofile.CredentialStoreDocument)
+	shared := member.Provider.(*harness.Provider).Workspace().CredentialsDir()
+	doc := filepath.Join(shared, harnessprofile.CredentialStoreDocument)
 	for _, signedIn := range []bool{false, true} {
 		if signedIn {
 			if err := os.MkdirAll(shared, 0o700); err != nil {
@@ -276,9 +276,9 @@ roles:
 			}
 		}
 		run := runOn(t, c, seat, nil)
-		if got := run.files[codingagent.CredentialDocument]; got != doc || len(run.files) != 1 {
+		if got := run.files[executor.CredentialDocument]; got != doc || len(run.files) != 1 {
 			t.Errorf("signed in %v: the box is seeded from %q at %s, want the shared login %q "+
-				"and nothing else (files %v)", signedIn, got, codingagent.CredentialDocument, doc, run.files)
+				"and nothing else (files %v)", signedIn, got, executor.CredentialDocument, doc, run.files)
 		}
 	}
 }
@@ -355,7 +355,7 @@ roles:
 	if err != nil {
 		t.Fatal(err)
 	}
-	shared := member.Provider.(*cliagent.Provider).Workspace().CredentialsDir()
+	shared := member.Provider.(*harness.Provider).Workspace().CredentialsDir()
 	if want := filepath.Join(shared, ".credentials.json"); files[".claude/.credentials.json"] != want || len(files) != 1 {
 		t.Errorf("an entry nobody signed in offered %v, want its one login file at %s", files, want)
 	}

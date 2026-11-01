@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -23,8 +23,8 @@ type fakeDeviceLogin struct {
 	finish chan error
 }
 
-func (f *fakeDeviceLogin) login(ctx context.Context, _ *cliagent.Provider, out func(cliagent.DeviceCode)) error {
-	out(cliagent.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
+func (f *fakeDeviceLogin) login(ctx context.Context, _ *harness.Provider, out func(harness.DeviceCode)) error {
+	out(harness.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
 		ExpiresAt: time.Now().Add(15 * time.Minute)})
 	select {
 	case err := <-f.finish:
@@ -276,7 +276,7 @@ func TestADeviceSignInsEndIsAudited(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartDeviceSignIn: %v", err)
 	}
-	login.finish <- cliagent.ErrDeviceCodeExpired
+	login.finish <- harness.ErrDeviceCodeExpired
 	statusOn(t, one, started.ID, coord.DeviceExpired)
 	deadline := time.Now().Add(5 * time.Second)
 	for len(endsAudited(q)) == 0 && time.Now().Before(deadline) {

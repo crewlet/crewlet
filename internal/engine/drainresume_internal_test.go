@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -175,7 +175,7 @@ func withModels(t *testing.T, e *Engine, entry llm.Provider) {
 // given, and the catalogue this node's coordinator launches on as the epoch's
 // own, as an apply that configured both would. The entry is what an answer's
 // relaunch picks from ([firstCallMembers]).
-func withLaunchModels(t *testing.T, e *Engine, entry *cliagent.Provider) {
+func withLaunchModels(t *testing.T, e *Engine, entry *harness.Provider) {
 	t.Helper()
 	reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: entry}})
 	if err != nil {

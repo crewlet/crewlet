@@ -14,9 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -295,7 +295,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	run := newCodingRun(agent, runEnv.env)
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       cell,
-		CodingAgent:     agent.Agent(),
+		CodingAgent:     agent.Harness(),
 		PauseTTL:        pauseTTL(settings),
 		MaxTurns:        maxTurnsFor(settings),
 		Env:             run.env,
@@ -496,7 +496,7 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 //     where a hand-off announced on every launch would report a fallback
 //     nothing fell from;
 //   - a member sitting out its spent plan on this node
-//     ([cliagent.Provider.SittingOut]) is handed off like a call's fallback
+//     ([harness.Provider.SittingOut]) is handed off like a call's fallback
 //     ([chain.Pick]), published against this turn through onFallback;
 //   - every runner member sitting out is a [*chain.Error] carrying each one's
 //     refusal, the same unavailability an exhausted call reports: a chain at
@@ -507,18 +507,18 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 // A run that meets its limit midway is not relaunched on the next member: its
 // box did the work it did, and the next launch is where the chain moves on.
 func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
-	onFallback func(chain.Fallback)) (chain.Member, *cliagent.Provider, error) {
+	onFallback func(chain.Fallback)) (chain.Member, *harness.Provider, error) {
 	runners, err := executorRunners(l.company, l.seat, manager)
 	if err != nil {
 		return chain.Member{}, nil, err
 	}
 	picked, err := chain.Pick(ctx, runners, func(m chain.Member) error {
-		return m.Provider.(*cliagent.Provider).SittingOut()
+		return m.Provider.(*harness.Provider).SittingOut()
 	}, onFallback)
 	if err != nil {
 		return chain.Member{}, nil, err
 	}
-	return picked, picked.Provider.(*cliagent.Provider), nil
+	return picked, picked.Provider.(*harness.Provider), nil
 }
 
 // executorRunners is seat's executor chain as a launch can take it: every
@@ -544,11 +544,11 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]ch
 	}
 	runners := make([]chain.Member, 0, len(members))
 	for _, m := range members {
-		agent, isCLI := m.Provider.(*cliagent.Provider)
-		if !isCLI {
+		agent, isHarness := m.Provider.(*harness.Provider)
+		if !isHarness {
 			continue
 		}
-		if _, err := manager.RunnerFor(agent.Agent()); err != nil {
+		if _, err := manager.RunnerFor(agent.Harness()); err != nil {
 			continue
 		}
 		runners = append(runners, m)
@@ -560,7 +560,7 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]ch
 		}
 		return nil, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf("seat %q's executor "+
 			"chain (%s) has no member whose CLI runs in a box: point the seat's llm at an "+
-			"entry on %s", seat.Handle(), words.And(keys), words.Or(codingagent.Names())))
+			"entry on %s", seat.Handle(), words.And(keys), words.Or(executor.Names())))
 	}
 	return runners, nil
 }

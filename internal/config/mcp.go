@@ -31,7 +31,7 @@ var MCPTransports = []MCPTransport{TransportStdio, TransportHTTP}
 // spelled one way in every phase — the prefix its model sees
 // (`mcp__crewlet__reply`) is the same for the reviewer on this host and the
 // executor in its box — and the built-in harness profiles, which write it into
-// each harness's own configuration grammar, are held to it by a test in cliagent.
+// each harness's own configuration grammar, are held to it by a test in harness.
 //
 // RESERVED: an `mcp_servers` entry may not take it. The engine writes the
 // bridge into every executor box's server list under this key, so a company

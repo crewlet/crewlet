@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
 // epochEngine is a bare engine whose active revision is c.
@@ -50,7 +50,7 @@ func TestEachEntrysRowIsItsSignInsStateOnThisNode(t *testing.T) {
 		chainMember{key: "plan", agent: "claude-code", model: "opus"},
 		chainMember{key: "spare", agent: "claude-code", model: "haiku", env: map[string]string{"ANTHROPIC_BASE_URL": "https://gateway.example.com"}},
 	)
-	if !planOf(t, c).RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm", At: time.Now()}) {
+	if !planOf(t, c).RunEnded(t.Context(), harness.RunEnd{Answer: "Usage limit reached · resets 5pm", At: time.Now()}) {
 		t.Fatal("the premise: the plan entry sits out")
 	}
 	e := epochEngine(c)
@@ -94,22 +94,22 @@ func TestANodeWithNoModelsPublishesNoRows(t *testing.T) {
 	}
 }
 
-// statusCLI is a subscription claude-code entry whose CLI's status command
+// statusHarness is a subscription claude-code entry whose CLI's status command
 // exits with code, as the login watcher runs it.
-func statusCLI(t *testing.T, key string, code int) *cliagent.Provider {
+func statusHarness(t *testing.T, key string, code int) *harness.Provider {
 	t.Helper()
 	script := filepath.Join(t.TempDir(), "status-cli")
 	body := fmt.Sprintf("#!/bin/sh\necho '{\"loggedIn\": true, \"authMethod\": \"claude.ai\"}'\nexit %d\n", code)
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	provider, err := cliagent.New(cliagent.Config{
-		Key: key, Agent: "claude-code", Model: "opus", StateDir: t.TempDir(),
+	provider, err := harness.New(harness.Config{
+		Key: key, Harness: "claude-code", Model: "opus", StateDir: t.TempDir(),
 		Overrides: map[string]any{"binary": script}, Timeout: time.Minute,
-		Auth: cliagent.Auth{Mode: cliagent.AuthSubscription},
+		Auth: harness.Auth{Mode: harness.AuthSubscription},
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
+		t.Fatalf("harness.New: %v", err)
 	}
 	return provider
 }
@@ -122,10 +122,10 @@ func statusCLI(t *testing.T, key string, code int) *cliagent.Provider {
 //
 // Mutation: publish a login row for a key entry, or answer a check from the
 // last beat's reading rather than running the command, and this fails.
-func TestTheLoginWatcherSaysWhatTheCLISaysOfItsLogin(t *testing.T) {
+func TestTheLoginWatcherSaysWhatTheHarnessSaysOfItsLogin(t *testing.T) {
 	t.Parallel()
 	c, _ := chainCompany(t, chainMember{key: "keyed", agent: "claude-code", model: "opus"})
-	signedIn, signedOut := statusCLI(t, "host", 0), statusCLI(t, "gone", 1)
+	signedIn, signedOut := statusHarness(t, "host", 0), statusHarness(t, "gone", 1)
 	keyed, _ := c.Models.Provider("keyed")
 	models, err := phase.NewRegistry([]phase.Entry{
 		{Key: "keyed", Provider: keyed}, {Key: "host", Provider: signedIn}, {Key: "gone", Provider: signedOut},

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // The cases here hold WHERE `crewlet llm` restores an entry's configured
@@ -36,7 +36,7 @@ func bundledEntryWithLogout(t *testing.T, bundle, logout string) (flags []string
 	t.Helper()
 	dir := t.TempDir()
 	state := filepath.Join(dir, "state")
-	t.Setenv(cliprofile.BundleVarName("sub"), bundle)
+	t.Setenv(harnessprofile.BundleVarName("sub"), bundle)
 	binary, status, signIn, logoutArgs := "true", `["status"]`, `["login"]`, ""
 	if logout != "" {
 		binary, status, signIn = "sh", `["-c", "exit 0"]`, `["-c", "exit 0"]`
@@ -75,8 +75,8 @@ roles:
 // rather than this file's copy of one.
 func llmBundle(t *testing.T, body string) string {
 	t.Helper()
-	p, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: "custom", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
+	p, err := harness.New(harness.Config{
+		Key: "sub", Harness: "custom", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
 		Overrides: map[string]any{
 			"binary": "true", "complete_args": []any{"-p"}, "output": "text",
 			"credential_paths": []any{".fake/creds.json"},
@@ -103,8 +103,8 @@ func llmBundle(t *testing.T, body string) string {
 // a state directory of its own: another CLI's, to the `custom` entry above.
 func codexBundle(t *testing.T, body string) string {
 	t.Helper()
-	p, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: "codex", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
+	p, err := harness.New(harness.Config{
+		Key: "sub", Harness: "codex", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
 	})
 	if err != nil {
 		t.Fatalf("building the exporting entry: %v", err)
@@ -174,7 +174,7 @@ func TestALogoutOutlastsTheCommandsThatRestoreTheBundle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("logout: %v (%s)", err, stderr)
 	}
-	for _, want := range []string{"Logged sub out", cliprofile.BundleVarName("sub"), "fresh volume",
+	for _, want := range []string{"Logged sub out", harnessprofile.BundleVarName("sub"), "fresh volume",
 		"`crewlet llm login sub`"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the logout does not say %q about the configured bundle:\n%s", want, stdout)
@@ -267,7 +267,7 @@ func TestTheCommandsThatAnswerAsTheEngineRestoreTheBundleFirst(t *testing.T) {
 //
 // Mutation: drop the key from doctor's remedy, or the manifest's check from the
 // restore, and this is red.
-func TestABundleFromAnotherCLIIsRefusedByTheCommandsThatRestoreIt(t *testing.T) {
+func TestABundleFromAnotherHarnessIsRefusedByTheCommandsThatRestoreIt(t *testing.T) {
 	flags, login := bundledEntry(t, codexBundle(t, `{"token":"k-codex"}`))
 
 	stdout, _, err := runSub(t, flags, "doctor", "-no-smoke")
@@ -368,7 +368,7 @@ func TestALogoutWhoseVendorHalfFailedStillNamesTheBundle(t *testing.T) {
 	if strings.Contains(stdout, "Logged sub out") {
 		t.Errorf("a logout whose vendor half failed reported success:\n%s", stdout)
 	}
-	for _, want := range []string{cliprofile.BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
+	for _, want := range []string{harnessprofile.BundleVarName("sub"), "fresh volume", "`crewlet llm login sub`"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the failed logout does not say %q about the bundle it holds back:\n%s", want, stdout)
 		}

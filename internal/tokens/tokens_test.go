@@ -574,7 +574,7 @@ func TestAPhaseRecordCountsTheProviderCallsItCovers(t *testing.T) {
 //
 // Mutation: count a launch as one whatever its CLI reported, or take a
 // negative count as given, and this goes red.
-func TestALaunchCountsItsCLIsOwnTurns(t *testing.T) {
+func TestALaunchCountsItsHarnessOwnTurns(t *testing.T) {
 	t.Parallel()
 	for turns, want := range map[int]int{17: 17, 1: 1, 0: 1, -3: 1} {
 		if got := tokens.LaunchCalls(turns); got != want {

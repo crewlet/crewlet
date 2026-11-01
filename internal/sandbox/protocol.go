@@ -305,7 +305,7 @@ type Result struct {
 	// Text and Error: its own terminal event, verbatim — Claude Code's
 	// result line, whose `api_error_status` names a spent plan however the
 	// sentence beside it is worded. It is what an executor's ending is
-	// classified by first, as a call's is (cliagent.Provider.RunEnded), and
+	// classified by first, as a call's is (harness.Provider.RunEnded), and
 	// nothing else reads it. Set on a run that did not succeed, by a CLI that
 	// prints such an event; empty otherwise, and wherever the line is past
 	// [MaxRunEventBytes] ([boundBox]).
@@ -735,7 +735,7 @@ type RunRequest struct {
 // run that wrote it.
 //
 // GIT ADDS IT, NOT THE MODEL. The runner installs a hook in the box that git
-// runs on every commit the run makes (internal/sandbox/codingagent's
+// runs on every commit the run makes (internal/sandbox/executor's
 // attribution.go), so the credit is there whether or not the agent remembered
 // an instruction — and only on a commit whose author is the identity the run
 // commits as, so a person's commit the run amends, cherry-picks or rebases is

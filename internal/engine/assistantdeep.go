@@ -23,10 +23,10 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/period"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -144,7 +144,7 @@ func (assistantRunAs) Bound() bool { return true }
 // target is where one run goes: its cell, the manager over it and its CLI.
 type deepTarget struct {
 	key       string
-	agent     *cliagent.Provider
+	agent     *harness.Provider
 	placement sandbox.Placement
 	manager   *sandbox.Manager
 	company   *Company
@@ -171,8 +171,8 @@ func (d *assistantDeep) target() (deepTarget, error) {
 		return deepTarget{}, fmt.Errorf("assistant.deep_work.llm names %q, which this node "+
 			"does not build", key)
 	}
-	agent, isCLI := provider.(*cliagent.Provider)
-	if !isCLI || agent.Agent() != codingagent.ClaudeCodeName {
+	agent, isHarness := provider.(*harness.Provider)
+	if !isHarness || agent.Harness() != executor.ClaudeCodeName {
 		return deepTarget{}, fmt.Errorf("providers.llm.%s is not a Claude Code entry this "+
 			"node can run deep work on", key)
 	}
@@ -391,14 +391,14 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 
 	maxTurns := r.Steps
 	spec := t.manager.BuildSpec(sandbox.SpecInput{Placement: placement,
-		CodingAgent: codingagent.ClaudeCodeName, Timeout: r.Timeout + deepGrace,
+		CodingAgent: executor.ClaudeCodeName, Timeout: r.Timeout + deepGrace,
 		MaxTurns: &maxTurns, Env: run.env, CredentialFiles: run.files})
 	box, runner, session, err := d.acquire(ctx, t, spec, r)
 	if err != nil {
 		return assistant.DeepOutcome{}, err
 	}
 	out := assistant.DeepOutcome{Box: assistant.DeepBox{Placement: string(placement),
-		Sandbox: box.ID(), Agent: codingagent.ClaudeCodeName, Session: session}}
+		Sandbox: box.ID(), Agent: executor.ClaudeCodeName, Session: session}}
 	if placeErr := placeInputs(ctx, box, r.Inputs); placeErr != nil {
 		d.discard(ctx, t, placement, box.ID())
 		return assistant.DeepOutcome{}, placeErr
@@ -448,7 +448,7 @@ func (d *assistantDeep) acquire(ctx context.Context, t deepTarget, spec sandbox.
 		var runner sandbox.Runner
 		box, err := reach(managers, func(m *sandbox.Manager) (sandbox.Sandbox, error) {
 			reconnected, held, reconnectErr := m.Reconnect(ctx, placement, c.Sandbox,
-				codingagent.ClaudeCodeName)
+				executor.ClaudeCodeName)
 			runner = held
 			return reconnected, reconnectErr
 		})

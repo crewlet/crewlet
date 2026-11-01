@@ -1,7 +1,7 @@
 // Package textcut shortens a string without breaking it.
 //
 // It replaced four helpers — three named truncate, in internal/agent/extension,
-// internal/learning and internal/providers/llm/cliagent, plus internal/learning's
+// internal/learning and internal/providers/llm/harness, plus internal/learning's
 // preview — which were four copies of one rule. They already agreed on the hard
 // part, walk back to a rune boundary, and disagreed on the easy one: two
 // appended "…" and two appended "...", so the same cut read differently

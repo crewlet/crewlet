@@ -25,7 +25,7 @@ import (
 func TestTheDispatcherKeepsTheToolSessionContract(t *testing.T) {
 	t.Parallel()
 	toolsessiontest.Run(t, func(t *testing.T, spec toolsessiontest.Spec) *toolsessiontest.Served {
-		cli := &suiteCLI{served: make(chan suiteRun, 1), end: make(chan struct{})}
+		cli := &suiteHarness{served: make(chan suiteRun, 1), end: make(chan struct{})}
 		ended := make(chan struct{})
 		go func() {
 			defer close(ended)
@@ -69,13 +69,13 @@ func TestTheDispatcherKeepsTheToolSessionContract(t *testing.T) {
 	})
 }
 
-// suiteCLI is the CLI the suite plays. Its one run is served as a CLI whose
+// suiteHarness is the CLI the suite plays. Its one run is served as a CLI whose
 // record the host does not read — so every call is placed the moment it
 // arrives, never held for a record that will not come — and that re-lists its
 // tools when told they changed. It stays out until the suite ends it: a CLI the
 // host decided to stop is one it has not stopped yet, and its calls still
 // arrive. A later run of the phase calls nothing.
-type suiteCLI struct {
+type suiteHarness struct {
 	served chan suiteRun
 	end    chan struct{}
 	runs   atomic.Int32
@@ -87,9 +87,9 @@ type suiteRun struct {
 	socket string
 }
 
-func (*suiteCLI) Model() string { return "toolsessiontest" }
+func (*suiteHarness) Model() string { return "toolsessiontest" }
 
-func (c *suiteCLI) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+func (c *suiteHarness) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	done := &llm.Completion{Model: c.Model(), Content: "done", StopReason: llm.StopEnd}
 	if req.Tools == nil || c.runs.Add(1) > 1 {
 		return done, nil

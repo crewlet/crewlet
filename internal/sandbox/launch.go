@@ -883,7 +883,7 @@ func buildSystem(req LaunchRequest) string {
 // opens with "You are Claude Code, Anthropic's official CLI for Claude", and
 // no flag removes it. A seat prompt that only implies who it is loses to that,
 // so this says outright which of the two prompts is the role. The engine's own
-// runs on this host open with the same note (internal/providers/llm/cliagent
+// runs on this host open with the same note (internal/providers/llm/harness
 // harnessNote), less the sentence it adds on a call that offers tools — act
 // through the `crewlet` server's tools, never the CLI's own: here the run's
 // shell and editor are what the box is for, and the seat's tools are called

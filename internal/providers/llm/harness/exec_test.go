@@ -1,0 +1,1006 @@
+package harness
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/mcprelay"
+	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+)
+
+// helperEnv marks a re-execution of this test binary as the fake CLI rather
+// than the suite. [TestMain] reads it before the framework starts.
+//
+// The fake is this binary rather than a shell script because the two platforms
+// the engine ships for do not share a userland: what the fake reports — a
+// file's permission bits, its whole environment, its stdin as base64 — is
+// spelled with `stat`, `base64` and `echo` flags that GNU and BSD disagree
+// about, so a script would test each machine's tools as much as the exec path.
+// Every mode is Go, defined here beside the cases that drive it, and every
+// fixture launches it through [fakeChildEnv].
+//
+// The `-test.run=TestFakeHarness` the fixtures still pass now names no
+// test, and is kept deliberately as a FORK-BOMB GUARD rather than a selector:
+// TestMain dispatches on the variable alone, so if a fixture ever forgets it,
+// the child falls through to the suite — and a filter matching nothing makes
+// that child exit immediately instead of re-running every test in this package,
+// recursively, once per case.
+const helperEnv = "CREWLET_HARNESS_FAKE"
+
+// TestMain runs the fake CLI when this binary was re-executed as one, a writer
+// of the shared login when it was re-executed as one of those
+// ([runLoginWriter]), and the suite otherwise.
+//
+// THE DISPATCH IS HERE rather than in a test function, and that is what stops
+// the fake being REPORTED as a skipped test. It was `TestFakeHarness` with
+// a t.Skip on the parent path, so every ordinary run of this package logged a
+// skip for something that is not a test and never had an assertion in it —
+// noise in exactly the place a skip is supposed to mean "this went unchecked".
+// Same shape as internal/mcp/helper_process_test.go.
+//
+// It also exits before the framework parses flags, so the fake's output is
+// exactly the bytes the case asked for with nothing of testing's around them.
+//
+// THE RELAY FIRST. A run with tools hands its CLI this binary as the relay to
+// the seat's tools — the engine names its own executable, and under `go test`
+// that is this one — and the CLI starts it with an environment of its own
+// choosing, which for the fake is its own: started as a relay and dispatched
+// on the fake's variable, it would play a CLI instead.
+func TestMain(m *testing.M) {
+	mcprelay.DispatchIfRelay()
+	if os.Getenv(helperEnv) == "1" {
+		if os.Getenv(fakeMCPEnv) != "" {
+			runFakeMCPHarness()
+		}
+		runFakeHarness()
+		os.Exit(0)
+	}
+	if op := os.Getenv(loginWriterEnv); op != "" {
+		runLoginWriter(op)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// runFakeHarness is the fake CLI the exec tests drive.
+func runFakeHarness() {
+	if ms := os.Getenv("FAKE_SLEEP_MS"); ms != "" {
+		delay, _ := strconv.Atoi(ms)
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+	}
+	if dir := os.Getenv("FAKE_RECORD_ARGV"); dir != "" {
+		// Not a mode: a record of what this invocation was handed, kept
+		// before whichever mode answers, for a case that asks what SEVERAL
+		// calls carried — the doctor's three probes — or what one call's
+		// argv held beside a reply of its own. A file per invocation,
+		// because the calls of one case may overlap.
+		fakeRecordArgv(dir)
+	}
+	switch {
+	case os.Getenv("FAKE_STORE") == "1":
+		// A CLI that keeps its login, its sessions and their usage in a
+		// database of its own — see credentialstore_test.go.
+		fakeStore()
+	case os.Getenv("FAKE_USAGE_COMMAND") != "" && slices.Contains(os.Args, os.Getenv("FAKE_USAGE_COMMAND")):
+		// A usage command run after the call, told apart from the call by an
+		// argument only it carries, printing FAKE_USAGE_REPORT verbatim —
+		// nothing at all included — and exiting 0.
+		fmt.Print(os.Getenv("FAKE_USAGE_REPORT"))
+	case os.Getenv("FAKE_STUBBORN") == "1":
+		// A CLI that ignores the polite signal and leaves a forking
+		// descendant behind — a Node or Bun runtime under a launcher, which
+		// is what every coding CLI in this package actually is. It announces
+		// the grandchild's pid so the parent can watch for its death, then
+		// holds its own process open for ever.
+		//
+		// The whole tree is signalled through the process GROUP, so an
+		// engine that only signals the process it started leaves this
+		// grandchild holding the seat's workspace and sockets.
+		fakeStubborn()
+	case os.Getenv("FAKE_GRANDCHILD") == "1":
+		fakeGrandchild()
+	case os.Getenv("FAKE_HOLD_STREAM") != "":
+		// A CLI that answers and exits 0, leaving a helper behind that holds
+		// one of its streams — see exec_unix_test.go.
+		fakeLeaveHolder(os.Getenv("FAKE_HOLD_STREAM"))
+		fmt.Print(os.Getenv("FAKE_STDOUT"))
+	case os.Getenv("FAKE_EXIT_0_ON_TERM") == "1":
+		// A CLI that ends cleanly when it is asked to stop — see
+		// exec_unix_test.go.
+		fakeExitZeroOnTerm()
+	case os.Getenv("FAKE_KEY_SESSION") != "":
+		// A CLI that keeps what a key signs it in to in its login's own
+		// file, as Cursor Agent does: it answers with what that file held
+		// when it started, and then, handed a key, writes it down there.
+		path := filepath.Join(os.Getenv("HOME"), os.Getenv("FAKE_KEY_SESSION"))
+		held, err := os.ReadFile(path) //nolint:gosec // the fake's own home
+		if err != nil {
+			held = []byte("nothing")
+		}
+		if key := os.Getenv("FAKE_VENDOR_API_KEY"); key != "" {
+			written := os.MkdirAll(filepath.Dir(path), 0o700)
+			if written == nil {
+				written = os.WriteFile(path, []byte("a session for "+key), 0o600)
+			}
+			if written != nil {
+				fmt.Fprint(os.Stderr, "UNWRITABLE: ", written)
+				os.Exit(3)
+			}
+		}
+		fmt.Print(string(held))
+	case os.Getenv("FAKE_DUMP_CWD") == "1":
+		// THE CHILD'S OWN ANSWER, because nothing else can give one, and it
+		// reports what it FINDS rather than only where it is.
+		//
+		// Two reasons, and the case that reads this fell down both. PWD is a
+		// SHELL variable: os/exec sets it nowhere, and buildEnv's host
+		// allowlist would not carry it if a shell had, so reading it out of
+		// the dumped environment returned empty on every platform — including
+		// the one CI runs — while the skip blamed "not every platform". And
+		// the per-call directory is REMOVED when the call releases, so a
+		// parent handed only the path has nothing left to list by the time it
+		// looks. Same reason the system-prompt case below reads its file from
+		// in here.
+		dir, err := os.Getwd()
+		if err != nil {
+			fmt.Printf("CWD_ERR=%v", err)
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			fmt.Printf("CWD=%s\nCWD_ERR=%v", dir, err)
+			return
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		slices.Sort(names)
+		fmt.Printf("CWD=%s\nCWD_ENTRIES=%s", dir, strings.Join(names, ","))
+	case os.Getenv("FAKE_DUMP_ENV") == "1":
+		env := os.Environ()
+		slices.Sort(env)
+		fmt.Print(strings.Join(env, "\n"))
+	case os.Getenv("FAKE_READ_SYSTEM_PROMPT") != "":
+		// Reads the file the system-prompt env var points at and prints
+		// it, FROM INSIDE THE CHILD. That is the only place the question
+		// can be asked honestly: the per-call working directory is
+		// removed when the call releases, so a test that opened the path
+		// afterwards would be reading a file the CLI never saw — and a
+		// prompt written after the spawn, or unreadable to the child,
+		// looks identical from outside.
+		body, err := os.ReadFile(os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")))
+		if err != nil {
+			fmt.Print("UNREADABLE: ", err)
+			return
+		}
+		fmt.Printf("%s|%s", os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")), body)
+	case os.Getenv("FAKE_READ_DISCOVERED") != "":
+		// Reads a file at a path RELATIVE TO ITS WORKING DIRECTORY, FROM
+		// INSIDE THE CHILD, as a CLI that discovers its agents there does —
+		// and prints its argv beside it, so one probe settles that the file
+		// was where the CLI looks and that the argv selected rather than
+		// carried it.
+		path := os.Getenv("FAKE_READ_DISCOVERED")
+		body, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Print("UNREADABLE: ", err)
+			return
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Print("UNSTATABLE: ", err)
+			return
+		}
+		fmt.Printf("%s|%o|%s", strings.Join(os.Args[1:], " "), info.Mode().Perm(),
+			base64.StdEncoding.EncodeToString(body))
+	case os.Getenv("FAKE_READ_UNDER_ENV") != "":
+		// Answers, FROM INSIDE THE CHILD, where a relocation variable points
+		// and what is there when the CLI starts: `VAR:rel,rel` prints the
+		// child's working directory, the variable's value, and each file's
+		// bytes under it. The per-call directory is removed on release, so
+		// nothing outside the child can tell a file the CLI found from one
+		// written after it had looked.
+		name, rels, _ := strings.Cut(os.Getenv("FAKE_READ_UNDER_ENV"), ":")
+		cwd, _ := os.Getwd()
+		dir := os.Getenv(name)
+		fmt.Printf("CWD=%s\n%s=%s\n", cwd, name, dir)
+		for rel := range strings.SplitSeq(rels, ",") {
+			body, err := os.ReadFile(filepath.Join(dir, rel))
+			if err != nil {
+				fmt.Printf("%s UNREADABLE: %v\n", rel, err)
+				continue
+			}
+			fmt.Printf("%s=%s\n", rel, base64.StdEncoding.EncodeToString(body))
+		}
+	case os.Getenv("FAKE_REPORT_ENV") != "":
+		// Reports whether one named variable reached the child, FROM
+		// INSIDE it. The parent cannot answer this: what an invocation
+		// hands os/exec is the whole question, and a nil there means the
+		// child gets the ENGINE's environment rather than none.
+		name := os.Getenv("FAKE_REPORT_ENV")
+		_, present := os.LookupEnv(name)
+		fmt.Printf("%s present=%v", name, present)
+	case os.Getenv("FAKE_REPORT_TMPDIR") == "1":
+		// Reports whether the TMPDIR the child was handed is a directory,
+		// FROM INSIDE it and before it writes anything: a program finds its
+		// temporary directory rather than making it, so this is what
+		// mktemp, or a CLI's own sandbox helper, would find.
+		info, err := os.Stat(os.Getenv("TMPDIR"))
+		fmt.Printf("TMPDIR dir=%v", err == nil && info.IsDir())
+	case os.Getenv("FAKE_PROMPT_FILE") != "":
+		// Answers the whole prompt-file question FROM INSIDE THE CHILD,
+		// which is the only place it can be answered honestly: the
+		// per-call working directory is removed on release, so a parent
+		// that opened the path afterwards would be reading a file the CLI
+		// never saw. It prints the argv it was given, the file's mode, and
+		// its bytes, so one probe settles "the path is on argv, the
+		// transcript is not, the child could read it, and it is private".
+		flag := os.Getenv("FAKE_PROMPT_FILE")
+		path := ""
+		for i, arg := range os.Args {
+			if arg == flag && i+1 < len(os.Args) {
+				path = os.Args[i+1]
+			}
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Print("UNREADABLE: ", err)
+			return
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Print("UNSTATABLE: ", err)
+			return
+		}
+		fmt.Printf("%s|%o|%s", strings.Join(os.Args, " "), info.Mode().Perm(),
+			base64.StdEncoding.EncodeToString(body))
+	case os.Getenv("FAKE_USAGE_FILE") != "":
+		// Writes the vendor's own usage report where the profile asked
+		// for it, FROM INSIDE THE CHILD — which is the only place it can
+		// be written honestly: the per-call working directory is created
+		// for one call and removed on release, so a report the parent
+		// planted would prove nothing about the path the CLI was handed.
+		// The variable carries the report's BYTES; an empty one is a run
+		// that wrote no report at all.
+		path := ""
+		for i, arg := range os.Args {
+			if arg == "--usage-file" && i+1 < len(os.Args) {
+				path = os.Args[i+1]
+			}
+		}
+		if path != "" && os.Getenv("FAKE_USAGE_FILE") != "-" {
+			if err := os.WriteFile(path, []byte(os.Getenv("FAKE_USAGE_FILE")), 0o600); err != nil {
+				fmt.Print("UNWRITABLE: ", err)
+				return
+			}
+		}
+		fmt.Print(os.Getenv("FAKE_STDOUT"))
+	case os.Getenv("FAKE_ECHO_STDIN") == "1":
+		// Base64 rather than verbatim: the prompt CONTAINS the response
+		// contract's own fenced example, so echoing it raw would be
+		// parsed as an envelope and the test would assert against the
+		// example instead of the prompt.
+		prompt, _ := io.ReadAll(os.Stdin)
+		fmt.Print(base64.StdEncoding.EncodeToString(prompt))
+	case os.Getenv("FAKE_SHELL_PROBE_STDOUT") != "" || os.Getenv("FAKE_WEB_PROBE_STDOUT") != "":
+		// The doctor's isolation probes are two more completions, and a
+		// test of them needs the fake to answer each differently: which
+		// probe is asking is read off the prompt.
+		prompt, _ := io.ReadAll(os.Stdin)
+		switch {
+		case strings.Contains(string(prompt), "read the file at "):
+			// The file probe: a CLI whose file tool works reads the
+			// path out of the prompt and answers with the file.
+			if os.Getenv("FAKE_FILE_PROBE") != "read" {
+				fmt.Print(noLocalToolsReply)
+				break
+			}
+			_, rest, _ := strings.Cut(string(prompt), "read the file at ")
+			path, _, _ := strings.Cut(rest, " and reply")
+			body, _ := os.ReadFile(path)
+			fmt.Print(string(body))
+		case strings.Contains(string(prompt), webProbeURL):
+			fmt.Print(os.Getenv("FAKE_WEB_PROBE_STDOUT"))
+		case strings.Contains(string(prompt), noLocalToolsReply):
+			fmt.Print(os.Getenv("FAKE_SHELL_PROBE_STDOUT"))
+		default:
+			fmt.Print(os.Getenv("FAKE_STDOUT"))
+		}
+	case os.Getenv("FAKE_STREAM_ARG") != "":
+		// A streamed variant is chosen per call, so the fake answers with
+		// the stream only when the call's argv carries the variant's
+		// argument: a test then knows which argv the call ran from what
+		// came back.
+		if slices.Contains(os.Args, os.Getenv("FAKE_STREAM_ARG")) {
+			fmt.Print(os.Getenv("FAKE_STREAM_STDOUT"))
+		} else {
+			fmt.Print(os.Getenv("FAKE_STDOUT"))
+		}
+	default:
+		fmt.Print(os.Getenv("FAKE_STDOUT"))
+	}
+	if s := os.Getenv("FAKE_STDERR"); s != "" {
+		fmt.Fprint(os.Stderr, s)
+	}
+	code, _ := strconv.Atoi(os.Getenv("FAKE_EXIT"))
+	os.Exit(code)
+}
+
+// fakeRecordArgv writes this invocation's argv, after the binary, as a JSON
+// array into a new file in dir. A record that cannot be written ends the run
+// non-zero, so the case reads a failed call rather than a missing record.
+func fakeRecordArgv(dir string) {
+	f, err := os.CreateTemp(dir, "argv-*.json")
+	if err != nil {
+		fmt.Fprint(os.Stderr, "UNRECORDABLE: ", err)
+		os.Exit(3)
+	}
+	err = json.NewEncoder(f).Encode(os.Args[1:])
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		fmt.Fprint(os.Stderr, "UNRECORDABLE: ", err)
+		os.Exit(3)
+	}
+}
+
+// recordedArgv reads back every argv [fakeRecordArgv] wrote into dir, in no
+// particular order.
+func recordedArgv(t *testing.T, dir string) [][]string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := make([][]string, 0, len(entries))
+	for _, e := range entries {
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var argv []string
+		if err := json.Unmarshal(raw, &argv); err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		out = append(out, argv)
+	}
+	return out
+}
+
+// fakeProvider builds a provider whose CLI is this test binary.
+func fakeProvider(t *testing.T, env map[string]string, overrides map[string]any) *Provider {
+	t.Helper()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+
+	base := map[string]any{
+		"binary":        os.Args[0],
+		"complete_args": []any{"-test.run=TestFakeHarness"},
+		"model_args":    []any{},
+		"output":        "text",
+		"prompt_mode":   "stdin",
+	}
+	for k, v := range overrides {
+		base[k] = v
+	}
+	p, err := New(Config{
+		Key: "sub", Harness: "custom", StateDir: dir, Overrides: base,
+		Timeout: 20 * time.Second, MaxConcurrent: 2, Env: fakeChildEnv(env),
+		Auth: Auth{Mode: AuthSubscription},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return p
+}
+
+// fakeChildEnv is the environment every fake CLI this suite launches is handed
+// through [Config.Env]: the variable that makes the re-executed binary the
+// fake, the race options that let it exit the moment it is done
+// ([procgrouptest.StandInRaceOptions] — a second a call otherwise, which was
+// most of this package's wall clock), and extra over both.
+//
+// THROUGH Config.Env because nothing else reaches the child: buildEnv forwards
+// the host allowlist and the provider's own Env, so a GORACE the suite
+// inherited from make or CI is dropped at the exec.
+func fakeChildEnv(extra map[string]string) map[string]string {
+	env := map[string]string{
+		helperEnv:            "1",
+		procgrouptest.GORACE: procgrouptest.StandInRaceOptions(),
+	}
+	maps.Copy(env, extra)
+	return env
+}
+
+func ask(t *testing.T, p *Provider, req llm.Request) (*llm.Completion, error) {
+	t.Helper()
+	if len(req.Messages) == 0 {
+		req.Messages = []llm.Message{{Role: llm.RoleUser, Content: "hello"}}
+	}
+	return p.Complete(t.Context(), req)
+}
+
+// The whole point of the backend: a CLI's prose comes back as a completion.
+func TestAPlainReplyBecomesACompletion(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "the answer"}, nil)
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if comp.Content != "the answer" {
+		t.Errorf("Content = %q", comp.Content)
+	}
+	if comp.Model != p.Model() {
+		t.Errorf("Model = %q, want the configured %q", comp.Model, p.Model())
+	}
+	if comp.InputTokens == 0 || comp.OutputTokens == 0 {
+		t.Errorf("a CLI reporting no usage must still be estimated, got in=%d out=%d",
+			comp.InputTokens, comp.OutputTokens)
+	}
+}
+
+// A spent subscription arrives as prose on a SUCCESSFUL exit. Classifying it
+// RATE_LIMIT is what carries the role onto its fallback for the rest of the
+// window and back again afterwards, with no operator intervention — and the
+// window it sits out is the vendor's own reset instant ([Provider.bench]),
+// where the profile reads one.
+func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
+	t.Parallel()
+	reset := time.Now().Add(37 * time.Minute).Unix()
+	p := fakeProvider(t, map[string]string{
+		"FAKE_STDOUT": fmt.Sprintf("Claude AI usage limit reached|%d", reset),
+	}, map[string]any{
+		"limit_markers": []any{map[string]any{
+			"sentinel": "Claude AI usage limit reached", "reset_separator": "|", "reset_unit": "epoch",
+		}},
+	})
+	_, err := ask(t, p, llm.Request{})
+	if err == nil {
+		t.Fatal("a spent subscription was returned as a successful completion")
+	}
+	if got := llm.KindOf(err); got != llm.KindRateLimit {
+		t.Fatalf("kind = %v, want rate_limit", got)
+	}
+	var classified *llm.Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("error is not classified: %v", err)
+	}
+	if left := time.Until(sitOutUntil(p)); left < 30*time.Minute || left > 40*time.Minute {
+		t.Errorf("the entry sits out %v, want the vendor's own reset instant", left)
+	}
+}
+
+// Structure, not keywords. A model ANSWERING a question about usage limits
+// writes the phrase itself, and throwing that answer away as a spent plan is
+// the bug this classification is shaped to avoid.
+func TestAModelWritingAboutUsageLimitsIsNotASpentSubscription(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{
+		"FAKE_STDOUT": "A rate limit is when the usage limit for your plan is reached.",
+	}, map[string]any{
+		"limit_markers": []any{map[string]any{
+			"sentinel": "Claude AI usage limit reached", "reset_separator": "|", "reset_unit": "epoch",
+		}},
+	})
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("an answer about rate limits was classified as one: %v", err)
+	}
+	if !strings.Contains(comp.Content, "rate limit") {
+		t.Errorf("Content = %q", comp.Content)
+	}
+}
+
+// An expired login must classify AUTH, which is retryable — so the chain
+// keeps the seat working off a metered key while the operator re-logs in.
+func TestAnExpiredLoginIsClassifiedAuth(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{
+		"FAKE_STDERR": "Error: OAuth token has expired\n", "FAKE_EXIT": "1",
+	}, map[string]any{
+		"auth_markers": []any{map[string]any{"sentinel": "OAuth token has expired"}},
+	})
+	_, err := ask(t, p, llm.Request{})
+	if got := llm.KindOf(err); got != llm.KindAuth {
+		t.Fatalf("kind = %v, want auth (err %v)", got, err)
+	}
+	if !llm.KindOf(err).Retryable() {
+		t.Error("an expired login must be retryable across the chain")
+	}
+}
+
+// A wall-clock breach reports TIMEOUT and returns at the deadline, not when
+// the child eventually finishes: the cap exists so a wedged CLI cannot hold a
+// seat's concurrency slot.
+func TestTheWallClockCapEndsACall(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_SLEEP_MS": "60000"}, nil)
+	p.timeout = 300 * time.Millisecond
+
+	started := time.Now()
+	_, err := ask(t, p, llm.Request{})
+	elapsed := time.Since(started)
+
+	if got := llm.KindOf(err); got != llm.KindTimeout {
+		t.Fatalf("kind = %v, want timeout (err %v)", got, err)
+	}
+	if elapsed > 20*time.Second {
+		t.Fatalf("the call took %v — the cap did not end it", elapsed)
+	}
+	if !strings.Contains(err.Error(), "timeout_seconds") {
+		t.Errorf("the timeout error does not say which knob to raise: %v", err)
+	}
+}
+
+// Exit zero with nothing on stdout is a failed call, but not a FATAL one:
+// nothing about the request was refused, so the chain must be free to try
+// another member and the entry must not sit out.
+func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": ""}, nil)
+	_, err := ask(t, p, llm.Request{})
+	if got := llm.KindOf(err); got != llm.KindServer {
+		t.Fatalf("kind = %v, want server", got)
+	}
+	if err := p.SittingOut(); err != nil {
+		t.Errorf("an empty answer sat the entry out: %v", err)
+	}
+}
+
+// claudeOverloaded is how Claude Code reports an overloaded API once its own
+// retries are spent: a failed run whose result is the API's error, relayed.
+const claudeOverloaded = `{"type":"result","subtype":"success","is_error":true,` +
+	`"result":"API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"}`
+
+// shippedShape is the overrides that make the fake CLI's output read as the
+// named built-in profile reads it: its output mode, where its answer and its
+// failure flag are, its markers and where they are matched — so a case built
+// on it says what the shipped entry would make of the same output.
+func shippedShape(t *testing.T, agent string) map[string]any {
+	t.Helper()
+	builtin, ok := harnessprofile.Builtin(agent)
+	if !ok {
+		t.Fatalf("no built-in %s profile", agent)
+	}
+	shape := map[string]any{
+		"output":       string(builtin.EffectiveOutput()),
+		"marker_scope": string(builtin.EffectiveMarkerScope()),
+	}
+	set := func(key string, values []any) {
+		if len(values) > 0 {
+			shape[key] = values
+		}
+	}
+	paths := func(ps []harnessprofile.Path) []any {
+		out := make([]any, 0, len(ps))
+		for _, path := range ps {
+			out = append(out, toAny(path))
+		}
+		return out
+	}
+	var limits, auths []any
+	for _, m := range builtin.LimitMarkers {
+		limits = append(limits, map[string]any{"sentinel": m.Sentinel})
+	}
+	for _, m := range builtin.AuthMarkers {
+		auths = append(auths, map[string]any{"sentinel": m.Sentinel})
+	}
+	set("limit_markers", limits)
+	set("auth_markers", auths)
+	set("text_paths", paths(builtin.TextPaths))
+	set("error_paths", paths(builtin.ErrorPaths))
+	set("event_type_path", toAny(builtin.EventTypePath))
+	set("text_events", toAny(builtin.TextEvents))
+	set("marker_events", toAny(builtin.MarkerEvents))
+	set("marker_path", toAny(builtin.MarkerPath))
+	return shape
+}
+
+// toAny is a list of strings as the []any an overrides map carries.
+func toAny(ss []string) []any {
+	out := make([]any, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, s)
+	}
+	return out
+}
+
+// A VENDOR OUTAGE IS A SERVER FAILURE, NOT A FATAL ONE. Claude Code relays an
+// overloaded API as a failed run — a non-zero exit with the API's error as its
+// result — and no marker matches it, because it is neither a spent plan nor a
+// login. Nothing about it says the request is one no model could take, so it
+// is retryable, and the next member of the seat's chain gets the call; and it
+// does not sit the entry out, because an overload the next call may not meet
+// must not hold every seat on the node off a working entry.
+//
+// Mutation: classify a failed run as fatal again, and the kind is wrong.
+func TestAFailedRunIsAServerFailureThatDoesNotSitTheEntryOut(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": claudeOverloaded, "FAKE_EXIT": "1"},
+		shippedShape(t, "claude-code"))
+	_, err := ask(t, p, llm.Request{})
+	if got := llm.KindOf(err); got != llm.KindServer {
+		t.Fatalf("kind = %v, want server (err %v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "overloaded_error") {
+		t.Errorf("err = %v, want the error the CLI relayed", err)
+	}
+	if err := p.SittingOut(); err != nil {
+		t.Errorf("a failed run sat the entry out: %v", err)
+	}
+}
+
+// THE CHAIN CARRIES THE SEAT PAST A HEAD WHOSE CLI FAILED. The point of a
+// fallback list is surviving one vendor's outage; when a failed run was fatal,
+// the walk stopped at the head and the turn failed against the same dead head
+// on every redelivery, with the next entry never asked.
+//
+// Mutation: classify a failed run as fatal again, and the backup is never
+// called and no fallback fires.
+func TestAChainWalksPastAHeadWhoseHarnessFailed(t *testing.T) {
+	t.Parallel()
+	head := fakeProvider(t, map[string]string{"FAKE_STDOUT": claudeOverloaded, "FAKE_EXIT": "1"},
+		shippedShape(t, "claude-code"))
+	backup := fakeProvider(t, map[string]string{"FAKE_STDOUT": "from the backup"}, nil)
+	var seen []chain.Fallback
+	walk, err := chain.New([]chain.Member{{Key: "plan", Provider: head}, {Key: "key", Provider: backup}},
+		chain.Options{OnFallback: func(f chain.Fallback) { seen = append(seen, f) }})
+	if err != nil {
+		t.Fatalf("chain.New: %v", err)
+	}
+	comp, err := walk.Complete(t.Context(), llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("the chain stopped at the failed head: %v", err)
+	}
+	if comp.Content != "from the backup" || comp.ProviderKey != "key" {
+		t.Errorf("answered %q from %q, want the backup's answer", comp.Content, comp.ProviderKey)
+	}
+	if len(seen) != 1 || seen[0].From != "plan" || seen[0].To != "key" || seen[0].Kind != llm.KindServer {
+		t.Errorf("fallbacks = %+v, want one from plan to key, of kind server", seen)
+	}
+}
+
+// The environment is an ALLOWLIST. A child that inherited os.Environ() would
+// hand every seat the org's chat token and the engine's collector credential,
+// and would silently bill a metered key that happened to be exported.
+func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-not-for-the-child")
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20otlp-ingest-not-for-the-child")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-billed")
+	t.Setenv("CREWLET_SECRET_KEY_2026_01", "keyring-material-not-for-the-child")
+
+	p := fakeProvider(t, map[string]string{"FAKE_DUMP_ENV": "1"}, nil)
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	for _, leaked := range []string{
+		"SLACK_BOT_TOKEN", "OTEL_EXPORTER_OTLP_HEADERS", "ANTHROPIC_API_KEY", "CREWLET_SECRET_KEY_2026_01",
+	} {
+		if strings.Contains(comp.Content, leaked+"=") {
+			t.Errorf("%s reached the child:\n%s", leaked, comp.Content)
+		}
+	}
+	if !strings.Contains(comp.Content, "PATH=") {
+		t.Error("PATH did not reach the child, so the CLI cannot find its own helpers")
+	}
+	home := envValue(comp.Content, "HOME")
+	if !strings.Contains(home, filepath.Join("seats")) {
+		t.Errorf("HOME = %q, want a path inside the seat's own home", home)
+	}
+	if envValue(comp.Content, "XDG_CONFIG_HOME") == "" {
+		t.Error("XDG_CONFIG_HOME was not redirected, so the CLI reads the engine user's config")
+	}
+}
+
+// The default mode must never let a metered key through, even one an operator
+// put in env — that is the flat-rate-plan-billed-anyway failure the mode
+// exists to prevent.
+func TestSubscriptionModeStripsAMeteredKey(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t,
+		map[string]string{"FAKE_DUMP_ENV": "1", "ANTHROPIC_API_KEY": "sk-ant-oops"},
+		map[string]any{"api_key_env": "ANTHROPIC_API_KEY", "token_env": "CLAUDE_CODE_OAUTH_TOKEN"})
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if strings.Contains(comp.Content, "ANTHROPIC_API_KEY=") {
+		t.Errorf("a metered key survived subscription mode:\n%s", comp.Content)
+	}
+}
+
+// api-key mode is the deliberate opposite, and must actually deliver the key
+// or the mode does nothing.
+func TestAPIKeyModeDeliversTheKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	p, err := New(Config{
+		Key: "metered", Harness: "custom", StateDir: dir,
+		Overrides: map[string]any{
+			"binary": os.Args[0], "complete_args": []any{"-test.run=TestFakeHarness"},
+			"model_args": []any{}, "output": "text", "api_key_env": "VENDOR_API_KEY",
+		},
+		Timeout: 20 * time.Second, MaxConcurrent: 1,
+		Env:  fakeChildEnv(map[string]string{"FAKE_DUMP_ENV": "1"}),
+		Auth: Auth{Mode: AuthAPIKey, APIKey: "sk-metered"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if envValue(comp.Content, "VENDOR_API_KEY") != "sk-metered" {
+		t.Errorf("api-key mode did not deliver the key:\n%s", comp.Content)
+	}
+}
+
+// THE TEMPORARY DIRECTORY A COMMAND IS HANDED EXISTS WHEN IT STARTS, for every
+// kind of command this package runs in a home of its own: a call in a seat's
+// home, a login command in the login home, the version probe in the probe home.
+//
+// A program finds its TMPDIR rather than making it — mktemp fails on one that
+// names nothing — and a TMPDIR named and never made failed every codex call
+// from 0.164 on, whose sandbox helper resolves it before reading the call's
+// AGENTS.md. Asked of the child, before it writes anything.
+func TestEveryCommandFindsTheTemporaryDirectoryItIsHanded(t *testing.T) {
+	t.Parallel()
+	fake := []any{"-test.run=TestFakeHarness"}
+	p := fakeProvider(t, map[string]string{"FAKE_REPORT_TMPDIR": "1"},
+		map[string]any{"status_args": fake, "version_args": fake})
+	const want = "TMPDIR dir=true"
+
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if comp.Content != want {
+		t.Errorf("a call's child reported %q, want %q", comp.Content, want)
+	}
+	var out bytes.Buffer
+	if err := p.Status(t.Context(), &out, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != want {
+		t.Errorf("a login command's child reported %q, want %q", got, want)
+	}
+	if got := p.probeVersion(t.Context()); got != want {
+		t.Errorf("the version probe's child reported %q, want %q", got, want)
+	}
+}
+
+// Each call runs in a per-call directory holding nothing but the engine's own
+// project-root marker, so a CLI that reads AGENTS.md or CLAUDE.md from cwd
+// finds nothing from anyone else — and, stopped at that marker, nothing from
+// the directories above it either.
+//
+// IT ASKS THE CHILD, and that is the whole repair. It read PWD out of the
+// dumped environment and skipped when it was absent, with a comment blaming
+// "not every platform". PWD is a SHELL variable — os/exec sets it nowhere,
+// and buildEnv's host allowlist does not carry it — so it was absent on EVERY
+// platform including the one CI runs, and this assertion had never once been
+// made. os.Getwd() in the child is the only honest source, and it cannot be
+// unavailable.
+func TestTheWorkingDirectoryHoldsOnlyTheProjectRootMarker(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_DUMP_CWD": "1"}, nil)
+	comp, err := ask(t, p, llm.Request{})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	dir := envValue(comp.Content, "CWD")
+	if dir == "" {
+		t.Fatalf("the child did not report a working directory:\n%s", comp.Content)
+	}
+	if err := envValue(comp.Content, "CWD_ERR"); err != "" {
+		t.Fatalf("the child could not read its own working directory: %s", err)
+	}
+	// The child listed its own directory, because the parent cannot: the
+	// per-call directory is removed when the call releases.
+	if entries := envValue(comp.Content, "CWD_ENTRIES"); entries != harnessprofile.ProjectRootMarker {
+		t.Errorf("the call's working directory %q holds %q, want only %s — a CLI "+
+			"reading AGENTS.md or CLAUDE.md from cwd would find somebody "+
+			"else's", dir, entries, harnessprofile.ProjectRootMarker)
+	}
+}
+
+// The prompt must actually reach the CLI, as the labelled transcript a text
+// function is: every message under a heading naming its author, and nothing
+// of a tool channel, which a text function does not have.
+func TestThePromptReachesTheHarnessAsALabelledTranscript(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_ECHO_STDIN": "1"}, nil)
+	comp, err := ask(t, p, llm.Request{
+		Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: "you are Dev"},
+			{Role: llm.RoleUser, Content: "summarise this"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	prompt := decodePrompt(t, comp.Content)
+	for _, want := range []string{"## system", "you are Dev", "## user", "summarise this"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the prompt is missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, harnessToolsNote) || strings.Contains(prompt, "MCP") {
+		t.Errorf("a text function's prompt speaks of tools it does not have:\n%s", prompt)
+	}
+}
+
+// A SEAT'S PHASE ON A PROFILE WITH NO TOOL ROUTE IS REFUSED, fatal and naming
+// the field: run without its tools it would answer as though it had called
+// none, and the next member of the chain would be refused the same way — the
+// fault is the operator's, in the profile. Nothing is started.
+//
+// Mutation: drop the refusal in Complete, and the call runs the CLI with no
+// tools — the fake answers — instead of failing.
+func TestAPhaseOnAProfileWithNoToolRouteIsRefused(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "an answer"}, nil)
+	_, err := ask(t, p, llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "do the task"}},
+		Tools:    newTestHost(t, "search"),
+	})
+	if err == nil {
+		t.Fatal("a phase ran on a profile that cannot hand its CLI any tools")
+	}
+	if llm.KindOf(err) != llm.KindFatal || !strings.Contains(err.Error(), "overrides.mcp") {
+		t.Errorf("err = %v (%v), want a fatal refusal naming overrides.mcp", err, llm.KindOf(err))
+	}
+}
+
+// The cap is what keeps a fleet of seats starting their turns together from
+// exhausting the engine host — each CLI is a full runtime at 200-400 MB.
+func TestConcurrencyIsCapped(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok", "FAKE_SLEEP_MS": "250"}, nil)
+	if cap(p.slots) != 2 {
+		t.Fatalf("slots = %d, want the configured 2", cap(p.slots))
+	}
+	started := time.Now()
+	done := make(chan error, 4)
+	for i := range 4 {
+		go func() {
+			ctx := llm.WithSeat(t.Context(), fmt.Sprintf("seat-%d", i))
+			_, err := p.Complete(ctx, llm.Request{
+				Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+			})
+			done <- err
+		}()
+	}
+	for range 4 {
+		if err := <-done; err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+	}
+	// Four calls of 250 ms through two slots cannot finish in one batch.
+	if elapsed := time.Since(started); elapsed < 400*time.Millisecond {
+		t.Errorf("four calls through two slots took %v — the cap is not holding", elapsed)
+	}
+}
+
+// A caller that gave up while queueing must not go on to launch a process
+// nobody is waiting for.
+func TestACancelledCallerDoesNotLaunchAProcess(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "ok"}, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	// Fill the slots so the cancelled caller queues.
+	p.slots <- struct{}{}
+	p.slots <- struct{}{}
+	_, err := p.Complete(ctx, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}})
+	if got := llm.KindOf(err); got != llm.KindCancelled {
+		t.Fatalf("kind = %v, want canceled (err %v)", got, err)
+	}
+}
+
+// A CALL STOPPED UNDER A RUNNING CLI IS A CANCELLATION, never the vendor's
+// outage: the CLI exits on the signal the stop sent (143 for a Node runtime),
+// which reads exactly like a crash, so a classification from the exit status
+// walked the assistant's chain to its next model and logged a fallback for a
+// person's Stop. Nothing is learned from it either: a member that was ready
+// stays ready.
+func TestAStoppedCallIsCancelledNotAServerFailure(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_SLEEP_MS": "20000", "FAKE_STDOUT": "late"}, nil)
+	stopped := errors.New("the person stopped the turn")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	time.AfterFunc(300*time.Millisecond, func() { cancel(stopped) })
+	_, err := p.Complete(ctx, llm.Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}}})
+	if got := llm.KindOf(err); got != llm.KindCancelled {
+		t.Fatalf("kind = %v, want canceled (err %v)", got, err)
+	}
+	if llm.KindOf(err).Retryable() {
+		t.Error("a cancellation is retryable: the chain would start its next member for nobody")
+	}
+	if !errors.Is(err, stopped) {
+		t.Errorf("err = %v, want it to name why the caller stopped", err)
+	}
+	if unready := p.Unready(t.Context()); unready != nil {
+		t.Errorf("a cancelled call left a readiness verdict: %v", unready)
+	}
+}
+
+// EVERY PROVIDER GIVES A SIGNALLED CLI FIVE SECONDS to exit, the figure
+// [termGrace] argues for. The cases that watch a stubborn child die run at a
+// grace of their own (exec_unix_test.go), so this is what ties the value they
+// skip waiting for to the one a running engine uses — at both places a child is
+// started, since both read the provider's field.
+func TestAProviderGivesASignalledHarnessFiveSecondsToExit(t *testing.T) {
+	t.Parallel()
+	if termGrace != 5*time.Second {
+		t.Errorf("termGrace = %v, want the 5s a Node runtime needs to flush", termGrace)
+	}
+	if p := fakeProvider(t, nil, nil); p.termGrace != termGrace {
+		t.Errorf("New gave the provider a grace of %v, want termGrace (%v)", p.termGrace, termGrace)
+	}
+}
+
+// AN INVOCATION WITH NO GRACE IS REFUSED rather than run. os/exec reads a zero
+// WaitDelay as no bound at all, so a call site that forgot to pass one would
+// start a child that, ignoring SIGTERM, held its call open for ever.
+func TestAnInvocationWithNoGraceIsRefused(t *testing.T) {
+	t.Parallel()
+	env := os.Environ()
+	for k, v := range fakeChildEnv(map[string]string{"FAKE_STDOUT": "ran"}) {
+		env = append(env, k+"="+v)
+	}
+	res, err := run(t.Context(), invocation{
+		binary: os.Args[0], args: []string{"-test.run=TestFakeHarness"},
+		env: env, timeout: 20 * time.Second,
+	})
+	if err == nil {
+		t.Fatalf("an invocation with no grace ran (stdout %q)", res.stdout)
+	}
+	if !strings.Contains(err.Error(), "termination grace") {
+		t.Errorf("the refusal does not name what is missing: %v", err)
+	}
+}
+
+// decodePrompt reads back a prompt the fake CLI echoed.
+func decodePrompt(t *testing.T, encoded string) string {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encoded))
+	if err != nil {
+		t.Fatalf("the fake CLI did not echo a prompt: %v (%q)", err, encoded)
+	}
+	return string(raw)
+}
+
+// envValue reads one variable out of a dumped environment.
+func envValue(dump, name string) string {
+	for line := range strings.SplitSeq(dump, "\n") {
+		if after, ok := strings.CutPrefix(line, name+"="); ok {
+			return after
+		}
+	}
+	return ""
+}

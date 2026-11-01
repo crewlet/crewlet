@@ -31,7 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
@@ -79,7 +79,7 @@ func (r *reviewWatch) Complete(ctx context.Context, req llm.Request) (*llm.Compl
 			}
 			r.mu.Unlock()
 			if back {
-				return phasedCLI{model: "scripted", pick: func([]string) llmtest.Run {
+				return phasedHarness{model: "scripted", pick: func([]string) llmtest.Run {
 					return calling(runner.SubmitReviewTool, map[string]any{
 						"decision": "self_iterate", "notes": "not done yet: run it again",
 					}, llmtest.DefaultUsage)
@@ -977,7 +977,7 @@ func TestAnOpenCodeRunsNoteIsReadAtItsNextStepByItsJob(t *testing.T) {
 		t.Fatalf("the plugin's poll and read: %v", seen.err)
 	}
 	if len(seen.notes) != 1 || seen.notes[0].ID != "req-1" ||
-		seen.notes[0].Inbox != codingagent.OpenCodeInboxID(launch, "req-1") ||
+		seen.notes[0].Inbox != executor.OpenCodeInboxID(launch, "req-1") ||
 		!strings.Contains(seen.notes[0].Message, "use the staging database") {
 		t.Fatalf("the poll answered %+v, want the note under the id job %s admits it as", seen.notes, launch)
 	}
@@ -1158,7 +1158,7 @@ func TestANoteFiledDuringTheReviewEndsTheReviewersRun(t *testing.T) {
 			{Calls: []llmtest.Call{{Name: runner.SubmitReviewTool, Args: `{"decision":"done"}`}}},
 		}}
 	}
-	cli := phasedCLI{model: "scripted", pick: pick}
+	cli := phasedHarness{model: "scripted", pick: pick}
 	model := providerFunc(func(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 		if req.Tools != nil {
 			if offered, err := offeredTo(req); err == nil && offers(offered, runner.SubmitReviewTool) {

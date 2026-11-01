@@ -528,7 +528,7 @@ func TestArgumentsThatDoNotParseAreAnsweredNotRun(t *testing.T) {
 // good object, and only the CLI's record, which keeps the array, shows that
 // the model never wrote it. Read from there, the call is refused exactly as
 // one the session could not read.
-func TestArgumentsTheCLIReplacedAreAnsweredNotRun(t *testing.T) {
+func TestArgumentsTheHarnessReplacedAreAnsweredNotRun(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("post")
 	prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
@@ -765,7 +765,7 @@ func TestACallThatRunsAloneWaitsOnlyForCallsThatCanArriveBesideIt(t *testing.T) 
 // read as naming a call. Played on a CLI whose record shows no requests, so the
 // `_meta` is the only place an id could come from — one joined to a record
 // takes the record's.
-func TestACallsIDIsReadOnlyUnderTheKeyItsCLIDeclared(t *testing.T) {
+func TestACallsIDIsReadOnlyUnderTheKeyItsHarnessDeclared(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, declared string
@@ -879,7 +879,7 @@ func TestARequestOfOneRunIsNeverReadAsAnotherRunsRequest(t *testing.T) {
 // its calls still land on the request that asked for them. Gemini CLI and
 // OpenCode write a response down once its calls are answered, so holding a
 // call for its response's record held every call for the whole join wait.
-func TestACLIThatRecordsCallsLateIsNotWaitedFor(t *testing.T) {
+func TestAHarnessThatRecordsCallsLateIsNotWaitedFor(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("search", "post")
 	prov := &llmtest.Script{LateRecord: true, Runs: []llmtest.Run{{Responses: []llmtest.Response{
@@ -936,7 +936,7 @@ func TestAToolThatPanicsEndsThePhaseAsAPanic(t *testing.T) {
 
 // AN ACTIVATION ON A CLI THAT NEVER RE-LISTS ENDS THE RUN, and the next one
 // starts with the new tool listed — it would otherwise never see it.
-func TestAnActivationOnACLIThatNeverRelistsEndsTheRun(t *testing.T) {
+func TestAnActivationOnAHarnessThatNeverRelistsEndsTheRun(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("activate_tool")
 	surf.activates = "activate_tool"

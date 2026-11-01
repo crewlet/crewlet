@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
 // AN ENTRY MOVED TO ANOTHER CLI IS AN ORDINARY REVISION, APPLIED LIVE.
@@ -28,7 +28,7 @@ import (
 //
 // Mutation: refuse a second CLI on a directory Shared already holds, as it
 // did, and the move to opencode is refused on the running node.
-func TestAnEntryMovedToAnotherCLIAppliesLive(t *testing.T) {
+func TestAnEntryMovedToAnotherHarnessAppliesLive(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		stateDir func(t *testing.T) (field, dir string)
@@ -97,12 +97,12 @@ func assertEntryOn(t *testing.T, e *Engine, agent, dir string) {
 	if !found {
 		t.Fatal("the running epoch has no entry k")
 	}
-	cli, ok := provider.(*cliagent.Provider)
+	cli, ok := provider.(*harness.Provider)
 	if !ok {
 		t.Fatalf("entry k is %T, want a CLI", provider)
 	}
-	if cli.Agent() != agent {
-		t.Fatalf("entry k drives %q, want %q", cli.Agent(), agent)
+	if cli.Harness() != agent {
+		t.Fatalf("entry k drives %q, want %q", cli.Harness(), agent)
 	}
 	if got, want := cli.Workspace().Root(), filepath.Join(dir, agent); got != want {
 		t.Errorf("entry k on %s keeps its files in %q, want %q", agent, got, want)

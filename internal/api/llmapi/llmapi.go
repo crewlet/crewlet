@@ -59,7 +59,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -112,7 +112,7 @@ type Check struct {
 	// Said is the vendor's or the CLI's own sentence behind Failure.
 	Said string
 	// Lines are the checks, in the doctor's order.
-	Lines []cliagent.Check
+	Lines []harness.Check
 	// Elapsed is how long the call took, for the answer's sentence.
 	Elapsed time.Duration
 	// Limited is the vendor's limit a candidate met, nil when none: a 429

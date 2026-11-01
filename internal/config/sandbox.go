@@ -177,7 +177,7 @@ type SandboxProvider struct {
 	// CommitAttribution says whether every commit an executor authors as
 	// itself credits Crewlet: `Co-authored-by: Crewlet <noreply@crewlet.ai>`,
 	// and `Crewlet-Run:` naming the run's turn. Git adds it, through a hook
-	// the run's box is given (internal/sandbox/codingagent), so it holds
+	// the run's box is given (internal/sandbox/executor), so it holds
 	// whatever the model remembers, and only on the run's own commits: a
 	// person's commit the run amends, cherry-picks or rebases keeps no
 	// credit. Read it through [SandboxProvider.AttributesCommits].

@@ -308,9 +308,9 @@ roles:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	built, err := engine.BuildCLIAgent("subscription", c.Providers.LLM["subscription"], config.EnvOnly(), nil)
+	built, err := engine.BuildHarness("subscription", c.Providers.LLM["subscription"], config.EnvOnly(), nil)
 	if err != nil {
-		t.Fatalf("BuildCLIAgent: %v", err)
+		t.Fatalf("BuildHarness: %v", err)
 	}
 	if got := built.SignInState(t.Context()); got != "token" {
 		t.Errorf("SignInState = %q, want token — the conventional variable was not read", got)

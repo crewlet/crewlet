@@ -23,7 +23,7 @@
 //   - a PRIOR-WORK LINE ([github.com/crewlet/crewlet/internal/agent/ledger])
 //     is re-read by the model every round and shown to a person on the seat
 //     screen as the conversation ledger, and is neither kind of document;
-//   - a CLI RUN'S TRANSCRIPT ([github.com/crewlet/crewlet/internal/providers/llm/cliagent])
+//   - a CLI RUN'S TRANSCRIPT ([github.com/crewlet/crewlet/internal/providers/llm/harness])
 //     shows the model its own earlier calls, which it reads as written:
 //     shown a `<` it typed as an escape, it reads a call it never made;
 //   - a COMMAND'S -json (`cmd/crewlet`: a validation's problems, a node's
@@ -87,7 +87,7 @@
 // for a reader's sake.
 //
 // Nor is the OpenCode readiness check's spelling of a server's name
-// ([github.com/crewlet/crewlet/internal/sandbox/codingagent]). It looks for
+// ([github.com/crewlet/crewlet/internal/sandbox/executor]). It looks for
 // the name inside OpenCode's own answer, which JavaScript's JSON.stringify
 // wrote, so it leaves U+2028 and U+2029 as themselves too — and
 // encoding/json, which this package writes through, always escapes those two.

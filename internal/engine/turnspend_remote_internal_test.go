@@ -103,8 +103,8 @@ const (
 // billingModel answers each phase with its own submission and bills it: a
 // coding CLI on the real session whose one request calls the phase's
 // terminator — submit_review where the phase offers it, submit_work otherwise.
-func billingModel() phasedCLI {
-	return phasedCLI{model: "billing", pick: billingRun}
+func billingModel() phasedHarness {
+	return phasedHarness{model: "billing", pick: billingRun}
 }
 
 // billingRun is billingModel's run for a phase offering offered.

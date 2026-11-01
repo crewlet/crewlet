@@ -18,7 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/modelcatalog"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -72,7 +72,7 @@ type LocalModel struct {
 	Variable string
 	// Resolves is whether its credential resolved on this node.
 	Resolves bool
-	// Hint is the resolved credential's hint (cliagent's
+	// Hint is the resolved credential's hint (harness's
 	// CredentialHint), "" for none.
 	Hint string
 	// TokenLifetime is how long the CLI's headless token lasts, zero when
@@ -793,7 +793,7 @@ var catalogueProviders = map[string]string{"claude-code": "anthropic", "codex": 
 // catalogue's, and the test call is what says whether a plan reaches a model.
 func (s Sources) llmModels(ctx context.Context, p Params) (any, error) {
 	harness := p.String("harness")
-	profile, known := cliprofile.Builtin(harness)
+	profile, known := harnessprofile.Builtin(harness)
 	if harness == "" || !known || !slices.Contains([]string{"claude-code", "codex", "opencode"}, harness) {
 		return nil, fmt.Errorf("%w: harness must be claude-code, codex or opencode", ErrBadParams)
 	}

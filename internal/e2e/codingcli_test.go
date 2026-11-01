@@ -66,13 +66,13 @@ import (
 // offered tools, so a case scripting what the executor calls
 // ([scriptedModel.callOnExecute]) scripts what the run calls.
 
-// codingCLIEnv makes a re-execution of this binary the stand-in coding CLI
+// harnessEnv makes a re-execution of this binary the stand-in coding CLI
 // rather than the suite, and its value is the address of the model that
-// answers it — one variable for both, as [scriptedCLIEnv] is.
+// answers it — one variable for both, as [scriptedHarnessEnv] is.
 //
 // It reaches the child through the shim's own `env`, which bakes it in: the
 // box hands its CLI an environment of its own making, never the engine's.
-const codingCLIEnv = "CREWLET_E2E_CODING_CLI"
+const harnessEnv = "CREWLET_E2E_CODING_CLI"
 
 // What a case may vary about a run, read off the run's own environment —
 // which is role.sandbox.env, the ONLY route an external value has into a box,
@@ -95,7 +95,7 @@ const (
 
 // codingVersion is the release the stand-in reports by default: 2.1.310, the
 // Claude Code the runner's fixtures were measured on, at or past the oldest a
-// run is started with its note hooks on (codingagent's claudeNotesFloor).
+// run is started with its note hooks on (executor's claudeNotesFloor).
 const codingVersion = "2.1.310 (Claude Code)"
 
 // The modes a run can be in.
@@ -153,16 +153,16 @@ const codingMaxRounds = 16
 // endpoint.
 //
 // THE SAME FORK-BOMB GUARD as [scriptedEntry]'s: a child that somehow lost
-// [codingCLIEnv] falls through to the suite with a filter matching nothing.
+// [harnessEnv] falls through to the suite with a filter matching nothing.
 // And GORACE, for the reason that entry sets it.
 func codingShim(endpoint string) string {
 	return fmt.Sprintf("#!/bin/sh\n"+
 		"# The executor's coding CLI: the e2e test binary, standing in for Claude\n"+
 		"# Code. See internal/e2e/codingcli_test.go.\n"+
 		"exec env %s=%s %s=%s %s '-test.run=^$' \"$@\"\n",
-		codingCLIEnv, shellQuote(endpoint),
+		harnessEnv, shellQuote(endpoint),
 		procgrouptest.GORACE, shellQuote(procgrouptest.StandInRaceOptions()),
-		shellQuote(scriptedCLIBinary))
+		shellQuote(scriptedHarnessBinary))
 }
 
 // writeCodingShim writes [codingShim] for endpoint under dir and returns its
@@ -323,13 +323,13 @@ func (s codingStream) result(subtype, text string, turns int, spent replyUsage) 
 	})
 }
 
-// runCodingCLI is the stand-in coding CLI: it does what its mode says, prints
+// runHarness is the stand-in coding CLI: it does what its mode says, prints
 // its stream, and returns its exit status.
 //
 // A FAILURE IS THE CLI'S OWN, on stderr with a non-zero exit, which the runner
 // reports as the run failing with that account — so the reason reaches the
 // turn's record rather than a case timing out with nothing said.
-func runCodingCLI(endpoint string) int {
+func runHarness(endpoint string) int {
 	fail := func(format string, args ...any) int {
 		fmt.Fprintf(os.Stderr, "coding CLI: "+format+"\n", args...)
 		return 1
@@ -338,7 +338,7 @@ func runCodingCLI(endpoint string) int {
 	// A VERSION PROBE IS ANSWERED AS CLAUDE CODE ANSWERS IT, and nothing else
 	// happens: no brief read, no invocation recorded, no mode run. A run wired
 	// to its notes asks `claude --version` before it starts the CLI, to decide
-	// its hooks and its system text (codingagent's claudeNotesGate); a
+	// its hooks and its system text (executor's claudeNotesGate); a
 	// stand-in that ran the probe as a run held a held case's wait in the
 	// probe rather than in the CLI, answered nothing, and left the gate to its
 	// fallback, so no case ran the branch a real release takes.
@@ -781,7 +781,7 @@ func bridgeURL(path string) (string, error) {
 }
 
 // askModel asks the scripted model one round, posting the request the
-// scripted CLI on the engine host posts ([cliRun.ask]), and answers its reply.
+// scripted CLI on the engine host posts ([harnessRun.ask]), and answers its reply.
 func askModel(endpoint string, req modelRequest) (modelReply, error) {
 	body, err := json.Marshal(req)
 	if err != nil {

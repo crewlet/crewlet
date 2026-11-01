@@ -26,7 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // codingConversation is the DM line the coding gate's turn arrives on, and
@@ -957,11 +957,11 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 	if box.Home() != sandbox.DefaultHome {
 		t.Fatalf("home = %q, want %q", box.Home(), sandbox.DefaultHome)
 	}
-	runner := codingagent.NewClaudeCode()
+	runner := executor.NewClaudeCode()
 	if err := runner.Install(t.Context(), box); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	p := codingagent.PathsFor(box)
+	p := executor.PathsFor(box)
 
 	// A file written from the host side of the mount is visible inside.
 	if err := box.WriteFile(t.Context(), p.WorkDir()+"/probe", []byte("hello")); err != nil {

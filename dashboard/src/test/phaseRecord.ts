@@ -71,7 +71,7 @@ export function phaseRecord(over: Partial<PhaseRecord> = {}): PhaseRecord {
     deliveredRefs: [],
     deliveredRefsElided: 0,
     launchId: "",
-    cliTurns: 0,
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,

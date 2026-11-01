@@ -32,7 +32,7 @@ import (
 //
 // Mutation: drop the record of the ask from either the hook's take or the
 // plugin's poll, and that job is said never to have run its reader.
-func TestAJobsCLIAskingForItsNotesIsOnItsRecord(t *testing.T) {
+func TestAJobsHarnessAskingForItsNotesIsOnItsRecord(t *testing.T) {
 	logs := captureSteerLogs(t)
 	client := httpxtest.Pool(t)
 	for _, tc := range []struct {

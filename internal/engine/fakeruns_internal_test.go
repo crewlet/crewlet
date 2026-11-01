@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -41,7 +41,7 @@ import (
 // collection and the resume.
 //
 // What a run DOES is the case's: a [fakePlayer]. [modelPlayer] is the usual one
-// — the pick of the case's scripted CLI ([phasedCLI]), played as the run,
+// — the pick of the case's scripted CLI ([phasedHarness]), played as the run,
 // calling the seat's tools over the bridge — so one fixture scripts the run
 // and the reviewer that judges it alike.
 
@@ -55,15 +55,15 @@ const runnerKey = "cli"
 // starting a real CLI on the machine running the suite.
 func runnerEntry(t *testing.T) phase.Entry {
 	t.Helper()
-	provider, err := cliagent.New(cliagent.Config{
-		Key: runnerKey, Agent: "claude-code", Model: "sonnet",
+	provider, err := harness.New(harness.Config{
+		Key: runnerKey, Harness: "claude-code", Model: "sonnet",
 		StateDir:  t.TempDir(),
 		Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")},
 		Timeout:   time.Minute,
-		Auth:      cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"},
+		Auth:      harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-not-real"},
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
+		t.Fatalf("harness.New: %v", err)
 	}
 	return phase.Entry{Key: runnerKey, Provider: provider}
 }
@@ -238,7 +238,7 @@ func runToItsEnd(t *testing.T, e *Engine, rig *runRig, req Request) {
 // modelPlayer plays a run as its coding CLI would, with pick as the CLI's
 // model: the seat's tools are the bridge's, listed over a real MCP session to
 // the run's own endpoint, and the run is the one pick chooses for the names
-// they offer — the pick a [phasedCLI] makes for a phase of the engine's own,
+// they offer — the pick a [phasedHarness] makes for a phase of the engine's own,
 // so a fixture scripts the run and the phases around it the same way. Each response's calls are made over that
 // session in order, so every call lands on the run's row exactly as a box's
 // would, and the run ends after its last response, or once it has submitted

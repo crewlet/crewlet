@@ -23,20 +23,20 @@ func tierB(values map[string]string) *config.Resolver {
 	return config.NewResolver(storeSource(values), config.EnvSource{})
 }
 
-// TestBuildCLIAgentResolvesModel pins the scalar a Tier B document most often
+// TestBuildHarnessAgentResolvesModel pins the scalar a Tier B document most often
 // writes a reference into. The model becomes the CLI's --model argv, so an
 // unresolved one is not an error an operator can read: it is the CLI refusing
-// a model literally named "${CLI_MODEL}".
-func TestBuildCLIAgentResolvesModel(t *testing.T) {
+// a model literally named "${HARNESS_MODEL}".
+func TestBuildHarnessAgentResolvesModel(t *testing.T) {
 	t.Parallel()
-	r := tierB(map[string]string{"CLI_MODEL": "sonnet"})
+	r := tierB(map[string]string{"HARNESS_MODEL": "sonnet"})
 
-	p, err := BuildCLIAgent("subscription", config.LLMProvider{
-		Model:    "${CLI_MODEL}",
+	p, err := BuildHarness("subscription", config.LLMProvider{
+		Model:    "${HARNESS_MODEL}",
 		StateDir: t.TempDir(),
 	}, r, nil)
 	if err != nil {
-		t.Fatalf("BuildCLIAgent: %v", err)
+		t.Fatalf("BuildHarness: %v", err)
 	}
 	if got := p.Model(); got != "sonnet" {
 		t.Errorf("Model() = %q, want %q", got, "sonnet")
@@ -82,13 +82,13 @@ func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 				"CLAUDE_CODE_OAUTH_TOKEN": "tok-from-the-store",
 				"ANTHROPIC_API_KEY":       "sk-ant-from-the-store",
 			})
-			p, err := BuildCLIAgent("claude", config.LLMProvider{
+			p, err := BuildHarness("claude", config.LLMProvider{
 				Model:    "sonnet",
 				StateDir: t.TempDir(),
 				Auth:     tc.auth,
 			}, r, nil)
 			if err != nil {
-				t.Fatalf("BuildCLIAgent: %v", err)
+				t.Fatalf("BuildHarness: %v", err)
 			}
 			env := p.SandboxEnv()
 			if got := env[tc.varName]; got != tc.want {
@@ -148,7 +148,7 @@ func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := BuildCLIAgent("default", config.LLMProvider{
+			_, err := BuildHarness("default", config.LLMProvider{
 				Harness:  config.HarnessOpenCode,
 				Model:    tc.model,
 				StateDir: t.TempDir(),
@@ -171,12 +171,12 @@ func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 // never heard of.
 func TestAResolvedModelIsTrimmed(t *testing.T) {
 	t.Parallel()
-	p, err := BuildCLIAgent("default", config.LLMProvider{
+	p, err := BuildHarness("default", config.LLMProvider{
 		Model:    "${LLM_MODEL}",
 		StateDir: t.TempDir(),
 	}, tierB(map[string]string{"LLM_MODEL": " sonnet\n"}), nil)
 	if err != nil {
-		t.Fatalf("BuildCLIAgent: %v", err)
+		t.Fatalf("BuildHarness: %v", err)
 	}
 	if got := p.Model(); got != "sonnet" {
 		t.Errorf("Model() = %q, want %q", got, "sonnet")
@@ -189,7 +189,7 @@ func TestAResolvedModelIsTrimmed(t *testing.T) {
 // a boot that died over one key, where a missing model has no such tell.
 func TestAMissingCredentialStillBuilds(t *testing.T) {
 	t.Parallel()
-	if _, err := BuildCLIAgent("default", config.LLMProvider{
+	if _, err := BuildHarness("default", config.LLMProvider{
 		Model:    "sonnet",
 		StateDir: t.TempDir(),
 		Auth: config.HarnessAuth{
@@ -205,7 +205,7 @@ func TestAMissingCredentialStillBuilds(t *testing.T) {
 // its own — the engine hands it the entry's resolved cap — so the config's
 // default is the one every call runs under, and it is the one the docs and the
 // schema state.
-func TestTheCLITimeoutDefaultIsTheDocumentedOne(t *testing.T) {
+func TestTheHarnessTimeoutDefaultIsTheDocumentedOne(t *testing.T) {
 	t.Parallel()
 	if got := (&config.LLMProvider{}).Timeout(); got != 600 {
 		t.Fatalf("an entry naming no timeout_seconds gets %v s, want the documented 600", got)

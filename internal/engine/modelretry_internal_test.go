@@ -9,7 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
 // retryNode is one node of a fleet sharing fleet: its own revision, its own
@@ -34,7 +34,7 @@ func retryNode(t *testing.T, fleet coord.Fleet) (*Engine, *Company) {
 // spend sits c's plan entry out on a report made at `at`.
 func spend(t *testing.T, c *Company, at time.Time) {
 	t.Helper()
-	if !planOf(t, c).RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm", At: at}) {
+	if !planOf(t, c).RunEnded(t.Context(), harness.RunEnd{Answer: "Usage limit reached · resets 5pm", At: at}) {
 		t.Fatal("the premise: the entry sits out")
 	}
 }

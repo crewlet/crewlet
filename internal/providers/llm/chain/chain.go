@@ -429,7 +429,7 @@ func (e *Error) Error() string {
 func (e *Error) Unwrap() error { return e.Err }
 
 // unready is a member that can say, without a call, that its next call would
-// fail (cliagent's Provider).
+// fail (harness's Provider).
 type unready interface {
 	Unready(ctx context.Context) error
 }

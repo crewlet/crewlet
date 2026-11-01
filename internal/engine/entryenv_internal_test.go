@@ -6,7 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -154,7 +154,7 @@ func TestASeatsOwnTokenReplacesTheEntrysSignInAndKeepsItsRoute(t *testing.T) {
 func TestAnOverriddenTokenVariableIsPartOfTheEntrysSignIn(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompanyOverrides(t, "claude-code",
-		cliagent.Auth{Mode: cliagent.AuthSubscription, Token: "sk-ant-oat-entry"},
+		harness.Auth{Mode: harness.AuthSubscription, Token: "sk-ant-oat-entry"},
 		map[string]any{"token_env": "CLAUDE_SESSION_STRING"})
 	if env := runOn(t, c, seat, nil).env; env["CLAUDE_SESSION_STRING"] != "sk-ant-oat-entry" {
 		t.Fatalf("the entry's token under its renamed variable did not reach the box: %v", env)
@@ -175,11 +175,11 @@ func TestAnOverriddenTokenVariableIsPartOfTheEntrysSignIn(t *testing.T) {
 // Mutation: judge by a fixed list of Claude Code's names, and the added switch
 // neither keeps the entry's key out nor lets the remote run start, while the
 // dropped Bedrock toggle still keeps the key out.
-func TestTheNamesThatSignACLIInAreItsProfilesList(t *testing.T) {
+func TestTheNamesThatSignAHarnessInAreItsProfilesList(t *testing.T) {
 	t.Parallel()
 	overrides := map[string]any{"sign_in_env": []any{"CLAUDE_CODE_USE_MYCLOUD"}}
 	c, seat := creditedCompanyOverrides(t, "claude-code",
-		cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-entry"}, overrides)
+		harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-entry"}, overrides)
 
 	env := runOn(t, c, seat, map[string]string{"CLAUDE_CODE_USE_MYCLOUD": "1"}).env
 	if value, present := env["ANTHROPIC_API_KEY"]; present {
@@ -190,7 +190,7 @@ func TestTheNamesThatSignACLIInAreItsProfilesList(t *testing.T) {
 		t.Errorf("a name the profile no longer lists kept the entry's key out: %v", env)
 	}
 
-	bare, bareSeat := creditedCompanyOverrides(t, "claude-code", cliagent.Auth{}, overrides)
+	bare, bareSeat := creditedCompanyOverrides(t, "claude-code", harness.Auth{}, overrides)
 	if err := guardOn(t, bare, bareSeat, sandbox.E2B,
 		map[string]string{"CLAUDE_CODE_USE_MYCLOUD": "1"}); err != nil {
 		t.Errorf("a remote run signed in by a name the profile lists was refused: %v", err)

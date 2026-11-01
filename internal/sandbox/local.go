@@ -1306,7 +1306,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 	// file itself; one that keeps it in a database of its own has it on disk
 	// only as far as its runner exported it, which is why such a runner
 	// exports while the run works rather than only at its end (see
-	// codingagent's OpenCode).
+	// executor's OpenCode).
 	collectCredentials(ctx, layout, readCredentialMap(layout))
 	removeBox(layout)
 	localLog.Debug("local_sandbox_killed", "sandbox_id", sandboxID)

@@ -16,8 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -27,7 +27,7 @@ import (
 // A DEVICE SIGN-IN, the engine's half (M11 of the Models design): a person
 // signs a CLI in from the Models page without a terminal on the node. The node
 // that takes the request runs the CLI's own device-code login
-// ([cliagent.DeviceLogin]), relays its verification address and one-time code
+// ([harness.DeviceLogin]), relays its verification address and one-time code
 // through a coordination record ([coord.DeviceSignIn]), and waits for the
 // person to approve it in their browser. Nothing is pasted back through
 // Crewlet.
@@ -45,7 +45,7 @@ import (
 // exports it as the entry's credential bundle, seals it in the secret store
 // ([secrets.SourceModels]), and re-activates the revision so every node
 // rebuilds the entry and restores the bundle, the newest login winning over an
-// older one it holds (cliagent's bundle restore). A failed re-activation leaves
+// older one it holds (harness's bundle restore). A failed re-activation leaves
 // the login sealed and says so on the record: the next apply carries it.
 //
 // # A session outlives nothing it should not
@@ -64,7 +64,7 @@ const deviceCodeWait = 20 * time.Second
 
 // deviceCodeLifetime is how long a session is held for before the CLI has said
 // how long its code lives: OpenAI's documented fifteen minutes for a device
-// code, plus the thirty-second grace cliagent's device login allows past it.
+// code, plus the thirty-second grace harness's device login allows past it.
 const deviceCodeLifetime = 15*time.Minute + 30*time.Second
 
 // deviceSweepInterval is how often a node sweeps the sessions: the coordination
@@ -132,8 +132,8 @@ type deviceSignIns struct {
 	// wait that has begun.
 	stopping bool
 
-	// login is cliagent.DeviceLogin outside a test.
-	login func(ctx context.Context, p *cliagent.Provider, out func(cliagent.DeviceCode)) error
+	// login is harness.DeviceLogin outside a test.
+	login func(ctx context.Context, p *harness.Provider, out func(harness.DeviceCode)) error
 
 	// approveBudget and finalBudget are [deviceApproveBudget] and
 	// [deviceFinalWriteBudget] outside a test.
@@ -255,7 +255,7 @@ func (e *Engine) StartDeviceSignIn(ctx context.Context, key string, by iam.Actor
 	sessionCtx, cancel := session.ctx, session.cancel
 	go func() {
 		defer cancel(nil)
-		loginErr := login(sessionCtx, agent, func(code cliagent.DeviceCode) {
+		loginErr := login(sessionCtx, agent, func(code harness.DeviceCode) {
 			pending, werr := e.updateDeviceSignIn(sessionCtx, key, stored.ID, func(s *coord.DeviceSignIn) bool {
 				if s.Status.Ended() {
 					return false
@@ -341,7 +341,7 @@ type reservedSession struct {
 // session counts in the node's wait from here, so a stop that begins after
 // this waits for it.
 func (e *Engine) reserveDeviceSession(record coord.DeviceSignIn) (reservedSession,
-	func(context.Context, *cliagent.Provider, func(cliagent.DeviceCode)) error, error) {
+	func(context.Context, *harness.Provider, func(harness.DeviceCode)) error, error) {
 
 	d := &e.signIns
 	d.mu.Lock()
@@ -367,7 +367,7 @@ func (e *Engine) reserveDeviceSession(record coord.DeviceSignIn) (reservedSessio
 	d.sessions.Add(1)
 	login := d.login
 	if login == nil {
-		login = cliagent.DeviceLogin
+		login = harness.DeviceLogin
 	}
 	return reservedSession{deviceSession: session, ctx: ctx}, login, nil
 }
@@ -398,7 +398,7 @@ func (e *Engine) unreserveDeviceSession(s *deviceSession, ran bool) {
 }
 
 // deviceEntry is an entry a device sign-in can sign in, with its config.
-func (e *Engine) deviceEntry(key string) (*cliagent.Provider, error) {
+func (e *Engine) deviceEntry(key string) (*harness.Provider, error) {
 	c := e.Company()
 	if c == nil || c.Config == nil {
 		return nil, fmt.Errorf("%w: %q", ErrNoModel, key)
@@ -410,7 +410,7 @@ func (e *Engine) deviceEntry(key string) (*cliagent.Provider, error) {
 	}
 	profile := agent.Profile()
 	if !profile.HasDeviceLogin() {
-		return nil, fmt.Errorf("%w: %s", ErrNoDeviceSignIn, agent.Agent())
+		return nil, fmt.Errorf("%w: %s", ErrNoDeviceSignIn, agent.Harness())
 	}
 	if mode := spec.ResolvedAuthMode(); mode != config.AuthSubscription {
 		return nil, fmt.Errorf("%w: %s signs in with auth.mode %s; change "+
@@ -508,7 +508,7 @@ func (e *Engine) updateDeviceSignIn(ctx context.Context, key string, id uuid.UUI
 // endDeviceSignIn records how a session ended: approved (its login sealed and
 // the revision re-activated), expired, cancelled or failed.
 func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid.UUID,
-	agent *cliagent.Provider, by iam.Actor, loginErr error) coord.DeviceSignIn {
+	agent *harness.Provider, by iam.Actor, loginErr error) coord.DeviceSignIn {
 
 	status, detail := coord.DeviceApproved, ""
 	var revision string
@@ -526,7 +526,7 @@ func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid
 			// record says what is left to do.
 			detail = err.Error()
 		}
-	case errors.Is(loginErr, cliagent.ErrDeviceCodeExpired):
+	case errors.Is(loginErr, harness.ErrDeviceCodeExpired):
 		status, detail = coord.DeviceExpired, "the code expired before it was approved"
 	case errors.Is(cause, errSessionCancelled):
 		status = coord.DeviceCancelled
@@ -585,7 +585,7 @@ func (e *Engine) publishSignInEnded(ctx context.Context, key string,
 // sealDeviceLogin exports the login a device sign-in made as the entry's
 // bundle, seals it, and re-activates the revision so every node restores it,
 // answering the activation it produced.
-func (e *Engine) sealDeviceLogin(ctx context.Context, key string, agent *cliagent.Provider,
+func (e *Engine) sealDeviceLogin(ctx context.Context, key string, agent *harness.Provider,
 	by iam.Actor) (string, uint64, error) {
 
 	blob, err := agent.ExportBundle(ctx)
@@ -621,7 +621,7 @@ func (e *Engine) sealDeviceLogin(ctx context.Context, key string, agent *cliagen
 
 // bundleVariable is the secret an entry's credential bundle is read from: the
 // ${VAR} its auth.credential_bundle names, else the convention
-// ([cliprofile.BundleVarName]).
+// ([harnessprofile.BundleVarName]).
 func (e *Engine) bundleVariable(key string) string {
 	if c := e.Company(); c != nil && c.Config != nil {
 		if spec, ok := c.Config.Providers.LLM[key]; ok {
@@ -634,7 +634,7 @@ func (e *Engine) bundleVariable(key string) string {
 			}
 		}
 	}
-	return cliprofile.BundleVarName(key)
+	return harnessprofile.BundleVarName(key)
 }
 
 // CancelDeviceSignIn cancels a running session by id: at once where this node

@@ -132,7 +132,7 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// another registry is released, since whether the seat's chain is
 		// still the one that refused is this company's to say. An entry
 		// that still calls as the same account finds its sign-in's
-		// sit-out ([cliagent.Plans]), so a limit that still holds parks the
+		// sit-out ([harness.Plans]), so a limit that still holds parks the
 		// seat again at the cost of one delivery and no process: the
 		// entry refuses before any CLI is started. A seat whose mail its
 		// run holds is parked again by its run's completion, which the

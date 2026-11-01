@@ -22,9 +22,9 @@ import (
 // predict, so a run is picked from the tools the phase offers, the way the
 // phases themselves tell apart.
 
-// phasedCLI plays, for each call that offers tools, the run pick chooses from
+// phasedHarness plays, for each call that offers tools, the run pick chooses from
 // the names the phase offers; a call that offers none is answered by text.
-type phasedCLI struct {
+type phasedHarness struct {
 	model string
 
 	// pick is the run a phase plays, from the tools it offers.
@@ -34,11 +34,11 @@ type phasedCLI struct {
 	text func(ctx context.Context, req llm.Request) (*llm.Completion, error)
 }
 
-var _ llm.Provider = phasedCLI{}
+var _ llm.Provider = phasedHarness{}
 
-func (p phasedCLI) Model() string { return p.model }
+func (p phasedHarness) Model() string { return p.model }
 
-func (p phasedCLI) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+func (p phasedHarness) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
 	if req.Tools == nil {
 		if p.text == nil {
 			return &llm.Completion{Model: p.model, Content: "done", StopReason: llm.StopEnd}, nil
@@ -58,7 +58,7 @@ func (p phasedCLI) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 func offeredTo(req llm.Request) ([]string, error) {
 	host, ok := req.Tools.(interface{ Offered() []toolsession.Tool })
 	if !ok {
-		return nil, errors.New("phasedCLI: the request's tool host lists no tools")
+		return nil, errors.New("phasedHarness: the request's tool host lists no tools")
 	}
 	var names []string
 	for _, tool := range host.Offered() {

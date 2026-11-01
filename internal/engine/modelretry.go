@@ -14,13 +14,13 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
 // "RETRY NOW" AND "CLEAR", FLEET-WIDE (M10 of the Models design).
 //
 // A sit-out is each node's own memory of a vendor's limit, kept on the
-// entry's sign-in ([cliagent.Plan]): a request a person makes through one node
+// entry's sign-in ([harness.Plan]): a request a person makes through one node
 // changes nothing on another unless every node hears it. So the request is a
 // coordination record, one per entry ([coord.ModelRetry]), and every node
 // keeps a watched copy of the class, as it does of seat pauses
@@ -28,7 +28,7 @@ import (
 // that entry, a node:
 //
 //  1. clears the entry's sign-in of every window opened by a report dated
-//     BEFORE the stamp ([cliagent.Plan.Clear]); a report after it stands, since
+//     BEFORE the stamp ([harness.Plan.Clear]); a report after it stands, since
 //     the vendor said it after the person asked; and
 //  2. fires now every provider-park probe whose chain names the entry, so a
 //     seat parked on it is tried at once ([Engine.rearmLimitProbesNaming]); a
@@ -183,7 +183,7 @@ func (e *Engine) applyModelRetry(ctx context.Context, r coord.ModelRetry) {
 }
 
 // harnessEntry is the active revision's coding-CLI entry under key.
-func (e *Engine) harnessEntry(key string) (*cliagent.Provider, bool) {
+func (e *Engine) harnessEntry(key string) (*harness.Provider, bool) {
 	c := e.Company()
 	if c == nil || c.Models == nil {
 		return nil, false
@@ -192,8 +192,8 @@ func (e *Engine) harnessEntry(key string) (*cliagent.Provider, bool) {
 	if !ok {
 		return nil, false
 	}
-	agent, isCLI := provider.(*cliagent.Provider)
-	return agent, isCLI
+	agent, isHarness := provider.(*harness.Provider)
+	return agent, isHarness
 }
 
 // RetryModel stops every node sitting an entry out.
@@ -275,7 +275,7 @@ func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRet
 // the same sign-in and state directory, with a record of its own rather than
 // the node's: what its one call meets is the vendor's word, never the entry's
 // window.
-func (e *Engine) probeSibling(key string) (*cliagent.Provider, error) {
+func (e *Engine) probeSibling(key string) (*harness.Provider, error) {
 	c := e.Company()
 	if c == nil || c.Config == nil {
 		return nil, fmt.Errorf("%w: %q", ErrNoModel, key)
@@ -284,7 +284,7 @@ func (e *Engine) probeSibling(key string) (*cliagent.Provider, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrNoModel, key)
 	}
-	return BuildCLIAgent(key, spec, e.resolver(), nil)
+	return BuildHarness(key, spec, e.resolver(), nil)
 }
 
 // probeEntry makes one call on provider, the entry under key, as the provider

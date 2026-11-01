@@ -1220,7 +1220,7 @@ func TestARelaunchWhoseBoxIsGoneStartsInAFreshOne(t *testing.T) {
 // than its last — which the box was installed for and no other CLI can run in.
 // The attach overwrites the row's reference, so a box the relaunch walked
 // away from was named by nothing: no settle, no reaper would ever reclaim it.
-func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
+func TestARelaunchOnAnotherHarnessReclaimsTheBoxItLeaves(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	opencode := NewFakeRunner("opencode")

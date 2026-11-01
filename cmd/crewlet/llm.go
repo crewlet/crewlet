@@ -16,9 +16,9 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/envref"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -160,7 +160,7 @@ func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	if sub == "doctor" {
 		return doctorLLM(ctx, doctorEntries(company, keys, resolver), !*noSmoke, stdout)
 	}
-	providers, err := cliAgents(company, keys, resolver)
+	providers, err := harnessProviders(company, keys, resolver)
 	if err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		// failed after the login was removed fails this command with the
 		// logout recorded all the same, and that record is what keeps the
 		// configured bundle out — which the operator revoking a compromised
-		// login most needs to hear. See [cliagent.Provider.LogoutNotice].
+		// login most needs to hear. See [harness.Provider.LogoutNotice].
 		switch notice, err := p.LogoutNotice(); {
 		case err != nil:
 			fmt.Fprintf(stderr, "crewlet: %s: %v\n", p.Key(), err)
@@ -214,8 +214,8 @@ func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 
 // statusLLM answers `crewlet llm status KEY`: one line of what the CLI's status
 // command says of its login, read as the engine reads it
-// ([cliagent.Provider.LoginStatus]), then the CLI's own words for a person
-// ([cliagent.Provider.Status], its status_text_args where it has them).
+// ([harness.Provider.LoginStatus]), then the CLI's own words for a person
+// ([harness.Provider.Status], its status_text_args where it has them).
 //
 // THE ENGINE'S READING FIRST, because it is the answer the dashboard and the
 // heartbeat give for the same entry, and the line a script greps; the CLI's
@@ -223,7 +223,7 @@ func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 // organisation, when it expires). It exits non-zero unless the reading is
 // signed in, as the CLI's own status command does, so a script that ran it
 // before keeps its meaning.
-func statusLLM(ctx context.Context, p *cliagent.Provider, stdout, stderr io.Writer) error {
+func statusLLM(ctx context.Context, p *harness.Provider, stdout, stderr io.Writer) error {
 	status, err := p.LoginStatus(ctx)
 	if err != nil {
 		return err
@@ -238,13 +238,13 @@ func statusLLM(ctx context.Context, p *cliagent.Provider, stdout, stderr io.Writ
 	fmt.Fprintln(stdout, line)
 	// The CLI's words are an account for a person, never the answer: a text
 	// form that fails says so on stderr and leaves the reading standing.
-	if err := p.Status(ctx, stdout, stderr); err != nil && status.State == cliagent.LoginSignedIn {
+	if err := p.Status(ctx, stdout, stderr); err != nil && status.State == harness.LoginSignedIn {
 		fmt.Fprintf(stderr, "crewlet: %s: the CLI's own account of its login failed: %v\n", p.Key(), err)
 	}
 	switch status.State {
-	case cliagent.LoginSignedIn:
+	case harness.LoginSignedIn:
 		return nil
-	case cliagent.LoginSignedOut:
+	case harness.LoginSignedOut:
 		return fmt.Errorf("%s holds no login: sign it in on this host with `crewlet llm login %s`, "+
 			"and `crewlet llm doctor %s` reports every other way it can be signed in",
 			p.Key(), p.Key(), p.Key())
@@ -257,11 +257,11 @@ func statusLLM(ctx context.Context, p *cliagent.Provider, stdout, stderr io.Writ
 // read: an unknown one reads nothing of the company, and reveals nothing.
 var llmCommands = []string{"list", "doctor", "login", "status", "logout", "export", "import"}
 
-// cliAgentProvider pairs a built provider with the key it was configured
+// harnessProvider pairs a built provider with the key it was configured
 // under, in the order the company document wrote them.
-type cliAgentProvider struct {
+type harnessProvider struct {
 	key      string
-	provider *cliagent.Provider
+	provider *harness.Provider
 }
 
 // loadLLMConfig reads the company document, the entries a subcommand
@@ -353,21 +353,21 @@ func llmEntryReads(company *config.Company, keys []string) []string {
 	return unionReads(names)
 }
 
-// cliAgents builds these entries' providers, in the order given.
-func cliAgents(company *config.Company, keys []string, resolver *config.Resolver) ([]cliAgentProvider, error) {
-	out := make([]cliAgentProvider, 0, len(keys))
+// harnessProviders builds these entries' providers, in the order given.
+func harnessProviders(company *config.Company, keys []string, resolver *config.Resolver) ([]harnessProvider, error) {
+	out := make([]harnessProvider, 0, len(keys))
 	for _, key := range keys {
-		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver, nil)
+		built, err := engine.BuildHarness(key, company.Providers.LLM[key], resolver, nil)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, cliAgentProvider{key: key, provider: built})
+		out = append(out, harnessProvider{key: key, provider: built})
 	}
 	return out, nil
 }
 
 // oneProvider picks the provider a key names, or explains the choice.
-func oneProvider(providers []cliAgentProvider, key string) (*cliagent.Provider, error) {
+func oneProvider(providers []harnessProvider, key string) (*harness.Provider, error) {
 	if key == "" {
 		if len(providers) == 1 {
 			return providers[0].provider, nil
@@ -384,17 +384,17 @@ func oneProvider(providers []cliAgentProvider, key string) (*cliagent.Provider, 
 }
 
 // restoreConfiguredBundle makes the restore the engine makes before it runs an
-// entry ([cliagent.Provider.RestoreConfiguredBundle]), for a command that
+// entry ([harness.Provider.RestoreConfiguredBundle]), for a command that
 // answers about the login the engine would run with, and says on stderr why
 // it restored nothing where it did not: the engine warns and runs the entry
 // signed out, and the command then reports a login that is not there, which
 // this line explains — a bundle that failed, or a logout that keeps it out
 // until a login is written again.
-func restoreConfiguredBundle(ctx context.Context, p *cliagent.Provider, stderr io.Writer) {
+func restoreConfiguredBundle(ctx context.Context, p *harness.Provider, stderr io.Writer) {
 	err := p.RestoreConfiguredBundle(ctx)
 	switch {
 	case err == nil:
-	case errors.Is(err, cliagent.ErrLoggedOut):
+	case errors.Is(err, harness.ErrLoggedOut):
 		fmt.Fprintf(stderr, "crewlet: %s: %v\n", p.Key(), err)
 	default:
 		fmt.Fprintf(stderr, "crewlet: %s: the entry's configured credential bundle did not restore: %v\n",
@@ -402,7 +402,7 @@ func restoreConfiguredBundle(ctx context.Context, p *cliagent.Provider, stderr i
 	}
 }
 
-func providerKeys(providers []cliAgentProvider) []string {
+func providerKeys(providers []harnessProvider) []string {
 	keys := make([]string, 0, len(providers))
 	for _, p := range providers {
 		keys = append(keys, p.key)
@@ -419,7 +419,7 @@ func providerKeys(providers []cliAgentProvider) []string {
 // read before the restore it said `none` for a fresh container that doctor —
 // and the engine — would sign in from its bundle. A restore that fails, or a
 // logout that keeps the bundle out, is said on stderr, as `status` says it.
-func listLLMProviders(ctx context.Context, providers []cliAgentProvider, stdout, stderr io.Writer) error {
+func listLLMProviders(ctx context.Context, providers []harnessProvider, stdout, stderr io.Writer) error {
 	for _, p := range providers {
 		restoreConfiguredBundle(ctx, p.provider, stderr)
 	}
@@ -431,7 +431,7 @@ func listLLMProviders(ctx context.Context, providers []cliAgentProvider, stdout,
 			model = "(the CLI's default)"
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			p.key, p.provider.Agent(), model,
+			p.key, p.provider.Harness(), model,
 			p.provider.SignInState(ctx), p.provider.Workspace().StateDir())
 	}
 	return w.Flush()
@@ -462,7 +462,7 @@ func doctorEntries(company *config.Company, keys []string, resolver *config.Reso
 	out := make([]doctorEntry, 0, len(keys))
 	for _, key := range keys {
 		entry := doctorEntry{key: key}
-		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver, nil)
+		built, err := engine.BuildHarness(key, company.Providers.LLM[key], resolver, nil)
 		if err != nil {
 			entry.diagnose = unbuilt(key, err)
 			out = append(out, entry)
@@ -473,10 +473,10 @@ func doctorEntries(company *config.Company, keys []string, resolver *config.Reso
 			// bundle: the diagnosis names it beside the missing sign-in,
 			// as it would for the entry the engine runs.
 			if err := built.RestoreConfiguredBundle(ctx); err != nil &&
-				!errors.Is(err, cliagent.ErrLoggedOut) {
+				!errors.Is(err, harness.ErrLoggedOut) {
 				return bundleFailure{key: key, err: err}
 			}
-			return built.Diagnose(ctx, cliagent.DiagnoseOptions{
+			return built.Diagnose(ctx, harness.DiagnoseOptions{
 				Smoke: smoke,
 				// THE COMPANY'S OWN ANSWER to which seats launch their
 				// executors on this entry, resolved as validation and the
@@ -488,9 +488,9 @@ func doctorEntries(company *config.Company, keys []string, resolver *config.Reso
 				// them: which runners this build registers and what a
 				// box can dial are facts about the process, and both
 				// decide whether an executor launches on the entry at all.
-				AgentRunners: codingagent.Names(),
-				Cell:         string(company.EntryCell(key)),
-				BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
+				ExecutorHarnesses: executor.Names(),
+				Cell:              string(company.EntryCell(key)),
+				BridgeURL:         os.Getenv(mcpbridge.BaseURLVar),
 			})
 		}
 		out = append(out, entry)
@@ -559,7 +559,7 @@ func doctorLLM(ctx context.Context, entries []doctorEntry, smoke bool, stdout io
 
 // loginRequest is what `crewlet llm login` was asked to do.
 type loginRequest struct {
-	providers     []cliAgentProvider
+	providers     []harnessProvider
 	key           string
 	home          string
 	fromHost      bool
@@ -625,7 +625,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 		// recommend reaches nothing ([refuseUnreadToken]); a CLI with no
 		// minting command has no -capture-token to run; and under a
 		// token_env outside the reference grammar the command refuses
-		// before it mints ([cliagent.Provider.MintsHeadlessToken]).
+		// before it mints ([harness.Provider.MintsHeadlessToken]).
 		if _, fromEnv := p.ModeSignIn(); fromEnv {
 			return nil
 		}
@@ -673,7 +673,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 						"or redirect it to a file you then remove")
 			}
 			fmt.Fprintln(stdout, token)
-			if sign, fromEnv := p.ModeSignIn(); fromEnv && sign.Mode == cliagent.AuthInheritEnv {
+			if sign, fromEnv := p.ModeSignIn(); fromEnv && sign.Mode == harness.AuthInheritEnv {
 				// Reached only under inherit-env: api-key was refused
 				// above. That mode reads no auth.token, which validation
 				// refuses beside it, so the reference would be one more
@@ -747,7 +747,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 // nothing, which a remote run's refusal and the doctor then reported again.
 //
 // The error says what the mode reads instead, in the words the doctor and the
-// run's refusal use ([cliagent.Provider.ModeSignIn]).
+// run's refusal use ([harness.Provider.ModeSignIn]).
 //
 // NO TOKEN VARIABLE, OR ONE NO STORE CAN HOLD, is refused before anything
 // else but api-key, whatever the mode and -print-token, since a token reaches
@@ -763,7 +763,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 // only to run, so the name reaches here.
 //
 // API-KEY IS JUDGED FIRST, because the mode decides what the entry reads before
-// the CLI does ([cliagent.Provider.ModeSignIn]): an api-key entry reads its key
+// the CLI does ([harness.Provider.ModeSignIn]): an api-key entry reads its key
 // and no token under any variable, so it is told its key, as the doctor tells
 // it, whatever the profile names. Judged after them, an api-key codex entry
 // would be told to sign in with a login, which api-key does not sign in with,
@@ -772,10 +772,10 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 // it. Its refusal offers subscription as the mode that reads a stored token
 // only under a variable a token can be stored in, and names the field where the
 // name is outside the grammar.
-func refuseUnreadToken(p *cliagent.Provider, key string, req loginRequest) error {
+func refuseUnreadToken(p *harness.Provider, key string, req loginRequest) error {
 	tokenVar := p.Profile().TokenEnv
 	sign, fromEnv := p.ModeSignIn()
-	if fromEnv && sign.Mode == cliagent.AuthAPIKey {
+	if fromEnv && sign.Mode == harness.AuthAPIKey {
 		return refuseAPIKeyToken(p, key, sign)
 	}
 	switch {
@@ -785,7 +785,7 @@ func refuseUnreadToken(p *cliagent.Provider, key string, req loginRequest) error
 				"was minted, read or stored: sign %s in with a login of its own (`crewlet llm "+
 				"doctor %s` names the routes it has), or, if your build of the CLI reads a "+
 				"token from a variable, name that variable in providers.llm.%s.overrides.token_env",
-			p.Agent(), key, key, key)
+			p.Harness(), key, key, key)
 	case !p.TokenCanBeStored():
 		return fmt.Errorf(
 			"providers.llm.%s.overrides.token_env is %q, which is not an environment variable "+
@@ -818,13 +818,13 @@ func refuseUnreadToken(p *cliagent.Provider, key string, req loginRequest) error
 // reaches nothing under any variable, and the remedy is the key the mode reads
 // — or, on a CLI whose profile names no key variable, a pairing every write of
 // the configuration refuses, the mode's own remedy, a login under subscription
-// ([cliagent.ModeSignIn]).
+// ([harness.ModeSignIn]).
 //
 // Subscription is offered as the mode that reads a token only where it could
 // read one: a CLI whose profile names no token variable, or one outside the
 // reference grammar, takes none under any mode, so offering it sent an
 // operator to the refusal that names the variable instead.
-func refuseAPIKeyToken(p *cliagent.Provider, key string, sign cliagent.ModeSignIn) error {
+func refuseAPIKeyToken(p *harness.Provider, key string, sign harness.ModeSignIn) error {
 	tokenVar := p.Profile().TokenEnv
 	switch {
 	case tokenVar == "":
@@ -832,7 +832,7 @@ func refuseAPIKeyToken(p *cliagent.Provider, key string, sign cliagent.ModeSignI
 			"%s runs under auth.mode api-key, which hands the CLI no headless token, and the %q "+
 				"profile names no token_env to hand one in, so a token would reach nothing, and "+
 				"none was minted or stored. The mode %s: %s",
-			key, p.Agent(), sign.Reads, sign.Supply)
+			key, p.Harness(), sign.Reads, sign.Supply)
 	case !p.TokenCanBeStored():
 		return fmt.Errorf(
 			"%s runs under auth.mode api-key, which removes %q from the CLI's environment, so a "+
@@ -869,7 +869,7 @@ func tokenFromReader(r io.Reader) (string, error) {
 	return token, nil
 }
 
-func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool,
+func exportLLM(ctx context.Context, providers []harnessProvider, key string, toStore bool,
 	companySecrets *companyStore, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
@@ -878,7 +878,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 	if key == "" {
 		key = providers[0].key
 	}
-	if err = p.RestoreConfiguredBundle(ctx); errors.Is(err, cliagent.ErrLoggedOut) {
+	if err = p.RestoreConfiguredBundle(ctx); errors.Is(err, harness.ErrLoggedOut) {
 		return fmt.Errorf("%s has no login to export: %w", key, err)
 	} else if err != nil {
 		return fmt.Errorf("the entry's configured credential bundle did not restore, so there is "+
@@ -905,7 +905,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 	// does not go through the store: the bundle on stdout, kept wherever the
 	// operator keeps such things, or a login on each host. This caps the
 	// bundle as the store keeps it, packed; a restore holds what it unpacks
-	// to cliagent's own bound, which measures different bytes, so a stored
+	// to harness's own bound, which measures different bytes, so a stored
 	// bundle must pass both.
 	if len(bundle) > secrets.MaxValueBytes {
 		return fmt.Errorf("%w: %s's credential bundle is %d bytes once packed, and the store "+
@@ -916,7 +916,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 			secrets.ErrValueTooLarge, key, len(bundle), secrets.MaxValueBytes,
 			secrets.MaxValueBytes>>10, key, key, key, key)
 	}
-	name := cliprofile.BundleVarName(key)
+	name := harnessprofile.BundleVarName(key)
 	target, written, err := storeLLMSecret(ctx, companySecrets, name, bundle)
 	if err != nil {
 		return err
@@ -986,19 +986,19 @@ func storeLLMSecret(ctx context.Context, companySecrets *companyStore, name, val
 // `crewlet llm export k | ssh host crewlet llm import k` — is a pipe anyway.
 //
 // It REFUSES TO OVERWRITE an existing login, which is
-// [cliagent.Provider.ImportBundle]'s rule whatever the bundle's install record
+// [harness.Provider.ImportBundle]'s rule whatever the bundle's install record
 // says: a host that has been running holds the fresher refresh token, and an
 // operator replacing it says so with `crewlet llm logout` first. That is reported
 // here rather than swallowed, because "nothing happened" and "restored" look
 // identical from the outside and only one of them means the host is ready —
 // asked before stdin is read, so a refusal costs nothing, and answered again by
-// [cliagent.Provider.ImportBundle] under the lock its write takes, because a
+// [harness.Provider.ImportBundle] under the lock its write takes, because a
 // login landing between the two was otherwise reported as a bundle restored.
 //
 // companyPath is the company document the entry was read from and
 // companySecrets the run's store, which say how the doctor that checks the
 // restored login can be run ([verifyWithDoctor]).
-func importLLM(ctx context.Context, providers []cliAgentProvider, key, companyPath string,
+func importLLM(ctx context.Context, providers []harnessProvider, key, companyPath string,
 	companySecrets *companyStore, stdin io.Reader, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
@@ -1044,7 +1044,7 @@ func importLLM(ctx context.Context, providers []cliAgentProvider, key, companyPa
 			"stdin held no bundle: pipe one in, e.g. " +
 				"`crewlet llm export " + key + " | ssh host crewlet llm import " + key + "`")
 	}
-	if err := p.ImportBundle(ctx, blob); errors.Is(err, cliagent.ErrLoginPresent) {
+	if err := p.ImportBundle(ctx, blob); errors.Is(err, harness.ErrLoginPresent) {
 		return present()
 	} else if err != nil {
 		return err

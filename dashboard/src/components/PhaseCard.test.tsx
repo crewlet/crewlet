@@ -66,7 +66,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     codingAgent: "",
     sandboxId: "",
     launchId: "",
-    cliTurns: 0,
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,
@@ -531,7 +531,7 @@ describe("an executor round's launches", () => {
     inputTokens: 9_000,
     outputTokens: 700,
     totalTokens: 9_700,
-    cliTurns: 31,
+    harnessTurns: 31,
     at: "2026-09-02T10:05:00Z",
   });
 

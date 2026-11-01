@@ -8,7 +8,7 @@ import (
 // WHAT A PERSON IS SHOWN OF A DEEP RUN AT WORK.
 //
 // A run's live reading is its coding CLI's own transcript
-// (internal/sandbox/codingagent): every tool call as "[tool] <name>:
+// (internal/sandbox/executor): every tool call as "[tool] <name>:
 // <subject>", where the subject is a command or a file path on the engine's
 // host ("Write: /private/tmp/.../assistant-boxes/.../outbox/report.md"), and
 // every paragraph the model writes. Drawn as it is, the deep-work card showed a

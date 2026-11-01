@@ -8,7 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
 // LocalModel is what THIS node resolved for one entry of its active revision,
@@ -22,7 +22,7 @@ import (
 // here rather than off a lease.
 type LocalModel struct {
 	Key string
-	// Route is cliagent's sign-in route on this node: token, credentials,
+	// Route is harness's sign-in route on this node: token, credentials,
 	// api-key, env, inherit-env, environment or none.
 	Route string
 	// Variable is the variable the entry's credential is read from: its
@@ -30,7 +30,7 @@ type LocalModel struct {
 	// "" for a route that reads none.
 	Variable string
 	Resolves bool
-	// Hint is the resolved credential's ([cliagent.Provider.CredentialHint]).
+	// Hint is the resolved credential's ([harness.Provider.CredentialHint]).
 	Hint string
 	// TokenLifetime is the CLI's documented headless-token lifetime, for a
 	// route that signs in with one; zero otherwise.
@@ -50,8 +50,8 @@ func (e *Engine) LocalModels() []LocalModel {
 	for _, key := range keys {
 		row := LocalModel{Key: key, Route: "none"}
 		provider, ok := c.Models.Provider(key)
-		agent, isCLI := provider.(*cliagent.Provider)
-		if !ok || !isCLI {
+		agent, isHarness := provider.(*harness.Provider)
+		if !ok || !isHarness {
 			out = append(out, row)
 			continue
 		}

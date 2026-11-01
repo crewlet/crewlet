@@ -46,7 +46,7 @@ import (
 // only when the parent says so. That is what makes the drain last long enough
 // to observe, and it is a real turn on the real path: a signed GitLab delivery
 // on the webhook edge, the notification service, the seat's mailbox, and the
-// CLI backend running the model's CLI ([heldCLI]) as a child of the node — for
+// CLI backend running the model's CLI ([heldHarness]) as a child of the node — for
 // the seat's first turn's onboarding pass, the one call a turn makes on the
 // seat's own model before its executor's run is launched and the turn parks.
 const (
@@ -168,7 +168,7 @@ func TestASignalledNodeDrainsWithItsProbesUp(t *testing.T) {
 	// package's parallel cases waiting on the same cores is time taken from
 	// the one budget here that matters.
 	client := drainProbeClient(t)
-	model := newHeldCLI(t)
+	model := newHeldHarness(t)
 	forge := newAccountForge(t)
 	// THE NODE'S PORT, HELD: see [drainProbeSocketFD].
 	port, socket := reserveNodeSocket(t)
@@ -457,7 +457,7 @@ func (n *nodeChild) exitedWith(t *testing.T, code int) {
 	}
 }
 
-// heldCLI is the seat's model: a CLI that marks every call it is handed and
+// heldHarness is the seat's model: a CLI that marks every call it is handed and
 // answers none until the test lets it go, and then fails them all at once.
 //
 // A FAILURE rather than an answer, because the case is about the node that
@@ -474,7 +474,7 @@ func (n *nodeChild) exitedWith(t *testing.T, code int) {
 // outside, as it sees the node's probes. `custom` because it ships nothing, so
 // no vendor's sign-in, sentinels or configuration stands between the engine
 // and a CLI that has none of them.
-type heldCLI struct {
+type heldHarness struct {
 	t *testing.T
 	// marker is the file a call creates on arrival; release is the one the
 	// call waits for.
@@ -484,18 +484,18 @@ type heldCLI struct {
 	released sync.Once
 }
 
-// heldCLIPoll is how often the parent looks for the marker and a held call for
+// heldHarnessPoll is how often the parent looks for the marker and a held call for
 // the release: fast enough that neither wait is what a case spends its budget
 // on, slow enough to cost nothing beside a booting node.
-const heldCLIPoll = 50 * time.Millisecond
+const heldHarnessPoll = 50 * time.Millisecond
 
-// newHeldCLI makes the files, and watches for the first call until the case
+// newHeldHarness makes the files, and watches for the first call until the case
 // ends. The let-go is registered here as well, so a case that fails before it
 // lets go itself never leaves a call held through the node's teardown.
-func newHeldCLI(t *testing.T) *heldCLI {
+func newHeldHarness(t *testing.T) *heldHarness {
 	t.Helper()
 	dir := t.TempDir()
-	m := &heldCLI{
+	m := &heldHarness{
 		t:       t,
 		marker:  filepath.Join(dir, "entered"),
 		release: filepath.Join(dir, "release"),
@@ -504,7 +504,7 @@ func newHeldCLI(t *testing.T) *heldCLI {
 	stop, stopped := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(stopped)
-		tick := time.NewTicker(heldCLIPoll)
+		tick := time.NewTicker(heldHarnessPoll)
 		defer tick.Stop()
 		for {
 			if _, err := os.Stat(m.marker); err == nil {
@@ -524,7 +524,7 @@ func newHeldCLI(t *testing.T) *heldCLI {
 }
 
 // letGo releases every call held now and every one made after.
-func (m *heldCLI) letGo() {
+func (m *heldHarness) letGo() {
 	m.released.Do(func() {
 		if err := os.WriteFile(m.release, nil, 0o600); err != nil {
 			m.t.Errorf("releasing the held CLI: %v", err)
@@ -538,10 +538,10 @@ func (m *heldCLI) letGo() {
 // The paths are quoted twice over: single quotes inside the script, so the
 // shell reads each as one word, and the whole script with %q, a Go-quoted
 // string being a YAML double-quoted scalar.
-func (m *heldCLI) entry(key, stateDir string) string {
+func (m *heldHarness) entry(key, stateDir string) string {
 	script := fmt.Sprintf("touch '%s'; while [ ! -e '%s' ]; do sleep %g; done; "+
 		"echo 'the drain probe has no model' >&2; exit 1",
-		m.marker, m.release, heldCLIPoll.Seconds())
+		m.marker, m.release, heldHarnessPoll.Seconds())
 	return fmt.Sprintf(`    %s:
       harness: custom
       model: claude-drain-probe

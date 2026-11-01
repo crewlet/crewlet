@@ -18,7 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/whsec"
@@ -154,10 +154,10 @@ roles:
         signing_secret: "${SLACK_SIGNING_SECRET_CEO}"
 `
 
-// cliAgentCompanyFile is a company whose one entry, "sub", names no credential
+// harnessCompanyFile is a company whose one entry, "sub", names no credential
 // of its own — so it reads its bundle under the conventional name — and whose
 // CLI is `true` for every command, and the entry as the run builds it.
-func cliAgentCompanyFile(t *testing.T) (string, *cliagent.Provider) {
+func harnessCompanyFile(t *testing.T) (string, *harness.Provider) {
 	t.Helper()
 	dir := t.TempDir()
 	state := filepath.Join(dir, "state")
@@ -184,8 +184,8 @@ roles:
     handle: ceo
     kind: human
 `, state))
-	p, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: "custom", StateDir: state,
+	p, err := harness.New(harness.Config{
+		Key: "sub", Harness: "custom", StateDir: state,
 		Timeout: time.Second, MaxConcurrent: 1,
 		Overrides: map[string]any{
 			"binary": "true", "complete_args": []any{"-p"},
@@ -201,7 +201,7 @@ roles:
 	return path, p
 }
 
-// aBundle is a credential bundle of the entry cliAgentCompanyFile declares,
+// aBundle is a credential bundle of the entry harnessCompanyFile declares,
 // exported from a login of its own.
 func aBundle(t *testing.T) string {
 	t.Helper()
@@ -226,7 +226,7 @@ type readerRun struct {
 	name string
 	// args is the command line; entry, for the llm reports, is the entry
 	// whose credentials directory a restore would write into.
-	args func(t *testing.T, cfg, vendor string) (args []string, entry *cliagent.Provider)
+	args func(t *testing.T, cfg, vendor string) (args []string, entry *harness.Provider)
 }
 
 // readersOfTheCompany is every command that reads the company's stored values:
@@ -239,7 +239,7 @@ func readersOfTheCompany() []readerRun {
 	vendorRun := func(name string, extra ...string) readerRun {
 		fields := strings.Fields(name)
 		return readerRun{name: strings.Join(append(fields, extra...), " "),
-			args: func(t *testing.T, cfg, vendor string) ([]string, *cliagent.Provider) {
+			args: func(t *testing.T, cfg, vendor string) ([]string, *harness.Provider) {
 				company := companyAt(t, readerCompanyDoc, vendor)
 				args := append(slices.Clone(fields), company)
 				switch fields[0] {
@@ -259,8 +259,8 @@ func readersOfTheCompany() []readerRun {
 	}
 	llmRun := func(sub string, extra ...string) readerRun {
 		return readerRun{name: strings.Join(append([]string{"llm", sub}, extra...), " "),
-			args: func(t *testing.T, cfg, _ string) ([]string, *cliagent.Provider) {
-				company, entry := cliAgentCompanyFile(t)
+			args: func(t *testing.T, cfg, _ string) ([]string, *harness.Provider) {
+				company, entry := harnessCompanyFile(t)
 				return append([]string{"llm", sub, "sub", "-company", company, "-config", cfg},
 					extra...), entry
 			}}
@@ -471,7 +471,7 @@ func TestALoginWithTheEngineStoppedStoresOnTheFleetsStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a login with the engine stopped was refused: %v", err)
 	}
-	providers, err := cliAgents(doc, keys, resolver)
+	providers, err := harnessProviders(doc, keys, resolver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +485,7 @@ func TestALoginWithTheEngineStoppedStoresOnTheFleetsStore(t *testing.T) {
 		t.Errorf("the write does not say who reads it when:\n%s", out.String())
 	}
 	store.Close()
-	if got := fleetRowsOf(t, cfg)["FAKE_CLI_TOKEN"]; got != "fake-pasted" {
+	if got := fleetRowsOf(t, cfg)["FAKE_HARNESS_TOKEN"]; got != "fake-pasted" {
 		t.Errorf("the token did not land on the fleet's store: %q", got)
 	}
 }
@@ -535,14 +535,14 @@ func TestALoginNamesTheDoctorAsItCanBeRun(t *testing.T) {
 				}
 			}
 			t.Run("import", func(t *testing.T) {
-				company, _ := cliAgentCompanyFile(t)
+				company, _ := harnessCompanyFile(t)
 				store := llmStoreAt(t, environ, "import", flags...)
 				doc, keys, resolver, err := loadLLMConfig(t.Context(), company, store,
 					"import", "sub", io.Discard)
 				if err != nil {
 					t.Fatalf("an import was refused: %v", err)
 				}
-				providers, err := cliAgents(doc, keys, resolver)
+				providers, err := harnessProviders(doc, keys, resolver)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -806,7 +806,7 @@ func TestCommandsOnARunningNodeDoNotDieOnItsLock(t *testing.T) {
 	cfg := bootstrapForURL(t, node.server.URL)
 	holdTheStore(t, storePathOf(t, cfg), store.EstateNode)
 
-	company, entry := cliAgentCompanyFile(t)
+	company, entry := harnessCompanyFile(t)
 	if out, errs, err := cli(t, "llm", "list", "-company", company, "-config", cfg); err != nil {
 		t.Errorf("llm list on a running node: %v\n%s%s", err, out, errs)
 	}
@@ -830,7 +830,7 @@ func TestAScratchStoreIsRefusedByTheCommandThatWasRun(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := seatsNodeTierA(t, dir)
-	company, _ := cliAgentCompanyFile(t)
+	company, _ := harnessCompanyFile(t)
 	for _, args := range [][]string{
 		{"gitlab", "provision", gitlabCompanyFile(t), "-dry-run", "-config", cfg},
 		{"llm", "list", "-company", company, "-config", cfg},
@@ -1018,7 +1018,7 @@ func TestAProvisioningRunAsksForItsSeatsTokensInItsFirstBatch(t *testing.T) {
 // Mutation: route a run with no Tier A and no -api, and it is refused.
 func TestAnEnvironmentOnlyRunDecidesNoRoute(t *testing.T) {
 	t.Parallel()
-	company, _ := cliAgentCompanyFile(t)
+	company, _ := harnessCompanyFile(t)
 	absent := filepath.Join(t.TempDir(), "absent.yaml")
 	out, errs, err := cli(t, "llm", "list", "-company", company, "-config", absent)
 	if err != nil {

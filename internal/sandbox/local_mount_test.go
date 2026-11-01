@@ -65,7 +65,7 @@ exit %d
 // that window: no child can inherit the descriptor, rather than one that did
 // being waited out by running the script until it starts. Every script this
 // package's cases exec is written through it, the external suite's stubs too
-// ([WriteExecutable]). The coding-agent suite (internal/sandbox/codingagent)
+// ([WriteExecutable]). The coding-agent suite (internal/sandbox/executor)
 // closes the same window another way: cp writes each of its stand-ins, so
 // that suite's own process never holds one open for a fork to inherit.
 func writeExecutable(t *testing.T, path, script string) {

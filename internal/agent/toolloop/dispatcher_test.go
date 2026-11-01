@@ -152,7 +152,7 @@ func TestACallNamingAnInactiveToolIsRefused(t *testing.T) {
 // arguments, makes a call the model never asked for. Joined to the model's own
 // call — by the CLI's id where it sends one, by the arguments where it does
 // not — its name is not the one the model asked for, and it is not run.
-func TestACallTheCLIRewroteIsRefused(t *testing.T) {
+func TestACallTheHarnessRewroteIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, noIDs := range []bool{false, true} {
 		surf := newSurface("post")
@@ -189,7 +189,7 @@ func TestACallTheCLIRewroteIsRefused(t *testing.T) {
 // CLI's cancel abandons only the delivery: the tool is not cut short half-way
 // through a write — its context is the phase's, which the CLI cannot cancel —
 // and its real result is on the record the next run reads.
-func TestACallTheCLIGaveUpOnRunsOutUnderThePhase(t *testing.T) {
+func TestACallTheHarnessGaveUpOnRunsOutUnderThePhase(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("slow")
 	surf.holdTool, surf.hold, surf.entered = "slow", make(chan struct{}), make(chan struct{})
@@ -238,7 +238,7 @@ func TestACallTheCLIGaveUpOnRunsOutUnderThePhase(t *testing.T) {
 // A CLI THAT DIES UNDER A CALL FAILS ITS RUN, AND THE CALL STILL RUNS OUT AND IS
 // RECORDED: the EOF abandons the delivery and nothing else. The phase reports
 // the run's failure with the call's real result on its failure record.
-func TestACallTheCLIDiedUnderRunsOutAndIsRecorded(t *testing.T) {
+func TestACallTheHarnessDiedUnderRunsOutAndIsRecorded(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("slow")
 	surf.holdTool, surf.hold, surf.entered = "slow", make(chan struct{}), make(chan struct{})
@@ -381,7 +381,7 @@ func TestTheLastRoundsParallelCallsAllRunAndTheRunEnds(t *testing.T) {
 // the CLI's own — its web search — has nothing for the host to answer, and the
 // CLI runs them and asks its model again: the run is ended as soon as the round
 // is read, not after a request the budget did not allow.
-func TestALastRoundOfTheCLIsOwnToolsEndsTheRun(t *testing.T) {
+func TestALastRoundOfTheHarnessOwnToolsEndsTheRun(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("post")
 	prov := script(runOf(
@@ -409,7 +409,7 @@ func TestALastRoundOfTheCLIsOwnToolsEndsTheRun(t *testing.T) {
 // A CALL STILL RUNNING NEAR THE CLI'S OWN TOOL TIMEOUT ENDS THE RUN, and the
 // next run is handed its real result: a CLI that gave up on a call the engine is
 // still running would send its model to do it again.
-func TestACallNearTheCLIsToolTimeoutEndsTheRun(t *testing.T) {
+func TestACallNearTheHarnessToolTimeoutEndsTheRun(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("slow", "submit_work")
 	surf.results["slow"] = toolloop.ToolResult{Output: "the real result"}
@@ -722,7 +722,7 @@ func TestASubmissionThatOutlivesItsRunStillFinishesThePhase(t *testing.T) {
 // calls are all the CLI's own has nothing for the host to answer, so no call's
 // end can pause the run: the note is seen as the response is read, and the next
 // run reads it before the model asks anything more.
-func TestANoteWaitingAsTheCLIRunsItsOwnToolsEndsTheRun(t *testing.T) {
+func TestANoteWaitingAsTheHarnessRunsItsOwnToolsEndsTheRun(t *testing.T) {
 	t.Parallel()
 	box := &stepBox{log: &stepLog{}}
 	prov := script(

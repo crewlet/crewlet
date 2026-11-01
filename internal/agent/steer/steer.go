@@ -30,7 +30,7 @@
 // own — Claude Code, on some models, appends it to the end of the batch's last
 // tool result as a reminder of its own — so the run's standing instruction
 // tells the model a note by the heading the CLI puts on it and by the note's
-// own, and never by where it sits (internal/sandbox/codingagent, steer.go).
+// own, and never by where it sits (internal/sandbox/executor, steer.go).
 // After the fence, because a turn this node no longer holds, or one a person
 // stopped, must not be told anything more. And the ENGINE never edits a system
 // prompt mid-turn: the system prompt is the frozen prefix a provider caches on,

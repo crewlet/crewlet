@@ -32,7 +32,7 @@ export type HarnessAuthMode = "subscription" | "api-key" | "inherit-env" | "env"
 /**
  * What each built-in harness is called where a person reads it: "Claude Code
  * subscription limit reached", never "claude-code". EXACTLY the engine's
- * built-in profiles (`cliprofile.BuiltinNames`) bar `custom`, held by
+ * built-in profiles (`harnessprofile.BuiltinNames`) bar `custom`, held by
  * `internal/config.TestEveryBuiltInHarnessHasAProductName`, so a profile the
  * engine ships is named the day it ships. An entry on `custom` describes a
  * harness of its own and is called by its key.
@@ -116,9 +116,9 @@ export const DEVICE_SIGN_IN_ENDED = [
 ] as const satisfies readonly ModelDeviceStatus[];
 
 /**
- * How a model's harness signs in as one node resolves it (`cliagent.SignInRoute`).
- * Held against `cliagent.SignInRoutes` by
- * `internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns`.
+ * How a model's harness signs in as one node resolves it (`harness.SignInRoute`).
+ * Held against `harness.SignInRoutes` by
+ * `internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns`.
  */
 export type ModelSignInRoute =
   "token" | "credentials" | "api-key" | "env" | "inherit-env" | "environment" | "none";
@@ -131,7 +131,7 @@ export type ModelSignInRoute =
 export type ModelLimitWindow = "session" | "weekly" | "model" | "unknown";
 
 /**
- * One line of a model's test (`cliagent.CheckName`), in the doctor's order.
+ * One line of a model's test (`harness.CheckName`), in the doctor's order.
  * Held against the doctor's own order by the sign-in gate.
  */
 export type ModelCheckName =

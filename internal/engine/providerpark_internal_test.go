@@ -39,7 +39,7 @@ type limitedModel struct {
 	mu    sync.Mutex
 	reset time.Time
 	// retry is when the backend tries the entry again, where it caps the
-	// vendor's reset as cliagent does at an hour; zero is the reset.
+	// vendor's reset as harness does at an hour; zero is the reset.
 	retry time.Time
 	now   func() time.Time
 	calls int
@@ -409,7 +409,7 @@ func newEmptyRegistry(t *testing.T) *phase.Registry {
 }
 
 // knownLimit is a model whose entry already knows it is at its limit until
-// retry, as cliagent's does once its CLI reported it ([chain.Unready]).
+// retry, as harness's does once its CLI reported it ([chain.Unready]).
 type knownLimit struct{ retry time.Time }
 
 func (knownLimit) Model() string { return "opus" }

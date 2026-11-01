@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 )
 
 // THE LOGIN WATCHER keeps, for every model entry that signs in with the CLI's
@@ -38,7 +38,7 @@ import (
 const hostLoginBeat = coord.ReconcileInterval
 
 // hostLoginRecheck is how long an answer stands with nothing changed on disk:
-// TEN MINUTES, the readiness memory's own horizon (cliagent's readinessMemory),
+// TEN MINUTES, the readiness memory's own horizon (harness's readinessMemory),
 // so the page and a call's readiness verdict go stale on the same clock. A
 // login that expires on the vendor's side without a file changing is said
 // within it.
@@ -120,18 +120,18 @@ func (e *Engine) kickHostLogins() {
 
 // loginEntries is every entry of the active revision that signs in with a CLI
 // login here, by key.
-func (e *Engine) loginEntries() map[string]*cliagent.Provider {
+func (e *Engine) loginEntries() map[string]*harness.Provider {
 	c := e.Company()
 	if c == nil || c.Config == nil || c.Models == nil {
 		return nil
 	}
-	out := map[string]*cliagent.Provider{}
+	out := map[string]*harness.Provider{}
 	for key := range c.Config.Providers.LLM {
 		provider, ok := c.Models.Provider(key)
 		if !ok {
 			continue
 		}
-		if agent, isCLI := provider.(*cliagent.Provider); isCLI && agent.SignsInWithLogin() {
+		if agent, isHarness := provider.(*harness.Provider); isHarness && agent.SignsInWithLogin() {
 			out[key] = agent
 		}
 	}
@@ -151,7 +151,7 @@ func (e *Engine) checkHostLogins(ctx context.Context, force bool) {
 			delete(h.rows, key)
 		}
 	}
-	due := map[string]*cliagent.Provider{}
+	due := map[string]*harness.Provider{}
 	for key, agent := range entries {
 		row, known := h.rows[key]
 		if force || !known || row.stamp != agent.LoginStamp() || now.Sub(row.login.CheckedAt) >= hostLoginRecheck {
@@ -168,7 +168,7 @@ func (e *Engine) checkHostLogins(ctx context.Context, force bool) {
 }
 
 // recordHostLogin runs one entry's status command and keeps its answer.
-func (e *Engine) recordHostLogin(ctx context.Context, key string, agent *cliagent.Provider) coord.HostLogin {
+func (e *Engine) recordHostLogin(ctx context.Context, key string, agent *harness.Provider) coord.HostLogin {
 	stamp := agent.LoginStamp()
 	status, err := agent.LoginStatus(ctx)
 	login := coord.HostLogin{
