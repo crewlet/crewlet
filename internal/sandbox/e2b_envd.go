@@ -643,6 +643,85 @@ func (s *envdStream) Close() error {
 	return s.body.Close()
 }
 
+// openTail streams the end of a file — see [Sandbox.OpenTail] — as the body
+// of an HTTP SUFFIX RANGE (`Range: bytes=-n`), read as it arrives: what
+// crosses the WAN is the n bytes kept, never the file before them.
+//
+// envd answers a range with 206 and the whole size in Content-Range
+// ([envdClient.readTail] says why). A server that ignores the range and
+// answers 200 with the whole file is still answered correctly: where it sends
+// the file's length, the bytes before the last n are read and dropped and the
+// rest streamed; where it sends none, the end is found only at the end, so
+// the last n bytes are kept in memory as they pass ([keepLast]) and handed
+// over from there — that box's envd costs the file's transfer either way,
+// which this engine does not get to choose.
+func (c *envdClient) openTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
+	if n <= 0 {
+		// A suffix range of zero is unsatisfiable; what such a caller wants
+		// is the size, and no bytes.
+		tail, err := c.readTail(ctx, path, 0)
+		if err != nil {
+			return nil, 0, err
+		}
+		return io.NopCloser(strings.NewReader("")), tail.Size, nil
+	}
+	header := http.Header{"Range": {fmt.Sprintf("bytes=-%d", n)}}
+	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, header)
+	if err != nil {
+		return nil, 0, fmt.Errorf("e2b: open the end of %s: %w", path, err)
+	}
+	done := func() {
+		idle.stop()
+		_ = resp.Body.Close()
+	}
+	empty := io.NopCloser(strings.NewReader(""))
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		done()
+		return empty, 0, nil
+	case resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+		// Unsatisfiable only because the file is empty: Content-Range then
+		// reads `bytes */0`.
+		_, total, _ := parseContentRange(resp.Header.Get("Content-Range"))
+		done()
+		return empty, max(total, 0), nil
+	case resp.StatusCode == http.StatusPartialContent:
+		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+		if !ok || total < 0 {
+			done()
+			return nil, 0, fmt.Errorf("e2b: open the end of %s: a range answered with Content-Range %q, "+
+				"which names no whole size", path, resp.Header.Get("Content-Range"))
+		}
+		stream := &envdStream{body: resp.Body, idle: idle, path: path}
+		return limitedStream{Reader: io.LimitReader(stream, min(n, total-start)), Closer: stream}, total, nil
+	case resp.StatusCode >= 400:
+		defer done()
+		return nil, 0, fmt.Errorf("e2b: open the end of %s: %d: %s", path, resp.StatusCode,
+			httpx.ReadRefusal(resp))
+	case resp.ContentLength >= 0:
+		stream := &envdStream{body: resp.Body, idle: idle, path: path}
+		if skip := resp.ContentLength - n; skip > 0 {
+			if _, err := io.CopyN(io.Discard, stream, skip); err != nil {
+				_ = stream.Close()
+				return nil, 0, err
+			}
+		}
+		return limitedStream{Reader: io.LimitReader(stream, n), Closer: stream}, resp.ContentLength, nil
+	}
+	defer done()
+	data, total, err := keepLast(idle, int(n))
+	if err != nil {
+		return nil, 0, fmt.Errorf("e2b: read the end of %s: %w", path, idle.silent(err))
+	}
+	return io.NopCloser(bytes.NewReader(data)), total, nil
+}
+
+// limitedStream is a stream read no further than its limit, closed whole.
+type limitedStream struct {
+	io.Reader
+	io.Closer
+}
+
 // readTail reads the end of a file — see [Sandbox.ReadTail] — as an HTTP
 // SUFFIX RANGE (`Range: bytes=-n`).
 //

@@ -353,6 +353,12 @@ func (s *E2BSandbox) ReadTail(ctx context.Context, path string, n int) (FileTail
 	return s.envd.readTail(ctx, path, n)
 }
 
+// OpenTail implements [Sandbox]: a suffix range on envd's download, its body
+// read as it arrives.
+func (s *E2BSandbox) OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
+	return s.envd.openTail(ctx, path, n)
+}
+
 // SetTimeout implements [Sandbox]: the keepalive.
 func (s *E2BSandbox) SetTimeout(ctx context.Context, seconds float64) error {
 	if seconds <= 0 {

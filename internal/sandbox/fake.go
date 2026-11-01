@@ -46,6 +46,9 @@ type FakeSandbox struct {
 	// readCap is the whole-read cap a suite gave the box, zero for
 	// [MaxFileBytes]: see [FakeSandbox.CapReads].
 	readCap int
+	// delivered is how many bytes its reads have handed out: see
+	// [FakeSandbox.Delivered].
+	delivered int64
 
 	// ExecFunc, when set, answers Exec instead of the default success.
 	ExecFunc func(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error)
@@ -176,7 +179,7 @@ func (s *FakeSandbox) ReadFile(ctx context.Context, p string) ([]byte, error) {
 	if err != nil || content == nil {
 		return nil, err
 	}
-	return readCapped(bytes.NewReader(content), p, s.ReadCap())
+	return readCapped(s.delivering(bytes.NewReader(content)), p, s.ReadCap())
 }
 
 // OpenFile streams the file whole, as every real backend does: a machine
@@ -186,7 +189,7 @@ func (s *FakeSandbox) OpenFile(ctx context.Context, p string) (io.ReadCloser, er
 	if err != nil {
 		return nil, err
 	}
-	return io.NopCloser(bytes.NewReader(content)), nil
+	return io.NopCloser(s.delivering(bytes.NewReader(content))), nil
 }
 
 // ReadTail answers the file's last n bytes and its whole size.
@@ -195,7 +198,49 @@ func (s *FakeSandbox) ReadTail(ctx context.Context, p string, n int) (FileTail, 
 	if err != nil {
 		return FileTail{}, err
 	}
-	return tailOf(content, n), nil
+	tail := tailOf(content, n)
+	s.mu.Lock()
+	s.delivered += int64(len(tail.Data))
+	s.mu.Unlock()
+	return tail, nil
+}
+
+// OpenTail streams the file's last n bytes, with its whole size.
+func (s *FakeSandbox) OpenTail(ctx context.Context, p string, n int64) (io.ReadCloser, int64, error) {
+	content, err := s.content(p)
+	if err != nil {
+		return nil, 0, err
+	}
+	size := int64(len(content))
+	start := max(size-max(n, 0), 0)
+	return io.NopCloser(s.delivering(bytes.NewReader(content[start:]))), size, nil
+}
+
+// Delivered is how many bytes of its files the box's reads have handed out —
+// each stream counted as far as its reader took it, a refused whole read as
+// far as the refusal read: what a remote box would have sent over the wire,
+// which a suite holds a reader's cost to.
+func (s *FakeSandbox) Delivered() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.delivered
+}
+
+// delivering is r counting what it hands out into [FakeSandbox.Delivered].
+func (s *FakeSandbox) delivering(r io.Reader) io.Reader { return deliveredReader{r: r, box: s} }
+
+// deliveredReader is a read of the box's file, counted as it is read.
+type deliveredReader struct {
+	r   io.Reader
+	box *FakeSandbox
+}
+
+func (d deliveredReader) Read(p []byte) (int, error) {
+	n, err := d.r.Read(p)
+	d.box.mu.Lock()
+	d.box.delivered += int64(n)
+	d.box.mu.Unlock()
+	return n, err
 }
 
 // content is one file's bytes, or the error a test scripted for reading it.

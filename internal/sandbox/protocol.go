@@ -851,6 +851,18 @@ type Sandbox interface {
 	// missing, as the others are.
 	ReadTail(ctx context.Context, path string, n int) (FileTail, error)
 
+	// OpenTail streams at most the last n bytes of a file — from where its
+	// end less n stood when it was opened — with the file's whole size then,
+	// for a stream's END kept whole rather than held: a failed check's log,
+	// the output's last bytes put into the object store as they arrive. Its
+	// cost is the n bytes, never the file before them: a remote box sends
+	// only the range, a box on the engine host seeks. OpenFile with the
+	// earlier bytes read and dropped cost a check that wrote gigabytes their
+	// whole transfer from the box to keep its last tens of MiB. A missing
+	// file is a reader that yields nothing and a size of 0, as the others
+	// answer; the caller closes it.
+	OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error)
+
 	// SetTimeout resets the box's wall-clock TTL to seconds from now.
 	//
 	// THE KEEPALIVE. A provider reclaims a box that many seconds after the

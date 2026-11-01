@@ -418,6 +418,16 @@ func (b *directBox) ReadTail(ctx context.Context, path string, n int) (FileTail,
 	return readHostTail(target, path, n)
 }
 
+// OpenTail implements [Sandbox] for a box on the engine host: a seek, then the
+// section to the end the open found.
+func (b *directBox) OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
+	target, err := b.resolve(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	return openHostTail(target, path, n)
+}
+
 // SetTimeout refreshes the box's keepalive stamp.
 //
 // This DOES have a counterpart here, and missing it was the bug: the orphan
@@ -710,6 +720,15 @@ func (b *containerBox) ReadTail(ctx context.Context, path string, n int) (FileTa
 	return readHostTail(target, path, n)
 }
 
+// OpenTail implements [Sandbox]: a seek on the host side of the mount.
+func (b *containerBox) OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error) {
+	target, err := b.hostPath(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	return openHostTail(target, path, n)
+}
+
 // openHostFile is a local box's OpenFile once the path is resolved: the file,
 // or a reader that yields nothing for one that is not there yet.
 //
@@ -728,6 +747,33 @@ func openHostFile(target, path string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("local sandbox: open %s: %w", path, err)
 	}
 	return f, nil
+}
+
+// openHostTail is a local box's OpenTail once the path is resolved: the
+// file's last n bytes as its size stood at the open, a SECTION of it for
+// readHostTail's reason, read in place and closed with the file.
+func openHostTail(target, path string, n int64) (io.ReadCloser, int64, error) {
+	f, err := openHostRegular(target)
+	switch {
+	case absent(err):
+		return io.NopCloser(strings.NewReader("")), 0, nil
+	case err != nil:
+		return nil, 0, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("local sandbox: stat %s: %w", path, err)
+	}
+	size := info.Size()
+	start := max(size-max(n, 0), 0)
+	return hostSection{Reader: io.NewSectionReader(f, start, size-start), Closer: f}, size, nil
+}
+
+// hostSection is a section of a file on the engine host, closed with it.
+type hostSection struct {
+	io.Reader
+	io.Closer
 }
 
 // readHostTail is a local box's ReadTail once the path is resolved.
