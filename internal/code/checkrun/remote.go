@@ -75,6 +75,22 @@ import (
 // the cap to free — every box started in the gap, and every one started after
 // them, competes with it for each slot that frees, so it could run on
 // uncounted to its own timeout, an overrun as long as a box's life.
+//
+// # A full cap is listed once a freed slot
+//
+// A listing of the slots is a scan of the class's keys in the store's lease
+// bucket and a read of its clock, so a walk lists them once ([SlotView]) and
+// takes each box's slot from what that listing left free, and a node that
+// found max_running full lists them again only once a slot it held is given
+// back, or a walk backstop ([Timing.Backstop]) after it found them full: a
+// capped fleet costs the store a listing a git node a backstop, never one a
+// walk, which the queue's records nudge up to once a second ([WalkGap]). A
+// slot another node frees is seen a backstop late at most, as a nudge the
+// watch lost is. REJECTED: a
+// watch on the class (coord's WatchLive) — every renewal of every slot
+// reaches every git node, 0.8 a second at the default cap and 51 at its
+// bound, to learn of a release that the node making it learns for free, while
+// a lapse is no write and still needs the backstop.
 
 // Leases is the coordination store's lease surface as a remote cell's slot is
 // held on it — coord.Backend satisfies it.
@@ -144,12 +160,13 @@ func (h RemoteHold) Valid() bool { return slices.Contains(RemoteHolds(), h) }
 // RemoteSlots is one git node's side of the company's remote caps: the slots
 // it takes and keeps, and the minutes it charges.
 type RemoteSlots struct {
-	nodeID  string
-	leases  Leases
-	minutes Minutes
-	renew   time.Duration
-	now     func() time.Time
-	log     *slog.Logger
+	nodeID   string
+	leases   Leases
+	minutes  Minutes
+	renew    time.Duration
+	backstop time.Duration
+	now      func() time.Time
+	log      *slog.Logger
 
 	mu sync.Mutex
 	// spent is the UTC day's window this node last saw refuse a charge, and
@@ -160,13 +177,38 @@ type RemoteSlots struct {
 		window time.Time
 		limit  int
 	}
+	// full is when this node last found max_running full, on the wall
+	// clock's monotonic reading, and the cap it was full at: no walk lists
+	// the slots again while the cap is at most that, within a backstop of
+	// it, and no slot this node held has been given back since. Zero is
+	// none remembered.
+	full struct {
+		at    time.Time
+		limit int
+	}
+	// frees counts the slots this node has given back, so a listing read
+	// before one is never remembered as full after it.
+	frees uint64
 }
 
-// newRemoteSlots builds the node's remote caps over its coordination store.
-func newRemoteSlots(nodeID string, leases Leases, minutes Minutes, renew time.Duration, now func() time.Time,
-	log *slog.Logger) *RemoteSlots {
+// newRemoteSlots builds the node's remote caps over its coordination store,
+// a full cap remembered for at most backstop.
+func newRemoteSlots(nodeID string, leases Leases, minutes Minutes, renew, backstop time.Duration,
+	now func() time.Time, log *slog.Logger) *RemoteSlots {
 
-	return &RemoteSlots{nodeID: nodeID, leases: leases, minutes: minutes, renew: renew, now: now, log: log}
+	return &RemoteSlots{nodeID: nodeID, leases: leases, minutes: minutes, renew: renew, backstop: backstop,
+		now: now, log: log}
+}
+
+// SlotView is one walk's reading of the company's live remote slots: listed
+// at the first remote check the walk takes a slot for, then kept by the walk
+// — each slot it takes, and each another runner took first, marked held — so
+// a walk that starts several boxes lists them once, never once a box. A slot
+// freed meanwhile is the next walk's to see. The zero value is unlisted.
+type SlotView struct {
+	held map[string]bool
+	// frees is the node's count of slots given back as the listing began.
+	frees uint64
 }
 
 // RemoteSlot is a slot this node holds for one remote check's box: renewed,
@@ -195,32 +237,45 @@ type RemoteSlot struct {
 
 // Take takes a slot for one remote box under the caps maxRunning and
 // minutesPerDay, charging its first minute — or answers why not: a cap full,
-// or [HoldUnknown] with the store's error. A slot it answers is kept until
-// its Release.
-func (s *RemoteSlots) Take(ctx context.Context, maxRunning, minutesPerDay int) (*RemoteSlot, RemoteHold, error) {
+// or [HoldUnknown] with the store's error. view is the walk's reading of the
+// slots, listed here where the walk has none yet. A slot it answers is kept
+// until its Release.
+func (s *RemoteSlots) Take(ctx context.Context, view *SlotView, maxRunning, minutesPerDay int) (*RemoteSlot,
+	RemoteHold, error) {
+
 	now := s.now()
 	if minutesPerDay <= 0 || s.daySpent(now, minutesPerDay) {
 		return nil, HoldBoxHours, nil
 	}
-	if maxRunning <= 0 {
+	if maxRunning <= 0 || s.capFull(maxRunning) {
 		return nil, HoldMaxRunning, nil
 	}
-	live, err := s.leases.ListLive(ctx, RemoteSlotClass)
-	if err != nil {
-		return nil, HoldUnknown, fmt.Errorf("list the remote check slots held: %w", err)
+	if view.held == nil {
+		view.frees = s.freesNow()
+		live, err := s.leases.ListLive(ctx, RemoteSlotClass)
+		if err != nil {
+			return nil, HoldUnknown, fmt.Errorf("list the remote check slots held: %w", err)
+		}
+		view.held = heldSlots(live)
 	}
 	// EVERY LIVE SLOT COUNTS, whatever its index: a cap lowered while the
 	// boxes of the old one run is held until enough of them end, and a box
 	// whose lapsed slot was taken again past the cap is counted.
-	if len(live) >= maxRunning {
+	if len(view.held) >= maxRunning {
+		s.fullAt(view, maxRunning)
 		return nil, HoldMaxRunning, nil
 	}
-	for _, resource := range freeSlots(heldSlots(live), 0, maxRunning) {
+	for _, resource := range freeSlots(view.held, 0, maxRunning) {
 		owner, epoch, won, err := s.acquire(ctx, resource)
 		if err != nil {
 			return nil, HoldUnknown, fmt.Errorf("take the remote check slot %s: %w", resource, err)
 		}
+		// HELD NOW, by this runner or by one that took it since the listing.
+		view.held[resource] = true
 		if !won {
+			if len(view.held) >= maxRunning {
+				break
+			}
 			continue
 		}
 		slot := &RemoteSlot{s: s, maxRunning: maxRunning, limit: minutesPerDay, taken: now, resource: resource,
@@ -229,6 +284,7 @@ func (s *RemoteSlots) Take(ctx context.Context, maxRunning, minutesPerDay int) (
 		ok, err := s.charge(ctx, now, minutesPerDay)
 		if err != nil || !ok {
 			slot.give(ctx)
+			delete(view.held, resource)
 			if err != nil {
 				return nil, HoldUnknown, fmt.Errorf("charge a remote check box's first minute: %w", err)
 			}
@@ -237,8 +293,46 @@ func (s *RemoteSlots) Take(ctx context.Context, maxRunning, minutesPerDay int) (
 		go slot.keep()
 		return slot, "", nil
 	}
-	// EVERY SLOT A LISTING CALLED FREE WAS TAKEN BY ANOTHER RUNNER since.
+	// EVERY SLOT THE LISTING CALLED FREE WAS TAKEN BY ANOTHER RUNNER since.
+	s.fullAt(view, maxRunning)
 	return nil, HoldMaxRunning, nil
+}
+
+// capFull reports whether this node found max_running full at a cap of
+// maxRunning or more within a backstop, with no slot of its own given back
+// since — a cap the next listing would find full too, so it is not asked.
+func (s *RemoteSlots) capFull(maxRunning int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.full.at.IsZero() && maxRunning <= s.full.limit && time.Since(s.full.at) < s.backstop
+}
+
+// fullAt remembers max_running found full at maxRunning, now, by view — not
+// where this node gave a slot back after view was listed, which view cannot
+// have seen free.
+func (s *RemoteSlots) fullAt(view *SlotView, maxRunning int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.frees != view.frees {
+		return
+	}
+	s.full.at, s.full.limit = time.Now(), maxRunning
+}
+
+// freesNow is how many slots this node has given back.
+func (s *RemoteSlots) freesNow() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.frees
+}
+
+// freed forgets a full cap: a slot this node held was given back, which is
+// room the next walk can take.
+func (s *RemoteSlots) freed() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.full.at = time.Time{}
+	s.frees++
 }
 
 // acquire claims resource for one tenure, under an owner of its own — the
@@ -431,8 +525,10 @@ func (sl *RemoteSlot) chargeDue(ctx context.Context, charged int, closing bool) 
 }
 
 // Release gives the slot back once its box is closed: its keeping stopped and
-// its lease released, under a context no caller's cancellation reaches. Safe
-// to call more than once, and on nil.
+// its lease released, under a context no caller's cancellation reaches, and
+// then a full cap this node remembered forgotten — after the release, so no
+// listing between the two is remembered full again. Safe to call more than
+// once, and on nil.
 func (sl *RemoteSlot) Release() {
 	if sl == nil {
 		return
@@ -441,6 +537,7 @@ func (sl *RemoteSlot) Release() {
 		close(sl.stop)
 		<-sl.done
 		sl.give(context.Background())
+		sl.s.freed()
 	})
 }
 

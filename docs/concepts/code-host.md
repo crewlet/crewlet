@@ -2302,6 +2302,11 @@ node finds room claims it. Queued checks are taken oldest first, as always.
 whose node died holding it lapses within 60 seconds, so a dead runner never
 holds the company's cap for longer than a minute. A cap lowered while the boxes
 of the old one run holds every new box back until enough of them have ended.
+A git node lists the slots once a walk of its queue, however many boxes the
+walk starts, and a node that found them all held lists them again only once a
+box of its own has given its slot back, the cap is raised, or 15 seconds have
+passed: a full cap costs the coordination store one listing per git node every
+15 seconds, never one every walk.
 
 **A day is counted a minute at a time.** Each `e2b` box is charged one minute
 to the fleet's shared counter when its slot is taken, and one more each minute

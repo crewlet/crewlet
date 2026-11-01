@@ -311,6 +311,68 @@ func TestARemoteBoxWhoseSlotLapsedIsCountedAgain(t *testing.T) {
 	eventually(t, "every slot given back", func() bool { return f.slots() == 0 })
 }
 
+// A CAPPED RUNNER LISTS THE SLOTS ONCE A FREED SLOT: a walk that starts
+// several remote boxes lists the live slots once and takes each box's slot
+// from what that listing left free; a runner that found max_running full asks
+// the store nothing on the walks after it — every nudge of the queue — until
+// a slot is seen to free, and the one its own box gives back is seen at once.
+//
+// Mutation: list the slots for every remote check a walk takes — three
+// listings on the first walk, red; forget a full cap between walks — a
+// listing every nudged walk, red; keep the full cap past this node's own
+// release — the waiting check never runs, red.
+func TestACappedRunnerListsTheSlotsOnceAFreedSlot(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.company.Code.Checks.Remote.MaxRunning = new(2)
+	var keys []code.CheckKey
+	for _, oid := range []string{"1", "2", "3"} {
+		keys = append(keys, f.queue(oidOf(oid), remote("lint", time.Hour)))
+	}
+	leases := &countedLeases{Leases: f.leases}
+	queue := &countedEstate{Estate: estate{f.d}}
+	o := f.options("git-a", 0, &order{nodes: []string{"git-a"}})
+	o.Leases, o.Estate = leases, queue
+	// NO BACKSTOP WITHIN THE CASE: a walk at the start, at each nudge and at
+	// each check's ending, and nothing else.
+	o.Timing.Backstop = time.Hour
+	r := f.runner(o)
+	boxes := []*sandbox.FakeSandbox{f.e2b.box(t), f.e2b.box(t)}
+	var waiting []code.CheckKey
+	for _, key := range keys {
+		if row, _ := f.row(key); row.State == code.CheckStateQueued {
+			waiting = append(waiting, key)
+		}
+	}
+	if len(waiting) != 1 {
+		t.Fatalf("%d of %d remote checks wait queued under a cap of two, want one", len(waiting), len(keys))
+	}
+	for range 5 {
+		walked := queue.walks.Load()
+		r.Nudge()
+		eventually(t, "a nudged walk", func() bool { return queue.walks.Load() > walked })
+	}
+	if n := leases.lists.Load(); n != 1 {
+		t.Fatalf("the runner listed the remote slots %d times over %d walks with the cap full, want once",
+			n, queue.walks.Load())
+	}
+
+	f.e2b.end(boxes[0], 0, "")
+	next := f.e2b.box(t)
+	f.await(waiting[0], "ran once a box ended", func(r code.CheckRow) bool { return r.Box == next.ID() })
+	if n := leases.lists.Load(); n != 2 {
+		t.Fatalf("the runner listed the remote slots %d times, want twice: once more for the slot its box gave "+
+			"back", n)
+	}
+	for _, b := range []*sandbox.FakeSandbox{boxes[1], next} {
+		f.e2b.end(b, 0, "")
+	}
+	for _, key := range keys {
+		f.ended(key)
+	}
+	eventually(t, "every slot given back", func() bool { return f.slots() == 0 })
+}
+
 // countedLeases is the company's leases, counting the listings and the
 // claims a runner made of them.
 type countedLeases struct {
@@ -328,6 +390,20 @@ func (c *countedLeases) TryAcquire(ctx context.Context, resource string, opts co
 
 	c.acquires.Add(1)
 	return c.Leases.TryAcquire(ctx, resource, opts)
+}
+
+// countedEstate is a data node's code domain, counting the walks a runner
+// made of the queue: each one's first page.
+type countedEstate struct {
+	checkrun.Estate
+	walks atomic.Int64
+}
+
+func (e *countedEstate) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	if q.Kind == code.ReadChecksQueued && q.Cursor == "" {
+		e.walks.Add(1)
+	}
+	return e.Estate.Read(ctx, q)
 }
 
 // remote is a check that runs in an e2b cell.
