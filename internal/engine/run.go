@@ -324,6 +324,11 @@ type Engine struct {
 	// parked on it. See providerpark.go.
 	limitProbes limitProbes
 
+	// parkNotices is every seat's provider park notice not yet published:
+	// one per change, held and retried while the broker refuses. See
+	// parknotice.go.
+	parkNotices parkNotices
+
 	// clock is the instant every token-budget window this engine cuts is
 	// read at, and nil is the wall clock — which is what every engine [New]
 	// builds runs on. See [Engine.now] for why there is one and why it is
