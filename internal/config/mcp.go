@@ -100,8 +100,8 @@ type MCPServer struct {
 	// SeatCredentials declares which integration's per-seat credential a
 	// per-seat server reads, and under which key, so the engine binds each
 	// seat's own sealed credential to it (D15). Absent, a server this build
-	// recognises by its command or address reads what [SeatToolBindings]
-	// says; see toolbinding.go.
+	// recognises by its command or address reads what the MCP catalogue's
+	// recognition says ([catalogue.SeatKeysFor]); see toolbinding.go.
 	SeatCredentials []SeatCredential `yaml:"seat_credentials,omitempty" json:"seat_credentials,omitempty" desc:"Per-seat credentials this server reads: integration, field, and the variable or header it reads each under. Absent for a server the engine recognises."`
 
 	// OptionalKeys names the keys whose value may resolve to nothing: of

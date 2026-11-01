@@ -96,6 +96,9 @@ const status: McpServersStatusAnswer = {
   servers: [
     {
       name: "docs",
+      title: "docs",
+      catalogue: "",
+      vendor: "",
       configured: true,
       shared: true,
       transport: "stdio",
@@ -149,6 +152,9 @@ const status: McpServersStatusAnswer = {
     },
     {
       name: "github",
+      title: "github",
+      catalogue: "",
+      vendor: "",
       configured: true,
       shared: false,
       transport: "stdio",
@@ -204,6 +210,9 @@ const status: McpServersStatusAnswer = {
       // A SERVER THAT REGISTERED NOTHING: it failed on the one node that
       // launched it, so the catalogue has no row from it at all.
       name: "notes",
+      title: "notes",
+      catalogue: "",
+      vendor: "",
       configured: true,
       shared: true,
       transport: "stdio",
@@ -466,6 +475,9 @@ test("a server waiting for a provisioned credential names what it waits for, not
     servers: [
       {
         name: "github",
+        title: "github",
+        catalogue: "",
+        vendor: "",
         configured: true,
         shared: false,
         transport: "stdio",

@@ -427,3 +427,40 @@ func mustJSON(t *testing.T, v any) []byte {
 	}
 	return raw
 }
+
+// A SERVER IS DRAWN AS THE CATALOGUE ENTRY IT IS, by its address or its
+// command, and by its own name with no mark where the catalogue knows it not.
+func TestAServerRowNamesTheCatalogueEntryItIs(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(`
+name: Acme
+mcp_servers:
+  - name: code
+    transport: http
+    shared: false
+    url: https://api.githubcopilot.com/mcp/
+  - name: db
+    command: uvx
+    args: ["postgres-mcp==0.3.0", "--access-mode=restricted"]
+  - name: wiki
+    transport: http
+    url: https://wiki.example.com/mcp
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", nil)
+	answer := askMCPStatus(t, queries.Sources{Coord: backend, Company: companySource(t, cfg)})
+	for _, want := range []queries.MCPServerRow{
+		{Name: "code", Title: "GitHub", Catalogue: "github", Vendor: "github"},
+		{Name: "db", Title: "PostgreSQL", Catalogue: "postgres", Vendor: "postgresql"},
+		{Name: "wiki", Title: "wiki"},
+	} {
+		row := serverRow(t, answer, want.Name)
+		if row.Title != want.Title || row.Catalogue != want.Catalogue || row.Vendor != want.Vendor {
+			t.Errorf("%s is drawn as %q, %q, %q; want %q, %q, %q", want.Name, row.Title, row.Catalogue,
+				row.Vendor, want.Title, want.Catalogue, want.Vendor)
+		}
+	}
+}

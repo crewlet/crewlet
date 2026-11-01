@@ -59,6 +59,13 @@ export interface McpServerNode {
 /** One server. */
 export interface McpServerStatus {
   name: string;
+  /** The curated catalogue entry's title where the engine recognises the
+   *  server by its address or its command, else the server's name. */
+  title: string;
+  /** That entry's key, or "" for a server the catalogue does not know. */
+  catalogue: string;
+  /** The vetted vendor mark to draw, or "" for the generic server glyph. */
+  vendor: string;
   /** False for a server a node reports and this configuration does not carry. */
   configured: boolean;
   /** One instance for the company, rather than one per seat granted it. */

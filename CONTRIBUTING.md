@@ -882,12 +882,16 @@ line, not in a manifest. [`internal/config/toolservers_test.go`](internal/config
 holds them instead. Every package a page or a skill fetches by name — an
 `mcp_servers` entry, a `uvx`, `npx`, `npm exec` or `pip install` it tells
 somebody to run — names an exact release; every server a document launches is
-listed in `pinnedToolServers` with `readAt`, the release what the documents
-say about it (its tool names, its variables) was read against; and every
-document that names a release names that one. So moving one means reading the
-new release first, correcting whatever moved, and setting `readAt` in the same
-change — and since nothing proposes the move, check the registry whenever you
-touch those pages. Reading it includes running the documented launch through
+an entry of the curated MCP catalogue
+([`internal/mcp/catalogue`](internal/mcp/catalogue)), whose `Package` and
+`Release` are the package and the release what the documents and the
+catalogue say about it (its tool names, its variables) was read against; and
+every document that names a release names that one. The catalogue's own
+launches are held by the same test, so the release the dashboard offers and
+the release a page launches are one. So moving one means reading the new
+release first, correcting whatever moved, and setting the entry's `Release`
+in the same change. Since nothing proposes the move, check the registry
+whenever you touch those pages. Reading it includes running the documented launch through
 `initialize` and `tools/list`: a runner pins the package it is given and
 resolves every dependency the package leaves unbounded at its newest, so a
 release whose source reads right can still fail to start — `mcp-linear` 0.1.1
