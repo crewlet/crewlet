@@ -109,7 +109,7 @@ func FloorAt(level ReadLevel, at Position) Freshness {
 // knowledge base's), so four leaves an answer composed later room for two
 // logs more. Bounded at all because every floor is checked against every log
 // an answer reads before anything else is, and a request naming a floor on
-// each of a fleet's logs — eight state logs at this build — is a client that
+// each of a fleet's logs — ten state logs at this build — is a client that
 // sends what it holds rather than what this answer reads: refused as that,
 // rather than checked against each in turn.
 const MaxFloors = 4
