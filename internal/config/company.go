@@ -290,7 +290,9 @@ func (c *Company) ValidateRunnable() error {
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
 // seats declaring one email, and a reference that is shaped like neither a
-// handle nor a key. And the `assistant:` block ([Company.validateAssistant]),
+// handle nor a key. And every name and address an MCP server entry or an
+// `mcp_env` block for it holds that no client can use
+// ([Company.validateMCPNames]), the `assistant:` block ([Company.validateAssistant]),
 // whose chain is held to its rules again wherever it is handed out, and the
 // per-seat access rules ([Company.validateSeatAccess]): every seat block says
 // whether it is on, holds access the vendor offers within the company's reach,
@@ -306,8 +308,8 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateAssistant(),
-		c.validateSeatAccess())
+		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateMCPNames(),
+		c.validateAssistant(), c.validateSeatAccess())
 }
 
 // validateUnitIDs requires an id on every authored unit, at any depth. See

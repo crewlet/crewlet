@@ -72,8 +72,10 @@ type MCPServer struct {
 	//
 	// It must be non-empty. An empty name silently mis-categorised a
 	// seat's MCP tools into the prompt's builtin block, so an agent was
-	// told it had tools that behave nothing like the ones it got.
-	Name string `yaml:"name" json:"name" js:"required" desc:"Server name; the key seats declare credentials under."`
+	// told it had tools that behave nothing like the ones it got. And it is
+	// held to one spelling every place it lands can take ([mcpServerName],
+	// [MaxMCPServerName]), which the schema states too.
+	Name string `yaml:"name" json:"name" js:"required;pattern=^[a-z0-9]([a-z0-9-]*[a-z0-9])?$;maxlen=32" desc:"Server name: lowercase letters, digits and hyphens, at most 32 characters; the key seats declare credentials under."`
 
 	// Enabled turns the server off without removing it: off, nothing starts
 	// it, no seat is granted it and no executor box is given it, while the
@@ -101,8 +103,9 @@ type MCPServer struct {
 	Env     map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Environment for the subprocess (stdio); ${VAR} supported."`
 
 	// ToolPrefix disambiguates tools whose bare names would collide with
-	// another server's.
-	ToolPrefix string `yaml:"tool_prefix,omitempty" json:"tool_prefix,omitempty" desc:"Prefix applied to this server's tool names."`
+	// another server's. Held to a model's tool-name characters and to
+	// [MaxMCPToolPrefix], which the schema's bound is held to by a test.
+	ToolPrefix string `yaml:"tool_prefix,omitempty" json:"tool_prefix,omitempty" js:"pattern=^[A-Za-z0-9_-]+$;maxlen=49" desc:"Prefix put in front of every tool this server serves: letters, digits, _ and -, at most 49 characters."`
 
 	// The http fields.
 	//

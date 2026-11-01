@@ -418,7 +418,52 @@ type MCPServerStatus struct {
 	// anything a seat count multiplies — and a key cut short would name a
 	// tool nobody wrote.
 	Unlisted []string
+
+	// Refused are tools an instance on this node lists that are not offered
+	// for their name: one no model can be handed (characters, length) or one
+	// a built-in holds. Shadowed are tools another server's tool of the same
+	// name is offered in place of, each with that server's configured name.
+	// Each over every instance, once per tool and reason (or server), sorted
+	// by tool, at most [MaxMCPToolNotes] of them; RefusedCount and
+	// ShadowedCount are how many there are in all, the ones listed included.
+	//
+	// BOUNDED, unlike Unlisted: these are bounded by what the server lists,
+	// not by the entry, and a server with a long prefix can refuse every
+	// tool it has. The count still says how many.
+	Refused       []MCPToolRefusal
+	RefusedCount  int
+	Shadowed      []MCPToolShadow
+	ShadowedCount int
 }
+
+// MCPToolRefusal is one tool not offered for its name, by the name it would
+// have been filed under, and the reason (internal/mcp's NameRefusal: kept a
+// string here, as a lease carries it, for a reader to judge).
+type MCPToolRefusal struct {
+	Tool   string
+	Reason string
+}
+
+// MCPToolShadow is one tool another server's tool of the same name is offered
+// in place of, and that server's configured name.
+type MCPToolShadow struct {
+	Tool string
+	By   string
+}
+
+// MaxMCPToolNotes bounds [MCPServerStatus.Refused] and
+// [MCPServerStatus.Shadowed] on the wire: EIGHT, the first by tool name, as a
+// model row names its parked seats ([MaxModelParkedSeats]). What a person
+// reads before "and N more", and what a beat re-sent every
+// [ReconcileInterval] can carry for each server however many tools it
+// refuses; the counts travel whole beside them.
+const MaxMCPToolNotes = 8
+
+// MaxMCPToolNameBytes bounds a tool's name on the wire: 128 bytes, the
+// longest name the MCP specification says a server's tool should have, so a
+// name any conforming server lists travels whole and one that is not cannot
+// grow the beat.
+const MaxMCPToolNameBytes = 128
 
 // MaxMCPErrorBytes bounds [MCPServerStatus.Error] and [MCPServerStatus.Wait]
 // on the wire.
@@ -494,6 +539,26 @@ func (s NodeStatus) Meta() map[string]any {
 			}
 			if len(m.Unlisted) > 0 {
 				row["unlisted"] = m.Unlisted
+			}
+			// OMITTED WHEN NOTHING IS REFUSED OR SHADOWED, which is every
+			// row of a company whose names are in order.
+			if m.RefusedCount > 0 {
+				notes := make([]map[string]any, 0, min(len(m.Refused), MaxMCPToolNotes))
+				for _, r := range m.Refused[:min(len(m.Refused), MaxMCPToolNotes)] {
+					notes = append(notes, map[string]any{
+						"tool": textcut.Within(r.Tool, MaxMCPToolNameBytes), "reason": r.Reason,
+					})
+				}
+				row["refused"], row["refused_count"] = notes, m.RefusedCount
+			}
+			if m.ShadowedCount > 0 {
+				notes := make([]map[string]any, 0, min(len(m.Shadowed), MaxMCPToolNotes))
+				for _, s := range m.Shadowed[:min(len(m.Shadowed), MaxMCPToolNotes)] {
+					notes = append(notes, map[string]any{
+						"tool": textcut.Within(s.Tool, MaxMCPToolNameBytes), "by": s.By,
+					})
+				}
+				row["shadowed"], row["shadowed_count"] = notes, m.ShadowedCount
 			}
 			rows[i] = row
 		}
@@ -662,6 +727,23 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 			Unlisted:  stringsFromMeta(row["unlisted"]),
 		}
 		m.Shared, _ = row["shared"].(bool)
+		for _, n := range listFromMeta(row["refused"]) {
+			if note, ok := n.(map[string]any); ok && stringFromMeta(note["tool"]) != "" {
+				m.Refused = append(m.Refused, MCPToolRefusal{
+					Tool: stringFromMeta(note["tool"]), Reason: stringFromMeta(note["reason"]),
+				})
+			}
+		}
+		for _, n := range listFromMeta(row["shadowed"]) {
+			if note, ok := n.(map[string]any); ok && stringFromMeta(note["tool"]) != "" {
+				m.Shadowed = append(m.Shadowed, MCPToolShadow{
+					Tool: stringFromMeta(note["tool"]), By: stringFromMeta(note["by"]),
+				})
+			}
+		}
+		// A COUNT IS AT LEAST WHAT IT LISTS, whatever a peer wrote.
+		m.RefusedCount = max(intFromMeta(row["refused_count"]), len(m.Refused))
+		m.ShadowedCount = max(intFromMeta(row["shadowed_count"]), len(m.Shadowed))
 		status.MCP = append(status.MCP, m)
 	}
 	for _, r := range listFromMeta(raw["models"]) {

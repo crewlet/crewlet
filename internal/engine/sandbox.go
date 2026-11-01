@@ -1848,7 +1848,9 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 // with no per-tool control left, so what it is given is the decision, and it
 // is made here rather than inherited. And never one the company has turned off
 // ([config.MCPServer.IsEnabled]): the listing stays in the seat's block for the
-// day it is turned back on, and gives the box nothing until then.
+// day it is turned back on, and gives the box nothing until then. Nor one whose
+// address, resolved, is one the engine would not dial its own child of the
+// server at ([config.MCPAddressProblem]).
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
@@ -1916,6 +1918,16 @@ func sandboxMCP(
 		if missing != nil {
 			withheld = append(withheld, missing)
 			continue
+		}
+		if server.Kind() == config.TransportHTTP {
+			// THE ADDRESS AS THE BOX WOULD DIAL IT, refused by the rule
+			// that keeps the engine's own child of the server from dialling
+			// it ([serverSpec]); out of the scope, like a server turned off.
+			if problem := config.MCPAddressProblem(values.url); problem != "" {
+				log.Warn("sandbox_mcp_server_refused", "seat", seat.Handle(), "server", name,
+					"detail", "the coding agent is not given this server: its url "+problem)
+				continue
+			}
 		}
 		box := sandbox.MCPServer{
 			Name: server.Name, Transport: sandbox.Transport(server.Kind()),

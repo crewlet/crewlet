@@ -866,7 +866,9 @@ type Requests struct {
 	// tools (its web search, its fetch).
 	//
 	// THE MODEL'S SPELLING, never the record's: what a record writes around
-	// the name is the call rule's [CallPaths.NamePrefix].
+	// the name is the call rule's [CallPaths.NamePrefix]. The longest tool
+	// name the engine files ([ToolNameMax]) is what the longest of these
+	// leaves of a model's 64 characters.
 	HostPrefix string `yaml:"host_prefix,omitempty"`
 
 	// HostNamespace is the namespace the CLI files the server's tools under,
@@ -953,8 +955,9 @@ type CallPaths struct {
 	// NamePrefix is what the record writes before every call's name that is
 	// no part of the name the model called: Muse Code files a call under the
 	// operation `tool:<name>`. Cut off before the name is read, so
-	// [Requests.HostPrefix] is the model's own spelling on every CLI. A name
-	// the record writes without it is read whole.
+	// [Requests.HostPrefix] is the model's own spelling on every CLI, which
+	// is what the engine's longest tool name is computed from
+	// ([ToolNameMax]). A name the record writes without it is read whole.
 	NamePrefix string `yaml:"name_prefix,omitempty"`
 }
 

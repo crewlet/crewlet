@@ -146,6 +146,9 @@ var contract = []Entry{
 	{"McpServerStatus", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpServerNode", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 	{"McpServerState", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+	{"McpToolRefusal", ReadUnion, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+	{"McpRefusedTool", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
+	{"McpShadowedTool", ReadInterface, "internal/api/queries.TestTheToolsScreenReadsWhatTheServerStatusSends"},
 
 	// attribution.ts
 	{"CHANGE_FIELDS", ReadLiteral, "internal/worklet.TestAttributionFieldsAreTheEngines"},
