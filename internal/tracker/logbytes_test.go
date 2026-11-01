@@ -887,6 +887,10 @@ var codeLogFields = map[code.OpKind]struct {
 		payload: reflect.TypeFor[code.MergeabilityKept](),
 		carried: []string{"repo_id", "change_id", "revision", "target_oid", "target_position",
 			"change_version", "readiness_version", "checks_position"},
+		absent: map[string]string{
+			"chart_epoch": "the activation of the chart a readiness was judged by, a Unix millisecond " +
+				"where the node holds one: thirty bytes on the day's most",
+		},
 	},
 	code.OpReview: {
 		payload: reflect.TypeFor[code.Review](),

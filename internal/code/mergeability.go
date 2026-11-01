@@ -319,8 +319,8 @@ type Mergeability struct {
 // the same count of the rest, the same readiness and the same "waits on a
 // person" — recorded by what it MOVED and nothing else: the tip a recheck
 // merged into, where its home merged again into a moved target, and the
-// versions and the checks position a readiness was judged at, where any of
-// them moved. The writer forms it in place of the [Mergeability] the home
+// versions, the checks position and the chart a readiness was judged at,
+// where any of them moved. The writer forms it in place of the [Mergeability] the home
 // sent (decideMergeability): a recheck of a target that moves every few
 // minutes, or a refresh after a review that changed nothing about whether the
 // change may merge, would otherwise rewrite the whole record — its tip, its
@@ -354,14 +354,28 @@ type MergeabilityKept struct {
 	// home merged again, both empty where the record is a refresh's alone.
 	TargetOID      string            `json:"target_oid,omitempty"`
 	TargetPosition statelog.Position `json:"target_position,omitzero"`
-	// ChangeVersion, ReadinessVersion and ChecksPosition are what the
-	// readiness was judged at ([Mergeability.ChangeVersion]) — all three set
-	// where any of them moved past the row's, and ChangeVersion zero where
-	// none did: a change's row is at version 1 from its open, so a zero names
-	// no judgement, where a zero readiness version or checks position is one.
+	// ChangeVersion, ReadinessVersion, ChecksPosition and ChartEpoch are
+	// what the readiness was judged at ([Mergeability.ChangeVersion],
+	// [Mergeability.ChartEpoch]) — all four set where any of them moved past
+	// the row's, and ChangeVersion zero where none did: a change's row is at
+	// version 1 from its open, so a zero names no judgement, where a zero
+	// readiness version, checks position or chart is one. THE CHART RIDES
+	// WITH THE VERSIONS because a configuration apply alone makes a change
+	// due a refresh (changes_due's chart term): a refresh that keeps the
+	// row's answer under a later chart must still move the row's chart, or
+	// the change stays due at every pass, and a record moving nothing else
+	// would be a judgement the apply could not tell from none.
+	//
+	// ChartEpoch is BASE FORMAT, under the condition [OpMergeability]
+	// states: once a build without it has run it takes {Name:
+	// "MergeabilityKept.ChartEpoch", Since: 2, Op: "mergeability_kept",
+	// Path: []string{"mutation", "chart_epoch"}}, which an older build
+	// defers the record by rather than move the versions and leave the
+	// chart behind them.
 	ChangeVersion    int64             `json:"change_version,omitempty"`
 	ReadinessVersion int64             `json:"readiness_version,omitempty"`
 	ChecksPosition   statelog.Position `json:"checks_position,omitzero"`
+	ChartEpoch       int64             `json:"chart_epoch,omitempty"`
 }
 
 // keptOutcome reports whether m, stamped with its readiness, says what prior
@@ -636,8 +650,10 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 	m.Ready, m.WaitsPerson = readiness.Ready(), readiness.WaitsPerson()
 	if of && keptOutcome(m, prior) {
 		// THE OUTCOME THE ROW HOLDS ALREADY: recorded by what moved — the tip
-		// a recheck merged into, and the versions and the checks position
-		// the readiness was judged at where any of them moved — never the
+		// a recheck merged into, and the versions, the checks position and
+		// the chart the readiness was judged at where any of them moved
+		// (a chart alone included: a configuration apply makes the change
+		// due, and only a moved chart ends that) — never the
 		// whole record again. It turns nothing, so it concerns nobody, and
 		// routeConversation stamps it no routing.
 		kept := MergeabilityKept{RepoID: m.RepoID, ChangeID: m.ChangeID, Revision: m.Revision}
@@ -645,9 +661,9 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 			kept.TargetOID, kept.TargetPosition = m.TargetOID, m.TargetPosition
 		}
 		if m.ChangeVersion != prior.changeVersion || m.ReadinessVersion != prior.readinessVersion ||
-			checksAt != prior.checksPosition {
-			kept.ChangeVersion, kept.ReadinessVersion, kept.ChecksPosition = m.ChangeVersion,
-				m.ReadinessVersion, m.ChecksPosition
+			checksAt != prior.checksPosition || m.ChartEpoch != prior.chartEpoch {
+			kept.ChangeVersion, kept.ReadinessVersion, kept.ChecksPosition, kept.ChartEpoch = m.ChangeVersion,
+				m.ReadinessVersion, m.ChecksPosition, m.ChartEpoch
 		}
 		d.op, d.payload = OpMergeabilityKept, kept
 		// THE MERGEABILITY'S ROW, and the conversation's own.

@@ -739,7 +739,7 @@ func registeredStatements() map[string]statement {
 		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, 7000, true, false, "repo-1-change-000001",
 			2, "refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
 		"keep mergeability": {keptMergeabilitySQL, []any{true, oid("t"), 6000, 7000, true, 5, 4, 5000,
-			"repo-1-change-000001", 2}, []string{mergeabilityKey + " (change_id=?)"}},
+			"repo-1-change-000001", 2, 1_762_000_000_000}, []string{mergeabilityKey + " (change_id=?)"}},
 		"clear readiness": {clearReadinessSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", mergeabilityKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		// THE POSITION OF A HEAD'S CHECKS a mergeability's decide stamps: every

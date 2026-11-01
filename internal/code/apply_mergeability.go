@@ -91,18 +91,19 @@ func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Merge
 
 // applyMergeabilityKept moves what a re-evaluation that kept the row's outcome
 // moved ([MergeabilityKept]): a recheck's tip, its position and the row's
-// instant — the one the home's next recheck is paced from — and the versions
-// and the checks position a readiness was judged at, each part only where the
-// record carries it, and nothing else: the state, the conflicted paths, the
-// stored answer, the node and the position of the record that recorded them
-// stay the row's. A refresh alone leaves the instant, as a refresh's full
-// record does, so a review never postpones a moved target's recheck.
+// instant — the one the home's next recheck is paced from — and the versions,
+// the checks position and the chart a readiness was judged at, each part only
+// where the record carries it, and nothing else: the state, the conflicted
+// paths, the stored answer, the node and the position of the record that
+// recorded them stay the row's. A refresh alone leaves the instant, as a
+// refresh's full record does, so a review never postpones a moved target's
+// recheck.
 //
 // It writes the row only while it is of the record's revision and the record
-// moves it FORWARD — a tip no earlier than the row's, versions and a checks
-// position no lower — the guard the merge's own record is decided by, which
-// the arbitration on the change's subject keeps true since no other record
-// writes the row; and applies as nothing otherwise.
+// moves it FORWARD — a tip no earlier than the row's, versions, a checks
+// position and a chart no lower — the guard the merge's own record is decided
+// by, which the arbitration on the change's subject keeps true since no other
+// record writes the row; and applies as nothing otherwise.
 //
 // PURE IN THE RECORD, its position, its broker instant and the prior row.
 func applyMergeabilityKept(ctx context.Context, tx *sql.Tx, at applyContext, k MergeabilityKept) (int, error) {
@@ -112,7 +113,8 @@ func applyMergeabilityKept(ctx context.Context, tx *sql.Tx, at applyContext, k M
 			"writer forms", at.position)
 	}
 	res, err := tx.ExecContext(ctx, keptMergeabilitySQL, retarget, k.TargetOID, k.TargetPosition.Packed(), at.at(),
-		rejudge, k.ChangeVersion, k.ReadinessVersion, k.ChecksPosition.Packed(), k.ChangeID, k.Revision)
+		rejudge, k.ChangeVersion, k.ReadinessVersion, k.ChecksPosition.Packed(), k.ChangeID, k.Revision,
+		k.ChartEpoch)
 	if err != nil {
 		return 0, fmt.Errorf("code: move %s's mergeability at %s: %w", k.ChangeID, at.position, err)
 	}
@@ -181,9 +183,11 @@ const (
 			at = CASE WHEN ?1 THEN ?4 ELSE at END,
 			change_version = CASE WHEN ?5 THEN ?6 ELSE change_version END,
 			readiness_version = CASE WHEN ?5 THEN ?7 ELSE readiness_version END,
-			checks_position = CASE WHEN ?5 THEN ?8 ELSE checks_position END
+			checks_position = CASE WHEN ?5 THEN ?8 ELSE checks_position END,
+			chart_epoch = CASE WHEN ?5 THEN ?11 ELSE chart_epoch END
 		WHERE change_id = ?9 AND revision = ?10 AND (NOT ?1 OR target_position <= ?3)
-			AND (NOT ?5 OR (change_version <= ?6 AND readiness_version <= ?7 AND checks_position <= ?8))`
+			AND (NOT ?5 OR (change_version <= ?6 AND readiness_version <= ?7 AND checks_position <= ?8
+				AND chart_epoch <= ?11))`
 	clearReadinessSQL = `UPDATE code_mergeability SET ready = 0, waits_person = 0 WHERE rowid IN (SELECT g.rowid
 		FROM json_each(?) AS j CROSS JOIN code_mergeability AS g
 		WHERE g.change_id = CAST(j.value AS TEXT) AND (g.ready = 1 OR g.waits_person = 1))`

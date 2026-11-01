@@ -5684,8 +5684,10 @@ it names no asker.
   [refresh](#merge-readiness) whose readiness is the row's, ready or not and
   waiting on a person or not as before, are recorded as a
   `mergeability_kept`: the change, its revision, and only what moved — the
-  recheck's tip and the position that moved the branch there, the versions
-  and the checks position a refresh judged the readiness at. Its apply moves
+  recheck's tip and the position that moved the branch there, the versions,
+  the checks position and the chart a refresh judged the readiness at (a
+  chart alone included, since a configuration apply alone makes a change due
+  a refresh, and only the row's chart moving ends that). Its apply moves
   those columns, and a recheck's instant, under the guard the full record's
   is decided by, and nothing else, so a conflicted change is not carried
   again, paths and all, every ten minutes its target moves. Whatever turns
@@ -5694,7 +5696,7 @@ it names no asker.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_mergeability` | each change its home merged | The revision merged, the target branch, the tip merged into and the position of the record that moved the branch there; the state; the conflicted paths it names and how many more there were; the git node that merged; the record that merged, with its broker instant, which the change's next recheck is paced by; and the change's [readiness](#merge-readiness) as the last record judged it — whether it was ready, whether it waited on a person — beside the versions of the change's row and of what its readiness reads it was judged at |
+| `code_mergeability` | each change its home merged | The revision merged, the target branch, the tip merged into and the position of the record that moved the branch there; the state; the conflicted paths it names and how many more there were; the git node that merged; the record that merged, with its broker instant, which the change's next recheck is paced by; and the change's [readiness](#merge-readiness) as the last record judged it — whether it was ready, whether it waited on a person — beside the versions of the change's row and of what its readiness reads, and the chart, it was judged at |
 
 The change's own read carries it (`mergeability` on a change's detail): of
 its head revision into its target where its home has merged that, and of an

@@ -924,3 +924,71 @@ func TestAChartChangeAloneMakesAChangeDueARefresh(t *testing.T) {
 		t.Fatalf("a refreshed change is still due %+v in %v at the chart that refreshed it", changes, repos)
 	}
 }
+
+// A CHART CHANGE THAT KEEPS THE ANSWER STILL MOVES THE STORED CHART: web!1,
+// approved by plat-lead and merged clean on the chart of activation e1, is
+// stored ready. A configuration apply that changes nothing the readiness
+// reads (activation e2, the same seats) makes it due a refresh at e2 all the
+// same, and the refresh on e2 judges it ready again — the row's outcome, so
+// the writer records a mergeability_kept rather than the whole record. That
+// record names the chart alongside the versions, its apply moves the row's
+// chart to e2, the answer stays ready, and the home on e2 finds the change
+// due nothing more: a kept refresh that left the chart behind would leave
+// the change due at every pass, and one that carried the chart alone would
+// name no judgement the apply could move.
+//
+// Mutations: stamp no chart on the kept record → its apply refuses the
+// record, and the change stays due at e2; leave chart_epoch out of the kept
+// apply → the change stays due at e2.
+func TestAChartChangeThatKeepsTheAnswerMovesTheStoredChart(t *testing.T) {
+	t.Parallel()
+	const e1, e2 = int64(1_762_000_000_000), int64(1_762_000_060_000)
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	on := func(epoch int64) func(*code.ChangeWriterOptions) {
+		return func(o *code.ChangeWriterOptions) {
+			o.SeatRules = func() (code.SeatRules, bool) {
+				return code.SeatRules{Roster: testChart(), Zone: time.UTC, Epoch: epoch}, true
+			}
+		}
+	}
+	due := func(epoch int64) []code.ChangeDue {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChangesDue, Fresh: stale,
+			ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: harnessAt, ChartEpoch: epoch}})
+		if err != nil {
+			t.Fatalf("Read(changes_due) of web at %d: %v", epoch, err)
+		}
+		return a.DueChanges
+	}
+
+	w1, _ := writerOn(t, n, n.pub, on(e1))
+	converse(t, w1, asking(repo, change, dev, "plat-lead"))
+	converse(t, w1, n.patched(repo, change, 1, "B", oidOf("the retry diff")))
+	converse(t, w1, reviewing(repo, change, platLead, 1, code.VerdictApprove, nil))
+	converse(t, w1, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	judged := n.storedReadiness(change)
+	if !judged.ready {
+		t.Fatalf("the merge on e1 stored %+v, want ready", judged)
+	}
+	if changes := due(e2); len(changes) != 1 || !changes[0].RefreshDue {
+		t.Fatalf("a home on a later chart finds %+v due, want web!1 owing a refresh", changes)
+	}
+
+	w2, _ := writerOn(t, n, n.pub, on(e2))
+	res := converse(t, w2, code.ConversationWrite{OpID: statelog.NewOpID(harnessAt, ""),
+		Mergeability: &code.Mergeability{RepoID: repo, ChangeID: change, Revision: 1, HeadOID: oidOf("B"),
+			TargetRef: mainRef, Refresh: true, Node: n.id}})
+	if rec := n.recordAt(res.Position); rec.Op != code.OpMergeabilityKept ||
+		!strings.Contains(string(rec.Mutation), `"chart_epoch":`+strconv.FormatInt(e2, 10)) {
+		t.Fatalf("the refresh on e2 recorded %s %s, want a mergeability_kept naming chart %d", rec.Op,
+			rec.Mutation, e2)
+	}
+	if stored := n.storedReadiness(change); !stored.ready || stored.waitsPerson {
+		t.Fatalf("the kept refresh left %+v, want the answer ready as before", stored)
+	}
+	if changes := due(e2); len(changes) != 0 {
+		t.Fatalf("a change whose kept refresh judged it at e2 is still due %+v at e2", changes)
+	}
+}
