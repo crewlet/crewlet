@@ -1054,7 +1054,8 @@ func Catalogue() []Instrument {
 				"preview a person or a seat asked, given a read's ten seconds " +
 				"of the read lane under a unit of the node's seat git-work " +
 				"share, its merge-tree alone timed: a preview refused before " +
-				"it (not held, not permitted, a commit absent) is no merge, and " +
+				"it (not held, not permitted, a commit absent), or answered " +
+				"from the node's memo of the same two commits, is no merge, and " +
 				"is not observed. `outcome`: `clean`, `conflict`, `unknown` — " +
 				"the merge ran out of its time and decided nothing, which a " +
 				"change's home records and asks again ten minutes on — " +

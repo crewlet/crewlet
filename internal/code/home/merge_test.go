@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -784,6 +785,92 @@ func TestAMergePreviewIsAnsweredAsAReadByObjectIDIs(t *testing.T) {
 		code.UnreadyNodeFailed {
 		t.Errorf("a stopped node's preview answered %v, want unready %s", err, code.UnreadyNodeFailed)
 	}
+}
+
+// A REPEATED MERGE PREVIEW RUNS NO GIT: the second preview of the same two
+// commits — by another principal, its grant judged as the first's was — is
+// answered from the node's memo with no git process at all, the same state
+// and conflicted paths as the first, and is still recorded as its asker's
+// read of the `visibility: unit` repository; a preview of two other commits
+// merges as any first does.
+//
+// Mutations: memoize nothing, and the second preview runs git; answer a hit
+// before judging the grant, and the outsider is answered.
+func TestARepeatedMergePreviewRunsNoGit(t *testing.T) {
+	t.Parallel()
+	settings := codetest.Settings()
+	settings.Visibility = code.VisibilityUnit
+	h := newGitHome(t, settings)
+	base := h.commit(map[string]string{"a.go": "a\n", "b.go": "b\n"}, "base")
+	h.git("checkout", "-q", "-b", "conflict", base)
+	head := h.commit(map[string]string{"b.go": "b, one way\n"}, "a conflicting change")
+	h.git("checkout", "-q", "-b", "clean", base)
+	clean := h.commit(map[string]string{"a.go": "a, changed\n"}, "a clean change")
+	h.git("checkout", "-q", "main")
+	tip := h.commit(map[string]string{"b.go": "b, the other way\n"}, "main moves")
+	h.push("refs/heads/main", "refs/heads/conflict", "refs/heads/clean")
+	node := h.node()
+	git := &countedGit{PreviewPool: node.Pool()}
+	recorded := &fetches{}
+	p, err := home.NewPreviews(home.PreviewOptions{NodeID: node.ID(), Cache: node.Cache(), Git: git,
+		Share: node.Share(), Roster: codetest.FixtureRoster, Fetched: recorded.record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Stop(context.WithoutCancel(t.Context())) })
+	ask := func(asker code.Principal, head string) (code.MergePreviewAnswer, error) {
+		return p.MergePreview(t.Context(), code.MergePreviewQuery{RepoID: h.repo, Asker: asker, Base: tip,
+			Head: head, Home: true})
+	}
+
+	first, err := ask(person, head)
+	if err != nil || first.State != code.MergeConflict || !slices.Equal(first.Conflicts, []string{"b.go"}) {
+		t.Fatalf("the first preview answered (%+v, %v), want a conflict in b.go", first, err)
+	}
+	ran := git.count()
+	if ran == 0 {
+		t.Fatal("the premise: the first preview ran no git")
+	}
+	if _, err := ask(code.Principal{Kind: code.PrincipalAgent, Seat: "outsider"}, head); !errors.Is(err,
+		code.ErrNotPermitted) {
+		t.Errorf("an outsider's preview of the memoized merge answered %v, want %v", err, code.ErrNotPermitted)
+	}
+	again, err := ask(alice, head)
+	if err != nil || again.State != first.State || !slices.Equal(again.Conflicts, first.Conflicts) ||
+		again.ConflictsOmitted != first.ConflictsOmitted {
+		t.Fatalf("the repeated preview answered (%+v, %v), want the first's %+v", again, err, first)
+	}
+	if got := git.count(); got != ran {
+		t.Errorf("the repeated preview ran %d git processes, want none: it is the memo's", got-ran)
+	}
+	if got := recorded.all(); len(got) != 2 || got[1].Principal != alice.Seat || got[1].Kind != home.PreviewReadKind {
+		t.Errorf("the previews were recorded as %+v, want the first's read and the repeated one's by %s", got,
+			alice.Seat)
+	}
+	if other, err := ask(person, clean); err != nil || other.State != code.MergeClean || git.count() == ran {
+		t.Errorf("a preview of two other commits answered (%+v, %v) running %d git processes, want a clean "+
+			"merge of its own", other, err, git.count()-ran)
+	}
+}
+
+// countedGit is a node's pool, counting every git process it runs.
+type countedGit struct {
+	home.PreviewPool
+	mu   sync.Mutex
+	runs int
+}
+
+func (g *countedGit) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	g.mu.Lock()
+	g.runs++
+	g.mu.Unlock()
+	return g.PreviewPool.Run(ctx, c)
+}
+
+func (g *countedGit) count() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.runs
 }
 
 // BenchmarkMergeability is one home's merge of a change into its moved target

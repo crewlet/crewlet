@@ -5503,7 +5503,12 @@ preview and the change it would open say one thing — its state, the
 conflicted paths a record would hold and how many more there were — merged in
 a scratch of its own, in the node's read lane under one unit of its seat
 git-work share ([Fair share](#fair-share)), within a read's ten seconds of git:
-a merge that runs out of them answers `unknown`. A comparison's question
+a merge that runs out of them answers `unknown`. A merge is a function of the
+two commits and the git that ran it, so a decided one is kept in the node's
+memo of answers by object id, beside the comparison it sits by: the same two
+commits previewed again — by anybody whose grant reads the repository, and
+recorded as their read all the same — are answered from it with no git run.
+An `unknown` merge is never kept. A comparison's question
 asks one beside its answer — the `preview` of `GET
 /code/repos/{name}/compare` ([A repository's
 content](../reference/api-endpoints.md#a-repositorys-content)) — and a
