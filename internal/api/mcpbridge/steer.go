@@ -17,25 +17,25 @@ import (
 
 // A NOTE INBOX: a person's notes to the run's turn, at the run's own steps.
 //
-// An executor is its CLI's own loop, so the engine has no round of it to open
-// with a note. What the CLI has is boundaries of its own — Claude Code's hooks
+// An executor is its harness's own loop, so the engine has no round of it to open
+// with a note. What the harness has is boundaries of its own — Claude Code's hooks
 // after a batch of tool calls and as it is about to finish, OpenCode's next
 // step — and a way to ask for something there. So a run's session carries the
 // run's note INBOX ([Session.Steer]), and the bridge serves it two ways, both
 // behind the run's own token and nothing else:
 //
 //   - THE steer_take TOOL ([SteerTool]) on the run's existing MCP server, which
-//     a hook calls. It is NEVER LISTED, so no CLI offers it to its model, and
+//     a hook calls. It is NEVER LISTED, so no harness offers it to its model, and
 //     it is answered by the server's own receiving middleware, so the call never
 //     reaches the run's surface and is never recorded on its ledger: it is the
-//     CLI asking, not the model. Its answer is ALWAYS text — empty for nothing
+//     harness asking, not the model. Its answer is ALWAYS text — empty for nothing
 //     — never an error: measured on Claude Code, a hook's call that failed made
-//     the CLI drop and re-initialise the whole bridge, telling the model its
+//     the harness drop and re-initialise the whole bridge, telling the model its
 //     tools were still connecting.
-//   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the CLI polls: GET
+//   - THE NOTES ROUTE ([SteerPattern]) a plugin inside the harness polls: GET
 //     `notes?after=<seq>` holds for a note for up to [steerHold] and answers the
 //     ones waiting past the cursor, rendered; POST `read` records the notes the
-//     CLI reported putting in front of its model.
+//     harness reported putting in front of its model.
 //
 // THE BRIDGE DECIDES NOTHING ABOUT NOTES. What waits, what fits, what is read
 // and what is recorded is the inbox's (internal/engine, runsteer.go); the
@@ -44,7 +44,7 @@ import (
 // the boundaries the main agent's loop makes, and bounds how long either is
 // held.
 
-// SteerTool is the tool a coding CLI's hook calls on the bridge for its turn's
+// SteerTool is the tool a harness's hook calls on the bridge for its turn's
 // notes.
 const SteerTool = "steer_take"
 
@@ -61,7 +61,7 @@ const (
 type SteerInbox interface {
 	// Take answers one hook of the run's main agent, at event
 	// ([SteerEventToolBatch] or [SteerEventFinish]): the hook's whole answer,
-	// in the shape the CLI reads, or empty for nothing. Never an error — a
+	// in the shape the harness reads, or empty for nothing. Never an error — a
 	// note that could not be taken waits for the next step.
 	Take(ctx context.Context, event string) string
 
@@ -70,7 +70,7 @@ type SteerInbox interface {
 	// closes. A PEEK: nothing is recorded read.
 	Wait(ctx context.Context, after int) ([]SteerNote, <-chan struct{})
 
-	// Read records the notes named read at the run's next step — the CLI
+	// Read records the notes named read at the run's next step — the harness
 	// reported putting them in front of its model. A note no longer waiting
 	// is skipped; an error is a record that could not be written, and the
 	// notes wait.
@@ -90,7 +90,7 @@ type SteerNote struct {
 	// ID is the note's identity, which a read names it by.
 	ID string `json:"id"`
 
-	// Inbox is the id the CLI admits the note under, unique to the note and
+	// Inbox is the id the harness admits the note under, unique to the note and
 	// the job, so a poller that admits it twice admits it once.
 	Inbox string `json:"inbox"`
 
@@ -108,7 +108,7 @@ const SteerPattern = PathPrefix + "{token}/steer/{verb}"
 const steerSuffix = "/steer"
 
 // SteerURL is the notes route of the job whose endpoint is given — what the
-// engine hands a run's CLI beside the endpoint itself.
+// engine hands a run's harness beside the endpoint itself.
 func SteerURL(endpoint string) string {
 	if endpoint == "" {
 		return ""
@@ -117,11 +117,11 @@ func SteerURL(endpoint string) string {
 }
 
 // steerTakeBudget bounds the inbox's answer to one hook: FIVE SECONDS, half
-// the ten a hook that calls steer_take is given. A CLI waits on its hook before
+// the ten a hook that calls steer_take is given. A harness waits on its hook before
 // its next request, at every batch, so the hook's own timeout is short, and
-// half of it answers a note the inbox took before the CLI gives up on the
+// half of it answers a note the inbox took before the harness gives up on the
 // hook, unless the network itself stalls past five seconds. Measured on Claude
-// Code: at its timeout the CLI cancels the call (notifications/cancelled) and
+// Code: at its timeout the harness cancels the call (notifications/cancelled) and
 // discards a late answer, and a take still in flight is cancelled with it.
 const steerTakeBudget = 5 * time.Second
 
@@ -133,7 +133,7 @@ const steerTakeBudget = 5 * time.Second
 // log line for nothing. Inside the fleet relay's idle bound
 // (internal/httprelay's Idle, three heartbeats) for a poll relayed to the
 // seat's holder. Its cost is one request every ten seconds per idle run whose
-// CLI polls, answered from memory.
+// harness polls, answered from memory.
 const steerHold = 10 * time.Second
 
 // steerReadBody bounds a read's body: a read names at most a turn's notes
@@ -393,7 +393,7 @@ func (o *binding) steerMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 }
 
 // steerArgs is what a hook passes steer_take: the event that fired it and the
-// agent whose loop it fired in, each substituted by the CLI.
+// agent whose loop it fired in, each substituted by the harness.
 type steerArgs struct {
 	Event string `json:"event"`
 	Agent string `json:"agent"`
@@ -414,13 +414,13 @@ func (o *binding) takeSteer(ctx context.Context, raw json.RawMessage) string {
 	}
 	switch {
 	case strings.HasPrefix(args.Agent, "${"):
-		// THE CLI DID NOT SUBSTITUTE IT: whose loop fired the hook cannot be
+		// THE HARNESS DID NOT SUBSTITUTE IT: whose loop fired the hook cannot be
 		// told, so it is answered as a subagent's would be — the note waits
 		// for a boundary that can be told apart. Said once per session.
 		o.unsubstituted.Do(func() {
 			log.WarnContext(o.ctx, "mcp_bridge_steer_unsubstituted", "run_id", o.session.RunID,
 				"seat", o.session.Handle, "agent", args.Agent,
-				"detail", "the run's coding CLI did not fill in the hook's agent id, so no "+
+				"detail", "the run's harness did not fill in the hook's agent id, so no "+
 					"note is taken between its steps; its notes reach the run's review instead")
 		})
 		return ""

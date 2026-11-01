@@ -36,7 +36,7 @@ const (
 	// and attributed to whoever started it: the moment a login is stored
 	// is the one an audit is opened to find, and no route call marks it.
 	ModelDeviceSignInEnded ModelAction = "device_sign_in_ended"
-	// ModelHostLoginCheck reads a host CLI login's status on the
+	// ModelHostLoginCheck reads a host harness login's status on the
 	// answering node.
 	ModelHostLoginCheck ModelAction = "host_login_check"
 )

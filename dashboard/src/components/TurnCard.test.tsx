@@ -68,7 +68,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     codingAgent: "",
     sandboxId: "",
     launchId: "",
-    cliTurns: 0,
+    harnessTurns: 0,
     transcript: "",
     transcriptElidedLines: 0,
     transcriptElidedBytes: 0,

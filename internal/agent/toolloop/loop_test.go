@@ -14,7 +14,7 @@ import (
 
 // The loop's shape, what ends it, and the correctives it sends when a run ends
 // without what the phase needed — each driven through the real session by the
-// scripted CLI, so every response is a model request a CLI made and every call
+// scripted harness, so every response is a model request a harness made and every call
 // crossed the socket.
 
 // --- script helpers ---------------------------------------------------------
@@ -32,7 +32,7 @@ func calling(text string, names ...string) llmtest.Response {
 	return r
 }
 
-// runOf is one CLI run playing the responses.
+// runOf is one harness run playing the responses.
 func runOf(rs ...llmtest.Response) llmtest.Run { return llmtest.Run{Responses: rs} }
 
 // script plays one run per argument.
@@ -86,7 +86,7 @@ func TestALoopEndsWhenTheModelStopsAskingForTools(t *testing.T) {
 		t.Errorf("executions = %+v, want one read", res.Executions)
 	}
 	if n := len(prov.Seen()); n != 1 {
-		t.Errorf("%d CLI runs, want the one that answered", n)
+		t.Errorf("%d harness runs, want the one that answered", n)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestEveryRunIsSentAsASeatAtWorkWithTheHost(t *testing.T) {
 	}
 	seen := prov.Seen()
 	if len(seen) != 2 {
-		t.Fatalf("%d CLI runs, want the declined one and the corrected one", len(seen))
+		t.Fatalf("%d harness runs, want the declined one and the corrected one", len(seen))
 	}
 	for i, req := range seen {
 		if !req.Agent {
@@ -681,7 +681,7 @@ func TestASurfaceFailureIsAnEngineFailure(t *testing.T) {
 
 // A FAILING TOOL GOES BACK TO THE MODEL, flagged: its message is what the model
 // reacts to, and the flag is what a backend renders the failure from — on the
-// answer the CLI read and on the conversation the next run reads alike, and
+// answer the harness read and on the conversation the next run reads alike, and
 // only on the call that failed.
 func TestAFailingToolGoesBackToTheModelFlagged(t *testing.T) {
 	t.Parallel()
@@ -698,7 +698,7 @@ func TestAFailingToolGoesBackToTheModelFlagged(t *testing.T) {
 	answered := prov.Results()
 	if len(answered) != 2 || !answered[0].Failed || answered[0].Output != "permission denied" ||
 		answered[1].Failed {
-		t.Errorf("the CLI was answered %+v, want only bad's failure flagged", answered)
+		t.Errorf("the harness was answered %+v, want only bad's failure flagged", answered)
 	}
 	var flags []bool
 	for _, m := range res.Messages {
@@ -714,7 +714,7 @@ func TestAFailingToolGoesBackToTheModelFlagged(t *testing.T) {
 	}
 }
 
-// AN ACTIVATION IS OFFERED TO THE RUN'S NEXT REQUEST on a CLI that re-lists: the
+// AN ACTIVATION IS OFFERED TO THE RUN'S NEXT REQUEST on a harness that re-lists: the
 // session's list moves with the surface, so the tool is callable at once and the
 // run is not ended for it.
 func TestAnActivatedToolIsCallableOnTheNextRequest(t *testing.T) {
@@ -731,11 +731,11 @@ func TestAnActivatedToolIsCallableOnTheNextRequest(t *testing.T) {
 	}
 	for _, r := range prov.Results() {
 		if r.Err != nil || r.Failed {
-			t.Errorf("the CLI was answered %+v", r)
+			t.Errorf("the harness was answered %+v", r)
 		}
 	}
 	if n := len(prov.Seen()); n != 1 {
-		t.Errorf("%d runs, want one — a CLI that re-lists needs no new run", n)
+		t.Errorf("%d runs, want one — a harness that re-lists needs no new run", n)
 	}
 }
 
@@ -767,12 +767,12 @@ func TestNarrationStaysAttachedToItsOwnRound(t *testing.T) {
 // caller publishes with the error, and it does not read as exhausted: it did
 // not run out, it failed.
 //
-// The round a CLI run died on is the last one its record showed: what the CLI
+// The round a harness run died on is the last one its record showed: what the harness
 // asked after it, if anything, never came back.
 func TestTheFailureViewCarriesWhatThePhaseManaged(t *testing.T) {
 	t.Parallel()
 	prog := &toolloop.Progress{}
-	died := errors.New("the CLI fell over")
+	died := errors.New("the harness fell over")
 	prov := script(llmtest.Run{
 		Responses: []llmtest.Response{{Text: "first", Calls: []llmtest.Call{{Name: "read"}},
 			Usage: llm.Usage{Input: 7}}},

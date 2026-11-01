@@ -14,24 +14,24 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The executor's engine half: turning a seat's executor into a detached run of
-// the coding CLI its executor chain picks at the launch.
+// the harness its executor chain picks at the launch.
 //
 // EVERY MOVING PART HERE ALREADY EXISTED, which is the point of the shape. The
 // detachment, the durable row, the completion poll, the claim and the re-entry
-// are the sandbox layer's — an executor is its coding CLI's own run, whose
+// are the sandbox layer's — an executor is its harness's own run, whose
 // brief is the turn's ask, with the seat's system prompt as its standing
 // instructions. The tool surface is the bridge's. What this file adds is the
 // choice of member, the wiring, and the refusals that wiring makes possible.
 
-// agentLauncher runs a seat's executor as its CLI's own agentic run.
+// agentLauncher runs a seat's executor as its harness's own agentic run.
 //
 // Every fact it launches from is the turn's PINNED epoch ([agentLauncher.company])
 // — the seat, its executor chain, the entries' cells and logins, its box
@@ -168,7 +168,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 			"seat %q's executor runs in a box, and this node has no sandbox runtime for "+
 				"this company: configure providers.sandbox", handle))
 	}
-	// NO BRIDGE IS A REFUSAL, not a degraded run. A coding agent with none
+	// NO BRIDGE IS A REFUSAL, not a degraded run. A harness with none
 	// of the seat's tools cannot answer anybody, cannot touch a ticket and
 	// cannot submit its work — it would burn a subscription producing prose
 	// nothing collects, and the turn would be rescued as incomplete with no
@@ -295,7 +295,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	run := newCodingRun(agent, runEnv.env)
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       cell,
-		CodingAgent:     agent.Agent(),
+		CodingAgent:     agent.Harness(),
 		PauseTTL:        pauseTTL(settings),
 		MaxTurns:        maxTurnsFor(settings),
 		Env:             run.env,
@@ -316,7 +316,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 	if err != nil {
 		return runner.Launched{}, err
 	}
-	// AND THE RUN'S NOTE INBOX, which its session serves to its CLI between
+	// AND THE RUN'S NOTE INBOX, which its session serves to its harness between
 	// steps, bound to the job with the ledger once the job has a name.
 	inbox := e.runSteers.inbox(identityOfRef(ref), req.Round)
 	if inbox != nil {
@@ -347,7 +347,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		MCPServers:  servers,
 		Model:       run.model,
 		ProviderKey: member.Key,
-		// THE SIGN-IN THE JOB'S CLI IS HANDED, on the job's record: what
+		// THE SIGN-IN THE JOB'S HARNESS IS HANDED, on the job's record: what
 		// its collection compares the entry's against ([Engine.signInReplaced]).
 		SignInID: string(agent.SignInID()),
 		System:   req.System,
@@ -431,7 +431,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 
 // openBridge opens a job's bridge session under the job's own name, with its
 // ledger and its note inbox bound to the same job, and answers what the box is
-// given for it — its server entry, and where its CLI asks for its turn's notes:
+// given for it — its server entry, and where its harness asks for its turn's notes:
 // [sandbox.LaunchRequest.Opened], for the launch, and the same opening for a
 // run taken over while it works ([Engine.reopenAgentRun]), whose box already
 // holds the endpoint and is never handed the one minted here.
@@ -489,14 +489,14 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 // From the turn's pinned chain ([phase.Registry.Chain], the same resolution
 // config validates the chain by), walked in order:
 //
-//   - a member that is not a coding CLI with an in-box runner is passed over
+//   - a member that is not a harness with an in-box runner is passed over
 //     SILENTLY. It is a fact of the configuration rather than a refusal of the
 //     moment — the seat's `llm` is shared with the reviewer and its other
-//     phases, where any CLI is legitimate — and config warns about it once,
+//     phases, where any harness is legitimate — and config warns about it once,
 //     where a hand-off announced on every launch would report a fallback
 //     nothing fell from;
 //   - a member sitting out its spent plan on this node
-//     ([cliagent.Provider.SittingOut]) is handed off like a call's fallback
+//     ([harness.Provider.SittingOut]) is handed off like a call's fallback
 //     ([chain.Pick]), published against this turn through onFallback;
 //   - every runner member sitting out is a [*chain.Error] carrying each one's
 //     refusal, the same unavailability an exhausted call reports: a chain at
@@ -507,22 +507,22 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 // A run that meets its limit midway is not relaunched on the next member: its
 // box did the work it did, and the next launch is where the chain moves on.
 func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
-	onFallback func(chain.Fallback)) (chain.Member, *cliagent.Provider, error) {
+	onFallback func(chain.Fallback)) (chain.Member, *harness.Provider, error) {
 	runners, err := executorRunners(l.company, l.seat, manager)
 	if err != nil {
 		return chain.Member{}, nil, err
 	}
 	picked, err := chain.Pick(ctx, runners, func(m chain.Member) error {
-		return m.Provider.(*cliagent.Provider).SittingOut()
+		return m.Provider.(*harness.Provider).SittingOut()
 	}, onFallback)
 	if err != nil {
 		return chain.Member{}, nil, err
 	}
-	return picked, picked.Provider.(*cliagent.Provider), nil
+	return picked, picked.Provider.(*harness.Provider), nil
 }
 
 // executorRunners is seat's executor chain as a launch can take it: every
-// member, in chain order, that is a coding CLI with an in-box runner in
+// member, in chain order, that is a harness with an in-box runner in
 // manager — the members [agentLauncher.member] picks among, and so every
 // member whose cell a run of the seat can land in.
 //
@@ -544,11 +544,11 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]ch
 	}
 	runners := make([]chain.Member, 0, len(members))
 	for _, m := range members {
-		agent, isCLI := m.Provider.(*cliagent.Provider)
-		if !isCLI {
+		agent, isHarness := m.Provider.(*harness.Provider)
+		if !isHarness {
 			continue
 		}
-		if _, err := manager.RunnerFor(agent.Agent()); err != nil {
+		if _, err := manager.RunnerFor(agent.Harness()); err != nil {
 			continue
 		}
 		runners = append(runners, m)
@@ -559,8 +559,8 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]ch
 			keys[i] = m.Key
 		}
 		return nil, sandbox.Because(sandbox.WhyConfiguration, fmt.Errorf("seat %q's executor "+
-			"chain (%s) has no member whose CLI runs in a box: point the seat's llm at an "+
-			"entry on %s", seat.Handle(), words.And(keys), words.Or(codingagent.Names())))
+			"chain (%s) has no member whose harness runs in a box: point the seat's llm at an "+
+			"entry on %s", seat.Handle(), words.And(keys), words.Or(executor.Names())))
 	}
 	return runners, nil
 }
@@ -568,7 +568,7 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) ([]ch
 // executorHeadroom refuses a launch below turn_engine.executor_min_budget_tokens.
 //
 // EVERY LAUNCH, the dispatch's and each relaunch a reviewer sends the turn back
-// for: a run's first request alone is its CLI's harness prompt and tool
+// for: a run's first request alone is its harness's own prompt and tool
 // definitions, the bridged tool array and the seat's system prompt, so a seat
 // with less room than that spends a box, a clone and a setup to be refused at
 // its first call.

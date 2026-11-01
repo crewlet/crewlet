@@ -76,7 +76,7 @@ func TestTheRoundInFlightIsShiftedWithTheRoundsBehindIt(t *testing.T) {
 	}
 }
 
-// AN EXTENSION'S CLI RUNS NAME THE PHASE'S ROUNDS. A run states the first and
+// AN EXTENSION'S HARNESS RUNS NAME THE PHASE'S ROUNDS. A run states the first and
 // last round it made, and the loop numbers them per invocation like every
 // other round, so an unshifted extension's first run claimed round 1 of a
 // phase twenty rounds in — a run a timeline draws over the phase's opening,
@@ -178,7 +178,7 @@ func TestAnInvocationIsFoldedOntoTheRoundsBehindIt(t *testing.T) {
 		t.Errorf("the folded round is numbered %d/%d, want 3",
 			got.Executions[1].Round, got.Narration[1].Round)
 	}
-	// Every CLI run of the phase, the extension's after the original's and
+	// Every harness run of the phase, the extension's after the original's and
 	// on the phase's scale.
 	if len(got.Invocations) != 2 || got.Invocations[1].FirstRound != 3 {
 		t.Errorf("runs = %+v, want the original's and the extension's, the second at round 3",

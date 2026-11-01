@@ -40,7 +40,7 @@ import { fmtCount, listed, plural } from "~/lib/format.ts";
 import { CATEGORY_JOBS, CATEGORY_ORDER, SEAT_JOBS, everythingSeats } from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { Alarms } from "./Alarms.tsx";
-import { CliMark, MARK_SIZE } from "./CliMark.tsx";
+import { HarnessMark, MARK_SIZE } from "./HarnessMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
@@ -187,12 +187,12 @@ function RowReveal({
 function ModelCell({ model }: { model: ModelView }) {
   return (
     <span className="models-entry-cell">
-      <CliMark agent={model.agent} size={MARK_SIZE} named />
+      <HarnessMark harness={model.harness} size={MARK_SIZE} named />
       <RowReveal
         model={model}
         tip={
           <span className="mono">
-            {product(model.agent)} · {model.key} · {model.model}
+            {product(model.harness)} · {model.key} · {model.model}
           </span>
         }
       >

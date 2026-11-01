@@ -141,7 +141,7 @@ func parked(t *testing.T) *livestate.LiveState {
 }
 
 // A WORKER THE RUN DELEGATED TO LEAVES ITS TURN PARKED. `delegate` is the
-// executor's alone and every executor is its coding CLI's run in a box, so
+// executor's alone and every executor is its harness's run in a box, so
 // every worker runs while its turn is parked, and its record — nested under
 // the execute phase — is the only event the turn publishes until the run is
 // collected. Read as one of the turn's own phases it un-parked the turn: the
@@ -256,7 +256,7 @@ func TestAFailedLaunchIsTheSeatsLastError(t *testing.T) {
 
 	s.Apply(env("executor_collected", turnPayload("tn-1", map[string]any{
 		"iteration": 1, "launch_id": "job-2", "failed": true,
-		"error": "the coding agent exited with status 1", "error_kind": "launch_failed",
+		"error": "the harness exited with status 1", "error_kind": "launch_failed",
 	}), id("broke"), at("2026-06-14T12:40:00Z")))
 	got := overlayOf(t, s, "Lead").LastError
 	if got == nil || got.Kind != "launch_failed" || got.Phase != "execute" ||

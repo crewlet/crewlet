@@ -15,19 +15,19 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// Conn is one CLI run in progress against a host's session, driven response
+// Conn is one harness run in progress against a host's session, driven response
 // by response — the half of [Script] a test drives itself when what the model
 // says next is not a fixed list of runs: a script chosen by the tools the run
 // was offered, or a reply worked out in Go from what the earlier calls were
 // answered.
 //
-// THE SAME CLI [Script] is: it lists the tools, reports each response to the
-// host as the CLI's record shows it, spends what the response cost, and makes
-// the response's calls over MCP. Two things it does as the measured CLIs do and
+// THE SAME HARNESS [Script] is: it lists the tools, reports each response to the
+// host as the harness's record shows it, spends what the response cost, and makes
+// the response's calls over MCP. Two things it does as the measured harnesses do and
 // [Script] does not:
 //
 //   - A name it was not offered is refused LOCALLY, without reaching the host —
-//     every measured CLI but two answers an unlisted name itself, so the host
+//     every measured harness but two answers an unlisted name itself, so the host
 //     sees the model ask for it only in the record.
 //   - It is stopped the moment the host ends its run, unless
 //     [ConnOptions.KillLatency] says otherwise: no response is played after
@@ -41,7 +41,7 @@ type Conn struct {
 	sock   net.Conn
 	seq    int64
 
-	// dead is closed once the CLI has been stopped; stopped, once the run
+	// dead is closed once the harness has been stopped; stopped, once the run
 	// is over and the watcher has nothing left to do.
 	dead    chan struct{}
 	stopped chan struct{}
@@ -59,24 +59,24 @@ type Conn struct {
 	connected bool
 }
 
-// ConnOptions is the CLI a [Conn] is.
+// ConnOptions is the harness a [Conn] is.
 type ConnOptions struct {
 	// ModelName is the model every response names when it names none;
 	// empty is "scripted".
 	ModelName string
 
-	// Unobserved makes the CLI one whose record shows no requests: the host
+	// Unobserved makes the harness one whose record shows no requests: the host
 	// is told nothing per response, and the whole run's cost at the end.
 	Unobserved bool
 
-	// NoRelist makes the CLI one that never re-lists its tools mid-run, so
+	// NoRelist makes the harness one that never re-lists its tools mid-run, so
 	// a tool activated during the run is one it never offers its model.
 	NoRelist bool
 
-	// ToolTimeout is the CLI's own per-call timeout, told to the host.
+	// ToolTimeout is the harness's own per-call timeout, told to the host.
 	ToolTimeout time.Duration
 
-	// KillLatency is how long the CLI takes to be stopped once the host has
+	// KillLatency is how long the harness takes to be stopped once the host has
 	// ended its run. Zero stops it at once.
 	KillLatency time.Duration
 
@@ -90,7 +90,7 @@ type ConnOptions struct {
 // one request reported twice.
 var connSeq atomic.Int64
 
-// Connect serves req's host to a new CLI run and connects to it as the CLI's
+// Connect serves req's host to a new harness run and connects to it as the harness's
 // MCP client does, listing the tools.
 func Connect(ctx context.Context, req llm.Request, opts ConnOptions) (*Conn, error) {
 	if req.Tools == nil {
@@ -141,9 +141,9 @@ func Connect(ctx context.Context, req llm.Request, opts ConnOptions) (*Conn, err
 	return c, nil
 }
 
-// watch stops the CLI when the host ends its run — after KillLatency, as a
+// watch stops the harness when the host ends its run — after KillLatency, as a
 // signal, a grace and an exit take — and then releases the run, which is
-// what a backend does once its CLI has exited and what lets a call whose
+// what a backend does once its harness has exited and what lets a call whose
 // answer the host withheld return.
 func (c *Conn) watch() {
 	select {
@@ -169,7 +169,7 @@ func (c *Conn) releaseRun() {
 	})
 }
 
-// list reads the tool list, as the CLI offers it to its model.
+// list reads the tool list, as the harness offers it to its model.
 func (c *Conn) list(ctx context.Context) error {
 	return c.listOn(ctx, c.cs)
 }
@@ -197,15 +197,15 @@ func (c *Conn) listOn(ctx context.Context, cs *mcp.ClientSession) error {
 	return nil
 }
 
-// Offered is the tool list as the CLI last read it — at connect, and again
-// whenever a relisting CLI went looking for a name it did not have.
+// Offered is the tool list as the harness last read it — at connect, and again
+// whenever a relisting harness went looking for a name it did not have.
 func (c *Conn) Offered() []llm.ToolDef {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.offered)
 }
 
-// Relist reads the tool list again and answers it, as a CLI that re-lists does
+// Relist reads the tool list again and answers it, as a harness that re-lists does
 // when the server says the list changed — so a case can say what the model was
 // offered at each request of a run, an activation's effect included.
 func (c *Conn) Relist(ctx context.Context) ([]llm.ToolDef, error) {
@@ -226,7 +226,7 @@ func (c *Conn) OfferedNames() []string {
 	return out
 }
 
-// Stopped reports whether the CLI has been stopped: the host ended its run —
+// Stopped reports whether the harness has been stopped: the host ended its run —
 // at that very moment where KillLatency is zero, which is what makes a case
 // that ends a run read the same on every schedule.
 func (c *Conn) Stopped() bool {
@@ -248,8 +248,8 @@ func (c *Conn) Results() []Result {
 }
 
 // Late is how many responses were played after the host had ended the run —
-// each one a request a real CLI would have been billed for, made after the
-// phase was decided. Zero unless KillLatency gave the CLI time to make one.
+// each one a request a real harness would have been billed for, made after the
+// phase was decided. Zero unless KillLatency gave the harness time to make one.
 func (c *Conn) Late() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -258,7 +258,7 @@ func (c *Conn) Late() int {
 
 // Respond plays one model response: its prose streamed, the response reported
 // to the host and its cost spent, then its calls made. It answers what each
-// call was answered, in the response's order, and nothing once the CLI has
+// call was answered, in the response's order, and nothing once the harness has
 // been stopped.
 func (c *Conn) Respond(ctx context.Context, r Response) []Result {
 	if c.Stopped() {
@@ -303,7 +303,7 @@ func (c *Conn) Respond(ctx context.Context, r Response) []Result {
 	if !r.Parallel {
 		for j, call := range calls {
 			if c.Stopped() {
-				// A STOPPED CLI MAKES NO FURTHER CALL of the response it
+				// A STOPPED HARNESS MAKES NO FURTHER CALL of the response it
 				// was in the middle of.
 				out = out[:j]
 				break
@@ -329,7 +329,7 @@ func (c *Conn) call(ctx context.Context, call Call) Result {
 		c.opts.Before(call.Name)
 	}
 	if !c.lists(ctx, call.Name) {
-		// THE CLI'S OWN REFUSAL, in the words Claude Code uses: the host
+		// THE HARNESS'S OWN REFUSAL, in the words Claude Code uses: the host
 		// never sees a name it did not offer.
 		return Result{Name: call.Name, Output: "No such tool available: " + call.Name, Failed: true}
 	}
@@ -350,8 +350,8 @@ func (c *Conn) call(ctx context.Context, call Call) Result {
 	return got
 }
 
-// lists reports whether the CLI offers name — re-reading the list first, on a
-// CLI that re-lists, when it is not in the copy the CLI holds.
+// lists reports whether the harness offers name — re-reading the list first, on a
+// harness that re-lists, when it is not in the copy the harness holds.
 func (c *Conn) lists(ctx context.Context, name string) bool {
 	c.mu.Lock()
 	have := c.listed[name]
@@ -377,9 +377,9 @@ func (c *Conn) modelOf(r Response) string {
 	return "scripted"
 }
 
-// Close ends the run: a CLI whose record shows no requests reports what the
+// Close ends the run: a harness whose record shows no requests reports what the
 // whole run cost, the connection is closed and the run released. It answers
-// whether the CLI ever reached the tools. Safe to call more than once.
+// whether the harness ever reached the tools. Safe to call more than once.
 func (c *Conn) Close() (connected bool) {
 	c.closed.Do(func() {
 		if c.opts.Unobserved {
@@ -424,10 +424,10 @@ func (c *Conn) Finish(stop llm.StopReason) *llm.Completion {
 	}
 }
 
-// Drive plays one whole CLI run over req's host: next is asked for each
+// Drive plays one whole harness run over req's host: next is asked for each
 // response in turn, handed the run so far, and the run ends when a response
 // calls nothing — the model's answer — or the host ends it. An error from next
-// fails the run, as a CLI that dies mid-run does, after everything it already
+// fails the run, as a harness that dies mid-run does, after everything it already
 // did has reached the host.
 func Drive(ctx context.Context, req llm.Request, opts ConnOptions,
 	next func(c *Conn) (Response, error),
@@ -437,7 +437,7 @@ func Drive(ctx context.Context, req llm.Request, opts ConnOptions,
 		return nil, err
 	}
 	// A next that panics — a case modelling a backend that falls over —
-	// still leaves its run released, as a CLI that died is.
+	// still leaves its run released, as a harness that died is.
 	defer c.Close()
 	for !c.Stopped() {
 		r, err := next(c)

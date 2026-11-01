@@ -710,9 +710,9 @@ function LaunchBody({ record }: { record: PhaseRecord }) {
  * CLI said its own loop took, or the mark that it said none.
  */
 function LaunchTurns({ record }: { record: PhaseRecord }) {
-  return record.cliTurns > 0 ? (
+  return record.harnessTurns > 0 ? (
     <span className="phase-meta t-num" title="the model turns its CLI's own loop took">
-      {plural(record.cliTurns, "turn")}
+      {plural(record.harnessTurns, "turn")}
     </span>
   ) : (
     <span className="phase-meta" title="its CLI reported no turns">

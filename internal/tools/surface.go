@@ -230,7 +230,7 @@ func (s *Surface) Active() []string {
 // is a program that may ask a person before an irreversible call, and the hint
 // is the only thing it has to ask on.
 //
-// It exists because the bridge advertised none. A sandboxed coding agent was
+// It exists because the bridge advertised none. A sandboxed harness was
 // handed a seat's whole grant with every tool unannotated, so its own client
 // could not tell `get_work_item` from `remove_work_item` — while the registry
 // behind it had carried both decisions the whole time.

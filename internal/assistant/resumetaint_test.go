@@ -18,7 +18,7 @@ import (
 // the segment its approval resumes continues the same loop, every answer the
 // first segment read still in it, and is handed the decision: the route's
 // answer to the write, which for an answer to an executor carries the run's
-// question, a coding CLI's words, read at an outside party's trust. So the
+// question, a harness's words, read at an outside party's trust. So the
 // taint rides the park, and the decision taints the turn as a read does: a
 // proposal the resumed segment makes after either names the source, and one
 // after only the company's own records names none.

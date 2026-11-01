@@ -65,7 +65,7 @@ type bridgedRun struct {
 }
 
 // launchBridged launches turnID's executor over a surface offering the given
-// tools, and dials its bridge the way the box's own coding agent would.
+// tools, and dials its bridge the way the box's own harness would.
 func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {
 	t.Helper()
 	server := httptest.NewServer(http.NotFoundHandler())
@@ -99,7 +99,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 
 // launch launches the run's executor job — the turn's next job when one has
 // run, carrying on the one that asked a person where cont is set — and dials
-// the bridge of the job it started, the way that job's coding agent would.
+// the bridge of the job it started, the way that job's harness would.
 func (b bridgedRun) launch(t *testing.T, cont *runner.Continuation) bridgedRun {
 	t.Helper()
 	before := len(b.jobs.Started())

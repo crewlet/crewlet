@@ -618,7 +618,7 @@ func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 	}{
 		{
 			// The token it signs in from without naming it, and the env
-			// its CLI runs with; the bundle is not stored.
+			// its harness runs with; the bundle is not stored.
 			"crewlet llm login default", llmEntryReads(company, []string{"default"}),
 			[]string{"CLAUDE_CODE_OAUTH_TOKEN", "PROXY_URL"},
 		},

@@ -225,10 +225,10 @@
 // `admin` is ONE permission over the whole company configuration, and that
 // configuration runs code: an `mcp_servers` entry is a command every engine
 // host executes, a seat's `mcp_env` and its per-phase model keys (`llm_*`,
-// each naming a `providers.llm` entry, which is a coding CLI) choose what a
+// each naming a `providers.llm` entry, which is a harness) choose what a
 // seat's children run and which credentials they are handed, a
 // `providers.llm` entry or `providers.sandbox.default_run_in` placed `direct`
-// runs every agent seat's executor — a coding CLI with its own shell — on the
+// runs every agent seat's executor — a harness with its own shell — on the
 // engine host itself, and a seat's worker grants decide which of its tools a
 // worker runs with. So holding it IS running code on every engine host, and
 // whatever a process there can read — the keyring included — is reachable

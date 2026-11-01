@@ -794,7 +794,7 @@ func pricesInModule(module []byte) []priceFound {
 // and never in money.
 //
 // The engine records a price where one is reported — only a subscription
-// coding CLI quotes one — and it is on the wire. A currency covering that
+// harness quotes one — and it is on the wire. A currency covering that
 // minority of calls, beside a token count covering all of them, reads as the
 // company's spend and is a fraction of it, so the client declares no price
 // field and draws none. dashboard/src/money.test.tsx holds the source and the
@@ -1130,7 +1130,7 @@ const (
 	// of prose opens its block, in the shared Markdown module the entry
 	// loads, took it to 349.1 KiB. 350 KiB, still under two seconds on that
 	// link. A model's usage limit as one condition per entry (ADR-0064): the
-	// queue's wording of it and the CLI names it is said in, the time of day
+	// queue's wording of it and the harness names it is said in, the time of day
 	// it lifts, its remedy in the link table, and the store keeping a row a
 	// push leaves as it was, all in the attention queue and the store the
 	// frame loads, took it to 351.0 KiB. 352 KiB, still under two seconds on
@@ -1252,7 +1252,7 @@ const (
 	// preview hook the draft file card now shares. 4493 KiB, which still
 	// refuses a doubled baseline. Merging main's MCP tool route (#371) beside
 	// the assistant's card rendering took it to 4499.8 KiB: the live view's
-	// CLI runs, their calls in flight and a run drawn before its first round.
+	// harness runs, their calls in flight and a run drawn before its first round.
 	// 4501 KiB, which still refuses a doubled baseline. uilet 0.64.0 and a
 	// card value drawn as what it is (a list as its items, a body as code,
 	// page text as an inert preview, a colour beside its chip) took it to
@@ -1337,7 +1337,7 @@ const (
 	// section matched by its path and name, Home's spent week through the
 	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
 	// still refuses a doubled baseline. A model's usage limit as one
-	// condition per entry (ADR-0064): its wording, the CLI names and its
+	// condition per entry (ADR-0064): its wording, the harness names and its
 	// remedy, the store keeping a row a push leaves as it was, and the Inbox
 	// keeping the rows it drew, took it to 4606.9 KiB. 4607 KiB, which still
 	// refuses a doubled baseline. The review's fixes (a failure's own text

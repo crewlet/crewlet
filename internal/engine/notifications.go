@@ -784,7 +784,7 @@ func (e *Engine) RouteInbound(_ context.Context, parsers []notify.Parser, prompt
 // delivery against, resolved through this node's own chain.
 //
 // It lives here rather than at the call site because both halves are the
-// engine's: the applied company and the resolver. The CLI assembling it
+// engine's: the applied company and the resolver. The harness assembling it
 // meant one line deciding a security property, and the mistake it invites —
 // passing the config through unresolved — leaves six routes verifying
 // against the literal "${GITLAB_SIGNING_SECRET}".

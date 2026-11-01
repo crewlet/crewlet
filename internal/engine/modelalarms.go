@@ -24,7 +24,7 @@ import (
 // as `backup_age` reads the fleet's one backup register, so a refusal, a limit,
 // a wait and a stored credential's age read the same whichever node a person
 // asks. Two inputs are this node's own reading, and say so: whether anything
-// signs an entry in here, and its CLI's token lifetime.
+// signs an entry in here, and its harness's token lifetime.
 //
 // A READ THAT FAILS CARRIES THE LAST GOOD ONE. The lease table and the secret
 // store are read on every evaluation, and a blip in either must not read as
@@ -176,12 +176,12 @@ func (e *Engine) storedAt(ctx context.Context) (map[string]time.Time, error) {
 	return out, nil
 }
 
-// tokenLifetimes is each coding-CLI entry's headless-token lifetime, zero where
-// its CLI declares none.
+// tokenLifetimes is each harness entry's headless-token lifetime, zero where
+// its harness declares none.
 func (e *Engine) tokenLifetimes(c *Company) map[string]time.Duration {
 	out := map[string]time.Duration{}
 	for key := range c.Config.Providers.LLM {
-		if agent, ok := e.cliEntry(key); ok {
+		if agent, ok := e.harnessEntry(key); ok {
 			out[key] = agent.TokenLifetime()
 		}
 	}

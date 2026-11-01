@@ -34,7 +34,7 @@ func (r rewritingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[
 
 // AN EXECUTOR RUN'S BRIDGED CALLS ARE COUNTED ON THEIR OWN METER.
 //
-// The coding CLI calls the seat's tools over the bridge long after the segment
+// The harness calls the seat's tools over the bridge long after the segment
 // that launched it has parked and charged what it spent. Counted on that
 // segment — its auxiliary tally, its worker tally — every one of those calls
 // added to a number nothing read again, and the work item the turn was on was

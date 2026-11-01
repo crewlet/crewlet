@@ -86,11 +86,11 @@ providers:
     #
     # Prefer Anthropic's models on an API key?  Swap the default for:
     #   default:
-    #     agent: claude-code
+    #     harness: claude-code
     #     model: sonnet
     #     auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
     # Every seat's executor is its CLI's own run, which only claude-code and
-    # opencode have.  OpenAI's models (`agent: codex`, `model: gpt-5`, the
+    # opencode have.  OpenAI's models (`harness: codex`, `model: gpt-5`, the
     # same `auth`, reading CODEX_API_KEY) serve a seat's reviewer, workers
     # and side passes, through llm_review / llm_subagent / llm_auxiliary.
     #
@@ -107,7 +107,7 @@ providers:
     # to $CREWLET_API_TOKEN_FOUNDER.
     # See docs/concepts/llm-backends.md.
     default:
-      agent: opencode
+      harness: opencode
       model: "${LLM_MODEL}"
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
@@ -117,7 +117,7 @@ providers:
     # it turns the CLI's web tools off, which Ask Crewlet requires (seats
     # keep theirs).  Prove the denial with `crewlet llm doctor assistant`.
     # assistant:
-    #   agent: claude-code
+    #   harness: claude-code
     #   model: sonnet
     #   auth: { mode: api-key }
     #   timeout_seconds: 90

@@ -22,7 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -30,18 +30,18 @@ import (
 
 // THE EXECUTOR, AS A TEST RUNS IT.
 //
-// Every seat's executor is its coding CLI's own run in a box, so a case that
+// Every seat's executor is its harness's own run in a box, so a case that
 // drives a turn has to give it one: a chain member that can take a launch, a
 // catalogue to place it in, a bridge its box can dial, and something that plays
 // the run. These are those, built the way `providers.sandbox.fake` builds them
 // in a deployment — the in-process double for every cell, the double's runner
-// for every CLI — over the REAL launch, the real bridge and the real
+// for every harness — over the REAL launch, the real bridge and the real
 // coordinator, so a case that drives a turn exercises the path every turn
 // takes: the launch, the park, the bridged calls landing on the run's row, the
 // collection and the resume.
 //
 // What a run DOES is the case's: a [fakePlayer]. [modelPlayer] is the usual one
-// — the pick of the case's scripted CLI ([phasedCLI]), played as the run,
+// — the pick of the case's scripted harness ([phasedHarness]), played as the run,
 // calling the seat's tools over the bridge — so one fixture scripts the run
 // and the reviewer that judges it alike.
 
@@ -50,20 +50,20 @@ const runnerKey = "cli"
 
 // runnerEntry is a claude-code entry an executor can launch on and that no
 // phase on this host can ever reach: its binary does not exist. The run itself is played by
-// the rig's double, so the CLI is never started — and a phase that fell
+// the rig's double, so the harness is never started — and a phase that fell
 // through to this entry by mistake fails on the missing binary rather than
-// starting a real CLI on the machine running the suite.
+// starting a real harness on the machine running the suite.
 func runnerEntry(t *testing.T) phase.Entry {
 	t.Helper()
-	provider, err := cliagent.New(cliagent.Config{
-		Key: runnerKey, Agent: "claude-code", Model: "sonnet",
+	provider, err := harness.New(harness.Config{
+		Key: runnerKey, Harness: "claude-code", Model: "sonnet",
 		StateDir:  t.TempDir(),
 		Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")},
 		Timeout:   time.Minute,
-		Auth:      cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"},
+		Auth:      harness.Auth{Mode: harness.AuthAPIKey, APIKey: "sk-ant-not-real"},
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
+		t.Fatalf("harness.New: %v", err)
 	}
 	return phase.Entry{Key: runnerKey, Provider: provider}
 }
@@ -94,7 +94,7 @@ type runRig struct {
 }
 
 // rigRuns gives e an executor runtime whose every run play plays: a bridge
-// mounted on a listener of its own, the double for every cell and every CLI,
+// mounted on a listener of its own, the double for every cell and every harness,
 // and the engine's own coordinator over a run store on e's fleet — and its
 // company the fake catalogue the launch checks the epoch for.
 func rigRuns(t *testing.T, e *Engine, play fakePlayer) *runRig {
@@ -161,7 +161,7 @@ func rigRunsOn(t *testing.T, e *Engine, pending sandbox.PendingStore, play fakeP
 	return rig
 }
 
-// started is every run the rig's runners were handed, in launch order per CLI.
+// started is every run the rig's runners were handed, in launch order per harness.
 func (r *runRig) started() []sandbox.RunRequest {
 	var out []sandbox.RunRequest
 	for _, runner := range r.runners {
@@ -235,18 +235,18 @@ func runToItsEnd(t *testing.T, e *Engine, rig *runRig, req Request) {
 	}
 }
 
-// modelPlayer plays a run as its coding CLI would, with pick as the CLI's
+// modelPlayer plays a run as its harness would, with pick as the harness's
 // model: the seat's tools are the bridge's, listed over a real MCP session to
 // the run's own endpoint, and the run is the one pick chooses for the names
-// they offer — the pick a [phasedCLI] makes for a phase of the engine's own,
+// they offer — the pick a [phasedHarness] makes for a phase of the engine's own,
 // so a fixture scripts the run and the phases around it the same way. Each response's calls are made over that
 // session in order, so every call lands on the run's row exactly as a box's
 // would, and the run ends after its last response, or once it has submitted
 // its work. Its closing text is the run's report, and what its responses cost
-// — the cached share included — is the run's spend, as a CLI reports its own.
+// — the cached share included — is the run's spend, as a harness reports its own.
 //
 // A failure to reach the bridge, or a run the script fails, is the run's
-// failure, with the reason, as a CLI that could not start or whose vendor
+// failure, with the reason, as a harness that could not start or whose vendor
 // refused it.
 func modelPlayer(t *testing.T, pick func(offered []string) llmtest.Run) fakePlayer {
 	t.Helper()
@@ -307,7 +307,7 @@ func modelPlayer(t *testing.T, pick func(offered []string) llmtest.Run) fakePlay
 
 // callBridged makes one of a script's calls over the run's bridge session and
 // answers what the model reads back: the tool's text, and whether it failed.
-// Arguments that do not parse fail the call as the CLI's own client would,
+// Arguments that do not parse fail the call as the harness's own client would,
 // before anything is sent.
 func callBridged(ctx context.Context, session *mcp.ClientSession, call llmtest.Call) (string, bool) {
 	var args map[string]any

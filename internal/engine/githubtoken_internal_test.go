@@ -768,7 +768,7 @@ func TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile(t *testing.T) {
 	}
 }
 
-// startReader is a coding CLI's runner that reads a box's token file at the
+// startReader is a harness's runner that reads a box's token file at the
 // moment its job starts, which is what the job's first git call would read.
 type startReader struct {
 	*sandbox.FakeRunner

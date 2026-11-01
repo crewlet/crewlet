@@ -13,7 +13,7 @@ import (
 )
 
 // Box drives the FILE CONTRACT every [sandbox.Sandbox] backend keeps: the
-// three reads a coding-agent runner is built on, and the write the suite
+// three reads a harness runner is built on, and the write the suite
 // seeds them through.
 //
 // ONE SUITE FOR EVERY BACKEND, the in-memory twin included, because the twin

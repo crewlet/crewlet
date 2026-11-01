@@ -17,7 +17,7 @@ import (
 // the resume once did with it — the answer reached the turn as a run that
 // ended without submitting, was rescued as incomplete, and never reached the
 // run that asked for it. So the resumed turn relaunches its executor instead:
-// in the asking run's own box, continuing the CLI's own conversation with the
+// in the asking run's own box, continuing the harness's own conversation with the
 // answer as its next prompt ([Asked.Continuation]), or — where that box is
 // gone — as a fresh run told the question, the answer and the branch beside
 // its brief ([Asked.Reseed]).
@@ -30,7 +30,7 @@ type Asked struct {
 	// asked, "" where it named none.
 	Branch string
 
-	// SessionID is the asking run's CLI session, which a relaunch in its
+	// SessionID is the asking run's harness session, which a relaunch in its
 	// box continues.
 	SessionID string
 

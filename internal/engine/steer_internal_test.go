@@ -701,7 +701,7 @@ func TestAFailedLaunchExpiresItsBoxNotes(t *testing.T) {
 // A LAUNCH THAT FAILS AFTER ITS WRITE LEAVES ITS NOTES TO THE RECORD'S ENDING.
 // The write that creates the record holds the brief's notes, read by the job it
 // opens, and the box's, waiting — and the launch can still fail after it, its
-// box not made, its CLI not started. Nothing is handed back: the segment's close
+// box not made, its harness not started. Nothing is handed back: the segment's close
 // reports nothing, and the run's ending, which every such failure decides,
 // reports every one of them expired — the brief's too, read by a job that never
 // started — once, under its own ids.

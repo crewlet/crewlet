@@ -43,7 +43,7 @@ import (
 //
 // Every other test in this tree stops at a seam. This one starts a real engine
 // on a real broker, wakes a real seat with a real trigger, drives a real
-// executor and reviewer loop against a scripted model behind the real CLI
+// executor and reviewer loop against a scripted model behind the real harness
 // backend, and reads the result off a WebSocket dialled the way the dashboard
 // dials it, then feeds those exact frames through the dashboard's OWN protocol
 // module (the store and the socket, built as static/dashboard/protocol.js).
@@ -614,9 +614,9 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			t.Errorf("the %s phase never ran; phases = %v", want, got)
 		}
 	}
-	// EACH ON ITS ROUTE: a seat's rounds keep the CLI's own prompt and add
+	// EACH ON ITS ROUTE: a seat's rounds keep the harness's own prompt and add
 	// the seat's after it, and an auxiliary pass replaces it, having no use
-	// for a coding agent's instructions.
+	// for a harness's instructions.
 	if bad := n.model.misrouted(); len(bad) > 0 {
 		t.Errorf("system prompts on the wrong channel: %s", strings.Join(bad, "; "))
 	}
@@ -844,7 +844,7 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			"run spent nothing any record carries")
 	}
 	// ONE CALL PER PROVIDER CALL: a phase's rounds, and a launch's own turns
-	// as its CLI reported them, as every spend figure counts them
+	// as its harness reported them, as every spend figure counts them
 	// (node/0040) — and none for the executor's own record, whose run's
 	// calls are its launches'.
 	var wantCalls int
@@ -860,7 +860,7 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		turns, _ := rec["cli_turns"].(float64)
 		wantCalls += tokens.LaunchCalls(int(turns))
 		if turns < 1 {
-			t.Errorf("the launch's record carries no cli_turns; its CLI reported "+
+			t.Errorf("the launch's record carries no cli_turns; its harness reported "+
 				"the turns its loop took, which are the run's calls: %v", rec)
 		}
 	}
@@ -910,10 +910,10 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			t.Errorf("the %v phase ran %v rounds under a stated cap of %v", rec["phase"], used, limit)
 		}
 		// THE EXECUTOR'S RECORD IS COLLECTED, NOT OBSERVED: every executor is
-		// its coding CLI's own run in a box, and its record states that run as
+		// its harness's own run in a box, and its record states that run as
 		// the one round the engine saw — the launch and the answer — with the
 		// calls the run made over the seat's bridge, timed there. The engine
-		// saw none of the run's model requests, so no CLI run of the engine's
+		// saw none of the run's model requests, so no harness run of the engine's
 		// covers its round, and the bridge has no request a call's tool_use id
 		// joins it to: the two checks below that read a phase's own requests
 		// are the phases on this host's.
@@ -939,8 +939,8 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 					"named", rec["phase"], call["name"], call["call_id"])
 			}
 		}
-		// ROUNDS ARE MODEL REQUESTS, AND THE CLI RUNS THAT MADE THEM NAME
-		// THEM. A phase's loop is its CLI's own, so the record carries each
+		// ROUNDS ARE MODEL REQUESTS, AND THE HARNESS RUNS THAT MADE THEM NAME
+		// THEM. A phase's loop is its harness's own, so the record carries each
 		// run beside the requests: one contiguous stretch of rounds per run,
 		// together every round the phase used — each run having shown its
 		// requests, as Claude Code's record does — and the model that served.
@@ -958,17 +958,17 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 				continue
 			}
 			if int(first) != covered+1 || last < first {
-				t.Errorf("a %v CLI run made rounds %v to %v after rounds up to %d were "+
+				t.Errorf("a %v harness run made rounds %v to %v after rounds up to %d were "+
 					"another's: %v", rec["phase"], first, last, covered, run)
 			}
 			covered = int(last)
 			if run["requests_observed"] != true || run["model"] != "claude-golden" {
-				t.Errorf("a %v CLI run reads %v, want one that showed its requests, served "+
+				t.Errorf("a %v harness run reads %v, want one that showed its requests, served "+
 					"by claude-golden", rec["phase"], run)
 			}
 		}
 		if covered != int(used) {
-			t.Errorf("the %v phase used %v rounds and its CLI runs %v made %d", rec["phase"],
+			t.Errorf("the %v phase used %v rounds and its harness runs %v made %d", rec["phase"],
 				used, invocations, covered)
 		}
 	}
@@ -1952,9 +1952,9 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	// Every round of the loop here is a tool-use reply, and every auxiliary
 	// pass a text reply, so each request's cost is known from its kind. EVERY
 	// request the model answered is summed: each is one model request of a
-	// scripted CLI run, whose usage the backend reads off the record the CLI
+	// scripted harness run, whose usage the backend reads off the record the harness
 	// prints for it, and a stop never lands between the model's answer and
-	// that record ([cliRun.handleStop]) — so there is no request the engine
+	// that record ([harnessRun.handleStop]) — so there is no request the engine
 	// was billed for and never read.
 	var used, want int
 	var calls []string

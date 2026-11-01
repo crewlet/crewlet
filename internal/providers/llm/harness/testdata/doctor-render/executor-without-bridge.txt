@@ -1,0 +1,22 @@
+provider      : sub
+harness       : custom
+binary        : <binary>
+version       : fake-cli 1.0.0
+written for   : unknown
+state dir     : <state>
+credentials   : none on disk
+token env     : n/a — this harness mints no headless token
+sign-in       : none
+token usage   : estimated (4 characters per token)
+system prompt : seats: in the transcript, under the harness's own (the profile declares no channel)
+              : side passes: in the transcript, under the harness's own (the profile declares no channel)
+smoke test    : skipped (-no-smoke)
+local tools   : not declared by profile; probe skipped (-no-smoke)
+web           : allowed; probe skipped (-no-smoke)
+executor      : seats: swe, qa
+              : runner: "custom" is registered
+              : tool bridge: unset
+problems:
+  - no sign-in for "sub": no credential files in <state>/custom/credentials, and nothing in the environment the harness is given authenticates it — the "custom" profile names no place a login is kept and no key variable: declare one under providers.llm.sub.overrides
+  - the "custom" profile reads no usage figures, so budgets for seats on this provider run on estimates
+  - a seat's executor reaches its tools over an MCP bridge, and a box in the e2b cell is not on the node's host, so it dials CREWLET_MCP_BRIDGE_URL alone — which is unset, so every launch on providers.llm.sub is refused: a coding agent with none of the seat's tools cannot answer anybody or submit its work. Set it to a URL that box reaches the node at

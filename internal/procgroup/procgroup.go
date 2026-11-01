@@ -1,7 +1,7 @@
 // Package procgroup addresses a child process TREE with one signal.
 //
 // Every long-running child this engine starts is launched through something
-// that forks: an MCP server behind `uvx` or `npx`, a coding CLI behind a Node
+// that forks: an MCP server behind `uvx` or `npx`, a harness behind a Node
 // or Bun runtime, a sandbox command behind a shell. Signalling the process
 // Go started reaches the launcher and nothing beneath it, so the real worker
 // survives its parent, keeps the inherited stderr descriptor open, and goes
@@ -48,7 +48,7 @@ func Detach(cmd *exec.Cmd) { detach(cmd) }
 // Stop suspends every process in the group led by pid (SIGSTOP).
 //
 // Uncatchable by design: it is the pause a sandbox takes while it waits for a
-// human to answer a coding agent's question, and a job that could decline to
+// human to answer a harness's question, and a job that could decline to
 // pause would go on spending the seat's budget.
 func Stop(pid int) error { return signal(pid, sigStop) }
 

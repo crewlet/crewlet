@@ -348,7 +348,7 @@ is **off** unless the company turns it on.
 providers:
   llm:
     assistant:                          # a dedicated entry, recommended
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       timeout_seconds: 90               # one interactive round
       max_concurrent: 4                 # its own slots, apart from the seats'
@@ -363,7 +363,7 @@ assistant:
   retention_days: 30                    # conversation history, 1..365
   token_budget: { day: 200000 }         # per person, optional
   deep_work:                            # optional: absent is quick mode only
-    llm: assistant-deep                 # a Claude Code entry (agent: claude-code)
+    llm: assistant-deep                 # a Claude Code entry (harness: claude-code)
     timeout_seconds: 1200               # one run's wall clock, 60..1200
     max_steps: 150                      # rounds and Crewlet calls a task makes, 10..400
     max_tokens: 3000000                 # tokens a task may spend, 10000..20000000
@@ -378,7 +378,7 @@ assistant:
 | `proposal_ttl_seconds` | 900 | How long a proposed change waits for its owner's approval before it expires. |
 | `retention_days` | 30 | How long a person's conversations are kept. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
-| `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`agent: claude-code`), run as its CLI's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
+| `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`harness: claude-code`), run as its CLI's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
 | `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
 | `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
 | `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
@@ -446,7 +446,7 @@ providers:
   llm:
     default:                            # named provider (referenced by roles via `llm: default`;
                                         #   `default` is also the fallback for a seat naming none)
-      agent: claude-code                # optional — which CLI to drive (default claude-code):
+      harness: claude-code                # optional — which CLI to drive (default claude-code):
                                         #   claude-code | codex | opencode | gemini-cli | qwen-code
                                         #   | cursor-agent | copilot | grok | muse-code | kimi-code
                                         #   | hermes | pi | custom
@@ -465,8 +465,8 @@ providers:
                                         #   any other CLI's entry, where nothing would read it; any
                                         #   CLI serves the reviewer, workers and side passes
       state_dir: ""                     # optional — the login + per-seat CLI homes, each CLI
-                                        #   under <state_dir>/<agent>. Empty:
-                                        #   $CREWLET_LLM_CLI_HOME/<key>, else ~/.crewlet/llm-cli/<key>.
+                                        #   under <state_dir>/<harness>. Empty:
+                                        #   $CREWLET_LLM_HARNESS_HOME/<key>, else ~/.crewlet/llm-harness/<key>.
                                         #   Use a persistent volume in an ephemeral container.
                                         #   Entries naming the SAME dir and driving the same CLI
                                         #   share one login (how per-phase models run off one
@@ -536,14 +536,14 @@ providers:
     gpt:                                # OpenAI's models through Codex — for a seat's reviewer,
                                         #   workers and side passes (llm_review, llm_subagent, …):
                                         #   Codex runs no executor
-      agent: codex
+      harness: codex
       model: gpt-5
       auth:
         mode: api-key                   # reads CODEX_API_KEY; leave it out to run on a
                                         #   ChatGPT login (`crewlet llm login gpt`)
 
     open:                               # open models through OpenCode
-      agent: opencode
+      harness: opencode
       model: openrouter/qwen/qwen3-coder  # <provider>/<model>, split at the first slash;
                                         #   a bare id is refused on a write
       env:
@@ -2286,7 +2286,7 @@ Only the braced identifier form is substituted — `${NAME}` where `NAME` matche
 providers:
   llm:
     default:
-      agent: opencode
+      harness: opencode
       model: "${LLM_MODEL}"                          # resolved where the entry is built
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"  # the secret store first, then the environment

@@ -118,7 +118,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	case launchType:
 		// THE EXECUTOR'S SPEND, filed as the store's writer files it: the
 		// executor's phase, under the round that launched it, nested under
-		// nothing, its calls its CLI's own turns.
+		// nothing, its calls its harness's own turns.
 		rec.Phase, rec.HostPhase, rec.Worker = tokens.PhaseExecute, "", ""
 		rec.Calls = tokens.LaunchCalls(num(payload, "cli_turns"))
 	case auxiliarySpendType:

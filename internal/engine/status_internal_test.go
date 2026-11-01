@@ -224,15 +224,15 @@ func (refusingProvider) Complete(context.Context, llm.Request) (*llm.Completion,
 // asserts a post the teardown is racing, which is the flake this fixture is
 // written against; see "WHAT IS PROMISED, AND WHEN" above.
 //
-// A coding CLI on the real session ([phasedCLI]): the phase's tools reach it
-// over MCP and it calls the submission there, so `waiting` runs as the CLI
+// A harness on the real session ([phasedHarness]): the phase's tools reach it
+// over MCP and it calls the submission there, so `waiting` runs as the harness
 // run starts — still on the turn's goroutine, and still before the answer.
 type scripted struct{ waiting func(reviewing bool) }
 
 func (scripted) Model() string { return "scripted" }
 
 func (s scripted) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	return phasedCLI{model: "scripted", pick: s.run}.Complete(ctx, req)
+	return phasedHarness{model: "scripted", pick: s.run}.Complete(ctx, req)
 }
 
 func (s scripted) run(offered []string) llmtest.Run {

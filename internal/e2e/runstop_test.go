@@ -16,7 +16,7 @@ import (
 
 // A PERSON'S STOP ENDS THE EXECUTOR THE SEAT HAS OUT, END TO END.
 //
-// The run is the stand-in coding CLI in a real `direct` box, held: nothing
+// The run is the stand-in harness in a real `direct` box, held: nothing
 // will ever release it, so it would run for ever. A pause with `stop_running`
 // lands in the fleet's record, and the node holding the seat must carry it out
 // on the run itself: the run's record gone, its box reclaimed off the disk, its

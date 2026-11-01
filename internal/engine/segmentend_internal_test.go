@@ -134,7 +134,7 @@ func TestATurnsEndIsMeasuredWhereItsSegmentEnded(t *testing.T) {
 
 // slowRewriteModel is [longAccountModel] whose rewrites — the calls offering no
 // tools — take a while to answer.
-func slowRewriteModel(delay time.Duration) phasedCLI {
+func slowRewriteModel(delay time.Duration) phasedHarness {
 	m := longAccountModel()
 	text := m.text
 	m.text = func(ctx context.Context, req llm.Request) (*llm.Completion, error) {
@@ -164,8 +164,8 @@ func swapModel(t *testing.T, e *Engine, p llm.Provider) {
 
 // longAccountModel answers each phase as billingModel does, with a reviewer's
 // account past what a task's card holds, and a rewrite with a short one.
-func longAccountModel() phasedCLI {
-	return phasedCLI{
+func longAccountModel() phasedHarness {
+	return phasedHarness{
 		model: "billing",
 		pick: func(offered []string) llmtest.Run {
 			if offers(offered, runner.SubmitReviewTool) {

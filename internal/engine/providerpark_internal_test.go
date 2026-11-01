@@ -39,7 +39,7 @@ type limitedModel struct {
 	mu    sync.Mutex
 	reset time.Time
 	// retry is when the backend tries the entry again, where it caps the
-	// vendor's reset as cliagent does at an hour; zero is the reset.
+	// vendor's reset as harness does at an hour; zero is the reset.
 	retry time.Time
 	now   func() time.Time
 	calls int
@@ -60,7 +60,7 @@ func (m *limitedModel) Complete(context.Context, llm.Request) (*llm.Completion, 
 		default:
 			retry = now.Add(time.Hour)
 		}
-		return nil, &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
+		return nil, &llm.Error{Kind: llm.KindRateLimit, Provider: "harness/claude-code",
 			Model: "opus", Key: "default", RetryAt: retry, ResetsAt: m.reset,
 			Agent: "claude-code", Subscription: true,
 			Err: errors.New("You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)")}
@@ -409,7 +409,7 @@ func newEmptyRegistry(t *testing.T) *phase.Registry {
 }
 
 // knownLimit is a model whose entry already knows it is at its limit until
-// retry, as cliagent's does once its CLI reported it ([chain.Unready]).
+// retry, as harness's does once its harness reported it ([chain.Unready]).
 type knownLimit struct{ retry time.Time }
 
 func (knownLimit) Model() string { return "opus" }
@@ -549,7 +549,7 @@ func (r *probeRig) park(t *testing.T, handle string, retry time.Time) {
 // ONE PROBE PER LIMITED CHAIN, HOWEVER MANY SEATS IT HOLDS. Three seats parked
 // on one spent entry for 40 hours are probed once an hour, not three times,
 // and the answer that ends the limit releases all three: the limit is the
-// entry's, and each probe is a full, charged run of its CLI.
+// entry's, and each probe is a full, charged run of its harness.
 //
 // Mutation: give each seat's park an alarm and a probe of its own, and every
 // tick asks the model three times.

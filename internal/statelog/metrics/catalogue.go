@@ -777,13 +777,13 @@ func Catalogue() []Instrument {
 			Attributes: []string{"outcome"},
 			Shows: "How long an Ask Crewlet turn segment runs from the question to its " +
 				"end, by outcome. A three-step read is held to 15 s at the median; a " +
-				"distribution reaching the turn's own timeout is a model or a CLI too " +
+				"distribution reaching the turn's own timeout is a model or a harness too " +
 				"slow for an interactive drawer.",
 		},
 		{
 			Name: AssistantFirstOutputLatency, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Shows: "How long a person waits from asking to the first step or text the " +
-				"drawer shows. Held to 4 s at the median; a rise is a CLI's cold start " +
+				"drawer shows. Held to 4 s at the median; a rise is a harness's cold start " +
 				"or its slots queued behind other turns.",
 		},
 		{

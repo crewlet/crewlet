@@ -56,12 +56,12 @@ func (s *stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{Output: out}, nil
 }
 
-// provider is the model behind every worker's CLI: reply states what it
+// provider is the model behind every worker's harness: reply states what it
 // answers at each of its requests — blocking, panicking and token spend
 // included — as ordinary Go rather than as a mock's expectations. A worker's run
 // plays its replies over the real session (llmtest.Conn) until one calls
 // nothing or the run is ended, so every call reaches the worker's tools as a
-// CLI's does.
+// harness's does.
 //
 // A run over a real session takes time of its own — a socket, the MCP
 // handshake, the tool list — so a case whose HEALTHY worker must beat a
@@ -77,7 +77,7 @@ type provider struct {
 }
 
 // modelView is what the model has in front of it at one of its requests: the
-// conversation its CLI run opened on, the tools the CLI offers it now, and what
+// conversation its harness run opened on, the tools the harness offers it now, and what
 // every call the run made so far was answered.
 type modelView struct {
 	Messages []llm.Message
@@ -117,7 +117,7 @@ func (p *provider) count() int {
 	return len(p.seen)
 }
 
-// started is how many CLI runs reached the provider, every worker's together:
+// started is how many harness runs reached the provider, every worker's together:
 // a run may be cut off before its model is asked anything.
 func (p *provider) started() int {
 	p.mu.Lock()
@@ -797,8 +797,8 @@ func TestAChildCannotCallAToolItWasNotGranted(t *testing.T) {
 	if n := w.byName["read_file"].ran.Load(); n != 1 {
 		t.Errorf("the granted tool ran %d times, want 1", n)
 	}
-	// NEVER OFFERED, so the worker's CLI refused the call itself and the
-	// model read that it failed: the grant decides the list the CLI is
+	// NEVER OFFERED, so the worker's harness refused the call itself and the
+	// model read that it failed: the grant decides the list the harness is
 	// given, and a name off it never reaches the worker's tools at all.
 	if offered := p.offered(0); slices.Contains(offered, "slack_post") {
 		t.Fatalf("the denied tool was offered: %v", offered)
@@ -881,7 +881,7 @@ func TestATimedOutChildReportsWhatItAlreadyDid(t *testing.T) {
 	}
 	// The partial work is the point: a child that spent a round did work the
 	// parent paid for, and reporting zeros throws away both the transcript
-	// and the only evidence of the cost. ONE round: the request its CLI's
+	// and the only evidence of the cost. ONE round: the request its harness's
 	// record showed. The second was still being answered when the cap fired,
 	// so no record of it reached the engine — and it billed nothing yet.
 	if res.Rounds != 1 || res.Tokens() != 100 {
@@ -1551,7 +1551,7 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 			t.Fatalf("%d of 2 children never started, want exactly 1: %+v", queued, results)
 		}
 		if p.started() != 1 {
-			t.Fatalf("%d children started a CLI run under MaxParallel 1", p.started())
+			t.Fatalf("%d children started a harness run under MaxParallel 1", p.started())
 		}
 	}
 }
@@ -2393,8 +2393,8 @@ func TestASubmissionEndsTheLoop(t *testing.T) {
 }
 
 // A SUBMISSION SURVIVES THE FAILURE THAT FOLLOWED IT. A worker that answered
-// has answered, whatever its CLI did after: here the submission arrives beside
-// a tool call, and the CLI — slow to stop once the engine ended its run — is
+// has answered, whatever its harness did after: here the submission arrives beside
+// a tool call, and the harness — slow to stop once the engine ended its run — is
 // still alive when the task's wall-clock cap kills it, so the run fails on the
 // deadline after the answer is in.
 func TestAnAnswerSurvivesALaterTimeout(t *testing.T) {
@@ -2414,7 +2414,7 @@ func TestAnAnswerSurvivesALaterTimeout(t *testing.T) {
 	}
 }
 
-// answersThenHangs is a worker's CLI that submits beside a read, and then does
+// answersThenHangs is a worker's harness that submits beside a read, and then does
 // not stop when the engine ends its run: it lives until the task's deadline
 // kills it, and its run fails on that.
 type answersThenHangs struct{}

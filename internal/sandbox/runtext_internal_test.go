@@ -82,7 +82,7 @@ func TestARunsAccountPastTheRecordIsCondensedNotCut(t *testing.T) {
 // the bound and says how many it left out — the report its opening, where its
 // summary is, and the failure BOTH ENDS: its end, where the line naming what
 // broke is, and its start, where the engine states the exit status and the
-// CLI's own error before the error stream. Kept from its end alone, a failure
+// harness's own error before the error stream. Kept from its end alone, a failure
 // with a long error stream lost those. A rewrite that came back past the
 // bound is no rewrite.
 //
@@ -107,7 +107,7 @@ func TestAnUncondensedAccountDropsWholeLinesAndSaysSo(t *testing.T) {
 			t.Parallel()
 			c := &Coordinator{condense: tc.condense}
 			report := "Outcome: succeeded\n" + lines("report", 8000)
-			const status = "the coding agent exited with status 1:\n"
+			const status = "the harness exited with status 1:\n"
 			failure := status + lines("noise", 8000) + "FATAL: migrations/0007.sql is missing"
 			got := c.fitResult(t.Context(), PendingRun{AgentHandle: "dev"}, Result{Text: report, Error: failure})
 
@@ -205,7 +205,7 @@ func TestTheCoordinatorsPrefixFitsTheRoomARunnerLeavesIt(t *testing.T) {
 
 // A FAILURE PAST WHAT ONE CONDENSATION READS IS BROUGHT INSIDE IT, NOT GIVEN UP
 // ON. Nothing outside this package keeps a runner's promise for it, and a
-// CLI's own error can be as long as the file it was read from — handed over
+// harness's own error can be as long as the file it was read from — handed over
 // whole, the compactor refuses it before a model is asked, and the resumed
 // executor reads the uncondensed fallback although a model was configured. The
 // failure keeps its start and its end in whole lines, says what it left out
@@ -221,7 +221,7 @@ func TestAFailurePastWhatACondensationReadsIsBroughtInsideIt(t *testing.T) {
 		return "(condensed)", nil
 	}}
 	c := &Coordinator{condense: condenser}
-	const opening = "the coding agent exited with status 1:\n"
+	const opening = "the harness exited with status 1:\n"
 	failure := opening + lines("cli error", 3*MaxCondenseBytes/48) + "FATAL: the last line"
 	got := c.fitResult(t.Context(), PendingRun{}, Result{Error: failure})
 	if got.Error != "(condensed)" {

@@ -305,7 +305,7 @@ What follows are the prerequisites that legitimately vary by machine.
   is run from.
 
   `node` also runs the **OpenCode notes plugin** the engine embeds
-  (`internal/sandbox/codingagent/opencode_steer.js`): the plugin is
+  (`internal/sandbox/executor/opencode_steer.js`): the plugin is
   JavaScript an OpenCode run's server loads, and `opencode_steer_test.go`
   drives it — as the engine writes it into a real box — under plain `node`,
   through `opencode_steer_probe.mjs` beside it, against a stand-in of the
@@ -574,7 +574,7 @@ files sit beside what they cover, as Go expects, and a test file that is not Go
 is no exception: the dashboard's Vitest suites sit beside their modules in
 `dashboard/src`, `internal/e2e`'s client replay is `internal/e2e/replay.mjs`,
 beside the `golden_test.go` that runs it, and the OpenCode notes plugin's probe
-is `internal/sandbox/codingagent/opencode_steer_probe.mjs`, beside the
+is `internal/sandbox/executor/opencode_steer_probe.mjs`, beside the
 `opencode_steer_test.go` that runs it. There is no top-level `tests/` tree.
 
 A test that opens a store on a fresh path opens it through
@@ -1306,7 +1306,7 @@ renders, calls, copies, runs or links:
   `internal/render/mirror_test.go` fingerprints engine functions by file and
   name — the coding-run launch, the address checks the boot refuses to start on
   and the Atlassian host rule among them — and its CRD suite reads the CLI
-  profiles (`cliprofile`: each CLI's token and key variables and the
+  profiles (`harnessprofile`: each CLI's token and key variables and the
   variables that keep it inside a seat's home) from the engine's own refusals. A
   change to one, or a rename or a move, fails it until it has been read against
   the files that copy it.

@@ -114,7 +114,7 @@ func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
 
 // A LOCAL BOX REPLACES ONLY A REGULAR FILE, AND NEVER WAITS TO FIND OUT WHAT IS
 // THERE. The engine writes into a box after something has run in it — a coding
-// CLI's configuration after the setup steps' commands, a token file under a
+// harness's configuration after the setup steps' commands, a token file under a
 // running job — and what the box put at the path is the box's own: a plain
 // write followed a link there (one that leads nowhere passes the escape check
 // as itself, so the write CREATED a file wherever the link pointed on the

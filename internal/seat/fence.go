@@ -66,7 +66,7 @@ var ErrSeatMoved = errors.New("seat: the seat moved to another node")
 //
 // # What it deliberately does not cover
 //
-// A RUNNING executor run — every agent seat's executor is its coding CLI's
+// A RUNNING executor run — every agent seat's executor is its harness's
 // own detached run — is not fenced, and that is the design rather than a gap.
 // Such a run outlives its turn on purpose: its placement is on its own row,
 // and the process that collects it is often not the one that launched it, so

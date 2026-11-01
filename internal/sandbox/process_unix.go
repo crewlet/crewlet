@@ -25,7 +25,7 @@ const unsupportedReason = ""
 //
 // The command gets its own session for the same reason a launched job does: on
 // a timeout the whole tree is killed, not just the process the engine holds.
-// `docker run` spawning a stuck child is precisely the case — killing the CLI
+// `docker run` spawning a stuck child is precisely the case — killing the harness
 // alone would leave it behind.
 //
 // ITS OWN TIMEOUT IS AN EXIT, 124, and A CALLER THAT CANCELLED IS AN ERROR

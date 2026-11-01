@@ -187,10 +187,10 @@ type LiveCall struct {
 	// asked for — as the progress frame carries it ([types.PhaseRound]).
 	// Empty on the opening frame, before the phase's first provider call —
 	// and for the whole of an executor, whose rounds run inside its coding
-	// CLI's run.
+	// harness's run.
 	Rounds []any `json:"rounds"`
 
-	// Invocations is the phase's CLI runs that have ENDED — when each was
+	// Invocations is the phase's harness runs that have ENDED — when each was
 	// launched and how long it lived, who served it, how it ended, the
 	// rounds it made (`first_round`, `last_round`) and what it spent — as
 	// the progress frame carries them ([types.PhaseInvocation]). The run in
@@ -211,7 +211,7 @@ type LiveCall struct {
 	// round's tools run. Empty before the first round opens.
 	RoundStartedAt string `json:"round_started_at,omitempty"`
 
-	// RunStartedAt is when the CLI run in flight was launched: the run whose
+	// RunStartedAt is when the harness run in flight was launched: the run whose
 	// rounds are past every entry in Invocations. Empty between runs, and on
 	// a frozen call.
 	RunStartedAt string `json:"run_started_at,omitempty"`
@@ -220,7 +220,7 @@ type LiveCall struct {
 	// order they arrived — `{id, round, name, arguments, started_at}`, each
 	// listed by the frame published before the call is handed to its tool
 	// and gone from the frame after it returns ([types.RunningCall]). A
-	// LIST because a coding CLI may run a response's calls at once. Absent
+	// LIST because a harness may run a response's calls at once. Absent
 	// between calls. Never merged into ToolExecutions, which lists calls
 	// that ANSWERED: a reader has to be able to tell a call in flight from
 	// one that returned nothing — and `id` is what the answered row's
@@ -265,7 +265,7 @@ type LiveCall struct {
 	StartedAt string `json:"started_at"`
 
 	// Versions numbers the copy of each heavy field — the prompt, the
-	// response, the narration, the tool calls, the rounds' timing, the CLI
+	// response, the narration, the tool calls, the rounds' timing, the harness
 	// runs — this call holds, so an `agents` push can leave out what a tab
 	// already has and a tab can tell when it missed a change (see
 	// detail.go). ALWAYS PRESENT, on every surface that carries a call.
@@ -559,7 +559,7 @@ const (
 	// ExecutorLaunching — the job has started and the turn that started it
 	// is still unwinding.
 	ExecutorLaunching ExecutorStatus = "launching"
-	// ExecutorRunning — the coding agent is working in its box.
+	// ExecutorRunning — the harness is working in its box.
 	ExecutorRunning ExecutorStatus = "running"
 	// ExecutorAwaiting — the agent asked a person and stopped; its box is
 	// held paused until the answer arrives.

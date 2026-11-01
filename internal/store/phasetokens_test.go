@@ -18,7 +18,7 @@ func seedPhase(t *testing.T, log *store.EventLog, id string, at time.Time, role 
 }
 
 // seedLaunch writes one collected launch of an executor's run — no phase of
-// its own, filed under the executor's — with the price its CLI reported.
+// its own, filed under the executor's — with the price its harness reported.
 func seedLaunch(t *testing.T, log *store.EventLog, id string, at time.Time,
 	role string, tokens int, usd float64) {
 
@@ -53,7 +53,7 @@ func seedSpend(t *testing.T, log *store.EventLog, eventType, id string, at time.
 // THE PRICE IS A COLUMN NOWHERE, and it is the one value here still read out
 // of the payload.
 //
-// Only a subscription coding CLI reports one — on a launch of an executor's
+// Only a subscription harness reports one — on a launch of an executor's
 // run, which is the one record that carries a price — so promoting it would
 // be a migration and a column that is NULL on almost every row of the table.
 // What matters is that the read carries it at all: without it the rollup's

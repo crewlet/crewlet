@@ -236,7 +236,7 @@ const (
 	// ONE CONSTANT, not a second figure, so the two cannot drift apart.
 	//
 	// A WAKE IS ITS SEAT'S EXECUTOR IN A BOX (ADR-0066): its first request
-	// carries the CLI's own harness (about 15k input tokens for Claude
+	// carries the harness's own prompt (about 15k input tokens for Claude
 	// Code) even where the seat decides the message was not for it, and
 	// its box is a 200 to 400 MB process on the engine host for a `direct`
 	// cell, or one of the sandboxes an E2B account may run at once. So this

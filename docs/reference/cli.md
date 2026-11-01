@@ -3048,7 +3048,7 @@ holds one — so a logout killed part way never leaves one file of the login it
 was removing, and a settings file the CLI keeps beside it, holding none, stays
 — and
 **records the logout** in the CLI's share of the state directory
-(`<state_dir>/<agent>/logged-out`), so the configured bundle below is not
+(`<state_dir>/<harness>/logged-out`), so the configured bundle below is not
 restored into the directory it emptied —
 not by the engine's next boot or apply, and not by `list`, `status`, `export`
 or `doctor`, which each say why instead — until a login is written into that
@@ -3086,7 +3086,7 @@ is keyed by the entry: one exported before the entry moved to another CLI
 names the old CLI, so a restore into the new CLI's empty directory refuses it
 and writes nothing — even where the two CLIs keep a login file under one name,
 as six keep an `auth.json` — at boot and apply as
-`cli_agent_bundle_restore_failed`, in `list`, `status`, `export` and `doctor`,
+`harness_bundle_restore_failed`, in `list`, `status`, `export` and `doctor`,
 and in `import`, until the new CLI is signed in and its own bundle exported in
 its place. A bundle that names no CLI is refused the same way: see [an entry
 moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).

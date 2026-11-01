@@ -1178,7 +1178,7 @@ const (
 	// --- the model routes (internal/api/llmapi) --- //
 
 	// CodeCredentialRejected is a candidate credential that did not sign
-	// the model in when it was tested (the vendor refused it, or the CLI did
+	// the model in when it was tested (the vendor refused it, or the harness did
 	// not use it): nothing was stored, and the model keeps its current
 	// credential. 422, its problem at the value. Not
 	// `credential_refused`, which is an artifact's content carrying a
@@ -1196,14 +1196,14 @@ const (
 	// CodeSignInInProgress is a device sign-in started while another for the
 	// same model is running, which the answer carries. 409.
 	CodeSignInInProgress Code = "sign_in_in_progress"
-	// CodeNoDeviceSignIn is a device sign-in for a model whose CLI has
+	// CodeNoDeviceSignIn is a device sign-in for a model whose harness has
 	// none, or whose sign-in reads no login. 422.
 	CodeNoDeviceSignIn Code = "no_device_sign_in"
-	// CodeDeviceSignInUnavailable is a device sign-in whose CLI printed no
+	// CodeDeviceSignInUnavailable is a device sign-in whose harness printed no
 	// code in time, its first line beside it. 502.
 	CodeDeviceSignInUnavailable Code = "device_sign_in_unavailable"
 	// CodeNoHostLogin is a host login check of a model that signs in with
-	// no CLI login. 422.
+	// no harness login. 422.
 	CodeNoHostLogin Code = "no_host_login"
 	// CodeUnknownProvider is a model catalogue question about a provider
 	// the catalogue lists nothing under. 422.
@@ -1635,8 +1635,8 @@ var codes = map[Code]string{
 	CodeSignInInProgress: "A sign-in for this model is already in progress. Finish or " +
 		"cancel that one first.",
 	CodeNoDeviceSignIn:          "This model can't sign in with a device code.",
-	CodeDeviceSignInUnavailable: "The CLI didn't print a sign-in code in time. Try again.",
-	CodeNoHostLogin:             "This model signs in without a CLI login, so there is none to check.",
+	CodeDeviceSignInUnavailable: "The harness didn't print a sign-in code in time. Try again.",
+	CodeNoHostLogin:             "This model signs in without a harness login, so there is none to check.",
 	CodeUnknownProvider:         "The model catalogue lists no provider by that name.",
 }
 

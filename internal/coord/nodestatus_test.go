@@ -299,7 +299,7 @@ func TestAModelBeatRoundTrips(t *testing.T) {
 }
 
 // THE BEAT IS RE-SENT EVERY FIFTEEN SECONDS, so every piece of text a model row
-// or a runner cell carries is bounded: a vendor's sentence, a CLI's detail and
+// or a runner cell carries is bounded: a vendor's sentence, a harness's detail and
 // an account are any length, and the plan is a prefix and never the whole
 // sign-in identity.
 func TestModelTextIsBoundedOnTheWire(t *testing.T) {

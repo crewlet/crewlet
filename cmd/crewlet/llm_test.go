@@ -18,18 +18,18 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // bundleProvider is a provider with a credential directory of its own and
 // nothing else — import and export never run the vendor's binary, so
 // none has to exist.
-func bundleProvider(t *testing.T) []cliAgentProvider {
+func bundleProvider(t *testing.T) []harnessProvider {
 	t.Helper()
-	p, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: "custom", StateDir: t.TempDir(),
+	p, err := harness.New(harness.Config{
+		Key: "sub", Harness: "custom", StateDir: t.TempDir(),
 		Timeout: time.Second, MaxConcurrent: 1,
 		Overrides: map[string]any{
 			"binary": "true", "complete_args": []any{"-p"}, "model_args": []any{},
@@ -39,9 +39,9 @@ func bundleProvider(t *testing.T) []cliAgentProvider {
 		},
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
+		t.Fatalf("harness.New: %v", err)
 	}
-	return []cliAgentProvider{{key: "sub", provider: p}}
+	return []harnessProvider{{key: "sub", provider: p}}
 }
 
 // EXPORT WITHOUT IMPORT IS A DEAD END: the documented way to move a login
@@ -108,13 +108,13 @@ func TestAStoredLLMCredentialSaysWhereItWentAndWhatHappensNext(t *testing.T) {
 		t.Fatal(err)
 	}
 	// ITS ONE SEAT IS A PERSON'S, as [doctorCompany]'s is: the entry is a
-	// `custom` stand-in for a CLI this suite cannot install, which can run
+	// `custom` stand-in for a harness this suite cannot install, which can run
 	// no seat's executor.
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
   llm:
     sub:
-      agent: custom
+      harness: custom
       model: m
       state_dir: %q
       overrides:
@@ -145,7 +145,7 @@ roles:
 		{
 			name:   "an exported bundle",
 			args:   []string{"export", "sub", "-secret-store"},
-			stored: cliprofile.BundleVarName("sub"),
+			stored: harnessprofile.BundleVarName("sub"),
 			says:   []string{"at boot and at every\napply"},
 		},
 		{
@@ -299,7 +299,7 @@ func TestOperatorCommandsTakeTheirLevelFromTheEnvironment(t *testing.T) {
 // doctorCompany writes a company whose providers are the given block, and
 // returns the flags pointing doctor at it. The bootstrap path does not exist,
 // so references resolve from the environment alone. Its one seat is a
-// person's: the entries are `custom` stand-ins for a CLI this suite cannot
+// person's: the entries are `custom` stand-ins for a harness this suite cannot
 // install, which can run no seat's executor.
 func doctorCompany(t *testing.T, providers string) []string {
 	t.Helper()
@@ -310,18 +310,18 @@ func doctorCompany(t *testing.T, providers string) []string {
 }
 
 // healthyDoctorEntry is a providers.llm entry, under key, that doctor reports healthy
-// without a billed call: a CLI that is on PATH and prints a version, reads its
+// without a billed call: a harness that is on PATH and prints a version, reads its
 // usage figures, and is handed a headless token — its model the given one,
 // which may be a ${VAR}.
 //
-// `custom` over /bin/sh, because doctor runs the binary and no vendor's CLI is
+// `custom` over /bin/sh, because doctor runs the binary and no vendor's harness is
 // installed where this suite runs; the token is the one sign-in that needs no
 // file and no login, and the token variable is the profile's own, so it is
-// the CLI's sign-in rather than an env entry doctor would have to judge.
+// the harness's sign-in rather than an env entry doctor would have to judge.
 func healthyDoctorEntry(t *testing.T, key, model string) string {
 	t.Helper()
 	return fmt.Sprintf(`    %s:
-      agent: custom
+      harness: custom
       model: %s
       state_dir: %q
       auth: {token: fake-headless-token}
@@ -332,7 +332,7 @@ func healthyDoctorEntry(t *testing.T, key, model string) string {
         model_args: ["--model", "{model}"]
         output: json
         text_paths: [["result"]]
-        token_env: FAKE_CLI_TOKEN
+        token_env: FAKE_HARNESS_TOKEN
         usage: {input: [["usage", "input_tokens"]], output: [["usage", "output_tokens"]]}
 `, key, model, t.TempDir())
 }
@@ -365,7 +365,7 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 }
 
 // THE DOCTOR NAMES THE SEATS THAT LAUNCH ON AN ENTRY, as the company resolves
-// them: the seats whose executor chain holds it — and for a member whose CLI
+// them: the seats whose executor chain holds it — and for a member whose harness
 // no box can run, that a launch passes over it. An entry no seat's executor
 // chain holds says nothing of runners or a bridge it never needs.
 //
@@ -373,7 +373,7 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 func TestDoctorNamesTheSeatsThatLaunchOnAnEntry(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	coder := fmt.Sprintf("    coder:\n      agent: claude-code\n      model: sonnet\n      state_dir: %q\n"+
+	coder := fmt.Sprintf("    coder:\n      harness: claude-code\n      model: sonnet\n      state_dir: %q\n"+
 		"      overrides: {binary: %q}\n", t.TempDir(), filepath.Join(dir, "no-cli-here"))
 	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n"+
 		healthyDoctorEntry(t, "plain", "m")+coder+healthyDoctorEntry(t, "spare", "m")+
@@ -381,7 +381,7 @@ func TestDoctorNamesTheSeatsThatLaunchOnAnEntry(t *testing.T) {
 		"  - name: QA\n    handle: qa\n    llm: [plain, coder]\n")
 	args := []string{"doctor", "-no-smoke", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}
 	var out, notes bytes.Buffer
-	// Problems are expected — the claude-code entry's CLI is not there, and
+	// Problems are expected — the claude-code entry's harness is not there, and
 	// no bridge is set — so the exit is not the case; the report is.
 	_ = runLLM(noEnviron, args, strings.NewReader(""), &out, &notes)
 	reports := map[string]string{}
@@ -454,31 +454,31 @@ func TestATokenPipedToBeStoredIsBounded(t *testing.T) {
 
 // tokenLoginProvider is a claude-code entry under mode whose token mint is `sh`
 // printing one, so a capture that ran would have a token to store.
-func tokenLoginProvider(t *testing.T, mode cliagent.AuthMode) []cliAgentProvider {
+func tokenLoginProvider(t *testing.T, mode harness.AuthMode) []harnessProvider {
 	t.Helper()
-	p, err := cliagent.New(cliagent.Config{
-		Key: "claude", Agent: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
+	p, err := harness.New(harness.Config{
+		Key: "claude", Harness: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
 		Timeout: 30 * time.Second, MaxConcurrent: 1,
 		Overrides: map[string]any{
 			"binary":             "sh",
 			"capture_token_args": []any{"-c", "echo sk-ant-oat01-MINTED"},
 		},
-		Auth: cliagent.Auth{Mode: mode},
+		Auth: harness.Auth{Mode: mode},
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
+		t.Fatalf("harness.New: %v", err)
 	}
-	return []cliAgentProvider{{key: "claude", provider: p}}
+	return []harnessProvider{{key: "claude", provider: p}}
 }
 
 // A HEADLESS TOKEN IS STORED ONLY WHERE THE ENTRY'S AUTH MODE READS ONE. Under
-// api-key the token variable is removed from the CLI's environment, and under
+// api-key the token variable is removed from the harness's environment, and under
 // inherit-env it is forwarded from the engine's own environment, never the
 // secret store — yet `-capture-token` and `-token-stdin` minted and stored one
 // under both, and printed an auth.token snippet that validation refuses under
 // either. Each is now refused before anything is minted, read or stored,
 // naming what the mode reads; inherit-env keeps -print-token, whose token
-// reaches the CLI once exported in the engine's environment. Subscription is
+// reaches the harness once exported in the engine's environment. Subscription is
 // the control: it stores, so "nothing stored" below is a refusal and not a
 // store the harness could not reach.
 //
@@ -489,7 +489,7 @@ func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
 	const tokenVar = "CLAUDE_CODE_OAUTH_TOKEN"
 	for _, tc := range []struct {
 		name    string
-		mode    cliagent.AuthMode
+		mode    harness.AuthMode
 		req     loginRequest
 		stdin   string
 		stored  string
@@ -501,47 +501,47 @@ func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
 		never   []string
 	}{
 		{
-			name: "subscription mints and stores", mode: cliagent.AuthSubscription,
+			name: "subscription mints and stores", mode: harness.AuthSubscription,
 			req: loginRequest{captureToken: true}, stored: "sk-ant-oat01-MINTED",
 		},
 		{
-			name: "subscription stores a token it is handed", mode: cliagent.AuthSubscription,
+			name: "subscription stores a token it is handed", mode: harness.AuthSubscription,
 			req: loginRequest{tokenStdin: true}, stdin: "sk-ant-oat01-PASTED\n", stored: "sk-ant-oat01-PASTED",
 		},
 		{
-			name: "api-key refuses a mint", mode: cliagent.AuthAPIKey,
+			name: "api-key refuses a mint", mode: harness.AuthAPIKey,
 			req: loginRequest{captureToken: true},
 			refused: []string{"auth.mode api-key", "removes " + tokenVar,
 				"providers.llm.claude.auth.api_key, else ANTHROPIC_API_KEY", "`crewlet secrets set`"},
 			never: []string{"${" + tokenVar + "}"},
 		},
 		{
-			name: "api-key refuses a token it is handed", mode: cliagent.AuthAPIKey,
+			name: "api-key refuses a token it is handed", mode: harness.AuthAPIKey,
 			req: loginRequest{tokenStdin: true}, stdin: "sk-ant-oat01-PASTED\n",
 			refused: []string{"auth.mode api-key", "ANTHROPIC_API_KEY"},
 			never:   []string{"sk-ant-oat01-PASTED"},
 		},
 		{
-			name: "api-key refuses a mint even to stdout", mode: cliagent.AuthAPIKey,
+			name: "api-key refuses a mint even to stdout", mode: harness.AuthAPIKey,
 			req:     loginRequest{captureToken: true, printToken: true},
 			refused: []string{"auth.mode api-key"},
 			never:   []string{"sk-ant-oat01-MINTED"},
 		},
 		{
-			name: "inherit-env refuses to store a mint", mode: cliagent.AuthInheritEnv,
+			name: "inherit-env refuses to store a mint", mode: harness.AuthInheritEnv,
 			req: loginRequest{captureToken: true},
 			refused: []string{"auth.mode inherit-env", "never from the secret store",
 				"`crewlet llm login claude -capture-token -print-token`", "export it as " + tokenVar},
 			never: []string{"${" + tokenVar + "}"},
 		},
 		{
-			name: "inherit-env refuses to store a token it is handed", mode: cliagent.AuthInheritEnv,
+			name: "inherit-env refuses to store a token it is handed", mode: harness.AuthInheritEnv,
 			req: loginRequest{tokenStdin: true}, stdin: "sk-ant-oat01-PASTED\n",
 			refused: []string{"auth.mode inherit-env", "export the token you have as " + tokenVar},
 			never:   []string{"sk-ant-oat01-PASTED"},
 		},
 		{
-			name: "inherit-env prints a mint to export", mode: cliagent.AuthInheritEnv,
+			name: "inherit-env prints a mint to export", mode: harness.AuthInheritEnv,
 			req: loginRequest{captureToken: true, printToken: true}, printed: "sk-ant-oat01-MINTED",
 			hint:  "Export it as " + tokenVar + " in the engine's environment",
 			never: []string{"${" + tokenVar + "}"},
@@ -614,7 +614,7 @@ func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
 // script leaves a marker and the token's stdin records a read, so either is
 // seen whatever became of the token. -from-host no longer recommends
 // -capture-token for such an entry, since that is the refusal, and `llm
-// doctor` names the field (which routes it then offers is cliagent's suite)
+// doctor` names the field (which routes it then offers is harness's suite)
 // and exits non-zero. And no store can hold the name, so no run treats it as a
 // stored value: through a running node the run's batch never asks for it — the
 // node refuses a whole request over one such name, which would fail the doctor
@@ -635,7 +635,7 @@ providers:
   sandbox: {fake: true}
   llm:
     claude:
-      agent: claude-code
+      harness: claude-code
       model: sonnet
       state_dir: %q
       overrides:
@@ -708,9 +708,9 @@ roles:
 			if err != nil {
 				t.Fatalf("loadLLMConfig: %v", err)
 			}
-			providers, err := cliAgents(doc, keys, resolver)
+			providers, err := harnessProviders(doc, keys, resolver)
 			if err != nil {
-				t.Fatalf("cliAgents: %v", err)
+				t.Fatalf("harnessProviders: %v", err)
 			}
 			stdin := &recordedReader{r: strings.NewReader("sk-ant-oat01-PASTED\n")}
 			err = loginLLM(t.Context(), loginRequest{
@@ -823,9 +823,9 @@ roles:
 	})
 }
 
-// A TOKEN FOR A CLI THAT TAKES NONE IS NEITHER MINTED NOR READ. A profile that
+// A TOKEN FOR A HARNESS THAT TAKES NONE IS NEITHER MINTED NOR READ. A profile that
 // names no token_env — codex, like every built-in one but claude-code — hands
-// its CLI no headless token, and `-token-stdin` read the token from stdin
+// its harness no headless token, and `-token-stdin` read the token from stdin
 // before it found that out, while a minting command a custom profile declared
 // ran, and the vendor issued a token, before the refusal. Each is now refused
 // first, in every mode and with -print-token too; the minting command leaves a
@@ -834,7 +834,7 @@ roles:
 //
 // Mutation: drop the check, or move it after the read and the mint, and stdin
 // is read, the marker appears and the refusal names no token_env.
-func TestATokenForACLIThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
+func TestATokenForAHarnessThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name string
@@ -848,8 +848,8 @@ func TestATokenForACLIThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			marker := filepath.Join(t.TempDir(), "minted")
-			p, err := cliagent.New(cliagent.Config{
-				Key: "codex", Agent: "codex", StateDir: t.TempDir(),
+			p, err := harness.New(harness.Config{
+				Key: "codex", Harness: "codex", StateDir: t.TempDir(),
 				Timeout: 30 * time.Second, MaxConcurrent: 1,
 				Overrides: map[string]any{
 					"binary": "/bin/sh",
@@ -858,17 +858,17 @@ func TestATokenForACLIThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
 				},
 			})
 			if err != nil {
-				t.Fatalf("cliagent.New: %v", err)
+				t.Fatalf("harness.New: %v", err)
 			}
 			req := tc.req
-			req.providers, req.key = []cliAgentProvider{{key: "codex", provider: p}}, "codex"
+			req.providers, req.key = []harnessProvider{{key: "codex", provider: p}}, "codex"
 			req.companySecrets = llmStoreAt(t, noEnviron, "login", "-config", bootstrapWithKeyring(t, "k1"))
 			stdin := &recordedReader{r: strings.NewReader("sk-PASTED\n")}
 			req.stdin = stdin
 			var out, errOut bytes.Buffer
 			err = loginLLM(t.Context(), req, &out, &errOut)
 			if err == nil {
-				t.Fatalf("a token for a CLI that takes none was accepted:\n%s%s",
+				t.Fatalf("a token for a harness that takes none was accepted:\n%s%s",
 					out.String(), errOut.String())
 			}
 			for _, want := range []string{
@@ -893,14 +893,14 @@ func TestATokenForACLIThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
 }
 
 // AN API-KEY ENTRY IS TOLD ITS KEY BEFORE ANYTHING ABOUT ITS TOKEN VARIABLE.
-// The mode removes the token variable from the CLI's environment, so a token
-// reaches nothing under any variable — yet the refusal of a CLI that names
+// The mode removes the token variable from the harness's environment, so a token
+// reaches nothing under any variable — yet the refusal of a harness that names
 // none told api-key codex to sign in with a login or to name a token
 // variable, and that of a name outside the grammar told api-key MY-TOKEN to
-// name the variable its CLI reads, as if a token would then reach it. Both
+// name the variable its harness reads, as if a token would then reach it. Both
 // are now the api-key refusal, naming the key the mode reads, and offer no
 // subscription where no token could be read under it; MY-TOKEN's names the
-// field as well. inherit-env is judged as before: the refusal of a CLI that
+// field as well. inherit-env is judged as before: the refusal of a harness that
 // names no token variable, which a login signs in under that mode too.
 //
 // Mutation: judge the token variable before the mode, and the api-key cases
@@ -910,12 +910,12 @@ func TestAnAPIKeyEntryIsToldItsKeyBeforeItsTokenVariable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, agent   string
-		mode          cliagent.AuthMode
+		mode          harness.AuthMode
 		overrides     map[string]any
 		want, notWant []string
 	}{
 		{
-			name: "codex under api-key", agent: "codex", mode: cliagent.AuthAPIKey,
+			name: "codex under api-key", agent: "codex", mode: harness.AuthAPIKey,
 			want: []string{"auth.mode api-key", `the "codex" profile names no token_env`,
 				"providers.llm.sub.auth.api_key, else CODEX_API_KEY", "`crewlet secrets set`",
 				"none was minted or stored"},
@@ -923,7 +923,7 @@ func TestAnAPIKeyEntryIsToldItsKeyBeforeItsTokenVariable(t *testing.T) {
 				"a login of its own"},
 		},
 		{
-			name: "MY-TOKEN under api-key", agent: "claude-code", mode: cliagent.AuthAPIKey,
+			name: "MY-TOKEN under api-key", agent: "claude-code", mode: harness.AuthAPIKey,
 			overrides: map[string]any{"token_env": "MY-TOKEN"},
 			want: []string{"auth.mode api-key", `removes "MY-TOKEN"`,
 				"providers.llm.sub.auth.api_key, else ANTHROPIC_API_KEY", "`crewlet secrets set`",
@@ -931,7 +931,7 @@ func TestAnAPIKeyEntryIsToldItsKeyBeforeItsTokenVariable(t *testing.T) {
 			notWant: []string{"auth.mode: subscription"},
 		},
 		{
-			name: "codex under inherit-env", agent: "codex", mode: cliagent.AuthInheritEnv,
+			name: "codex under inherit-env", agent: "codex", mode: harness.AuthInheritEnv,
 			want: []string{`the "codex" profile names no token_env`, "`crewlet llm doctor sub`",
 				"providers.llm.sub.overrides.token_env", "none was minted, read or stored"},
 			notWant: []string{"auth.mode api-key"},
@@ -955,16 +955,16 @@ func TestAnAPIKeyEntryIsToldItsKeyBeforeItsTokenVariable(t *testing.T) {
 				for name, value := range tc.overrides {
 					overrides[name] = value
 				}
-				p, err := cliagent.New(cliagent.Config{
-					Key: "sub", Agent: tc.agent, StateDir: t.TempDir(),
+				p, err := harness.New(harness.Config{
+					Key: "sub", Harness: tc.agent, StateDir: t.TempDir(),
 					Timeout: 30 * time.Second, MaxConcurrent: 1,
-					Overrides: overrides, Auth: cliagent.Auth{Mode: tc.mode},
+					Overrides: overrides, Auth: harness.Auth{Mode: tc.mode},
 				})
 				if err != nil {
-					t.Fatalf("cliagent.New: %v", err)
+					t.Fatalf("harness.New: %v", err)
 				}
 				req := flag.req
-				req.providers, req.key = []cliAgentProvider{{key: "sub", provider: p}}, "sub"
+				req.providers, req.key = []harnessProvider{{key: "sub", provider: p}}, "sub"
 				req.companySecrets = llmStoreAt(t, noEnviron, "login", "-config", bootstrapWithKeyring(t, "k1"))
 				stdin := &recordedReader{r: strings.NewReader("sk-PASTED\n")}
 				req.stdin = stdin
@@ -1008,43 +1008,43 @@ func (r *recordedReader) Read(p []byte) (int, error) {
 // -FROM-HOST RECOMMENDS A TOKEN ONLY WHERE THE ENTRY WOULD READ ONE. After an
 // adopted login it says to prefer `-capture-token`, which avoids the shared
 // refresh token — advice that, under api-key or inherit-env, leads to the
-// refusal above, and that a CLI with a token variable but no minting command
-// cannot follow at all: `-capture-token` refuses for it. Subscription on a CLI
+// refusal above, and that a harness with a token variable but no minting command
+// cannot follow at all: `-capture-token` refuses for it. Subscription on a harness
 // that mints is the control: it is told.
 //
 // Mutation: print the preference whatever the mode, and the api-key and
-// inherit-env cases go red; whenever the CLI names a token variable, and the
+// inherit-env cases go red; whenever the harness names a token variable, and the
 // case with no minting command does.
 func TestAdoptingAHostLoginRecommendsATokenOnlyWhereOneIsRead(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
-		mode   cliagent.AuthMode
+		mode   harness.AuthMode
 		noMint bool
 		prefer bool
 	}{
-		{name: string(cliagent.AuthSubscription), mode: cliagent.AuthSubscription, prefer: true},
-		{name: string(cliagent.AuthAPIKey), mode: cliagent.AuthAPIKey},
-		{name: string(cliagent.AuthInheritEnv), mode: cliagent.AuthInheritEnv},
-		{name: "subscription with no minting command", mode: cliagent.AuthSubscription, noMint: true},
+		{name: string(harness.AuthSubscription), mode: harness.AuthSubscription, prefer: true},
+		{name: string(harness.AuthAPIKey), mode: harness.AuthAPIKey},
+		{name: string(harness.AuthInheritEnv), mode: harness.AuthInheritEnv},
+		{name: "subscription with no minting command", mode: harness.AuthSubscription, noMint: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			providers := tokenLoginProvider(t, tc.mode)
 			if tc.noMint {
-				p, err := cliagent.New(cliagent.Config{
-					Key: "claude", Agent: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
+				p, err := harness.New(harness.Config{
+					Key: "claude", Harness: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
 					Timeout: 30 * time.Second, MaxConcurrent: 1,
 					Overrides: map[string]any{"capture_token_args": []any{}},
 				})
 				if err != nil {
-					t.Fatalf("cliagent.New: %v", err)
+					t.Fatalf("harness.New: %v", err)
 				}
 				if p.MintsHeadlessToken() || p.Profile().TokenEnv == "" {
 					t.Fatalf("the premise: a token variable and no minting command, got %+v",
 						p.Profile().CaptureTokenArgs)
 				}
-				providers = []cliAgentProvider{{key: "claude", provider: p}}
+				providers = []harnessProvider{{key: "claude", provider: p}}
 			}
 			home := t.TempDir()
 			path := filepath.Join(home, ".claude", ".credentials.json")
@@ -1137,7 +1137,7 @@ func TestAnLLMWriteSaysWhenARunningEngineReadsIt(t *testing.T) {
 				store, held := route.open(t, "login")
 				var stdout, stderr bytes.Buffer
 				err := loginLLM(t.Context(), loginRequest{
-					providers: tokenLoginProvider(t, cliagent.AuthSubscription), key: "claude",
+					providers: tokenLoginProvider(t, harness.AuthSubscription), key: "claude",
 					captureToken: true, companySecrets: store, stdin: strings.NewReader(""),
 				}, &stdout, &stderr)
 				if err != nil {
@@ -1203,7 +1203,7 @@ func TestATokenPipedToLoginIsBoundedBeforeItIsStored(t *testing.T) {
 	store := llmStoreAt(t, noEnviron, "login", "-config", cfg)
 	var out, errOut bytes.Buffer
 	err := loginLLM(t.Context(), loginRequest{
-		providers: tokenLoginProvider(t, cliagent.AuthSubscription), key: "claude",
+		providers: tokenLoginProvider(t, harness.AuthSubscription), key: "claude",
 		tokenStdin: true, companySecrets: store, stdin: endless,
 	}, &out, &errOut)
 	if !errors.Is(err, secrets.ErrValueTooLarge) {
@@ -1301,7 +1301,7 @@ func TestABundleNoStoreKeepsIsRefusedInABundlesWords(t *testing.T) {
 }
 
 // A PASSWORD PIPED TO `crewlet llm login -username U -password-stdin` IS READ
-// NO FURTHER THAN A PASSWORD IS, and refused before the CLI's login runs.
+// NO FURTHER THAN A PASSWORD IS, and refused before the harness's login runs.
 //
 // The command read its stdin to the end and handed the vendor's login
 // whatever arrived, so a file piped by mistake was read whole into memory and
@@ -1311,11 +1311,11 @@ func TestABundleNoStoreKeepsIsRefusedInABundlesWords(t *testing.T) {
 //
 // Mutation: read the login's stdin whole again, and the endless stream runs
 // into its reader's guard and is answered as a failed read.
-func TestAPasswordPipedToLLMLoginIsBoundedBeforeTheCLIRuns(t *testing.T) {
+func TestAPasswordPipedToLLMLoginIsBoundedBeforeTheHarnessRuns(t *testing.T) {
 	t.Parallel()
 	marker := filepath.Join(t.TempDir(), "login-ran")
-	p, err := cliagent.New(cliagent.Config{
-		Key: "gateway", Agent: "custom", StateDir: t.TempDir(),
+	p, err := harness.New(harness.Config{
+		Key: "gateway", Harness: "custom", StateDir: t.TempDir(),
 		Timeout: 30 * time.Second, MaxConcurrent: 1,
 		Overrides: map[string]any{
 			"binary": "sh", "complete_args": []any{"-p"}, "model_args": []any{},
@@ -1328,12 +1328,12 @@ func TestAPasswordPipedToLLMLoginIsBoundedBeforeTheCLIRuns(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
+		t.Fatalf("harness.New: %v", err)
 	}
 	endless := &endlessReader{}
 	var out, errOut bytes.Buffer
 	err = loginLLM(t.Context(), loginRequest{
-		providers: []cliAgentProvider{{key: "gateway", provider: p}}, key: "gateway",
+		providers: []harnessProvider{{key: "gateway", provider: p}}, key: "gateway",
 		username: "ops@example.com", passwordStdin: true, stdin: endless,
 	}, &out, &errOut)
 	if !errors.Is(err, errPipedPasswordTooLong) {
@@ -1345,6 +1345,6 @@ func TestAPasswordPipedToLLMLoginIsBoundedBeforeTheCLIRuns(t *testing.T) {
 		t.Errorf("read %d bytes of the stream to refuse it, want at most %d", endless.read, most)
 	}
 	if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
-		t.Errorf("the CLI's login ran for a refused password (%v)", statErr)
+		t.Errorf("the harness's login ran for a refused password (%v)", statErr)
 	}
 }

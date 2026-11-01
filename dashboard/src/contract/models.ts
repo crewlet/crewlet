@@ -3,41 +3,41 @@
  * `auth.mode`, and what each field the entry leaves out comes to.
  *
  * Settings › Models edits an entry as the company document WRITES it, and
- * an entry that names no `agent` or no `auth.mode` still runs as something.
+ * an entry that names no `harness` or no `auth.mode` still runs as something.
  * What it runs as is the engine's default, so the wizard says it from here
  * rather than guessing, and the words for each sign-in are keyed on this union
  * so a mode the engine adds is a typecheck failure rather than a choice drawn
  * with nothing said.
  *
- * HELD AGAINST `config.CLIAgentAuthModes`, `config.CodingAgents` and an unset
- * `config.LLMProvider`'s `AgentName`, `ResolvedAuthMode`, `Timeout` and
+ * HELD AGAINST `config.HarnessAuthModes`, `config.ExecutorHarnesses` and an unset
+ * `config.LLMProvider`'s `HarnessName`, `ResolvedAuthMode`, `Timeout` and
  * `Concurrency` by
  * `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes`: a default
- * that drifted would name a CLI, a sign-in or a cap the engine does not apply
+ * that drifted would name a harness, a sign-in or a cap the engine does not apply
  * to the entry on screen, and an executor set that drifted would say a model
  * runs an executor that the engine skips.
  */
 
 /**
- * How an entry's CLI signs in. `subscription`: the operator's own CLI login:
+ * How an entry's harness signs in. `subscription`: the operator's own harness login:
  * a headless token, or the files `crewlet llm login` wrote. `api-key`: one key,
- * put in the CLI's own key variable, billed to the metered account.
- * `inherit-env`: whichever of the CLI's two variables the engine's own
- * environment holds. `env`: the entry's own env signs the CLI in (a cloud
+ * put in the harness's own key variable, billed to the metered account.
+ * `inherit-env`: whichever of the harness's two variables the engine's own
+ * environment holds. `env`: the entry's own env signs the harness in (a cloud
  * provider's switch and credentials, or a gateway's token), and neither the
- * token nor the key reaches the CLI.
+ * token nor the key reaches the harness.
  */
-export type CLIAuthMode = "subscription" | "api-key" | "inherit-env" | "env";
+export type HarnessAuthMode = "subscription" | "api-key" | "inherit-env" | "env";
 
 /**
- * What each built-in CLI is called where a person reads it: "Claude Code
+ * What each built-in harness is called where a person reads it: "Claude Code
  * subscription limit reached", never "claude-code". EXACTLY the engine's
- * built-in profiles (`cliprofile.BuiltinNames`) bar `custom`, held by
- * `internal/config.TestEveryBuiltInCLIHasAProductName`, so a profile the
+ * built-in profiles (`harnessprofile.BuiltinNames`) bar `custom`, held by
+ * `internal/config.TestEveryBuiltInHarnessHasAProductName`, so a profile the
  * engine ships is named the day it ships. An entry on `custom` describes a
- * CLI of its own and is called by its key.
+ * harness of its own and is called by its key.
  */
-export const CLI_PRODUCTS: Readonly<Record<string, string>> = {
+export const HARNESS_PRODUCTS: Readonly<Record<string, string>> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   copilot: "GitHub Copilot",
@@ -52,26 +52,26 @@ export const CLI_PRODUCTS: Readonly<Record<string, string>> = {
   "qwen-code": "Qwen Code",
 };
 
-/** The CLI an entry that names no `agent` drives. */
-export const DEFAULT_CLI_AGENT = "claude-code";
+/** The harness an entry that names no `harness` drives. */
+export const DEFAULT_HARNESS = "claude-code";
 
 /**
- * The CLIs that can run a seat's executor: the coding agents with an in-box
- * runner. Every agent seat's executor is its CLI's own run, placed by the
+ * The harnesses that can run a seat's executor: the ones with an in-box
+ * runner. Every agent seat's executor is its harness's own run, placed by the
  * launching entry's `run_in`, and a member of an executor chain on any other
- * CLI is skipped at launch, and that entry serves the text phases alone (the
+ * harness is skipped at launch, and that entry serves the text phases alone (the
  * reviewer, workers, onboarding and side passes).
  */
-export const EXECUTOR_CLI_AGENTS = ["claude-code", "opencode"] as const;
+export const EXECUTOR_HARNESSES = ["claude-code", "opencode"] as const;
 
 /** An entry's `auth.mode` when it names none. */
-export const DEFAULT_CLI_AUTH_MODE: CLIAuthMode = "subscription";
+export const DEFAULT_HARNESS_AUTH_MODE: HarnessAuthMode = "subscription";
 
-/** The wall-clock cap on one stretch of a CLI's own work (no tool call in flight) when `timeout_seconds` is unset. */
-export const DEFAULT_CLI_TIMEOUT_SECONDS = 600;
+/** The wall-clock cap on one stretch of a harness's own work (no tool call in flight) when `timeout_seconds` is unset. */
+export const DEFAULT_HARNESS_TIMEOUT_SECONDS = 600;
 
-/** How many CLI processes an entry runs at once when `max_concurrent` is unset. */
-export const DEFAULT_CLI_MAX_CONCURRENT = 4;
+/** How many harness processes an entry runs at once when `max_concurrent` is unset. */
+export const DEFAULT_HARNESS_MAX_CONCURRENT = 4;
 
 /**
  * ONE reading of a model's condition, decided by the engine
@@ -116,9 +116,9 @@ export const DEVICE_SIGN_IN_ENDED = [
 ] as const satisfies readonly ModelDeviceStatus[];
 
 /**
- * How a model's CLI signs in as one node resolves it (`cliagent.SignInRoute`).
- * Held against `cliagent.SignInRoutes` by
- * `internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns`.
+ * How a model's harness signs in as one node resolves it (`harness.SignInRoute`).
+ * Held against `harness.SignInRoutes` by
+ * `internal/providers/llm/harness.TestTheModelsScreenNamesTheEnginesSignIns`.
  */
 export type ModelSignInRoute =
   "token" | "credentials" | "api-key" | "env" | "inherit-env" | "environment" | "none";
@@ -131,7 +131,7 @@ export type ModelSignInRoute =
 export type ModelLimitWindow = "session" | "weekly" | "model" | "unknown";
 
 /**
- * One line of a model's test (`cliagent.CheckName`), in the doctor's order.
+ * One line of a model's test (`harness.CheckName`), in the doctor's order.
  * Held against the doctor's own order by the sign-in gate.
  */
 export type ModelCheckName =
@@ -168,7 +168,7 @@ export type RunnerCellName = "direct" | "container" | "e2b";
 
 /**
  * The longest the engine lets each model route work before it answers, in
- * seconds: a test runs the CLI for real (up to three runs), a credential's test
+ * seconds: a test runs the harness for real (up to three runs), a credential's test
  * one isolated run, a retry one probe. The dashboard waits a little past each
  * rather than abandoning a request the engine is still answering. Held against
  * `llmapi.CheckBudget` and `CredentialBudget`, and the engine's own bound on a

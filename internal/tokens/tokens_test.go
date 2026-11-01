@@ -542,7 +542,7 @@ func TestANarrowedLiveRollupNamesItsSeatByIDAndItsHandleNow(t *testing.T) {
 }
 
 // A PHASE RECORD'S CALLS ARE THE PROVIDER CALLS IT COVERS, and an executor's
-// covers none. Every executor is its coding CLI's own run: the engine's record
+// covers none. Every executor is its harness's own run: the engine's record
 // of the phase states the run as one round, and counting that round put a
 // call nobody made on every turn beside the run's own — so the run's calls
 // are counted on each launch's own record ([tokens.LaunchCalls]), never here.
@@ -567,14 +567,14 @@ func TestAPhaseRecordCountsTheProviderCallsItCovers(t *testing.T) {
 	}
 }
 
-// A LAUNCH'S CALLS ARE ITS CLI'S OWN TURNS, as the CLI reported them, and one
+// A LAUNCH'S CALLS ARE ITS HARNESS'S OWN TURNS, as the harness reported them, and one
 // where it reported none — the run the engine asked for, the most it can say.
 // A negative count is none reported: the collection reads a run's printed
 // usage that way, and a launch must never count calls taken off.
 //
-// Mutation: count a launch as one whatever its CLI reported, or take a
+// Mutation: count a launch as one whatever its harness reported, or take a
 // negative count as given, and this goes red.
-func TestALaunchCountsItsCLIsOwnTurns(t *testing.T) {
+func TestALaunchCountsItsHarnessOwnTurns(t *testing.T) {
 	t.Parallel()
 	for turns, want := range map[int]int{17: 17, 1: 1, 0: 1, -3: 1} {
 		if got := tokens.LaunchCalls(turns); got != want {

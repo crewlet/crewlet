@@ -115,11 +115,11 @@ func TestSummaries(t *testing.T) {
 		},
 		want: "2 messages from alice: Thread",
 	}, {
-		name:    "a phase that ran in a box is badged with its coding agent",
+		name:    "a phase that ran in a box is badged with its harness",
 		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, CodingAgent: "claude-code"},
 		want:    "Dev execute [sandbox:claude-code]",
 	}, {
-		name:    "a phase that names its box and no CLI is still badged",
+		name:    "a phase that names its box and no harness is still badged",
 		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, SandboxID: "sb-1"},
 		want:    "Dev execute [sandbox:?]",
 	}, {
@@ -131,8 +131,8 @@ func TestSummaries(t *testing.T) {
 		payload: AgentPhaseCompleted{RoleName: "Dev", Phase: PhaseExecute, Failed: true, ErrorKind: "rate_limit"},
 		want:    "Dev execute ✗ failed (rate_limit)",
 	}, {
-		// The CLI and the tokens: which run it was, and what it cost.
-		name: "a collected launch names its CLI and what it spent",
+		// The harness and the tokens: which run it was, and what it cost.
+		name: "a collected launch names its harness and what it spent",
 		payload: ExecutorCollected{RoleName: "Dev", CodingAgent: "claude-code",
 			InputTokens: 9000, OutputTokens: 700, TotalTokens: 9700},
 		want: "Dev's executor launch was collected (claude-code, 9700 tokens)",

@@ -76,7 +76,7 @@ function company(): ModelsData {
       }),
       modelEntry({
         key: "codex-review",
-        agent: "codex",
+        harness: "codex",
         model: "gpt-6.1",
         health: "no_sign_in",
         sign_in: signIn({ route: "none", variable: null, source: "none", resolves: false }),
@@ -251,7 +251,7 @@ test("a limit offers to move the seats it holds to a model that answers, with th
   data.models.push(
     ...modelsData({
       entries: [
-        modelEntry({ key: "codex-ready", agent: "codex", model: "gpt-6.1", health: "ready" }),
+        modelEntry({ key: "codex-ready", harness: "codex", model: "gpt-6.1", health: "ready" }),
         modelEntry({ key: "haiku", model: "claude-haiku-4-5", health: "ready" }),
         // ON THE LIMITED PLAN: ready by its own last answer, held by the plan's limit all the same.
         modelEntry({ key: "plan-mate", plan: "plan-a", health: "ready" }),
@@ -281,7 +281,7 @@ test("a limit offers to move the seats it holds to a model that answers, with th
   onFlow.mockClear();
   fireEvent.click(trigger);
   fireEvent.click(screen.getByRole("menuitem", { name: "Add a model" }));
-  expect(onFlow).toHaveBeenCalledWith("add", undefined, { step: "cli", add: moved });
+  expect(onFlow).toHaveBeenCalledWith("add", undefined, { step: "harness", add: moved });
 });
 
 test("a model's own limit holds that model alone, so its plan's other models are offered", () => {

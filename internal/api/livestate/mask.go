@@ -25,7 +25,7 @@ import "slices"
 // Which `providers.llm` entries a company configures, and so which of them
 // served a run or failed it, is the company's configuration: the org
 // projection hands only an admin each seat's chain, and Settings, Models is
-// an admin's screen. Three live fields name entries: a CLI run's
+// an admin's screen. Three live fields name entries: a harness run's
 // `provider_key` ([LiveCall.Invocations]), the entry an executor was
 // launched on ([ExecutorEntry.ProviderKey]), which a fallback at launch makes
 // other than the chain's head, and a failure's own text ([ErrorInfo.Detail]),
@@ -92,7 +92,7 @@ type Reach struct {
 // the body.
 const runningArguments = "arguments"
 
-// invocationEntry is the key of a CLI run's providers.llm entry inside each
+// invocationEntry is the key of a harness run's providers.llm entry inside each
 // entry of [LiveCall.Invocations]: the company's configuration.
 const invocationEntry = "provider_key"
 
@@ -221,7 +221,7 @@ func withhold(dup *LiveCall, rounds, runs *[]any) withheldCall {
 	return withheldCall{LiveCall: dup, Rounds: rounds, Invocations: runs, BodyWithheld: true}
 }
 
-// withoutEntries is a CLI run list without the entry each run was served by,
+// withoutEntries is a harness run list without the entry each run was served by,
 // as fresh maps: the list's entries are the projection's own, shared with
 // every other variant of the broadcast. Nil stays nil.
 func withoutEntries(runs []any) []any {

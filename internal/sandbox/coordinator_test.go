@@ -1131,7 +1131,7 @@ func TestARunWithNoSuspendedConversationIsFailedAndFreed(t *testing.T) {
 // A RELAUNCH CONTINUES IN THE BOX ITS TURN LEFT. A reviewer that sends the
 // work back relaunches the executor on the same work, and the checkout is the
 // expensive half of a run: the collect pauses the box rather than tearing it
-// down, and the relaunch — the same CLI in the same cell — reattaches to it
+// down, and the relaunch — the same harness in the same cell — reattaches to it
 // rather than provisioning beside it.
 //
 // THROUGH THE REAL LAUNCH, not a hand-written status flip: a case that set the
@@ -1215,12 +1215,12 @@ func TestARelaunchWhoseBoxIsGoneStartsInAFreshOne(t *testing.T) {
 	}
 }
 
-// A RELAUNCH ON ANOTHER CLI RECLAIMS THE BOX IT LEAVES. Launch-time fallback
-// picks a member at every launch, so a turn's next job can run another CLI
-// than its last — which the box was installed for and no other CLI can run in.
+// A RELAUNCH ON ANOTHER HARNESS RECLAIMS THE BOX IT LEAVES. Launch-time fallback
+// picks a member at every launch, so a turn's next job can run another harness
+// than its last — which the box was installed for and no other harness can run in.
 // The attach overwrites the row's reference, so a box the relaunch walked
 // away from was named by nothing: no settle, no reaper would ever reclaim it.
-func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
+func TestARelaunchOnAnotherHarnessReclaimsTheBoxItLeaves(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	opencode := NewFakeRunner("opencode")
@@ -1250,7 +1250,7 @@ func TestARelaunchOnAnotherCLIReclaimsTheBoxItLeaves(t *testing.T) {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	if relaunch.Reused || relaunch.SandboxID == run.SandboxID {
-		t.Fatalf("relaunch = %+v, want a fresh box for the other CLI", relaunch)
+		t.Fatalf("relaunch = %+v, want a fresh box for the other harness", relaunch)
 	}
 	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
 		t.Fatalf("killed %v, want the claude-code box %q reclaimed as the opencode job "+
@@ -2360,7 +2360,7 @@ func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 1000})
 	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, r PendingRun) {
-		rig.runner.StartErr = errors.New("the coding agent would not start")
+		rig.runner.StartErr = errors.New("the harness would not start")
 		req := launchReq(r.TurnID)
 		if _, err := rig.launchVia(ctx, rig.manager, req); err == nil {
 			t.Error("the relaunch started a job the fixture refuses")

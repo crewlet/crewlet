@@ -12,8 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// startDevice serves POST /llm/providers/{key}/device-sign-in: the CLI's
-// device-code sign-in, run on this node, answered as soon as the CLI printed
+// startDevice serves POST /llm/providers/{key}/device-sign-in: the harness's
+// device-code sign-in, run on this node, answered as soon as the harness printed
 // its address and code. The person approves at the vendor; nothing is pasted
 // back through the engine, and the login the approval makes is sealed as the
 // entry's bundle and re-activated by the node running it.
@@ -41,7 +41,7 @@ func (s *Service) startDevice(w http.ResponseWriter, r *http.Request, _ *types.M
 			httpjson.Detail{"running": queries.DeviceOf(running.Running)})
 	case errors.Is(err, ErrNoDeviceSignIn):
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeNoDeviceSignIn,
-			map[string]string{"detail": key + "'s CLI has no device sign-in"})
+			map[string]string{"detail": key + "'s harness has no device sign-in"})
 	case errors.As(err, &mode):
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeNoDeviceSignIn,
 			map[string]string{"detail": key + " signs in with auth.mode " + string(mode.Mode) +

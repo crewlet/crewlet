@@ -320,7 +320,7 @@ func TestABoxCommandsOtherExitsAreTheBoxs(t *testing.T) {
 	}
 }
 
-// ONLY THE RUN WORKING IN ITS BOX READS IT. A seat's executor is its CLI's own
+// ONLY THE RUN WORKING IN ITS BOX READS IT. A seat's executor is its harness's own
 // run in the box, and every call naming a box source is that run's, made while
 // it works: a row that is another seat's, has no box yet, is launching, parked
 // on a question, collected or reaped is no box. And the run's own box, read

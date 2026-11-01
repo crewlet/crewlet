@@ -126,7 +126,7 @@ export function SignInStep({
         }))}
       />
 
-      {draft.agent === "opencode" ? (
+      {draft.harness === "opencode" ? (
         <FormField label="Provider" helper="The provider OpenCode sends the model's calls to.">
           {(field) => (
             <Select
@@ -191,7 +191,7 @@ export function SignInStep({
               placeholder={
                 word === "token"
                   ? "sk-ant-oat01-…"
-                  : draft.agent === "claude-code"
+                  : draft.harness === "claude-code"
                     ? "sk-ant-api03-…"
                     : "sk-…"
               }
@@ -286,7 +286,7 @@ export function SignInStep({
 
       {draft.method === "unchanged" ? (
         <Text as="p" variant="body" tone="secondary">
-          {product(draft.agent)} signs this model in as Configuration sets it.
+          {product(draft.harness)} signs this model in as Configuration sets it.
         </Text>
       ) : null}
     </>

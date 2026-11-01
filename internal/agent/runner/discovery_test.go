@@ -234,10 +234,10 @@ func TestTheReviewerIsOfferedOnlyItsSubmission(t *testing.T) {
 		t.Fatalf("the reviewer made %d model requests, want the refused activation and its answer",
 			len(offered))
 	}
-	// Refused BY ITS CLI: a name the reviewer was never offered never reaches
+	// Refused BY ITS HARNESS: a name the reviewer was never offered never reaches
 	// its tools at all.
 	if got := prov.answerTo("review", toolname.Activate); !strings.Contains(got, "No such tool") {
-		t.Errorf("the reviewer's activation was answered %q, want its CLI's refusal", got)
+		t.Errorf("the reviewer's activation was answered %q, want its harness's refusal", got)
 	}
 	for i, got := range offered {
 		if !slices.Equal(got, []string{runner.SubmitReviewTool}) {

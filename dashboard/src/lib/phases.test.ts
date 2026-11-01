@@ -734,7 +734,7 @@ describe("delegated workers", () => {
     expect([launch.phase, launch.iteration, launch.launch]).toEqual(["execute", 1, true]);
     expect(launch.response).toBe("Fixed the flake.");
     expect(launch.transcript).toBe("[tool] bash: go test");
-    expect([launch.cliTurns, launch.totalTokens, launch.codingAgent]).toEqual([
+    expect([launch.harnessTurns, launch.totalTokens, launch.codingAgent]).toEqual([
       31,
       9_700,
       "claude-code",

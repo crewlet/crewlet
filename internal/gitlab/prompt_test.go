@@ -91,7 +91,7 @@ func TestEachReasonAsksForSomethingDifferent(t *testing.T) {
 			[]string{"been assigned a merge request", "reassign it"},
 			[]string{"requested to review", "in your own checkout", "go quiet"}},
 		// AN ISSUE'S CODE CHANGE IS THE SEAT'S OWN TO MAKE. The executor
-		// reading this is the seat's coding CLI's own run, with its own
+		// reading this is the seat's harness's own run, with its own
 		// checkout, so it is sent to no other runtime, and the merge request
 		// it opens carries its own name.
 		{gitlab.IssueAssigned,

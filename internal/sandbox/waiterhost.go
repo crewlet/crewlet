@@ -17,7 +17,7 @@ type NudgeWhy string
 const (
 	// NudgeSubmitted is a run whose work was just submitted over its tool
 	// bridge (`submit_work`), or whose question was just asked there
-	// (`ask_and_wait`): its CLI is about to end its turn and exit, so
+	// (`ask_and_wait`): its harness is about to end its turn and exit, so
 	// the waiter that drives it polls it now and on a short schedule after
 	// ([nudgeOffsets]) rather than at its next pass.
 	NudgeSubmitted NudgeWhy = "submitted"
@@ -52,7 +52,7 @@ type Nudge struct {
 // nudgeFirstGap is how long after the poll a nudge starts the next is made;
 // each one after waits twice as long as the one before.
 //
-// ONE SECOND, from what is left of a run once it has submitted: its CLI makes
+// ONE SECOND, from what is left of a run once it has submitted: its harness makes
 // one more model call, the closing message of its turn — a few seconds, the
 // time to first token of a short answer — and exits, and its wrapper writes
 // the done marker the poll reads as it does. Polls at 0, 1, 3 and 7 seconds

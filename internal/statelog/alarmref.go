@@ -156,7 +156,7 @@ var alarmMeaning = map[Kind]string{
 		"in both the long and the short window of one of the two burn-rate pairs.",
 	KindLLMCredentialExpiring: "A model's credential expires in thirty days or less, " +
 		"and more than seven. The expiry is computed from when the credential was " +
-		"stored and the lifetime its CLI declares (a Claude Code setup-token lasts a " +
+		"stored and the lifetime its harness declares (a Claude Code setup-token lasts a " +
 		"year), because the token itself does not say.",
 	KindLLMCredentialExpiresSoon: "A model's credential expires in seven days or less. " +
 		"It replaces `llm_credential_expiring` for that model.",

@@ -193,7 +193,7 @@ func TestAToolCallIsTimedAndNamesItsOrigin(t *testing.T) {
 	}
 	a, b := res.Executions[0], res.Executions[1]
 	if b.StartedAt.Before(a.StartedAt.Add(a.Duration)) {
-		t.Errorf("the second call began at %v, before the first ended — the CLI made them one after another",
+		t.Errorf("the second call began at %v, before the first ended — the harness made them one after another",
 			b.StartedAt)
 	}
 }
@@ -312,7 +312,7 @@ func TestALiveFrameNamesTheRunInFlightApartFromItsRound(t *testing.T) {
 }
 
 // A REQUEST IN FLIGHT HAS ITS OWN ROUND AND ITS OWN INSTANT on the live view.
-// Once a round's calls have all answered, the CLI is asking its model again:
+// Once a round's calls have all answered, the harness is asking its model again:
 // the frame says so — the next round, started after every recorded one, no call
 // running — rather than naming the previous round for as long as the model
 // takes, which is what a reader counts "thinking for 40s" from.
@@ -388,7 +388,7 @@ func TestProgressIsPublishedAsARunOpensAnswersAndAroundEachCall(t *testing.T) {
 		t.Errorf("a reader saw %v, want %v", seen, want)
 	}
 	// A CALL STILL TO COME IS NOT A CALL THAT FAILED: no frame records one
-	// as not run while the CLI is about to make it.
+	// as not run while the harness is about to make it.
 	for i, f := range all {
 		for _, m := range f.Messages {
 			if m.Role == llm.RoleTool && m.Failed {
