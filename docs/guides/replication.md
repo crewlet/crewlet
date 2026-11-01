@@ -997,7 +997,7 @@ mergeability 1 030) — the most adding a queue entry a change, which its home's
 [merge queue](../concepts/code-host.md#the-merge-queue) tests in a train of its own,
 its three checks queued on the train's candidate, claimed, their boxes named
 and ended, and lands (a train 1 290 bytes, a candidate's check queued 1 010, a
-landing 1 500), a recheck of every change at each of its home's ten-minute
+landing 1 530), a recheck of every change at each of its home's ten-minute
 passes over a working day while its target moves, recording only what it
 moved, three checks of every revision, each queued,
 claimed, its box named and ended, the refreshes their endings drive and the

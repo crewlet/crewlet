@@ -110,7 +110,7 @@ var changeRecordBytes = map[string]int64{
 	"enqueue":                980,
 	"candidate":              1_290,
 	"candidate_check_queued": 1_010,
-	"land":                   1_500,
+	"land":                   1_530,
 	"check_queued":           970,
 	"check_dispatched":       970,
 	"check_started":          780,

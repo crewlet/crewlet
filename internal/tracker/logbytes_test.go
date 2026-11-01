@@ -148,7 +148,7 @@ const (
 	// its ending carry a head's keys, priced at theirs) and its landing.
 	codeCandidateBytes            = 1_290
 	codeCandidateCheckQueuedBytes = 1_010
-	codeLandBytes                 = 1_500
+	codeLandBytes                 = 1_530
 	codeCheckQueuedBytes          = 970
 	codeCheckDispatchedBytes      = 970
 	codeCheckStartedBytes         = 780
@@ -262,7 +262,6 @@ func codeLogDay() []codeLogTerm {
 	checks := revisions * referenceChecksAHead
 	candidates := changes * referenceChecksACandidate
 	tips := changes * referenceChecksATip
-	candidates := changes * referenceChecksACandidate
 	git := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
 	day := []codeLogTerm{{op: code.OpBarrier, shape: "a git client's linearizable read",
 		least: git, most: git + float64(referenceCIReads*code.BarrierRecordBytes)}}
@@ -318,8 +317,8 @@ func codeLogDay() []codeLogTerm {
 		{code.OpEnqueue, "a change queued into its target, one a change", changes, codeEnqueueBytes, true},
 		{code.OpCandidate, "a queued change's train, one candidate of one entry naming the pack its merge " +
 			"wrote, one a change", changes, codeCandidateBytes, true},
-		{code.OpLand, "the landing of a queued change's tested prefix, routed to its authors, one a change",
-			changes, codeLandBytes, true},
+		{code.OpLand, "the landing of a queued change's tested prefix, its source deleted, routed to its " +
+			"authors, one a change", changes, codeLandBytes, true},
 		{code.OpCheckQueued, "a required check of a queued change's candidate queued by its home's queue " +
 			"worker, naming the candidate and its train's base, three a change", candidates,
 			codeCandidateCheckQueuedBytes, true},
@@ -508,32 +507,6 @@ var codeLogNegligible = map[code.OpKind]string{
 		"last green and the red tip, each probe the failed checks queued, claimed and ended, at the rate " +
 		"of the red tips too; the reference company's landings are each judged before the next lands, so " +
 		"its red tip is its culprit, probed by nothing",
-	// AN ENTRY'S LEAVING its queue before it lands: a person's or a seat's
-	// code_dequeue_change, or its home's queue worker ejecting the entries a
-	// red check, a conflict or a gate no longer met put out. The reference
-	// company's queued changes each land, tested green on a target their
-	// merges do not conflict on, so its day takes neither.
-	code.OpDequeue: "an entry taken out of its queue by code_dequeue_change, a person's or a seat's " +
-		"gesture: once an enqueue at most, a record naming the entry and routed to the change's authors " +
-		"and its enqueuer, smaller than the landing it stands in place of; the reference company's queued " +
-		"changes each land",
-	code.OpEject: "entries put out of their queue by its home's queue worker — a candidate's required " +
-		"check failed and its batch bisected to the culprit, a merge onto the train conflicted, or an " +
-		"entry's gate no longer held at its landing — once an enqueue at most, each routed to its " +
-		"change's authors and its enqueuer, at the rate a merged result fails or conflicts, which the " +
-		"reference company's day has none of (as a broken's, below)",
-	// AN IMPORT'S AND A PULL MIRROR'S RECORDS, decided by the repository's
-	// committer and appended by its home's import and mirror loop, polling
-	// imports_due and mirrors_due: a repository brought in from outside, and
-	// one kept in step with a source outside. The reference company hosts
-	// every repository it has and imports and mirrors none.
-	code.OpImportChunk: "a chunk of a repository's import, each setting at most code.MaxImportRefs refs: " +
-		"once a repository imported, a hundred chunks for a hundred thousand refs — a person's import, " +
-		"which the reference company makes none of",
-	code.OpImportDone: "the end of a repository's import: once a repository imported",
-	code.OpMirrorSync: "a pull mirror's sync from its source, at most one each code.MirrorInterval " +
-		"(fifteen minutes) its source moved in — ninety-six a mirror a day — each moving at most " +
-		"code.MaxImportRefs refs; the reference company mirrors no repository",
 	code.OpQueueSweep: "the code-retention pass's sweep of an idle repository's ended queue entries " +
 		"and its landings below their green rows past code.QueueHistory once they have outlived it by " +
 		"code.QueueSweepGrace: a record an idle repository holding them, a day at most, as a pack " +
